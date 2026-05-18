@@ -2,3 +2,7 @@ build
 *.o
 *.a
 ?
+*.dat
+*.json
+*.log
+*.bin

@@ -3,6 +3,8 @@ add_library(rllm_lib STATIC)
 target_sources(rllm_lib PRIVATE
     RLLM.cc
     Corpus.cpp
+    NeuralNetwork.cc
+    serialization.cc
 )
 
 target_include_directories(rllm_lib PUBLIC

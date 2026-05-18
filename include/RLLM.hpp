@@ -1,43 +1,18 @@
 #pragma once
 
+#include <Corpus.hpp>
+
 #include <array>
 #include <cstddef>
-#include <cstdint>
-#include <map>
 #include <string>
 #include <vector>
 
 namespace rllm {
 
-using TokenID = uint32_t;
-using Token = std::string;
+// each unique token is an index in a layer
+static constexpr size_t LAYER_SIZE = 4096;
 
-class Corpus {
-public:
-  Corpus();
-
-private:
-  std::map<Token, TokenID> m_token_to_id;
-
-  class TokenData {
-  public:
-    explicit TokenData(std::string filename) : filename(std::move(filename)) {}
-
-    void add(TokenID id) {
-        data.push_back(id);
-    }
-
-  private:
-    std::string filename;
-    std::vector<TokenID> data; // positions of the token in the corpus
-  };
-
-  std::vector<TokenData> m_token_list;
-};
-
-static constexpr size_t LAYER_SIZE = 128;
 template <typename T>
-
 using vector = std::array<T, LAYER_SIZE>;
 
 struct Score {
@@ -50,10 +25,16 @@ public:
   ~Layer() = default;
   Layer(const Layer &) = delete;
   Layer &operator=(const Layer &) = delete;
+  Layer(Layer &&) = default;
+  Layer &operator=(Layer &&) = delete;
 
   void propagate_forward(Layer &next_layer);
+  void propagate_backward(const vector<float> &delta, vector<float> &prev_delta,
+                          float learning_rate);
 
   void set_random_weights_and_connections();
+
+  void set_input_layer(const InputLine &input);
 
 private:
   // accumulated input for each neuron in the layer
@@ -78,7 +59,7 @@ public:
   NeuralNetwork(const NeuralNetwork &) = delete;
   NeuralNetwork &operator=(const NeuralNetwork &) = delete;
 
-  void compute_score(Score &score);
+  void compute_score(Score &score, const TokenID expected_output_token);
   void propagate_backward(const Score &score);
 
   void propagate_forward() {
@@ -87,7 +68,13 @@ public:
     }
   }
 
-  void train();
+  void set_input_layer(const InputLine &input);
+
+  // returns the top-K with the biggest activation in the output layer, as pairs of (token_id, activation_value)
+  std::vector<std::pair<TokenID, float>> get_best_output_token_ids(size_t top_k) const;
+
+
+  void train(Corpus& corpus);
   void set_random_weights_and_connections();
 
   void load(const std::string &filename);
