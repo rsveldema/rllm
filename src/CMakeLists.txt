@@ -2,6 +2,7 @@ add_library(rllm_lib STATIC)
 
 target_sources(rllm_lib PRIVATE
     RLLM.cc
+    Corpus.cpp
 )
 
 target_include_directories(rllm_lib PUBLIC

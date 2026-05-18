@@ -4,15 +4,15 @@
 
 int main(int argc, char* argv[])
 {
-    rllm::RLLM predictor;
+    rllm::RLLM llm;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--train") == 0) {
-            predictor.train_mode();
+            llm.train_mode();
             return 0;
         }
     }
 
-    predictor.prompt_mode();
+    llm.prompt_mode();
     return 0;
 }
