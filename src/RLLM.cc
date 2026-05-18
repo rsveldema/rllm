@@ -1,6 +1,8 @@
 #include <RLLM.hpp>
 
+#include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <print>
 #include <string>
 
@@ -11,7 +13,12 @@ RLLM::RLLM() {
   // Constructor implementation
 }
 
-void RLLM::prompt_mode() {
+void RLLM::prompt_mode(const std::string &filename) {
+  Corpus corpus;
+
+  NeuralNetwork nn(num_layers);
+  nn.load(filename);
+
   std::string line;
   while (true) {
     std::cout << "Enter input (or 'exit' to quit): ";
@@ -19,6 +26,25 @@ void RLLM::prompt_mode() {
       break;
     }
     // Process the input line
+    auto token_id_list = corpus.get_token_ids(line);
+
+    for (int i = 0; i < token_id_list.size(); ++i) {
+      // Set the input layer of the neural network based on the token IDs
+      nn.set_input_layer(token_id_list[i]);
+
+      // Propagate through the network to get the output
+      nn.propagate_forward();
+
+      // Get the output and convert it back to a token
+      const auto output_token_id = nn.get_output_token_id();
+      const auto output_token = corpus.get_token_from_id(output_token_id);
+
+      std::println("Predicted next token: {}", output_token);
+
+      token_id_list.push_back(
+          output_token_id); // Add the predicted token ID to the input for the
+                            // next iteration
+    }
   }
 }
 
@@ -41,11 +67,47 @@ float get_random_value() {
   return random;
 }
 
-void NeuralNetwork::compute_score(Score &score) {
-  score.values.fill(0.0f);
-}
+  void NeuralNetwork::load(const std::string &filename)
+  {
+    std::ifstream file{filename};
+    if (!file) return;
+    const auto j = nlohmann::json::parse(file);
 
-void NeuralNetwork::propagate_backward(const Score& score) {
+    m_layers.clear();
+    for (const auto& jlayer : j["layers"]) {
+      Layer layer;
+      const auto inputs      = jlayer["inputs"].get<std::vector<float>>();
+      const auto triggers    = jlayer["trigger_values"].get<std::vector<float>>();
+      const auto weights     = jlayer["weights"].get<std::vector<float>>();
+      const auto connections = jlayer["connections"].get<std::vector<size_t>>();
+      std::copy(inputs.begin(),      inputs.end(),      layer.m_inputs.begin());
+      std::copy(triggers.begin(),    triggers.end(),    layer.m_trigger_values.begin());
+      std::copy(weights.begin(),     weights.end(),     layer.m_weights.begin());
+      std::copy(connections.begin(), connections.end(), layer.m_connections.begin());
+      m_layers.push_back(std::move(layer));
+    }
+  }
+
+  void NeuralNetwork::save(const std::string &filename) const
+  {
+    nlohmann::json j;
+    j["layers"] = nlohmann::json::array();
+    for (const auto& layer : m_layers) {
+      nlohmann::json jlayer;
+      jlayer["inputs"]        = std::vector<float>(layer.m_inputs.begin(),       layer.m_inputs.end());
+      jlayer["trigger_values"]= std::vector<float>(layer.m_trigger_values.begin(),layer.m_trigger_values.end());
+      jlayer["weights"]       = std::vector<float>(layer.m_weights.begin(),      layer.m_weights.end());
+      jlayer["connections"]   = std::vector<size_t>(layer.m_connections.begin(), layer.m_connections.end());
+      j["layers"].push_back(std::move(jlayer));
+    }
+    std::ofstream file{filename};
+    file << j.dump(2) << '\n';
+  }
+
+
+void NeuralNetwork::compute_score(Score &score) { score.values.fill(0.0f); }
+
+void NeuralNetwork::propagate_backward(const Score &score) {
   // Placeholder implementation
 }
 
@@ -101,7 +163,7 @@ void NeuralNetwork::train() {
   }
 }
 
-void RLLM::train_mode() {
+void RLLM::train_mode(const std::string &filename) {
   std::println("Training mode");
 
   Corpus corpus;
@@ -109,5 +171,7 @@ void RLLM::train_mode() {
   NeuralNetwork nn(num_layers);
 
   nn.train();
+
+  nn.save(filename);
 }
 } // namespace rllm

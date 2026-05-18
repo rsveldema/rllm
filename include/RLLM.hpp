@@ -67,6 +67,8 @@ private:
   vector<float> m_weights;
   // neuron 'i' is connected to neuron 'm_connections[i]' in the next layer
   vector<size_t> m_connections;
+
+  friend class NeuralNetwork;
 };
 
 class NeuralNetwork {
@@ -88,6 +90,9 @@ public:
   void train();
   void set_random_weights_and_connections();
 
+  void load(const std::string &filename);
+  void save(const std::string &filename) const;
+
 private:
   std::vector<Layer> m_layers;
 };
@@ -99,8 +104,8 @@ public:
   RLLM(const RLLM &) = delete;
   RLLM &operator=(const RLLM &) = delete;
 
-  void train_mode();
-  void prompt_mode();
+  void train_mode(const std::string &filename);
+  void prompt_mode(const std::string &filename);
 };
 
 } // namespace rllm
