@@ -45,6 +45,8 @@ namespace rllm {
     Corpus::Corpus() {
         const std::filesystem::path corpus_dir{"corpus"};
         if (!std::filesystem::exists(corpus_dir)) {
+            std::println("Corpus directory '{}' does not exist. Please create it and add some text files for training.", corpus_dir.string());
+            abort();
             return;
         }
 

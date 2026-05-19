@@ -36,13 +36,13 @@ void RLLM::prompt_mode(const std::string &filename) {
       nn.propagate_forward();
 
       // Get the output and convert it back to a token
-      const auto output_token_id_lists = nn.get_best_output_token_ids(5);
+      const auto output_token_id_lists = nn.get_best_output_token_ids(5, corpus);
       if (output_token_id_lists.empty()) {
         std::println("No output tokens predicted.");
         break;
       }
       const auto random_index = static_cast<size_t>(rand()) % output_token_id_lists.size();
-      const auto output_token_id = output_token_id_lists[random_index].first;
+      const auto output_token_id = output_token_id_lists[random_index].token_id;
       const auto output_token = corpus.get_token_from_id(output_token_id);
 
       std::println("Predicted next token: {}", output_token);

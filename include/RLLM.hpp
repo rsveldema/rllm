@@ -11,12 +11,21 @@ namespace rllm {
 
 // each unique token is an index in a layer
 static constexpr size_t LAYER_SIZE = 4096;
+// number of input positions encoded in the input layer
+static constexpr size_t MAX_INPUT_POSITIONS = 16;
+static constexpr size_t TOKENS_PER_POSITION = LAYER_SIZE / MAX_INPUT_POSITIONS;
 
 template <typename T>
 using vector = std::array<T, LAYER_SIZE>;
 
 struct Score {
   vector<float> values;
+};
+
+struct OutputToken {
+  TokenID token_id;
+  float activation;
+  float weight;
 };
 
 class Layer {
@@ -33,6 +42,9 @@ public:
                           float learning_rate);
 
   void set_random_weights_and_connections();
+  void set_random_weights_and_connections_to_output_layer(Corpus& corpus);
+  void set_random_weights_and_connections_for_output_layer(Corpus& corpus);
+  void update_output_weights(const vector<float> &delta, float learning_rate);
 
   void set_input_layer(const InputLine &input);
 
@@ -71,11 +83,11 @@ public:
   void set_input_layer(const InputLine &input);
 
   // returns the top-K with the biggest activation in the output layer, as pairs of (token_id, activation_value)
-  std::vector<std::pair<TokenID, float>> get_best_output_token_ids(size_t top_k) const;
+  std::vector<OutputToken> get_best_output_token_ids(size_t top_k, Corpus& corpus) const;
 
 
   void train(Corpus& corpus);
-  void set_random_weights_and_connections();
+  void set_random_weights_and_connections(Corpus& corpus);
 
   void load(const std::string &filename);
   void save(const std::string &filename) const;
