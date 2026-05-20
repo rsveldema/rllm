@@ -29,7 +29,6 @@ namespace rllm
       public:
         template_token_vector<float, TokenID> m_inputs;
         template_token_vector<float, TokenID> m_trigger_values;
-        template_token_vector<float, TokenID> m_weights;
     };
 
 } // namespace rllm

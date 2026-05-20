@@ -56,7 +56,7 @@ namespace rllm
         assert(id < IntermediateLayerIndex::MAX);
         return static_cast<IntermediateLayerIndex>(static_cast<int32_t>(id) + 1);
     }
-    
+
 
     template <typename T, typename LengthType>
     class template_token_vector

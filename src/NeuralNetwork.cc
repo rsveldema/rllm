@@ -78,7 +78,7 @@ namespace rllm
     {
         if (top_k.size() < k)
         {
-            top_k.push_back({id, value, weight});
+            top_k.emplace_back(id, value, weight);
             std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
                 return a.activation > b.activation;
             });
@@ -107,10 +107,15 @@ namespace rllm
         std::vector<OutputToken> top_k_pairs;
         for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
-            if (m_output_layer.m_inputs[i] < m_output_layer.m_trigger_values[i])
+            const auto activation = m_output_layer.m_inputs[i];
+            const auto trigger = m_output_layer.m_trigger_values[i];
+            if (activation < trigger)
                 continue; // neuron did not fire
             try_add_to_top_k(
-                top_k_pairs, static_cast<TokenID>(i), m_output_layer.m_inputs[i], m_output_layer.m_weights[i], top_k
+                top_k_pairs, static_cast<TokenID>(i),
+                 activation,
+                 trigger,
+                 top_k
             );
         }
         return top_k_pairs;
@@ -207,8 +212,9 @@ namespace rllm
                 {
                     const auto predicted_token = corpus.get_token_from_id(entry.token_id);
                     std::println(
-                        "\t predicted: {} / pred:'{}' (id: '{}'), {} (weight: {})",
+                        "\t prediction[{} of {}] / pred:'{}' (id: '{}'), {} (weight: {})",
                         prediction_index,
+                        predicted_token_id_lists.size(),
                         predicted_token,
                         entry.token_id,
                         entry.activation,

@@ -11,7 +11,6 @@ namespace rllm
         for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
             m_trigger_values[i] = get_random_value();
-            m_weights[i] = get_random_value();
         }
     }
 
@@ -19,7 +18,6 @@ namespace rllm
     {
         for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
-            m_weights[i] = std::clamp(m_weights[i] + learning_rate * delta[i] * m_inputs[i], 0.0f, 1.0f);
             // Adjust trigger: lower when delta > 0 (fire more), raise when delta < 0.
             m_trigger_values[i] = std::clamp(m_trigger_values[i] - learning_rate * delta[i], 0.0f, 1.0f);
         }

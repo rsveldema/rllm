@@ -30,15 +30,13 @@ namespace rllm
     void OutputLayer::load(const nlohmann::json& j)
     {
         json_helpers::deserialize_vector(j.at("trigger_values"), m_trigger_values);
-        json_helpers::deserialize_vector(j.at("weights"), m_weights);
         m_inputs.fill(0.0f);
     }
 
     nlohmann::json OutputLayer::save() const
     {
         return {
-            {"trigger_values", json_helpers::serialize_vector(m_trigger_values)},
-            {"weights", json_helpers::serialize_vector(m_weights)}
+            {"trigger_values", json_helpers::serialize_vector(m_trigger_values)}
         };
     }
 
