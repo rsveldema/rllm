@@ -1,0 +1,52 @@
+Checks: '-*,
+    abseil-*,
+    bugprone-*,
+        -bugprone-branch-clone,
+        -bugprone-unchecked-optional-access,
+    cert-*,
+    cppcoreguidelines-*,
+        -cppcoreguidelines-pro-bounds-constant-array-index,
+        -cppcoreguidelines-pro-type-vararg,
+        -cppcoreguidelines-non-private-member-variables-in-classes,
+    llvm-*,
+        -llvm-header-guard,
+        -llvm-include-order,
+    clang-analyzer-*,
+    modernize-*,
+        -modernize-use-trailing-return-type,
+        -modernize-use-default-member-init,
+        -modernize-use-nodiscard,
+        -modernize-avoid-c-arrays,
+        -modernize-use-using,
+        -modernize-use-ranges,
+    performance-*,
+        -performance-noexcept-move-constructor,
+        -performance-unnecessary-value-param,
+    portability-*,
+    readability-*,
+        -readability-redundant-member-init,
+        -readability-uppercase-literal-suffix,
+        -readability-else-after-return,
+        -readability-named-parameter,
+        -readability-redundant-access-specifiers,
+        -readability-magic-numbers,
+        -readability-avoid-return-with-void-value,
+    hicpp-*,
+        -hicpp-avoid-c-arrays,
+        -hicpp-uppercase-literal-suffix,
+        -hicpp-noexcept-move,
+        -hicpp-vararg,
+        -hicpp-member-init,
+        -hicpp-named-parameter,
+    misc-*,
+        -misc-non-private-member-variables-in-classes,
+        -misc-unused-parameters,
+        -misc-include-cleaner,'
+HeaderFilterRegex: '.*'
+ExtraArgs: ['--target=arm', '-pthread']
+CheckOptions:
+  - key:   cppcoreguidelines-rvalue-reference-param-not-moved.AllowPartialMove
+    value: true
+
+# -bugprone-unchecked-optional-access hangs on older tidy versions
+# -performance-unnecessary-value-param is reporting values that are being moved forward to other functions

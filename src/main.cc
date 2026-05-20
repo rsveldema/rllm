@@ -9,25 +9,38 @@ int main(int argc, char* argv[])
 {
     rllm::RLLM llm;
     bool train_mode = false;
-    const char *filename = "model.dat";
+    const char* filename = "model.dat";
 
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--file") == 0 && i + 1 < argc) {
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--file") == 0 && i + 1 < argc)
+        {
             filename = argv[++i];
-        } else if (std::strcmp(argv[i], "--train") == 0) {
+        }
+        else if (std::strcmp(argv[i], "--train") == 0)
+        {
             train_mode = true;
-        } else {
-            std::println("""Usage: {} [--train] [--file <filename>]\n"
-                         "  --train         Run in training mode (default is prompt mode)\n"
-                         "  --file <filename>  Specify the model file to load/save (default is '{}')",
-                         argv[0], filename);
+        }
+        else
+        {
+            std::println(
+                ""
+                "Usage: {} [--train] [--file <filename>]\n"
+                "  --train         Run in training mode (default is prompt mode)\n"
+                "  --file <filename>  Specify the model file to load/save (default is '{}')",
+                argv[0],
+                filename
+            );
             return 1;
         }
     }
 
-    if (train_mode) {
+    if (train_mode)
+    {
         llm.train_mode(filename);
-    } else {
+    }
+    else
+    {
         llm.prompt_mode(filename);
     }
 
