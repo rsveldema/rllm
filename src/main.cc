@@ -3,17 +3,25 @@
 
 #include <RLLM.hpp>
 
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 int main(int argc, char* argv[])
 {
+    std::srand(static_cast<unsigned>(std::time(nullptr)));
     rllm::RLLM llm;
     bool train_mode = false;
     const char* filename = "model.dat";
+    int num_layers = 2;
 
     for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], "--file") == 0 && i + 1 < argc)
+        if (std::strcmp(argv[i], "--layers") == 0 && ((i + 1) < argc))
+        {
+            num_layers = std::atoi(argv[++i]);
+        }
+        else if (std::strcmp(argv[i], "--file") == 0 && ((i + 1) < argc))
         {
             filename = argv[++i];
         }
@@ -37,7 +45,7 @@ int main(int argc, char* argv[])
 
     if (train_mode)
     {
-        llm.train_mode(filename);
+        llm.train_mode(filename, num_layers);
     }
     else
     {

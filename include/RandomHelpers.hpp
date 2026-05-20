@@ -5,13 +5,14 @@
 
 namespace rllm
 {
-    inline float get_random_value()
+    /** returns a random value in the range [min, max] */
+    inline float get_random_value(float min, float max)
     {
-        return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        return min + (static_cast<float>(rand()) / static_cast<float>(RAND_MAX)) * (max - min);
     }
 
     template <typename X, typename Y>
-    inline std::pair<X, Y> get_random_value_centered_around(X x, Y y, int range = 10)
+    inline std::pair<X, Y> get_random_value_centered_around(X x, Y y, int range = 3)
     {
         int k1 = rand() % (2 * range + 1) - range;
         int k2 = rand() % (2 * range + 1) - range;

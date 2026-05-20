@@ -59,6 +59,12 @@ namespace rllm
         return static_cast<IntermediateLayerIndex>(static_cast<int32_t>(id) + 1);
     }
 
+    template <typename T>
+    struct Range
+    {
+        T lo = T{0};
+        T hi = T{1};
+    };
 
     template <typename T, typename LengthType>
     class template_token_vector
@@ -114,10 +120,10 @@ namespace rllm
             m_data.fill(value);
         }
 
-        void add_with_clamp(LengthType index, T delta, T lo = T{0}, T hi = T{1})
+        void add_with_clamp(LengthType index, T delta, Range<T> range = {})
         {
             auto& cell = m_data[static_cast<size_t>(index)];
-            cell = std::clamp(cell + delta, lo, hi);
+            cell = std::clamp(cell + delta, range.lo, range.hi);
         }
 
       private:
@@ -172,15 +178,15 @@ namespace rllm
             }
         }
 
-        void add_with_clamp(const X x, const Y y, T delta, T lo = T{0}, T hi = T{1})
+        void add_with_clamp(const X x, const Y y, T delta, Range<T> range = {})
         {
             auto& cell = m_data[static_cast<size_t>(x)][static_cast<size_t>(y)];
-            cell = std::clamp(cell + delta, lo, hi);
+            cell = std::clamp(cell + delta, range.lo, range.hi);
         }
 
-        void add_with_clamp(const std::pair<const X, const Y>& indices, T delta, T lo = T{0}, T hi = T{1})
+        void add_with_clamp(const std::pair<const X, const Y>& indices, T delta, Range<T> range = {})
         {
-            add_with_clamp(indices.first, indices.second, delta, lo, hi);
+            add_with_clamp(indices.first, indices.second, delta, range);
         }
 
       private:

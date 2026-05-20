@@ -42,6 +42,12 @@ namespace rllm
         InputLayer m_input_layer;
         std::vector<IntermediateLayer> m_intermediate_layers;
         OutputLayer m_output_layer;
+
+        void dump_top_predictions(Corpus& corpus);
+        void dump_weights_and_triggers_for_token(TokenID token_id);
+        void dump_path_weights_and_triggers(TokenID token_id) const;
+        bool output_is_reachable_from_inputs(TokenID token_id) const;
+        bool has_active_path_to_token(TokenID token_id) const;
     };
 
     class RLLM
@@ -52,7 +58,7 @@ namespace rllm
         RLLM(const RLLM&) = delete;
         RLLM& operator=(const RLLM&) = delete;
 
-        void train_mode(const std::string& filename);
+        void train_mode(const std::string& filename, size_t num_layers);
         void prompt_mode(const std::string& filename);
     };
 

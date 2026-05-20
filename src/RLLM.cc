@@ -4,8 +4,6 @@
 #include <print>
 #include <string>
 
-const size_t num_layers = 2; // Example number of layers
-
 namespace rllm
 {
     RLLM::RLLM()
@@ -16,8 +14,9 @@ namespace rllm
     void RLLM::prompt_mode(const std::string& filename)
     {
         Corpus corpus;
+        size_t _num_layers = 2; // overriden when loaded from file
 
-        auto nn = std::make_unique<NeuralNetwork>(num_layers);
+        auto nn = std::make_unique<NeuralNetwork>(_num_layers);
         nn->load(filename);
 
         std::string line;
@@ -61,7 +60,7 @@ namespace rllm
         }
     }
 
-    void RLLM::train_mode(const std::string& filename)
+    void RLLM::train_mode(const std::string& filename, size_t num_layers)
     {
         std::println("Training mode");
 
