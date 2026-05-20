@@ -1,6 +1,7 @@
 
 #include <Corpus.hpp>
 #include <TokenIDFormatter.hpp>
+#include <JsonTensorHelpers.hpp>
 
 #include <cassert>
 #include <cstdlib>
@@ -165,5 +166,18 @@ namespace rllm
         const size_t random_index = static_cast<size_t>(rand()) % m_token_list.size();
         return m_token_list[random_index].get_training_input_line(min_size);
     }
+
+    void Corpus::save_token_map(const std::string& filename) const
+    {
+        nlohmann::json j;
+        for (const auto& [token, id] : m_token_to_id)
+        {
+            j[token] = id;
+        }
+        std::ofstream file{filename};
+        file << j.dump(2) << '\n';
+    }
+
+
 
 } // namespace rllm

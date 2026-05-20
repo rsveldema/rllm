@@ -4,6 +4,8 @@ target_sources(rllm_lib PRIVATE
     RLLM.cc
     Corpus.cpp
     InputLayer.cc
+    IntermediateLayer.cc
+    OutputLayer.cc
     NeuralNetwork.cc
     serialization.cc
 )

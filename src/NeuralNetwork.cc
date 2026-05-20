@@ -6,37 +6,6 @@
 
 namespace rllm
 {
-    // Helper functions
-
-    template <typename X, typename Y>
-    static std::pair<X, Y> get_random_value_centered_around(X x, Y y, int range = 10)
-    {
-        int k1 = rand() % (2 * range + 1) - range;
-        int k2 = rand() % (2 * range + 1) - range;
-
-        if ((static_cast<int>(x) + k1) < 0)
-        {
-            k1 = 0;
-        }
-
-        if ((static_cast<int>(y) + k2) < 0)
-        {
-            k2 = 0;
-        }
-
-        if ((static_cast<int>(x) + k1) >= static_cast<int>(X::MAX))
-        {
-            k1 = 0;
-        }
-
-        if (static_cast<int>(y) + k2 >= static_cast<int>(Y::MAX))
-        {
-            k2 = 0;
-        }
-
-        return std::make_pair(static_cast<X>(static_cast<int>(x) + k1), static_cast<Y>(static_cast<int>(y) + k2));
-    }
-
     static size_t clip_max(size_t value, size_t max)
     {
         if (value > max)
@@ -44,84 +13,7 @@ namespace rllm
         return value;
     }
 
-    static float get_random_value()
-    {
-        return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-    }
-
     // Layers
-
-    void IntermediateLayer::set_random_weights_and_connections()
-    {
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                m_inputs.set(i, pos, 0.0f);
-                m_trigger_values.set(i, pos, get_random_value());
-                m_weights.set(i, pos, get_random_value());
-                auto target = get_random_value_centered_around(i, pos);
-                m_connections.set(i, pos, target);
-            }
-        }
-    }
-
-    void IntermediateLayer::set_random_weights_and_connections_to_output_layer(Corpus& corpus)
-    {
-        // setup the layer JUST before the output layer.
-        // It needs to have connections to the output layer that are distributed
-        // across the tokens in the corpus.
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                m_inputs.set(i, pos, 0.0f);
-                m_trigger_values.set(i, pos, get_random_value());
-                m_weights.set(i, pos, get_random_value());
-                m_connections.set(
-                    i,
-                    pos,
-                    std::make_pair(
-                        static_cast<IntermediateLayerIndex>(static_cast<int>(i) % corpus.size()), PositionIndex::START
-                    )
-                );
-            }
-        }
-    }
-
-    void OutputLayer::set_random_weights_and_connections_for_output_layer(Corpus& corpus)
-    {
-        // setup the output layer itself. It has no connections to other neurons.
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
-        {
-            m_trigger_values[i] = get_random_value();
-            m_weights[i] = get_random_value();
-        }
-    }
-
-    void IntermediateLayer::propagate_forward(IntermediateLayer& next_layer)
-    {
-        next_layer.m_inputs.fill(0.0f);
-
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                if (m_inputs.get(i, pos) >= m_trigger_values.get(i, pos))
-                {
-                    const auto next_neuron_index = m_connections.get(i, pos);
-
-                    const auto weight = m_weights.get(i, pos);
-                    next_layer.m_inputs.set(
-                        next_neuron_index,
-                        std::clamp(
-                            next_layer.m_inputs.get(next_neuron_index) + weight * m_inputs.get(i, pos), 0.0f, 1.0f
-                        )
-                    );
-                }
-            }
-        }
-    }
 
     void NeuralNetwork::propagate_forward()
     {
@@ -131,80 +23,6 @@ namespace rllm
         }
     }
 
-
-    void OutputLayer::update_output_weights(const template_token_vector<float, TokenID>& delta, float learning_rate)
-    {
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
-        {
-            m_weights[i] = std::clamp(m_weights[i] + learning_rate * delta[i] * m_inputs[i], 0.0f, 1.0f);
-            // Adjust trigger: lower when delta > 0 (fire more), raise when delta < 0.
-            m_trigger_values[i] = std::clamp(m_trigger_values[i] - learning_rate * delta[i], 0.0f, 1.0f);
-        }
-    }
-
-    void IntermediateLayer::propagate_backward(
-        const template_token_vector<float, TokenID>& delta,
-        template_token_matrix<float, IntermediateLayerIndex, PositionIndex>& prev_delta,
-        float learning_rate
-    )
-    {
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                if (m_inputs.get(i, pos) < m_trigger_values.get(i, pos))
-                    continue; // neuron did not fire, no gradient to propagate
-
-                const auto next_neuron_index = m_connections.get(i, pos);
-                assert(static_cast<TokenID>(i) < TokenID::MAX);
-                const float d = delta[static_cast<TokenID>(i)];
-
-                // Increase weight when downstream error is positive (need more signal).
-                m_weights.set(
-                    i, pos, std::clamp(m_weights.get(i, pos) + learning_rate * d * m_inputs.get(i, pos), 0.0f, 1.0f)
-                );
-
-                // Lower trigger makes this neuron fire more easily — helpful when
-                // downstream error is positive.
-                m_trigger_values.set(i, pos, std::clamp(m_trigger_values.get(i, pos) - learning_rate * d, 0.0f, 1.0f));
-
-                // Accumulate gradient for the layer below.
-                prev_delta.set(i, pos, prev_delta.get(i, pos) + d * m_weights.get(i, pos));
-            }
-        }
-    }
-
-
-    void IntermediateLayer::propagate_backward(
-        const template_token_matrix<float, IntermediateLayerIndex, PositionIndex>& delta,
-        template_token_matrix<float, IntermediateLayerIndex, PositionIndex>& prev_delta,
-        float learning_rate
-    )
-    {
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                if (m_inputs.get(i, pos) < m_trigger_values.get(i, pos))
-                    continue; // neuron did not fire, no gradient to propagate
-
-                const auto next_neuron_index = m_connections.get(i, pos);
-                const float d = delta.get(i, pos);
-
-                // Increase weight when downstream error is positive (need more signal).
-                m_weights.set(
-                    i, pos, std::clamp(m_weights.get(i, pos) + learning_rate * d * m_inputs.get(i, pos), 0.0f, 1.0f)
-                );
-
-                // Lower trigger makes this neuron fire more easily — helpful when
-                // downstream error is positive.
-                m_trigger_values.set(i, pos, std::clamp(m_trigger_values.get(i, pos) - learning_rate * d, 0.0f, 1.0f));
-
-                // Accumulate gradient for the layer below.
-                prev_delta.set(i, pos, prev_delta.get(i, pos) + d * m_weights.get(i, pos));
-            }
-        }
-    }
 
     // NeuralNetwork
 
@@ -250,25 +68,9 @@ namespace rllm
         return top_k_pairs;
     }
 
-    void OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
-    {
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
-        {
-            score.values[i] = m_inputs[i];
-        }
-    }
-
     void NeuralNetwork::compute_score(Score& score, const TokenID expected_output_token)
     {
         m_output_layer.compute_score(score, expected_output_token);
-    }
-
-    void OutputLayer::compute_deltas(const Score& score, template_token_vector<float, TokenID>& deltas) const
-    {
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
-        {
-            deltas[i] = score.values[i] - m_inputs[i];
-        }
     }
 
 
