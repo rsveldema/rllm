@@ -51,46 +51,11 @@ namespace rllm
 
     // Layers
 
-    void InputLayer::set_input_layer(const InputLine& input)
-    {
-        m_inputs.fill(0.0f);
-        for (size_t i = 0; i < input.size(); ++i)
-        {
-            if (i >= static_cast<size_t>(PositionIndex::MAX))
-            {
-                std::println(
-                    "Warning: input line has more tokens than the max position index. Ignoring tokens beyond position "
-                    "{}.",
-                    static_cast<size_t>(PositionIndex::MAX)
-                );
-                break; // ignore tokens beyond the max position index
-            }
-
-            const auto token_id = input[i];
-            m_inputs.set(token_id, static_cast<PositionIndex>(i), 1.0f);
-        }
-    }
-
-    void InputLayer::set_random_weights_and_connections()
-    {
-        for (auto i = TokenID::START; i < TokenID::MAX; inc(i))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; inc(pos))
-            {
-                m_inputs.set(i, pos, 0.0f);
-                m_trigger_values.set(i, pos, get_random_value());
-                m_weights.set(i, pos, get_random_value());
-                auto [target, pos_index] = get_random_value_centered_around(i, pos);
-                m_connections.set(i, pos, std::make_pair(static_cast<IntermediateLayerIndex>(target), pos_index));
-            }
-        }
-    }
-
     void IntermediateLayer::set_random_weights_and_connections()
     {
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; inc(i))
+        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
         {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; inc(pos))
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
             {
                 m_inputs.set(i, pos, 0.0f);
                 m_trigger_values.set(i, pos, get_random_value());
@@ -106,9 +71,9 @@ namespace rllm
         // setup the layer JUST before the output layer.
         // It needs to have connections to the output layer that are distributed
         // across the tokens in the corpus.
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; inc(i))
+        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
         {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; inc(pos))
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
             {
                 m_inputs.set(i, pos, 0.0f);
                 m_trigger_values.set(i, pos, get_random_value());
@@ -127,7 +92,7 @@ namespace rllm
     void OutputLayer::set_random_weights_and_connections_for_output_layer(Corpus& corpus)
     {
         // setup the output layer itself. It has no connections to other neurons.
-        for (TokenID i = TokenID::START; i < TokenID::MAX; inc(i))
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
             m_trigger_values[i] = get_random_value();
             m_weights[i] = get_random_value();
@@ -138,9 +103,9 @@ namespace rllm
     {
         next_layer.m_inputs.fill(0.0f);
 
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; inc(i))
+        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
         {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; inc(pos))
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
             {
                 if (m_inputs.get(i, pos) >= m_trigger_values.get(i, pos))
                 {
@@ -169,7 +134,7 @@ namespace rllm
 
     void OutputLayer::update_output_weights(const template_token_vector<float, TokenID>& delta, float learning_rate)
     {
-        for (const auto i = TokenID::START; i < TokenID::MAX; inc(i))
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
             m_weights[i] = std::clamp(m_weights[i] + learning_rate * delta[i] * m_inputs[i], 0.0f, 1.0f);
             // Adjust trigger: lower when delta > 0 (fire more), raise when delta < 0.
@@ -183,9 +148,9 @@ namespace rllm
         float learning_rate
     )
     {
-        for (const auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; inc(i))
+        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
         {
-            for (const auto pos = PositionIndex::START; pos < PositionIndex::MAX; inc(pos))
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
             {
                 if (m_inputs.get(i, pos) < m_trigger_values.get(i, pos))
                     continue; // neuron did not fire, no gradient to propagate
@@ -216,9 +181,9 @@ namespace rllm
         float learning_rate
     )
     {
-        for (const auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; inc(i))
+        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
         {
-            for (const auto pos = PositionIndex::START; pos < PositionIndex::MAX; inc(pos))
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
             {
                 if (m_inputs.get(i, pos) < m_trigger_values.get(i, pos))
                     continue; // neuron did not fire, no gradient to propagate
@@ -274,7 +239,7 @@ namespace rllm
         assert(!m_intermediate_layers.empty());
 
         std::vector<OutputToken> top_k_pairs;
-        for (const auto i = TokenID::START; i < TokenID::MAX; inc(i))
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
             if (m_output_layer.m_inputs[i] < m_output_layer.m_trigger_values[i])
                 continue; // neuron did not fire
@@ -287,7 +252,7 @@ namespace rllm
 
     void OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
-        for (const auto i = TokenID::START; i < TokenID::MAX; inc(i))
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
             score.values[i] = m_inputs[i];
         }
@@ -300,7 +265,7 @@ namespace rllm
 
     void OutputLayer::compute_deltas(const Score& score, template_token_vector<float, TokenID>& deltas) const
     {
-        for (const auto i = TokenID::START; i < TokenID::MAX; inc(i))
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
             deltas[i] = score.values[i] - m_inputs[i];
         }
@@ -342,7 +307,7 @@ namespace rllm
         {
             m_intermediate_layers[i].set_random_weights_and_connections();
         }
-        m_intermediate_layers[m_intermediate_layers.size() - 1].set_random_weights_and_connections_to_output_layer(
+        m_intermediate_layers.back().set_random_weights_and_connections_to_output_layer(
             corpus
         );
 

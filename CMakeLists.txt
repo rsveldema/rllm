@@ -22,6 +22,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_subdirectory(src)
 add_subdirectory(tests)
 
-add_executable(rllm src/main.cc)
+add_executable(rllm src/main.cc
+  include/LayerPrimitives.hpp)
 target_link_libraries(rllm PRIVATE rllm_lib)
 target_include_directories(rllm PRIVATE ${CMAKE_SOURCE_DIR}/src)
