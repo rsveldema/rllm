@@ -1,6 +1,7 @@
 #include <InputLayer.hpp>
 #include <RandomHelpers.hpp>
 
+#include <algorithm>
 #include <print>
 
 namespace rllm
@@ -21,7 +22,27 @@ namespace rllm
             }
 
             const auto token_id = input[i];
+            assert(token_id < TokenID::MAX);
+
             m_inputs.set(token_id, i, 1.0f);
+        }
+    }
+
+    void InputLayer::propagate_forward(IntermediateLayer& next_layer) const
+    {
+        next_layer.fill_inputs(0.0f);
+        for (auto token = TokenID::START; token < TokenID::MAX; token = inc(token))
+        {
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
+            {
+                const auto input_value = m_inputs.get(token, pos);
+                if (input_value <= 0.0f)
+                    continue;
+
+                const auto next_neuron_index = m_connections.get(token, pos);
+                const auto weight = m_weights.get(token, pos);
+                next_layer.accumulate_input(next_neuron_index, weight * input_value);
+            }
         }
     }
 

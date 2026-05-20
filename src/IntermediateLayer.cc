@@ -44,6 +44,30 @@ namespace rllm
         }
     }
 
+    void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer) const
+    {
+        output_layer.m_inputs.fill(0.0f);
+        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
+        {
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
+            {
+                const auto input_value = m_inputs.get(i, pos);
+                if (input_value < m_trigger_values.get(i, pos))
+                    continue;
+
+                const auto [target, _target_pos] = m_connections.get(i, pos);
+                if (static_cast<size_t>(target) >= static_cast<size_t>(TokenID::MAX))
+                    continue;
+
+                const auto token_id = static_cast<TokenID>(target);
+                const auto weight = m_weights.get(i, pos);
+                output_layer.m_inputs[token_id] = std::clamp(
+                    output_layer.m_inputs[token_id] + weight * input_value, 0.0f, 1.0f
+                );
+            }
+        }
+    }
+
     void IntermediateLayer::propagate_forward(IntermediateLayer& next_layer)
     {
         next_layer.m_inputs.fill(0.0f);
@@ -81,9 +105,10 @@ namespace rllm
                 if (m_inputs.get(i, pos) < m_trigger_values.get(i, pos))
                     continue; // neuron did not fire, no gradient to propagate
 
-                const auto next_neuron_index = m_connections.get(i, pos);
-                assert(static_cast<TokenID>(i) < TokenID::MAX);
-                const float d = delta[static_cast<TokenID>(i)];
+                const auto [target_token, _target_pos] = m_connections.get(i, pos);
+                const auto token_id = static_cast<TokenID>(target_token);
+                assert(token_id < TokenID::MAX);
+                const float d = delta[token_id];
 
                 // Increase weight when downstream error is positive (need more signal).
                 m_weights.set(

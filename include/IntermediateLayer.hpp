@@ -2,7 +2,9 @@
 
 #include <LayerPrimitives.hpp>
 #include <Corpus.hpp>
+#include <OutputLayer.hpp>
 
+#include <algorithm>
 #include <nlohmann/json_fwd.hpp>
 
 
@@ -20,6 +22,14 @@ namespace rllm
         IntermediateLayer& operator=(IntermediateLayer&&) = delete;
 
         void propagate_forward(IntermediateLayer& next_layer);
+        void propagate_forward_to_output(OutputLayer& output_layer) const;
+
+        void fill_inputs(float value) { m_inputs.fill(value); }
+        void accumulate_input(std::pair<IntermediateLayerIndex, PositionIndex> index, float value)
+        {
+            m_inputs.add_with_clamp(index, value);
+        }
+
         void propagate_backward(
             const template_token_matrix<float, IntermediateLayerIndex, PositionIndex>& delta,
             template_token_matrix<float, IntermediateLayerIndex, PositionIndex>& prev_delta,

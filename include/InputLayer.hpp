@@ -2,6 +2,7 @@
 
 #include <LayerPrimitives.hpp>
 #include <Corpus.hpp>
+#include <IntermediateLayer.hpp>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -22,6 +23,8 @@ namespace rllm
         {
             m_inputs.set(token_id, pos_index, value);
         }
+
+        void propagate_forward(IntermediateLayer& next_layer) const;
 
         void set_random_weights_and_connections();
         void load(const nlohmann::json& j);

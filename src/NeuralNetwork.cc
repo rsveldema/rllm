@@ -20,27 +20,7 @@ namespace rllm
         assert(!m_intermediate_layers.empty());
 
         // Propagate from input layer into the first intermediate layer.
-        auto& first_layer = m_intermediate_layers.front();
-        first_layer.m_inputs.fill(0.0f);
-        for (auto token = TokenID::START; token < TokenID::MAX; token = inc(token))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                if (m_input_layer.m_inputs.get(token, pos) < m_input_layer.m_trigger_values.get(token, pos))
-                    continue;
-
-                const auto next_neuron_index = m_input_layer.m_connections.get(token, pos);
-                const auto weight = m_input_layer.m_weights.get(token, pos);
-                first_layer.m_inputs.set(
-                    next_neuron_index,
-                    std::clamp(
-                        first_layer.m_inputs.get(next_neuron_index) + weight * m_input_layer.m_inputs.get(token, pos),
-                        0.0f,
-                        1.0f
-                    )
-                );
-            }
-        }
+        m_input_layer.propagate_forward(m_intermediate_layers.front());
 
         // Propagate across intermediate layers.
         for (size_t i = 0; i < (m_intermediate_layers.size() - 1); ++i)
@@ -49,43 +29,24 @@ namespace rllm
         }
 
         // Propagate from the last intermediate layer into the output layer.
-        m_output_layer.m_inputs.fill(0.0f);
-        const auto& last_layer = m_intermediate_layers.back();
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                if (last_layer.m_inputs.get(i, pos) < last_layer.m_trigger_values.get(i, pos))
-                    continue;
-
-                const auto [target, _target_pos] = last_layer.m_connections.get(i, pos);
-                if (static_cast<size_t>(target) >= static_cast<size_t>(TokenID::MAX))
-                    continue;
-
-                const auto token_id = static_cast<TokenID>(target);
-                const auto weight = last_layer.m_weights.get(i, pos);
-                m_output_layer.m_inputs[token_id] = std::clamp(
-                    m_output_layer.m_inputs[token_id] + weight * last_layer.m_inputs.get(i, pos), 0.0f, 1.0f
-                );
-            }
-        }
+        m_intermediate_layers.back().propagate_forward_to_output(m_output_layer);
     }
 
 
     // NeuralNetwork
 
-    static void try_add_to_top_k(std::vector<OutputToken>& top_k, TokenID id, float value, float weight, size_t k)
+    static void try_add_to_top_k(std::vector<OutputToken>& top_k, TokenID id, float value, size_t k)
     {
         if (top_k.size() < k)
         {
-            top_k.emplace_back(id, value, weight);
+            top_k.emplace_back(id, value);
             std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
                 return a.activation > b.activation;
             });
         }
         else if (!top_k.empty() && value > top_k.back().activation)
         {
-            top_k.back() = {id, value, weight};
+            top_k.back() = {id, value};
             std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
                 return a.activation > b.activation;
             });
@@ -99,7 +60,9 @@ namespace rllm
     }
 
     // returns the top-K with the biggest activation in the output layer,
-    // sorted descending by activation
+    // sorted descending by activation.
+    // if no prediction can be made, returns an empty list.
+    // Do not try to return any if the activation is 0 or negative, as that means the token did not activate at all.
     std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k, Corpus& corpus) const
     {
         assert(!m_intermediate_layers.empty());
@@ -108,18 +71,10 @@ namespace rllm
         for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
             const auto activation = m_output_layer.m_inputs[i];
-            const auto trigger = m_output_layer.m_trigger_values[i];
-            assert(trigger > 0.0f); // if trigger is 0, the neuron always fires, which is not useful
-            /*
-            if (activation == 0)
-            {
+            if (activation <= 0.0f) {
                 continue; // skip tokens that did not activate at all
-            }*/
-            if (activation < trigger)
-            {
-                continue; // neuron did not fire
             }
-            try_add_to_top_k(top_k_pairs, i, activation, trigger, top_k);
+            try_add_to_top_k(top_k_pairs, i, activation, top_k);
         }
         return top_k_pairs;
     }
@@ -141,8 +96,6 @@ namespace rllm
         auto output_layer_delta = std::make_unique<template_token_vector<float, TokenID>>();
         static_assert(sizeof(*output_layer_delta) < 65536, "output_layer_delta is too large for the stack");
         m_output_layer.compute_deltas(score, *output_layer_delta);
-        // Update the output layer's weights directly from the score delta.
-        m_output_layer.update_output_weights(*output_layer_delta, LEARNING_RATE);
 
         auto delta = std::make_unique<template_token_matrix<float, IntermediateLayerIndex, PositionIndex>>();
         auto prev_delta = std::make_unique<template_token_matrix<float, IntermediateLayerIndex, PositionIndex>>();
@@ -167,8 +120,6 @@ namespace rllm
             m_intermediate_layers[i].set_random_weights_and_connections();
         }
         m_intermediate_layers.back().set_random_weights_and_connections_to_output_layer(corpus);
-
-        m_output_layer.set_random_weights_and_connections_for_output_layer(corpus);
     }
 
     void NeuralNetwork::train(Corpus& corpus)
@@ -180,7 +131,7 @@ namespace rllm
         // Get a training example from the corpus. The example needs at least 2
         // tokens. Note that the list can be padded to 2 tokens using
         // UNKNOWN_TOKEN_ID if necessary.
-        const auto train_output = corpus.get_training_input_line(2);
+        const auto train_output = corpus.get_training_input_line(3);
         auto train_input = train_output;
         const auto expected_output_token = train_input.back();
         train_input.pop_back();
@@ -213,14 +164,13 @@ namespace rllm
                 {
                     const auto predicted_token = corpus.get_token_from_id(entry.token_id);
                     std::println(
-                        "\t prediction[{} of {}] / pred:'{}' (id: '{}'), {} (weight: {})",
+                        "\t prediction[{} of {}] / pred:'{}' (id: '{}'), {}",
                         prediction_index,
                         predicted_token_id_lists.size(),
                         predicted_token,
                         entry.token_id,
-                        entry.activation,
-                        entry.weight
-                    );
+                        entry.activation
+                        );
                     prediction_index++;
                 }
             }

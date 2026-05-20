@@ -5,24 +5,6 @@
 
 namespace rllm
 {
-    void OutputLayer::set_random_weights_and_connections_for_output_layer(Corpus& corpus)
-    {
-        // setup the output layer itself. It has no connections to other neurons.
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
-        {
-            m_trigger_values[i] = get_random_value();
-        }
-    }
-
-    void OutputLayer::update_output_weights(const template_token_vector<float, TokenID>& delta, float learning_rate)
-    {
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
-        {
-            // Adjust trigger: lower when delta > 0 (fire more), raise when delta < 0.
-            m_trigger_values[i] = std::clamp(m_trigger_values[i] - learning_rate * delta[i], 0.0f, 1.0f);
-        }
-    }
-
     void OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
         for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))

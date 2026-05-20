@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <string>
 #include <utility>
+#include <vector>
+#include <algorithm>
 
 namespace rllm
 {
@@ -164,6 +166,17 @@ namespace rllm
             }
         }
 
+        void add_with_clamp(const X x, const Y y, T delta, T lo = T{0}, T hi = T{1})
+        {
+            auto& cell = m_data[static_cast<size_t>(x)][static_cast<size_t>(y)];
+            cell = std::clamp(cell + delta, lo, hi);
+        }
+
+        void add_with_clamp(const std::pair<const X, const Y>& indices, T delta, T lo = T{0}, T hi = T{1})
+        {
+            add_with_clamp(indices.first, indices.second, delta, lo, hi);
+        }
+
       private:
         using inner_array_t = std::array<T, static_cast<size_t>(Y::MAX)>;
         using matrix_data_t = std::array<inner_array_t, static_cast<size_t>(X::MAX)>;
@@ -179,7 +192,6 @@ namespace rllm
     {
         TokenID token_id;
         float activation;
-        float weight;
     };
 
 } // namespace rllm

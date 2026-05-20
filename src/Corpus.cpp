@@ -166,6 +166,11 @@ namespace rllm
     {
         assert(!m_token_list.empty());
 
+        for (const auto& token_data : m_token_list)
+        {
+            return token_data.get_training_input_line(min_size);
+        }
+
         const size_t random_index = static_cast<size_t>(rand()) % m_token_list.size();
         return m_token_list[random_index].get_training_input_line(min_size);
     }
