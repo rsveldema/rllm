@@ -93,11 +93,12 @@ namespace rllm
                 token_data.next_line();
                 for (const auto& token : tokens)
                 {
-
                     const auto it = m_token_to_id.find(token);
                     if (it == m_token_to_id.end())
                     {
                         const auto new_id = inc(next_id);
+                        next_id = new_id;
+
                         m_token_to_id.emplace(token, new_id);
 
                         token_data.add(new_id);
