@@ -29,7 +29,8 @@ namespace rllm
     {
         for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
-            score.values[i] = m_inputs[i];
+            // One-hot target: expected token should fire, all others should not.
+            score.values[i] = (i == expected_output_token) ? 1.0f : 0.0f;
         }
     }
 
