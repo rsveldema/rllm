@@ -109,14 +109,17 @@ namespace rllm
         {
             const auto activation = m_output_layer.m_inputs[i];
             const auto trigger = m_output_layer.m_trigger_values[i];
+            assert(trigger > 0.0f); // if trigger is 0, the neuron always fires, which is not useful
+            /*
+            if (activation == 0)
+            {
+                continue; // skip tokens that did not activate at all
+            }*/
             if (activation < trigger)
+            {
                 continue; // neuron did not fire
-            try_add_to_top_k(
-                top_k_pairs, static_cast<TokenID>(i),
-                 activation,
-                 trigger,
-                 top_k
-            );
+            }
+            try_add_to_top_k(top_k_pairs, i, activation, trigger, top_k);
         }
         return top_k_pairs;
     }
@@ -136,7 +139,7 @@ namespace rllm
         // Negative  → neuron fires too much    → decrease weight.
 
         auto output_layer_delta = std::make_unique<template_token_vector<float, TokenID>>();
-        static_assert(sizeof(*output_layer_delta) < 65536, "output_layer_delta is too large for the stack" );
+        static_assert(sizeof(*output_layer_delta) < 65536, "output_layer_delta is too large for the stack");
         m_output_layer.compute_deltas(score, *output_layer_delta);
         // Update the output layer's weights directly from the score delta.
         m_output_layer.update_output_weights(*output_layer_delta, LEARNING_RATE);
@@ -163,9 +166,7 @@ namespace rllm
         {
             m_intermediate_layers[i].set_random_weights_and_connections();
         }
-        m_intermediate_layers.back().set_random_weights_and_connections_to_output_layer(
-            corpus
-        );
+        m_intermediate_layers.back().set_random_weights_and_connections_to_output_layer(corpus);
 
         m_output_layer.set_random_weights_and_connections_for_output_layer(corpus);
     }
