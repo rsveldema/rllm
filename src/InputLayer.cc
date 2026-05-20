@@ -5,21 +5,12 @@
 
 namespace rllm
 {
-
-    namespace
-    {
-        static float get_random_value()
-        {
-            return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-        }
-    } // namespace
-
     void InputLayer::set_input_layer(const InputLine& input)
     {
         m_inputs.fill(0.0f);
-        for (size_t i = 0; i < input.size(); ++i)
+        for (PositionIndex i = PositionIndex::START; i < static_cast<PositionIndex>(input.size()); i = inc(i))
         {
-            if (i >= static_cast<size_t>(PositionIndex::MAX))
+            if (i >= PositionIndex::MAX)
             {
                 std::println(
                     "Warning: input line has more tokens than the max position index. Ignoring tokens beyond position "
@@ -30,7 +21,7 @@ namespace rllm
             }
 
             const auto token_id = input[i];
-            m_inputs.set(token_id, static_cast<PositionIndex>(i), 1.0f);
+            m_inputs.set(token_id, i, 1.0f);
         }
     }
 

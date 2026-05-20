@@ -17,9 +17,57 @@ namespace rllm
 
     void NeuralNetwork::propagate_forward()
     {
+        assert(!m_intermediate_layers.empty());
+
+        // Propagate from input layer into the first intermediate layer.
+        auto& first_layer = m_intermediate_layers.front();
+        first_layer.m_inputs.fill(0.0f);
+        for (auto token = TokenID::START; token < TokenID::MAX; token = inc(token))
+        {
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
+            {
+                if (m_input_layer.m_inputs.get(token, pos) < m_input_layer.m_trigger_values.get(token, pos))
+                    continue;
+
+                const auto next_neuron_index = m_input_layer.m_connections.get(token, pos);
+                const auto weight = m_input_layer.m_weights.get(token, pos);
+                first_layer.m_inputs.set(
+                    next_neuron_index,
+                    std::clamp(
+                        first_layer.m_inputs.get(next_neuron_index) + weight * m_input_layer.m_inputs.get(token, pos),
+                        0.0f,
+                        1.0f
+                    )
+                );
+            }
+        }
+
+        // Propagate across intermediate layers.
         for (size_t i = 0; i < (m_intermediate_layers.size() - 1); ++i)
         {
             m_intermediate_layers[i].propagate_forward(m_intermediate_layers[i + 1]);
+        }
+
+        // Propagate from the last intermediate layer into the output layer.
+        m_output_layer.m_inputs.fill(0.0f);
+        const auto& last_layer = m_intermediate_layers.back();
+        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
+        {
+            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
+            {
+                if (last_layer.m_inputs.get(i, pos) < last_layer.m_trigger_values.get(i, pos))
+                    continue;
+
+                const auto [target, _target_pos] = last_layer.m_connections.get(i, pos);
+                if (static_cast<size_t>(target) >= static_cast<size_t>(TokenID::MAX))
+                    continue;
+
+                const auto token_id = static_cast<TokenID>(target);
+                const auto weight = last_layer.m_weights.get(i, pos);
+                m_output_layer.m_inputs[token_id] = std::clamp(
+                    m_output_layer.m_inputs[token_id] + weight * last_layer.m_inputs.get(i, pos), 0.0f, 1.0f
+                );
+            }
         }
     }
 
@@ -82,22 +130,23 @@ namespace rllm
         // Positive  → neuron fires too little  → increase weight.
         // Negative  → neuron fires too much    → decrease weight.
 
-        template_token_vector<float, TokenID> output_layer_delta;
-        m_output_layer.compute_deltas(score, output_layer_delta);
+        auto output_layer_delta = std::make_unique<template_token_vector<float, TokenID>>();
+        static_assert(sizeof(*output_layer_delta) < 65536, "output_layer_delta is too large for the stack" );
+        m_output_layer.compute_deltas(score, *output_layer_delta);
         // Update the output layer's weights directly from the score delta.
-        m_output_layer.update_output_weights(output_layer_delta, LEARNING_RATE);
+        m_output_layer.update_output_weights(*output_layer_delta, LEARNING_RATE);
 
-        template_token_matrix<float, IntermediateLayerIndex, PositionIndex> delta;
-        template_token_matrix<float, IntermediateLayerIndex, PositionIndex> prev_delta;
-        m_intermediate_layers.back().propagate_backward(output_layer_delta, delta, LEARNING_RATE);
+        auto delta = std::make_unique<template_token_matrix<float, IntermediateLayerIndex, PositionIndex>>();
+        auto prev_delta = std::make_unique<template_token_matrix<float, IntermediateLayerIndex, PositionIndex>>();
+        m_intermediate_layers.back().propagate_backward(*output_layer_delta, *delta, LEARNING_RATE);
 
         // Walk backwards through the remaining layers.
         assert(m_intermediate_layers.size() >= 2);
         for (int l = static_cast<int>(m_intermediate_layers.size()) - 2; l >= 0; --l)
         {
-            prev_delta.fill(0.0f);
-            m_intermediate_layers[l].propagate_backward(delta, prev_delta, LEARNING_RATE);
-            delta = prev_delta;
+            prev_delta->fill(0.0f);
+            m_intermediate_layers[l].propagate_backward(*delta, *prev_delta, LEARNING_RATE);
+            *delta = *prev_delta;
         }
     }
 

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <Corpus.hpp>
 
 #include <nlohmann/json_fwd.hpp>
+
 
 namespace rllm
 {

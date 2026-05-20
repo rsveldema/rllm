@@ -1,31 +1,15 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
-#include <cassert>
+
+#include <LayerPrimitives.hpp>
 
 namespace rllm
 {
-
-    enum class TokenID : int32_t {
-        UNKNOWN_TOKEN_ID = -1,
-        START = 0,
-        MAX = 4096
-    };
-
-    static inline TokenID inc(TokenID id)
-    {
-        assert(id != TokenID::UNKNOWN_TOKEN_ID);
-        assert(id < TokenID::MAX);
-        return static_cast<TokenID>(static_cast<int32_t>(id) + 1);
-    }
-
-    using Token = std::string;
-
-    using InputLine = std::vector<TokenID>;
-
     class Corpus
     {
       public:
@@ -71,7 +55,7 @@ namespace rllm
                 const auto random_index = static_cast<size_t>(rand()) % m_data.size();
                 InputLine result = m_data[random_index];
 
-                while (result.size() < min_size)
+                while (result.size() < static_cast<PositionIndex>(min_size))
                 {
                     result.push_back(TokenID::UNKNOWN_TOKEN_ID);
                 }

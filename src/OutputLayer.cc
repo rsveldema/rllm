@@ -1,18 +1,10 @@
 #include <OutputLayer.hpp>
+#include <RandomHelpers.hpp>
 
 #include <algorithm>
 
 namespace rllm
 {
-
-    namespace
-    {
-        static float get_random_value()
-        {
-            return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-        }
-    } // namespace
-
     void OutputLayer::set_random_weights_and_connections_for_output_layer(Corpus& corpus)
     {
         // setup the output layer itself. It has no connections to other neurons.

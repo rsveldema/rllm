@@ -117,9 +117,9 @@ namespace rllm
         save_token_map("token_map.json");
     }
 
-    std::vector<TokenID> Corpus::get_token_ids(const std::string& text) const
+    InputLine Corpus::get_token_ids(const std::string& text) const
     {
-        std::vector<TokenID> ids;
+        InputLine ids;
         for (const auto& token : tokenize(text))
         {
             const auto it = m_token_to_id.find(token);
@@ -150,11 +150,13 @@ namespace rllm
     std::string Corpus::get_line(const InputLine& line) const
     {
         std::string result;
-        for (const auto id : line)
+        for (auto i = PositionIndex::START; i < line.size(); i = inc(i))
         {
             if (!result.empty())
+            {
                 result += ' ';
-            result += get_token_from_id(id);
+            }
+            result += get_token_from_id(line[i]);
         }
         return result;
     }

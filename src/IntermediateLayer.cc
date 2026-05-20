@@ -6,15 +6,6 @@
 
 namespace rllm
 {
-
-    namespace
-    {
-        static float get_random_value()
-        {
-            return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-        }
-    } // namespace
-
     void IntermediateLayer::set_random_weights_and_connections()
     {
         for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))

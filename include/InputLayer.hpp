@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <Corpus.hpp>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -34,6 +35,8 @@ namespace rllm
         // neuron 'i' is connected to neuron 'm_connections[i,j]' in the next layer
         template_token_matrix<std::pair<IntermediateLayerIndex, PositionIndex>, TokenID, PositionIndex>
             m_connections;
+
+        friend class NeuralNetwork;
     };
 
 } // namespace rllm

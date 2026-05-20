@@ -3,6 +3,7 @@
 #include <LayerPrimitives.hpp>
 
 #include <nlohmann/json_fwd.hpp>
+#include <Corpus.hpp>
 
 namespace rllm
 {

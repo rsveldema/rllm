@@ -1,19 +1,36 @@
 #pragma once
 
-#include <Corpus.hpp>
-
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <string>
+#include <utility>
 
 namespace rllm
 {
+    enum class TokenID : int32_t
+    {
+        UNKNOWN_TOKEN_ID = -1,
+        START = 0,
+        MAX = 4096
+    };
+
+    static inline TokenID inc(TokenID id)
+    {
+        assert(id != TokenID::UNKNOWN_TOKEN_ID);
+        assert(id < TokenID::MAX);
+        return static_cast<TokenID>(static_cast<int32_t>(id) + 1);
+    }
+
+
+    using Token = std::string;
+
     // position of a token in the input sequence. For example, in the input "the cat sat", the token "cat" has
     // position 1.
     enum class PositionIndex : size_t
     {
         START = 0,
-        MAX = 32,
+        MAX = 128,
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
@@ -39,6 +56,7 @@ namespace rllm
         assert(id < IntermediateLayerIndex::MAX);
         return static_cast<IntermediateLayerIndex>(static_cast<int32_t>(id) + 1);
     }
+    
 
     template <typename T, typename LengthType>
     class template_token_vector
@@ -49,8 +67,35 @@ namespace rllm
             m_data.fill(T{});
         }
         ~template_token_vector() = default;
-        template_token_vector(const template_token_vector&) = delete;
-        template_token_vector& operator=(const template_token_vector&) = delete;
+
+        void push_back(T value)
+        {
+            assert(len < LengthType::MAX);
+            m_data[static_cast<size_t>(len)] = value;
+            len = static_cast<LengthType>(static_cast<size_t>(len) + 1);
+        }
+
+        const T& back() const
+        {
+            assert(len > LengthType::START);
+            return m_data[static_cast<size_t>(len) - 1];
+        }
+
+        void pop_back()
+        {
+            assert(len > LengthType::START);
+            len = static_cast<LengthType>(static_cast<size_t>(len) - 1);
+        }
+
+        bool empty() const
+        {
+            return len == LengthType::START;
+        }
+
+        LengthType size() const
+        {
+            return len;
+        }
 
         T& operator[](LengthType index)
         {
@@ -70,7 +115,11 @@ namespace rllm
       private:
         using token_vector_data_t = std::array<T, static_cast<size_t>(LengthType::MAX)>;
         token_vector_data_t m_data;
+        LengthType len = LengthType::START;
     };
+
+    using InputLine = template_token_vector<TokenID, PositionIndex>;
+
 
     template <typename T, typename X, typename Y>
     class template_token_matrix

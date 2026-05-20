@@ -5,6 +5,11 @@
 
 namespace rllm
 {
+    inline float get_random_value()
+    {
+        return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+    }
+
     template <typename X, typename Y>
     inline std::pair<X, Y> get_random_value_centered_around(X x, Y y, int range = 10)
     {

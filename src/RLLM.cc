@@ -17,8 +17,8 @@ namespace rllm
     {
         Corpus corpus;
 
-        NeuralNetwork nn(num_layers);
-        nn.load(filename);
+        auto nn = std::make_unique<NeuralNetwork>(num_layers);
+        nn->load(filename);
 
         std::string line;
         while (true)
@@ -36,13 +36,13 @@ namespace rllm
             for (int iter = 0; iter < MAX_NUM_ANSWER_TOKENS; ++iter)
             {
                 // Set the input layer of the neural network based on the token IDs
-                nn.set_input_layer(token_id_list);
+                nn->set_input_layer(token_id_list);
 
                 // Propagate through the network to get the output
-                nn.propagate_forward();
+                nn->propagate_forward();
 
                 // Get the output and convert it back to a token
-                const auto output_token_id_lists = nn.get_best_output_token_ids(5, corpus);
+                const auto output_token_id_lists = nn->get_best_output_token_ids(5, corpus);
                 if (output_token_id_lists.empty())
                 {
                     std::println("No output tokens predicted.");
@@ -67,10 +67,10 @@ namespace rllm
 
         Corpus corpus;
 
-        NeuralNetwork nn(num_layers);
+        auto nn = std::make_unique<NeuralNetwork>(num_layers);
 
-        nn.train(corpus);
+        nn->train(corpus);
 
-        nn.save(filename);
+        nn->save(filename);
     }
 } // namespace rllm
