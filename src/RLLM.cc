@@ -4,7 +4,7 @@
 #include <print>
 #include <string>
 
-const size_t num_layers = 3; // Example number of layers
+const size_t num_layers = 2; // Example number of layers
 
 namespace rllm
 {

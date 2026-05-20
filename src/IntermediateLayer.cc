@@ -61,9 +61,8 @@ namespace rllm
 
                 const auto token_id = static_cast<TokenID>(target);
                 const auto weight = m_weights.get(i, pos);
-                output_layer.m_inputs[token_id] = std::clamp(
-                    output_layer.m_inputs[token_id] + weight * input_value, 0.0f, 1.0f
-                );
+
+                output_layer.m_inputs.add_with_clamp(token_id, weight * input_value, 0.0f, 1.0f);
             }
         }
     }
@@ -81,11 +80,8 @@ namespace rllm
                     const auto next_neuron_index = m_connections.get(i, pos);
 
                     const auto weight = m_weights.get(i, pos);
-                    next_layer.m_inputs.set(
-                        next_neuron_index,
-                        std::clamp(
-                            next_layer.m_inputs.get(next_neuron_index) + weight * m_inputs.get(i, pos), 0.0f, 1.0f
-                        )
+                    next_layer.m_inputs.add_with_clamp(
+                        next_neuron_index, weight * m_inputs.get(i, pos), 0.0f, 1.0f
                     );
                 }
             }
@@ -111,16 +107,14 @@ namespace rllm
                 const float d = delta[token_id];
 
                 // Increase weight when downstream error is positive (need more signal).
-                m_weights.set(
-                    i, pos, std::clamp(m_weights.get(i, pos) + learning_rate * d * m_inputs.get(i, pos), 0.0f, 1.0f)
-                );
+                m_weights.add_with_clamp(i, pos, learning_rate * d * m_inputs.get(i, pos), 0.0f, 1.0f);
 
                 // Lower trigger makes this neuron fire more easily -- helpful when
                 // downstream error is positive.
-                m_trigger_values.set(i, pos, std::clamp(m_trigger_values.get(i, pos) - learning_rate * d, 0.0f, 1.0f));
+                m_trigger_values.add_with_clamp(i, pos, -learning_rate * d, 0.0f, 1.0f);
 
                 // Accumulate gradient for the layer below.
-                prev_delta.set(i, pos, prev_delta.get(i, pos) + d * m_weights.get(i, pos));
+                prev_delta.add_with_clamp(i, pos, d * m_weights.get(i, pos), 0.0f, 1.0f);
             }
         }
     }
@@ -142,16 +136,14 @@ namespace rllm
                 const float d = delta.get(i, pos);
 
                 // Increase weight when downstream error is positive (need more signal).
-                m_weights.set(
-                    i, pos, std::clamp(m_weights.get(i, pos) + learning_rate * d * m_inputs.get(i, pos), 0.0f, 1.0f)
-                );
+                m_weights.add_with_clamp(i, pos, learning_rate * d * m_inputs.get(i, pos), 0.0f, 1.0f);
 
                 // Lower trigger makes this neuron fire more easily -- helpful when
                 // downstream error is positive.
-                m_trigger_values.set(i, pos, std::clamp(m_trigger_values.get(i, pos) - learning_rate * d, 0.0f, 1.0f));
+                m_trigger_values.add_with_clamp(i, pos, -learning_rate * d, 0.0f, 1.0f);
 
                 // Accumulate gradient for the layer below.
-                prev_delta.set(i, pos, prev_delta.get(i, pos) + d * m_weights.get(i, pos));
+                prev_delta.add_with_clamp(i, pos, d * m_weights.get(i, pos), 0.0f, 1.0f);
             }
         }
     }

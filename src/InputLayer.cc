@@ -40,8 +40,7 @@ namespace rllm
                     continue;
 
                 const auto next_neuron_index = m_connections.get(token, pos);
-                const auto weight = m_weights.get(token, pos);
-                next_layer.accumulate_input(next_neuron_index, weight * input_value);
+                next_layer.accumulate_input(next_neuron_index, input_value);
             }
         }
     }
@@ -53,8 +52,6 @@ namespace rllm
             for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
             {
                 m_inputs.set(i, pos, 0.0f);
-                m_trigger_values.set(i, pos, get_random_value());
-                m_weights.set(i, pos, get_random_value());
                 auto [target, pos_index] = get_random_value_centered_around(i, pos);
                 m_connections.set(i, pos, std::make_pair(static_cast<IntermediateLayerIndex>(target), pos_index));
             }

@@ -32,8 +32,6 @@ namespace rllm
 
       private:
         template_token_matrix<float, TokenID, PositionIndex> m_inputs;
-        template_token_matrix<float, TokenID, PositionIndex> m_trigger_values;
-        template_token_matrix<float, TokenID, PositionIndex> m_weights;
 
         // neuron 'i' is connected to neuron 'm_connections[i,j]' in the next layer
         template_token_matrix<std::pair<IntermediateLayerIndex, PositionIndex>, TokenID, PositionIndex>

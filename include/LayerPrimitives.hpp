@@ -114,6 +114,12 @@ namespace rllm
             m_data.fill(value);
         }
 
+        void add_with_clamp(LengthType index, T delta, T lo = T{0}, T hi = T{1})
+        {
+            auto& cell = m_data[static_cast<size_t>(index)];
+            cell = std::clamp(cell + delta, lo, hi);
+        }
+
       private:
         using token_vector_data_t = std::array<T, static_cast<size_t>(LengthType::MAX)>;
         token_vector_data_t m_data;
