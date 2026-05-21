@@ -14,7 +14,7 @@ namespace rllm
 
     void IntermediateLayer::set_random_weights_and_connections()
     {
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
+        for (const auto i : enum_iterator<IntermediateLayerIndex>())
         {
             m_inputs[i] = 0.0f;
             m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
@@ -33,7 +33,7 @@ namespace rllm
         // setup the layer JUST before the output layer.
         // Connections are encoded as IntermediateLayerIndex values; the output-layer
         // forward pass maps them to TokenIDs via modulo corpus size.
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
+        for (const auto i : enum_iterator<IntermediateLayerIndex>())
         {
             m_inputs[i] = 0.0f;
             m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
@@ -53,7 +53,7 @@ namespace rllm
     void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer) const
     {
         output_layer.m_inputs.fill(0.0f);
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
+        for (const auto i : enum_iterator<IntermediateLayerIndex>())
         {
             const auto input_value = m_inputs[i];
             if (input_value < m_trigger_values[i])
@@ -62,8 +62,9 @@ namespace rllm
             const auto weight = m_weights[i];
             for (const auto& target : m_connections[i])
             {
-                const auto token_id =
-                    static_cast<TokenID>(static_cast<size_t>(target) % static_cast<size_t>(m_corpus.number_of_token_types()));
+                const auto token_id = static_cast<TokenID>(
+                    static_cast<size_t>(target) % static_cast<size_t>(m_corpus.number_of_token_types())
+                );
                 output_layer.m_inputs.add_no_clamp(token_id, weight * input_value);
             }
         }
@@ -73,7 +74,7 @@ namespace rllm
     {
         next_layer.m_inputs.fill(0.0f);
 
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
+        for (const auto i : enum_iterator<IntermediateLayerIndex>())
         {
             const auto input_value = m_inputs[i];
             if (input_value < m_trigger_values[i])
@@ -91,12 +92,14 @@ namespace rllm
     )
     {
         m_last_weight_delta.fill(0.0f);
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
+        for (const auto i : enum_iterator<IntermediateLayerIndex>())
         {
             float d = 0.0f;
             for (const auto& target : m_connections[i])
             {
-                const auto token_id = static_cast<TokenID>(static_cast<size_t>(target) % static_cast<size_t>(m_corpus.number_of_token_types()));
+                const auto token_id = static_cast<TokenID>(
+                    static_cast<size_t>(target) % static_cast<size_t>(m_corpus.number_of_token_types())
+                );
                 assert(token_id < TokenID::MAX);
                 d += delta[token_id];
             }
@@ -138,7 +141,7 @@ namespace rllm
     )
     {
         m_last_weight_delta.fill(0.0f);
-        for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
+        for (const auto i : enum_iterator<IntermediateLayerIndex>())
         {
             float d = 0.0f;
             for (const auto& target : m_connections[i])

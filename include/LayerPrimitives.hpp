@@ -1,20 +1,63 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>
-#include <algorithm>
 
 namespace rllm
 {
+    template <typename Enum>
+    class enum_iterator
+    {
+      public:
+        enum_iterator(Enum end = Enum::MAX)
+            : m_current(Enum::START)
+            , m_end(end)
+        {}
+
+        enum_iterator(Enum start, Enum end)
+            : m_current(start)
+            , m_end(end)
+        {}
+
+        Enum operator*() const
+        {
+            return m_current;
+        }
+        enum_iterator& operator++()
+        {
+            m_current = inc(m_current);
+            return *this;
+        }
+        bool operator!=(const enum_iterator& other) const
+        {
+            return m_current != other.m_current;
+        }
+
+        enum_iterator begin() const
+        {
+            return enum_iterator{Enum::START, m_end};
+        }
+
+        enum_iterator end() const
+        {
+            return enum_iterator{m_end, m_end};
+        }
+
+      private:
+        Enum m_current;
+        Enum m_end;
+    };
+
     enum class TokenID : int32_t
     {
         UNKNOWN_TOKEN_ID = -1,
         START = 0,
-        MAX = 1024*2
+        MAX = 1024 * 2
     };
 
     static inline TokenID inc(TokenID id)

@@ -10,9 +10,7 @@ namespace rllm
     void InputLayer::propagate_forward(IntermediateLayer& next_layer) const
     {
         next_layer.fill_inputs(0.0f);
-        for (PositionIndex pos = PositionIndex::START;
-             pos < m_input.size();
-             pos = inc(pos))
+        for (const auto pos : enum_iterator<PositionIndex>(m_input.size()))
         {
             const TokenID tok = m_input[pos];
             if (tok == TokenID::UNKNOWN_TOKEN_ID)
