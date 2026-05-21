@@ -5,6 +5,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <functional>
 
 #include <LayerPrimitives.hpp>
 
@@ -15,13 +16,33 @@ namespace rllm
       public:
         Corpus();
 
+        using visitor_fn_t = std::function<void(const InputLine&)>;
+
         InputLine get_token_ids(const std::string& text) const;
         Token get_token_from_id(TokenID id) const;
         std::string get_line(const InputLine& line) const;
-        InputLine get_training_input_line(size_t min_size) const;
+
+        void visit_lines(const visitor_fn_t& visitor) const
+        {
+            for (const auto& token_data : m_token_list)
+            {
+                token_data.visit_lines(visitor);
+            }
+        }
+
+        size_t count_num_lines() const
+        {
+            size_t total = 0;
+            for (const auto& token_data : m_token_list)
+            {
+                total += token_data.size();
+            }
+            return total;
+        }
+
         void save_token_map(const std::string& filename) const;
 
-        size_t size() const
+        size_t number_of_token_types() const
         {
             return m_token_to_id.size();
         }
@@ -61,6 +82,20 @@ namespace rllm
                         return result;
                     }
                 }
+            }
+
+
+            void visit_lines(const visitor_fn_t& visitor) const
+            {
+                for (const auto& line : m_data)
+                {
+                    visitor(line);
+                }
+            }
+
+            size_t size() const
+            {
+                return m_data.size();
             }
 
           private:

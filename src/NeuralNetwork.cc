@@ -1,11 +1,15 @@
+#include <CircularBuffer.hpp>
 #include <NeuralNetwork.hpp>
 #include <TokenIDFormatter.hpp>
 #include <algorithm>
 #include <cassert>
+#include <numeric>
 #include <print>
 
 namespace rllm
 {
+    constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 1000;
+
     static size_t clip_max(size_t value, size_t max)
     {
         if (value > max)
@@ -124,9 +128,14 @@ namespace rllm
         {
             for (const auto& conn : last.m_connections[i])
                 if (static_cast<TokenID>(conn) == token_id)
-                    { target[static_cast<size_t>(i)] = true; break; }
+                {
+                    target[static_cast<size_t>(i)] = true;
+                    break;
+                }
         }
-        if (std::none_of(target.begin(), target.end(), [](bool b) { return b; }))
+        if (std::none_of(target.begin(), target.end(), [](bool b) {
+                return b;
+            }))
             return false;
 
         // Step 2: walk backwards through the remaining intermediate layers.
@@ -138,10 +147,15 @@ namespace rllm
             {
                 for (const auto& next_i : layer.m_connections[i])
                     if (target[static_cast<size_t>(next_i)])
-                        { prev[static_cast<size_t>(i)] = true; break; }
+                    {
+                        prev[static_cast<size_t>(i)] = true;
+                        break;
+                    }
             }
             target = std::move(prev);
-            if (std::none_of(target.begin(), target.end(), [](bool b) { return b; }))
+            if (std::none_of(target.begin(), target.end(), [](bool b) {
+                    return b;
+                }))
                 return false;
         }
 
@@ -163,9 +177,14 @@ namespace rllm
                 continue;
             for (const auto& conn : last.m_connections[i])
                 if (static_cast<TokenID>(conn) == token_id)
-                    { target[static_cast<size_t>(i)] = true; break; }
+                {
+                    target[static_cast<size_t>(i)] = true;
+                    break;
+                }
         }
-        if (std::none_of(target.begin(), target.end(), [](bool b) { return b; }))
+        if (std::none_of(target.begin(), target.end(), [](bool b) {
+                return b;
+            }))
             return false;
 
         // Step 2: walk backwards — a node counts only if it fired AND leads to an active target.
@@ -179,17 +198,20 @@ namespace rllm
                     continue;
                 for (const auto& next_i : layer.m_connections[i])
                     if (target[static_cast<size_t>(next_i)])
-                        { prev[static_cast<size_t>(i)] = true; break; }
+                    {
+                        prev[static_cast<size_t>(i)] = true;
+                        break;
+                    }
             }
             target = std::move(prev);
-            if (std::none_of(target.begin(), target.end(), [](bool b) { return b; }))
+            if (std::none_of(target.begin(), target.end(), [](bool b) {
+                    return b;
+                }))
                 return false;
         }
 
         // Step 3: check if any active input hashes to a target neuron in layer 0.
-        for (PositionIndex pos = PositionIndex::START;
-             pos < m_input_layer.m_input.size();
-             pos = inc(pos))
+        for (PositionIndex pos = PositionIndex::START; pos < m_input_layer.m_input.size(); pos = inc(pos))
         {
             const TokenID tok = m_input_layer.m_input[pos];
             if (tok == TokenID::UNKNOWN_TOKEN_ID)
@@ -214,9 +236,7 @@ namespace rllm
                 if (delta <= 0.0f)
                     continue;
                 std::println(
-                    "    neuron({}) weight={:.4f} delta=+{:.6f}",
-                    static_cast<size_t>(i),
-                    layer.m_weights[i], delta
+                    "    neuron({}) weight={:.4f} delta=+{:.6f}", static_cast<size_t>(i), layer.m_weights[i], delta
                 );
                 ++count;
             }
@@ -242,7 +262,10 @@ namespace rllm
         {
             for (const auto& conn : last_layer.m_connections[i])
                 if (static_cast<TokenID>(conn) == token_id)
-                    { path[num_layers - 1][static_cast<size_t>(i)] = true; break; }
+                {
+                    path[num_layers - 1][static_cast<size_t>(i)] = true;
+                    break;
+                }
         }
 
         for (int l = static_cast<int>(num_layers) - 2; l >= 0; --l)
@@ -252,16 +275,17 @@ namespace rllm
             {
                 for (const auto& next_i : layer.m_connections[i])
                     if (path[l + 1][static_cast<size_t>(next_i)])
-                        { path[l][static_cast<size_t>(i)] = true; break; }
+                    {
+                        path[l][static_cast<size_t>(i)] = true;
+                        break;
+                    }
             }
         }
 
         // Input layer: nodes whose hash maps to a path node in layer 0.
         std::println("  [input] nodes on path to token {} (capped at 10):", static_cast<int>(token_id));
         size_t count = 0;
-        for (PositionIndex pos = PositionIndex::START;
-             pos < m_input_layer.m_input.size() && count < 10;
-             pos = inc(pos))
+        for (PositionIndex pos = PositionIndex::START; pos < m_input_layer.m_input.size() && count < 10; pos = inc(pos))
         {
             const TokenID tok = m_input_layer.m_input[pos];
             if (tok == TokenID::UNKNOWN_TOKEN_ID)
@@ -272,16 +296,18 @@ namespace rllm
             const float input_val = m_input_layer.get_input_value(tok, pos);
             std::println(
                 "    input(tok={}, pos={}) val={:.4f} -> layer0({})",
-                static_cast<int>(tok), static_cast<size_t>(pos), input_val,
+                static_cast<int>(tok),
+                static_cast<size_t>(pos),
+                input_val,
                 static_cast<size_t>(target_neuron)
             );
             ++count;
         }
-        if (count >= 10) std::println("    ... (capped)");
+        if (count >= 10)
+            std::println("    ... (capped)");
 
         // Each intermediate layer: path nodes only.
-        auto dump_layer = [&](size_t l)
-        {
+        auto dump_layer = [&](size_t l) {
             std::println("  [layer {}] path nodes (capped at 10):", l);
             size_t n = 0;
             const auto& layer = m_intermediate_layers[l];
@@ -289,24 +315,28 @@ namespace rllm
             {
                 if (!path[l][static_cast<size_t>(i)])
                     continue;
-                const float inp     = layer.m_inputs[i];
+                const float inp = layer.m_inputs[i];
                 const float trigger = layer.m_trigger_values[i];
-                const float weight  = layer.m_weights[i];
+                const float weight = layer.m_weights[i];
                 std::println(
                     "    neuron({}) input={:.4f} trigger={:.4f} weight={:.4f} fired={}",
-                    static_cast<size_t>(i), inp, trigger, weight, inp >= trigger
+                    static_cast<size_t>(i),
+                    inp,
+                    trigger,
+                    weight,
+                    inp >= trigger
                 );
                 ++n;
             }
-            if (n >= 10) std::println("    ... (capped)");
+            if (n >= 10)
+                std::println("    ... (capped)");
         };
 
         for (size_t l = 0; l < num_layers; ++l)
             dump_layer(l);
 
         std::println(
-            "  [output] token {} : activation={:.4f}",
-            static_cast<int>(token_id), m_output_layer.m_inputs[token_id]
+            "  [output] token {} : activation={:.4f}", static_cast<int>(token_id), m_output_layer.m_inputs[token_id]
         );
     }
 
@@ -330,10 +360,7 @@ namespace rllm
             return;
         }
         const bool active = has_active_path_to_token(token_id);
-        std::println(
-            "token {} is structurally reachable, active path: {}",
-            static_cast<int>(token_id), active
-        );
+        std::println("token {} is structurally reachable, active path: {}", static_cast<int>(token_id), active);
         if (!active)
             std::println("  (no neurons firing along the path yet — weights/triggers not trained)");
         dump_path_weights_and_triggers(token_id);
@@ -362,7 +389,8 @@ namespace rllm
     float NeuralNetwork::compute_loss(TokenID expected_output_token) const
     {
         float loss = 0.0f;
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i)) {
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
+        {
             float target = (i == expected_output_token) ? 1.0f : 0.0f;
             float pred = m_output_layer.m_inputs[i];
             float diff = pred - target;
@@ -374,32 +402,83 @@ namespace rllm
     void NeuralNetwork::train(bool verbose)
     {
         std::println("Training the neural network...");
-
         set_random_weights_and_connections();
 
-        // Get a training example from the corpus. The example needs at least 2
-        // tokens. Note that the list can be padded to 2 tokens using
-        // UNKNOWN_TOKEN_ID if necessary.
-        const auto train_output = m_corpus.get_training_input_line(3);
+        int total_lines = m_corpus.count_num_lines();
+        int lines_visited = 0;
+        m_corpus.visit_lines([&](const InputLine& line) {
+            lines_visited++;
+            const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
+
+            if (static_cast<int>(line.size()) < 2)
+            {
+                const auto full_string = m_corpus.get_line(line);
+                std::println(
+                    "Skipping line with size {} (too short for training): '{}'",
+                    static_cast<int>(line.size()),
+                    full_string
+                );
+                return; // skip too-short lines that can't be used for training
+            }
+            const auto full_string = m_corpus.get_line(line);
+            std::println("Training on line: '{}', {:0.2f}% done", full_string, progress * 100.0f);
+            do_training(line, verbose);
+        });
+    }
+
+
+    void NeuralNetwork::do_training(const InputLine& train_output, bool verbose)
+    {
         assert(static_cast<int>(train_output.size()) >= 2);
         auto train_input = train_output;
         const auto expected_output_token = train_input.back();
         train_input.pop_back();
 
-        const auto full_string = m_corpus.get_line(train_output);
+        CircularBuffer<float, 100> recent_losses;
+        auto loss_function_converged = [&](float loss) {
+            recent_losses.push_back(loss);
+            if (recent_losses.size() < recent_losses.capacity())
+                return false; // not enough data yet
+            float average_loss = std::accumulate(recent_losses.begin(), recent_losses.end(), 0.0f) /
+                static_cast<float>(recent_losses.size());
+            return average_loss < 0.001f; // convergence threshold
+        };
 
-        size_t num_iterations = 1000000;
-        for (size_t i = 0; i < num_iterations; ++i)
+        size_t i = 0;
+        while (true)
         {
+            i++;
+
+            if (i > MAX_TRAINING_ITERATIONS_PER_LINE)
+            {
+                std::println("Reached maximum training iterations for this line. Stopping training on this line.");
+                break;
+            }
+
             Score score;
             set_input_layer(train_input);
             propagate_forward();
             compute_score(score, expected_output_token);
             propagate_backward(score);
 
+            float loss = compute_loss(expected_output_token);
+
+            if (loss_function_converged(loss))
+            {
+                std::println(
+                    "Convergence reached at iteration {} for token '{}'",
+                    i,
+                    m_corpus.get_token_from_id(expected_output_token)
+                );
+                dump_top_predictions();
+               break;
+            }
+
+
             if (verbose && i % 100 == 0)
             {
-                float loss = compute_loss(expected_output_token);
+                const auto full_string = m_corpus.get_line(train_output);
+
                 const auto expected_token = m_corpus.get_token_from_id(expected_output_token);
                 std::println(
                     "Training iteration[{}], wanted: '{}' ({}), full string: '{}'",
@@ -410,7 +489,7 @@ namespace rllm
                 );
                 std::println("  Loss: {:.6f}", loss);
                 dump_neurons_whose_weights_were_increasing();
-                //dump_weights_and_triggers_for_token(expected_output_token);
+                // dump_weights_and_triggers_for_token(expected_output_token);
                 dump_top_predictions();
             }
         }

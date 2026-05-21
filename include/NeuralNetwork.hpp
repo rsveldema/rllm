@@ -58,6 +58,7 @@ namespace rllm
         void dump_neurons_whose_weights_were_increasing() const;
         bool output_is_reachable_from_inputs(TokenID token_id) const;
         bool has_active_path_to_token(TokenID token_id) const;
+        void do_training(const InputLine& train_output, bool verbose);
     };
 
 } // namespace rllm

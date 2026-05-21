@@ -63,7 +63,7 @@ namespace rllm
             for (const auto& target : m_connections[i])
             {
                 const auto token_id =
-                    static_cast<TokenID>(static_cast<size_t>(target) % static_cast<size_t>(m_corpus.size()));
+                    static_cast<TokenID>(static_cast<size_t>(target) % static_cast<size_t>(m_corpus.number_of_token_types()));
                 output_layer.m_inputs.add_no_clamp(token_id, weight * input_value);
             }
         }
@@ -96,7 +96,7 @@ namespace rllm
             float d = 0.0f;
             for (const auto& target : m_connections[i])
             {
-                const auto token_id = static_cast<TokenID>(static_cast<size_t>(target) % static_cast<size_t>(m_corpus.size()));
+                const auto token_id = static_cast<TokenID>(static_cast<size_t>(target) % static_cast<size_t>(m_corpus.number_of_token_types()));
                 assert(token_id < TokenID::MAX);
                 d += delta[token_id];
             }
