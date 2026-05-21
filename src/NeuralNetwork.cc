@@ -63,7 +63,7 @@ namespace rllm
     // sorted descending by activation.
     // if no prediction can be made, returns an empty list.
     // Do not try to return any if the activation is 0 or negative, as that means the token did not activate at all.
-    std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k, Corpus& corpus) const
+    std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k) const
     {
         assert(!m_intermediate_layers.empty());
 
@@ -98,9 +98,9 @@ namespace rllm
         static_assert(sizeof(*output_layer_delta) < 65536, "output_layer_delta is too large for the stack");
         m_output_layer.compute_deltas(score, *output_layer_delta);
 
-        auto delta = std::make_unique<template_token_matrix<float, IntermediateLayerIndex, PositionIndex>>();
-        auto prev_delta = std::make_unique<template_token_matrix<float, IntermediateLayerIndex, PositionIndex>>();
-        m_intermediate_layers.back().propagate_backward(*output_layer_delta, *delta, LEARNING_RATE);
+        auto delta = std::make_unique<template_token_vector<float, IntermediateLayerIndex>>();
+        auto prev_delta = std::make_unique<template_token_vector<float, IntermediateLayerIndex>>();
+        m_intermediate_layers.back().propagate_backward_from_output_layer(*output_layer_delta, *delta, LEARNING_RATE);
 
         // Walk backwards through the remaining layers.
         assert(m_intermediate_layers.size() >= 2);
@@ -115,85 +115,55 @@ namespace rllm
     bool NeuralNetwork::output_is_reachable_from_inputs(TokenID token_id) const
     {
         assert(!m_intermediate_layers.empty());
-
-        // Packs a (IntermediateLayerIndex, PositionIndex) pair into a flat index.
-        constexpr size_t POS_MAX = static_cast<size_t>(PositionIndex::MAX);
-        constexpr size_t LAYER_SIZE = static_cast<size_t>(IntermediateLayerIndex::MAX) * POS_MAX;
-        auto pack = [](IntermediateLayerIndex i, PositionIndex p) {
-            return static_cast<size_t>(i) * POS_MAX + static_cast<size_t>(p);
-        };
+        constexpr size_t LAYER_SIZE = static_cast<size_t>(IntermediateLayerIndex::MAX);
 
         // Step 1: find nodes in the last intermediate layer that structurally connect to token_id.
         std::vector<bool> target(LAYER_SIZE, false);
         const auto& last = m_intermediate_layers.back();
         for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
         {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                const auto [conn, _conn_pos] = last.m_connections.get(i, pos);
+            for (const auto& conn : last.m_connections[i])
                 if (static_cast<TokenID>(conn) == token_id)
-                    target[pack(i, pos)] = true;
-            }
+                    { target[static_cast<size_t>(i)] = true; break; }
         }
         if (std::none_of(target.begin(), target.end(), [](bool b) { return b; }))
             return false;
 
         // Step 2: walk backwards through the remaining intermediate layers.
-        // A node in layer l is "needed" if its connection leads to a needed node in layer l+1.
         for (int l = static_cast<int>(m_intermediate_layers.size()) - 2; l >= 0; --l)
         {
             std::vector<bool> prev(LAYER_SIZE, false);
             const auto& layer = m_intermediate_layers[l];
             for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
             {
-                for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-                {
-                    const auto [next_i, next_pos] = layer.m_connections.get(i, pos);
-                    if (target[pack(next_i, next_pos)])
-                        prev[pack(i, pos)] = true;
-                }
+                for (const auto& next_i : layer.m_connections[i])
+                    if (target[static_cast<size_t>(next_i)])
+                        { prev[static_cast<size_t>(i)] = true; break; }
             }
             target = std::move(prev);
             if (std::none_of(target.begin(), target.end(), [](bool b) { return b; }))
                 return false;
         }
 
-        // Step 3: check if any input layer connection targets a needed node in layer 0.
-        for (auto tok = TokenID::START; tok < TokenID::MAX; tok = inc(tok))
-        {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                const auto [next_i, next_pos] = m_input_layer.m_connections.get(tok, pos);
-                if (target[pack(next_i, next_pos)])
-                    return true;
-            }
-        }
-        return false;
+        // Step 3: any remaining target in layer 0 is reachable from inputs via the hash.
+        return true;
     }
 
     bool NeuralNetwork::has_active_path_to_token(TokenID token_id) const
     {
         assert(!m_intermediate_layers.empty());
-
-        constexpr size_t POS_MAX = static_cast<size_t>(PositionIndex::MAX);
-        constexpr size_t LAYER_SIZE = static_cast<size_t>(IntermediateLayerIndex::MAX) * POS_MAX;
-        auto pack = [](IntermediateLayerIndex i, PositionIndex p) {
-            return static_cast<size_t>(i) * POS_MAX + static_cast<size_t>(p);
-        };
+        constexpr size_t LAYER_SIZE = static_cast<size_t>(IntermediateLayerIndex::MAX);
 
         // Step 1: find nodes in the last layer that FIRED and connect to token_id.
         std::vector<bool> target(LAYER_SIZE, false);
         const auto& last = m_intermediate_layers.back();
         for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
         {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                if (last.m_inputs.get(i, pos) < last.m_trigger_values.get(i, pos))
-                    continue;
-                const auto [conn, _conn_pos] = last.m_connections.get(i, pos);
+            if (last.m_inputs[i] < last.m_trigger_values[i])
+                continue;
+            for (const auto& conn : last.m_connections[i])
                 if (static_cast<TokenID>(conn) == token_id)
-                    target[pack(i, pos)] = true;
-            }
+                    { target[static_cast<size_t>(i)] = true; break; }
         }
         if (std::none_of(target.begin(), target.end(), [](bool b) { return b; }))
             return false;
@@ -205,45 +175,63 @@ namespace rllm
             const auto& layer = m_intermediate_layers[l];
             for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
             {
-                for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-                {
-                    if (layer.m_inputs.get(i, pos) < layer.m_trigger_values.get(i, pos))
-                        continue;
-                    const auto [next_i, next_pos] = layer.m_connections.get(i, pos);
-                    if (target[pack(next_i, next_pos)])
-                        prev[pack(i, pos)] = true;
-                }
+                if (layer.m_inputs[i] < layer.m_trigger_values[i])
+                    continue;
+                for (const auto& next_i : layer.m_connections[i])
+                    if (target[static_cast<size_t>(next_i)])
+                        { prev[static_cast<size_t>(i)] = true; break; }
             }
             target = std::move(prev);
             if (std::none_of(target.begin(), target.end(), [](bool b) { return b; }))
                 return false;
         }
 
-        // Step 3: check if any active input connects to an active-path node in layer 0.
-        for (auto tok = TokenID::START; tok < TokenID::MAX; tok = inc(tok))
+        // Step 3: check if any active input hashes to a target neuron in layer 0.
+        for (PositionIndex pos = PositionIndex::START;
+             pos < m_input_layer.m_input.size();
+             pos = inc(pos))
         {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                if (m_input_layer.m_inputs.get(tok, pos) <= 0.0f)
-                    continue;
-                const auto [next_i, next_pos] = m_input_layer.m_connections.get(tok, pos);
-                if (target[pack(next_i, next_pos)])
-                    return true;
-            }
+            const TokenID tok = m_input_layer.m_input[pos];
+            if (tok == TokenID::UNKNOWN_TOKEN_ID)
+                continue;
+            const auto hashed = InputLayer::hash_input(tok, pos);
+            if (target[static_cast<size_t>(hashed)])
+                return true;
         }
         return false;
+    }
+
+    void NeuralNetwork::dump_neurons_whose_weights_were_increasing() const
+    {
+        for (size_t l = 0; l < m_intermediate_layers.size(); ++l)
+        {
+            const auto& layer = m_intermediate_layers[l];
+            size_t count = 0;
+            std::println("  [layer {}] neurons with increasing weights (capped at 10):", l);
+            for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX && count < 10; i = inc(i))
+            {
+                const float delta = layer.m_last_weight_delta[i];
+                if (delta <= 0.0f)
+                    continue;
+                std::println(
+                    "    neuron({}) weight={:.4f} delta=+{:.6f}",
+                    static_cast<size_t>(i),
+                    layer.m_weights[i], delta
+                );
+                ++count;
+            }
+            if (count == 0)
+                std::println("    (none)");
+            else if (count >= 10)
+                std::println("    ... (capped)");
+        }
     }
 
     void NeuralNetwork::dump_path_weights_and_triggers(TokenID token_id) const
     {
         assert(!m_intermediate_layers.empty());
 
-        constexpr size_t POS_MAX = static_cast<size_t>(PositionIndex::MAX);
-        constexpr size_t LAYER_SIZE = static_cast<size_t>(IntermediateLayerIndex::MAX) * POS_MAX;
-        auto pack = [](IntermediateLayerIndex i, PositionIndex p) {
-            return static_cast<size_t>(i) * POS_MAX + static_cast<size_t>(p);
-        };
-
+        constexpr size_t LAYER_SIZE = static_cast<size_t>(IntermediateLayerIndex::MAX);
         const size_t num_layers = m_intermediate_layers.size();
 
         // Build per-layer path sets via backward walk from token_id.
@@ -252,12 +240,9 @@ namespace rllm
         const auto& last_layer = m_intermediate_layers.back();
         for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
         {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-            {
-                const auto [conn, _conn_pos] = last_layer.m_connections.get(i, pos);
+            for (const auto& conn : last_layer.m_connections[i])
                 if (static_cast<TokenID>(conn) == token_id)
-                    path[num_layers - 1][pack(i, pos)] = true;
-            }
+                    { path[num_layers - 1][static_cast<size_t>(i)] = true; break; }
         }
 
         for (int l = static_cast<int>(num_layers) - 2; l >= 0; --l)
@@ -265,33 +250,32 @@ namespace rllm
             const auto& layer = m_intermediate_layers[l];
             for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX; i = inc(i))
             {
-                for (auto pos = PositionIndex::START; pos < PositionIndex::MAX; pos = inc(pos))
-                {
-                    const auto [next_i, next_pos] = layer.m_connections.get(i, pos);
-                    if (path[l + 1][pack(next_i, next_pos)])
-                        path[l][pack(i, pos)] = true;
-                }
+                for (const auto& next_i : layer.m_connections[i])
+                    if (path[l + 1][static_cast<size_t>(next_i)])
+                        { path[l][static_cast<size_t>(i)] = true; break; }
             }
         }
 
-        // Input layer: nodes whose connection targets a path node in layer 0.
+        // Input layer: nodes whose hash maps to a path node in layer 0.
         std::println("  [input] nodes on path to token {} (capped at 10):", static_cast<int>(token_id));
         size_t count = 0;
-        for (auto tok = TokenID::START; tok < TokenID::MAX && count < 10; tok = inc(tok))
+        for (PositionIndex pos = PositionIndex::START;
+             pos < m_input_layer.m_input.size() && count < 10;
+             pos = inc(pos))
         {
-            for (auto pos = PositionIndex::START; pos < PositionIndex::MAX && count < 10; pos = inc(pos))
-            {
-                const auto [next_i, next_pos] = m_input_layer.m_connections.get(tok, pos);
-                if (!path[0][pack(next_i, next_pos)])
-                    continue;
-                const float input = m_input_layer.m_inputs.get(tok, pos);
-                std::println(
-                    "    input(tok={}, pos={}) val={:.4f} -> layer0({},{})",
-                    static_cast<int>(tok), static_cast<size_t>(pos), input,
-                    static_cast<size_t>(next_i), static_cast<size_t>(next_pos)
-                );
-                ++count;
-            }
+            const TokenID tok = m_input_layer.m_input[pos];
+            if (tok == TokenID::UNKNOWN_TOKEN_ID)
+                continue;
+            const auto target_neuron = InputLayer::hash_input(tok, pos);
+            if (!path[0][static_cast<size_t>(target_neuron)])
+                continue;
+            const float input_val = m_input_layer.get_input_value(tok, pos);
+            std::println(
+                "    input(tok={}, pos={}) val={:.4f} -> layer0({})",
+                static_cast<int>(tok), static_cast<size_t>(pos), input_val,
+                static_cast<size_t>(target_neuron)
+            );
+            ++count;
         }
         if (count >= 10) std::println("    ... (capped)");
 
@@ -303,20 +287,16 @@ namespace rllm
             const auto& layer = m_intermediate_layers[l];
             for (auto i = IntermediateLayerIndex::START; i < IntermediateLayerIndex::MAX && n < 10; i = inc(i))
             {
-                for (auto pos = PositionIndex::START; pos < PositionIndex::MAX && n < 10; pos = inc(pos))
-                {
-                    if (!path[l][pack(i, pos)])
-                        continue;
-                    const float inp     = layer.m_inputs.get(i, pos);
-                    const float trigger = layer.m_trigger_values.get(i, pos);
-                    const float weight  = layer.m_weights.get(i, pos);
-                    std::println(
-                        "    neuron({},{}) input={:.4f} trigger={:.4f} weight={:.4f} fired={}",
-                        static_cast<size_t>(i), static_cast<size_t>(pos),
-                        inp, trigger, weight, inp >= trigger
-                    );
-                    ++n;
-                }
+                if (!path[l][static_cast<size_t>(i)])
+                    continue;
+                const float inp     = layer.m_inputs[i];
+                const float trigger = layer.m_trigger_values[i];
+                const float weight  = layer.m_weights[i];
+                std::println(
+                    "    neuron({}) input={:.4f} trigger={:.4f} weight={:.4f} fired={}",
+                    static_cast<size_t>(i), inp, trigger, weight, inp >= trigger
+                );
+                ++n;
             }
             if (n >= 10) std::println("    ... (capped)");
         };
@@ -330,15 +310,13 @@ namespace rllm
         );
     }
 
-    void NeuralNetwork::set_random_weights_and_connections(Corpus& corpus)
+    void NeuralNetwork::set_random_weights_and_connections()
     {
-        m_input_layer.set_random_weights_and_connections();
-
         for (size_t i = 0; i < m_intermediate_layers.size() - 1; ++i)
         {
             m_intermediate_layers[i].set_random_weights_and_connections();
         }
-        m_intermediate_layers.back().set_random_weights_and_connections_to_output_layer(corpus);
+        m_intermediate_layers.back().set_random_weights_and_connections_to_output_layer();
     }
 
     void NeuralNetwork::dump_weights_and_triggers_for_token(TokenID token_id)
@@ -361,13 +339,13 @@ namespace rllm
         dump_path_weights_and_triggers(token_id);
     }
 
-    void NeuralNetwork::dump_top_predictions(Corpus& corpus)
+    void NeuralNetwork::dump_top_predictions()
     {
         int prediction_index = 0;
-        const auto predicted_token_id_lists = get_best_output_token_ids(5, corpus);
+        const auto predicted_token_id_lists = get_best_output_token_ids(5);
         for (const auto& entry : predicted_token_id_lists)
         {
-            const auto predicted_token = corpus.get_token_from_id(entry.token_id);
+            const auto predicted_token = m_corpus.get_token_from_id(entry.token_id);
             std::println(
                 "\t prediction[{} of {}] / pred:'{}' (id: '{}'), {}",
                 prediction_index,
@@ -380,21 +358,22 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::train(Corpus& corpus)
+    void NeuralNetwork::train()
     {
         std::println("Training the neural network...");
 
-        set_random_weights_and_connections(corpus);
+        set_random_weights_and_connections();
 
         // Get a training example from the corpus. The example needs at least 2
         // tokens. Note that the list can be padded to 2 tokens using
         // UNKNOWN_TOKEN_ID if necessary.
-        const auto train_output = corpus.get_training_input_line(3);
+        const auto train_output = m_corpus.get_training_input_line(3);
+        assert(static_cast<int>(train_output.size()) >= 2);
         auto train_input = train_output;
         const auto expected_output_token = train_input.back();
         train_input.pop_back();
 
-        const auto full_string = corpus.get_line(train_output);
+        const auto full_string = m_corpus.get_line(train_output);
 
         size_t num_iterations = 1000000;
         for (size_t i = 0; i < num_iterations; ++i)
@@ -407,7 +386,7 @@ namespace rllm
 
             if (i % 100 == 0)
             {
-                const auto expected_token = corpus.get_token_from_id(expected_output_token);
+                const auto expected_token = m_corpus.get_token_from_id(expected_output_token);
                 std::println(
                     "Training iteration[{}], wanted: '{}' ({}), full string: '{}'",
                     i,
@@ -415,8 +394,9 @@ namespace rllm
                     expected_output_token,
                     full_string
                 );
-                dump_weights_and_triggers_for_token(expected_output_token);
-                dump_top_predictions(corpus);
+                dump_neurons_whose_weights_were_increasing();
+                //dump_weights_and_triggers_for_token(expected_output_token);
+                dump_top_predictions();
             }
         }
     }

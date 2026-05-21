@@ -13,53 +13,52 @@ namespace rllm
     class IntermediateLayer
     {
       public:
-        IntermediateLayer()
+        IntermediateLayer(Corpus& corpus)
+            : m_corpus(corpus)
         {}
         ~IntermediateLayer() = default;
-        IntermediateLayer(const IntermediateLayer&) = delete;
-        IntermediateLayer& operator=(const IntermediateLayer&) = delete;
-        IntermediateLayer(IntermediateLayer&&) = delete;
-        IntermediateLayer& operator=(IntermediateLayer&&) = delete;
 
         void propagate_forward(IntermediateLayer& next_layer);
         void propagate_forward_to_output(OutputLayer& output_layer) const;
 
         void fill_inputs(float value) { m_inputs.fill(value); }
-        void accumulate_input(std::pair<IntermediateLayerIndex, PositionIndex> index, float value)
+        void accumulate_input(IntermediateLayerIndex index, float value)
         {
             m_inputs.add_with_clamp(index, value);
         }
 
         void propagate_backward(
-            const template_token_matrix<float, IntermediateLayerIndex, PositionIndex>& delta,
-            template_token_matrix<float, IntermediateLayerIndex, PositionIndex>& prev_delta,
+            const template_token_vector<float, IntermediateLayerIndex>& delta,
+            template_token_vector<float, IntermediateLayerIndex>& prev_delta,
             float learning_rate
         );
 
-        void propagate_backward(
+        void propagate_backward_from_output_layer(
             const template_token_vector<float, TokenID>& delta,
-            template_token_matrix<float, IntermediateLayerIndex, PositionIndex>& prev_delta,
+            template_token_vector<float, IntermediateLayerIndex>& prev_delta,
             float learning_rate
         );
 
         void set_random_weights_and_connections();
-        void set_random_weights_and_connections_to_output_layer(Corpus& corpus);
+        void set_random_weights_and_connections_to_output_layer();
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
 
       private:
+        Corpus& m_corpus;
         // accumulated input for each neuron in the layer
-        template_token_matrix<float, IntermediateLayerIndex, PositionIndex> m_inputs;
+        template_token_vector<float, IntermediateLayerIndex> m_inputs;
         // if m_inputs[i] >= m_trigger_values[i], then neuron 'i' fires.
         // this value is learned during training and can be thought of as the "bias"
         // for the neuron.
-        template_token_matrix<float, IntermediateLayerIndex, PositionIndex> m_trigger_values;
+        template_token_vector<float, IntermediateLayerIndex> m_trigger_values;
         // the weight of the connection from neuron 'i' in this layer
         // to neuron 'm_connections[i]' in the next layer
-        template_token_matrix<float, IntermediateLayerIndex, PositionIndex> m_weights;
-        // neuron 'n' is connected to neuron 'm_connections[i,j]' in the next layer
-        template_token_matrix<std::pair<IntermediateLayerIndex, PositionIndex>, IntermediateLayerIndex, PositionIndex>
-            m_connections;
+        template_token_vector<float, IntermediateLayerIndex> m_weights;
+        // weight delta applied during the last backprop step (positive = weight increased)
+        template_token_vector<float, IntermediateLayerIndex> m_last_weight_delta;
+        // neuron 'n' is connected to one or more neurons in the next layer
+        template_token_vector<std::vector<IntermediateLayerIndex>, IntermediateLayerIndex> m_connections;
 
         friend class NeuralNetwork;
     };

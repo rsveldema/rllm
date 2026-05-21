@@ -11,6 +11,12 @@ namespace rllm
         return min + (static_cast<float>(rand()) / static_cast<float>(RAND_MAX)) * (max - min);
     }
 
+    template<typename T>
+    T get_random_enum_value() {
+        static_assert(RAND_MAX >= static_cast<int>(T::MAX), "RAND_MAX must be greater than or equal to the number of enum values");
+        return static_cast<T>(rand() % static_cast<int>(T::MAX));
+    }
+
     template <typename X, typename Y>
     inline std::pair<X, Y> get_random_value_centered_around(X x, Y y, int range = 3)
     {

@@ -38,7 +38,7 @@ namespace rllm
                     word.clear();
                 }
             }
-            else if (std::ispunct(static_cast<unsigned char>(c)))
+            else if (std::ispunct(static_cast<unsigned char>(c)) and c != '_')
             {
                 if (!word.empty())
                 {
@@ -171,6 +171,7 @@ namespace rllm
             return token_data.get_training_input_line(min_size);
         }
 
+        assert(false);
         const size_t random_index = static_cast<size_t>(rand()) % m_token_list.size();
         return m_token_list[random_index].get_training_input_line(min_size);
     }

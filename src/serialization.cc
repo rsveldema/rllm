@@ -10,17 +10,13 @@
 namespace rllm
 {
 
-    void InputLayer::load(const nlohmann::json& j)
+    void InputLayer::load(const nlohmann::json&)
     {
-        json_helpers::deserialize_connection_matrix(j.at("connections"), m_connections);
-        m_inputs.fill(0.0f);
     }
 
     nlohmann::json InputLayer::save() const
     {
-        return {
-            {"connections", json_helpers::serialize_connection_matrix(m_connections)}
-        };
+        return {};
     }
 
     void OutputLayer::load(const nlohmann::json& j)
@@ -36,18 +32,18 @@ namespace rllm
 
     void IntermediateLayer::load(const nlohmann::json& j)
     {
-        json_helpers::deserialize_matrix(j.at("trigger_values"), m_trigger_values);
-        json_helpers::deserialize_matrix(j.at("weights"), m_weights);
-        json_helpers::deserialize_connection_matrix(j.at("connections"), m_connections);
+        json_helpers::deserialize_vector(j.at("trigger_values"), m_trigger_values);
+        json_helpers::deserialize_vector(j.at("weights"), m_weights);
+        json_helpers::deserialize_multi_connection_vector(j.at("connections"), m_connections);
         m_inputs.fill(0.0f);
     }
 
     nlohmann::json IntermediateLayer::save() const
     {
         return {
-            {"trigger_values", json_helpers::serialize_matrix(m_trigger_values)},
-            {"weights", json_helpers::serialize_matrix(m_weights)},
-            {"connections", json_helpers::serialize_connection_matrix(m_connections)}
+            {"trigger_values", json_helpers::serialize_vector(m_trigger_values)},
+            {"weights", json_helpers::serialize_vector(m_weights)},
+            {"connections", json_helpers::serialize_multi_connection_vector(m_connections)}
         };
     }
 

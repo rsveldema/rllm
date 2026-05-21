@@ -16,7 +16,7 @@ namespace rllm
         Corpus corpus;
         size_t _num_layers = 2; // overriden when loaded from file
 
-        auto nn = std::make_unique<NeuralNetwork>(_num_layers);
+        auto nn = std::make_unique<NeuralNetwork>(_num_layers, corpus);
         nn->load(filename);
 
         std::string line;
@@ -41,7 +41,7 @@ namespace rllm
                 nn->propagate_forward();
 
                 // Get the output and convert it back to a token
-                const auto output_token_id_lists = nn->get_best_output_token_ids(5, corpus);
+                const auto output_token_id_lists = nn->get_best_output_token_ids(5);
                 if (output_token_id_lists.empty())
                 {
                     std::println("No output tokens predicted.");
@@ -49,7 +49,7 @@ namespace rllm
                 }
                 const auto random_index = static_cast<size_t>(rand()) % output_token_id_lists.size();
                 const auto output_token_id = output_token_id_lists[random_index].token_id;
-                const auto output_token = corpus.get_token_from_id(output_token_id);
+                const auto output_token = nn->get_corpus().get_token_from_id(output_token_id);
 
                 std::println("Predicted next token: {}", output_token);
 
@@ -66,9 +66,9 @@ namespace rllm
 
         Corpus corpus;
 
-        auto nn = std::make_unique<NeuralNetwork>(num_layers);
+        auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus);
 
-        nn->train(corpus);
+        nn->train();
 
         nn->save(filename);
     }

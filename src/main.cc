@@ -9,11 +9,11 @@
 
 int main(int argc, char* argv[])
 {
-    std::srand(static_cast<unsigned>(std::time(nullptr)));
+    std::srand(0);
     rllm::RLLM llm;
     bool train_mode = false;
     const char* filename = "model.dat";
-    int num_layers = 2;
+    int num_layers = 3;
 
     for (int i = 1; i < argc; ++i)
     {

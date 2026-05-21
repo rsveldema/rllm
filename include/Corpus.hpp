@@ -52,15 +52,15 @@ namespace rllm
 
             InputLine get_training_input_line(size_t min_size) const
             {
-                const auto random_index = static_cast<size_t>(rand()) % m_data.size();
-                InputLine result = m_data[random_index];
-
-                while (result.size() < static_cast<PositionIndex>(min_size))
+                while (true)
                 {
-                    result.push_back(TokenID::UNKNOWN_TOKEN_ID);
+                    const auto random_index = static_cast<size_t>(rand()) % m_data.size();
+                    InputLine result = m_data[random_index];
+                    if (static_cast<int>(result.size()) >= min_size)
+                    {
+                        return result;
+                    }
                 }
-
-                return result;
             }
 
           private:

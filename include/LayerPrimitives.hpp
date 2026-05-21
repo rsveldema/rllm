@@ -14,7 +14,7 @@ namespace rllm
     {
         UNKNOWN_TOKEN_ID = -1,
         START = 0,
-        MAX = 4096
+        MAX = 1024*2
     };
 
     static inline TokenID inc(TokenID id)
@@ -41,7 +41,7 @@ namespace rllm
     enum class IntermediateLayerIndex : size_t
     {
         START = 0,
-        MAX = 1024 * 8,
+        MAX = static_cast<size_t>(TokenID::MAX) * 2,
         UNKNOWN_INTERMEDIATE_LAYER_INDEX = static_cast<size_t>(-1)
     };
 
@@ -126,6 +126,11 @@ namespace rllm
             cell = std::clamp(cell + delta, range.lo, range.hi);
         }
 
+        void add_no_clamp(LengthType index, T delta)
+        {
+            m_data[static_cast<size_t>(index)] += delta;
+        }
+
       private:
         using token_vector_data_t = std::array<T, static_cast<size_t>(LengthType::MAX)>;
         token_vector_data_t m_data;
@@ -147,7 +152,6 @@ namespace rllm
             }
         }
         ~template_token_matrix() = default;
-        template_token_matrix(const template_token_matrix&) = delete;
 
         void set(const X x, const Y y, T value)
         {
@@ -187,6 +191,11 @@ namespace rllm
         void add_with_clamp(const std::pair<const X, const Y>& indices, T delta, Range<T> range = {})
         {
             add_with_clamp(indices.first, indices.second, delta, range);
+        }
+
+        void add_no_clamp(const X x, const Y y, T delta)
+        {
+            m_data[static_cast<size_t>(x)][static_cast<size_t>(y)] += delta;
         }
 
       private:
