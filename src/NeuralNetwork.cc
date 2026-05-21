@@ -10,13 +10,6 @@ namespace rllm
 {
     constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 1000;
 
-    static size_t clip_max(size_t value, size_t max)
-    {
-        if (value > max)
-            return max;
-        return value;
-    }
-
     // Layers
 
     void NeuralNetwork::propagate_forward()
@@ -402,6 +395,9 @@ namespace rllm
     void NeuralNetwork::train(bool verbose)
     {
         std::println("Training the neural network...");
+
+        Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
+
         set_random_weights_and_connections();
 
         int total_lines = m_corpus.count_num_lines();
@@ -422,6 +418,7 @@ namespace rllm
             }
             const auto full_string = m_corpus.get_line(line);
             std::println("Training on line: '{}', {:0.2f}% done", full_string, progress * 100.0f);
+
             do_training(line, verbose);
         });
     }
@@ -452,6 +449,8 @@ namespace rllm
             if (i > MAX_TRAINING_ITERATIONS_PER_LINE)
             {
                 std::println("Reached maximum training iterations for this line. Stopping training on this line.");
+
+                m_stats.record_learning_failure();
                 break;
             }
 
@@ -471,7 +470,8 @@ namespace rllm
                     m_corpus.get_token_from_id(expected_output_token)
                 );
                 dump_top_predictions();
-               break;
+                m_stats.record_learning_success();
+                break;
             }
 
 

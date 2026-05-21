@@ -15,6 +15,7 @@ target_include_directories(rllm_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/include
 )
 
+target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -fopenmp)
 target_link_libraries(rllm_lib PUBLIC nlohmann_json::nlohmann_json)
 
 

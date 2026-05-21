@@ -19,7 +19,7 @@ namespace rllm
         return {};
     }
 
-    void OutputLayer::load(const nlohmann::json& j)
+    void OutputLayer::load(const nlohmann::json& )
     {
         m_inputs.fill(0.0f);
     }

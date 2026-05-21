@@ -5,6 +5,7 @@
 #include <IntermediateLayer.hpp>
 #include <LayerPrimitives.hpp>
 #include <OutputLayer.hpp>
+#include <Statistics.hpp>
 
 #include <nlohmann/json_fwd.hpp>
 #include <string>
@@ -15,8 +16,8 @@ namespace rllm
     class NeuralNetwork
     {
       public:
-        NeuralNetwork(size_t num_layers, Corpus& corpus)
-        : m_corpus(corpus)
+        NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats)
+        : m_corpus(corpus), m_stats(stats)
         {
             for (size_t i = 0; i < num_layers; ++i)
             {
@@ -28,6 +29,7 @@ namespace rllm
         NeuralNetwork& operator=(const NeuralNetwork&) = delete;
 
         const Corpus& get_corpus() const { return m_corpus; }
+        Statistics& get_statistics() const { return m_stats; }
 
         void compute_score(Score& score, const TokenID expected_output_token);
         void propagate_backward(const Score& score);
@@ -48,6 +50,7 @@ namespace rllm
 
       private:
         Corpus& m_corpus;
+        Statistics& m_stats;
         InputLayer m_input_layer;
         std::vector<IntermediateLayer> m_intermediate_layers;
         OutputLayer m_output_layer;

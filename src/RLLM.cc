@@ -15,8 +15,9 @@ namespace rllm
     {
         Corpus corpus;
         size_t _num_layers = 2; // overriden when loaded from file
+        Statistics stats;
 
-        auto nn = std::make_unique<NeuralNetwork>(_num_layers, corpus);
+        auto nn = std::make_unique<NeuralNetwork>(_num_layers, corpus, stats);
         nn->load(filename);
 
         std::string line;
@@ -32,7 +33,7 @@ namespace rllm
 
             static constexpr size_t MAX_NUM_ANSWER_TOKENS = 10;
 
-            for (int iter = 0; iter < MAX_NUM_ANSWER_TOKENS; ++iter)
+            for (size_t iter = 0; iter < MAX_NUM_ANSWER_TOKENS; ++iter)
             {
                 // Set the input layer of the neural network based on the token IDs
                 nn->set_input_layer(token_id_list);
@@ -65,10 +66,13 @@ namespace rllm
         std::println("Training mode");
 
         Corpus corpus;
+        Statistics stats;
 
-        auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus);
+        auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus, stats);
 
         nn->train(verbose);
+
+        stats.print_statistics();
 
         nn->save(filename);
     }
