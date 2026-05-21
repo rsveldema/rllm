@@ -9,7 +9,8 @@ namespace rllm
     static constexpr float MIN_TRIGGER = 0.0001f;
     static constexpr float MAX_TRIGGER = 1.0f;
     static constexpr float MIN_WEIGHT = 0.0f;
-    static constexpr float MAX_WEIGHT = 100.0f;
+    static constexpr float MAX_WEIGHT = 1.0f;
+    static constexpr size_t MAX_CONNECTIONS_PER_NEURON = 50;
 
     void IntermediateLayer::set_random_weights_and_connections()
     {
@@ -18,7 +19,7 @@ namespace rllm
             m_inputs[i] = 0.0f;
             m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
             m_weights[i] = get_random_value(MIN_WEIGHT, MAX_WEIGHT);
-            const int num_connections = 1 + std::rand() % 5;
+            const int num_connections = 1 + (std::rand() % MAX_CONNECTIONS_PER_NEURON);
             std::vector<IntermediateLayerIndex> conns;
             conns.reserve(num_connections);
             for (int c = 0; c < num_connections; ++c)

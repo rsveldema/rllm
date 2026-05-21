@@ -1,4 +1,4 @@
-#include <RLLM.hpp>
+#include <NeuralNetwork.hpp>
 #include <TokenIDFormatter.hpp>
 #include <algorithm>
 #include <cassert>
@@ -358,7 +358,20 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::train()
+    // Compute mean squared error loss between output activations and expected output
+    float NeuralNetwork::compute_loss(TokenID expected_output_token) const
+    {
+        float loss = 0.0f;
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i)) {
+            float target = (i == expected_output_token) ? 1.0f : 0.0f;
+            float pred = m_output_layer.m_inputs[i];
+            float diff = pred - target;
+            loss += diff * diff;
+        }
+        return loss / static_cast<float>(static_cast<int>(TokenID::MAX));
+    }
+
+    void NeuralNetwork::train(bool verbose)
     {
         std::println("Training the neural network...");
 
@@ -384,8 +397,9 @@ namespace rllm
             compute_score(score, expected_output_token);
             propagate_backward(score);
 
-            if (i % 100 == 0)
+            if (verbose && i % 100 == 0)
             {
+                float loss = compute_loss(expected_output_token);
                 const auto expected_token = m_corpus.get_token_from_id(expected_output_token);
                 std::println(
                     "Training iteration[{}], wanted: '{}' ({}), full string: '{}'",
@@ -394,6 +408,7 @@ namespace rllm
                     expected_output_token,
                     full_string
                 );
+                std::println("  Loss: {:.6f}", loss);
                 dump_neurons_whose_weights_were_increasing();
                 //dump_weights_and_triggers_for_token(expected_output_token);
                 dump_top_predictions();

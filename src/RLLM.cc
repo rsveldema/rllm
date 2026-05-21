@@ -60,7 +60,7 @@ namespace rllm
         }
     }
 
-    void RLLM::train_mode(const std::string& filename, size_t num_layers)
+    void RLLM::train_mode(const std::string& filename, size_t num_layers, bool verbose)
     {
         std::println("Training mode");
 
@@ -68,7 +68,7 @@ namespace rllm
 
         auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus);
 
-        nn->train();
+        nn->train(verbose);
 
         nn->save(filename);
     }

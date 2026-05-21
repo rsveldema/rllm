@@ -14,6 +14,7 @@ int main(int argc, char* argv[])
     bool train_mode = false;
     const char* filename = "model.dat";
     int num_layers = 3;
+    bool verbose = false;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -29,13 +30,18 @@ int main(int argc, char* argv[])
         {
             train_mode = true;
         }
+        else if (std::strcmp(argv[i], "--verbose") == 0)
+        {
+            verbose = true;
+        }
         else
         {
             std::println(
                 ""
-                "Usage: {} [--train] [--file <filename>]\n"
+                "Usage: {} [--train] [--file <filename>] [--verbose]\n"
                 "  --train         Run in training mode (default is prompt mode)\n"
-                "  --file <filename>  Specify the model file to load/save (default is '{}')",
+                "  --file <filename>  Specify the model file to load/save (default is '{}')\n"
+                "  --verbose       Enable verbose output",
                 argv[0],
                 filename
             );
@@ -45,7 +51,7 @@ int main(int argc, char* argv[])
 
     if (train_mode)
     {
-        llm.train_mode(filename, num_layers);
+        llm.train_mode(filename, num_layers, verbose);
     }
     else
     {
