@@ -52,6 +52,7 @@ namespace rllm
     )
     {
         clear_last_weight_deltas();
+#pragma omp parallel for schedule(static)
         for (const auto i : enum_iterator<IntermediateLayerIndex>())
             backward_neuron_from_output(i, delta, prev_delta, learning_rate);
     }
