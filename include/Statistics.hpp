@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <print>
+#include <atomic>
 #include <string>
 
 namespace rllm
@@ -14,20 +15,24 @@ namespace rllm
       public:
         class TotalLearnRecorderScope
         {
-            public:
-                TotalLearnRecorderScope(Statistics& stats)
-                    : m_stats(stats)
-                {
-                    m_stats.record_start_learning_process();
-                }
+          public:
+            TotalLearnRecorderScope(Statistics& stats)
+                : m_stats(stats)
+            {
+                start  = std::chrono::steady_clock::now();
+            }
 
-                ~TotalLearnRecorderScope()
-                {
-                    m_stats.record_end_learning_process();
-                }
+            ~TotalLearnRecorderScope()
+            {
+                const auto end = std::chrono::steady_clock::now();
+                const auto sum = end - start;
 
-            private:
-                Statistics& m_stats;
+                m_stats.total_learning_duration.fetch_add(std::chrono::duration_cast<std::chrono::milliseconds>(sum).count());
+            }
+
+          private:
+            Statistics& m_stats;
+            std::chrono::steady_clock::time_point start;
         };
 
 
@@ -46,30 +51,13 @@ namespace rllm
             std::println("Total learning failures: {}", m_learning_failures);
             std::println("Total learning successes: {}", m_learning_successes);
 
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                total_learning_end_time - total_learning_start_time
-            )
-                                .count();
+            auto duration = total_learning_duration.load();
             std::println("Total learning process took {} ms", duration);
         }
-
 
       private:
         size_t m_learning_failures = 0;
         size_t m_learning_successes = 0;
-
-        std::chrono::steady_clock::time_point total_learning_start_time;
-        std::chrono::steady_clock::time_point total_learning_end_time;
-
-        void record_start_learning_process()
-        {
-            total_learning_start_time = std::chrono::steady_clock::now();
-        }
-
-        void record_end_learning_process()
-        {
-            total_learning_end_time = std::chrono::steady_clock::now();
-        }
-
+        std::atomic<size_t> total_learning_duration{0};
     };
 } // namespace rllm

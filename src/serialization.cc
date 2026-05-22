@@ -72,15 +72,12 @@ namespace rllm
                 throw std::runtime_error("intermediate_layers must be an array");
             }
 
-            if (layers_j.size() != m_intermediate_layers.size())
+            m_intermediate_layers.clear();
+            m_intermediate_layers.reserve(layers_j.size());
+            for (const auto& layer_j : layers_j)
             {
-                throw std::runtime_error("Loaded model layer count does not match network configuration");
-            }
-
-            for (size_t i = 0; i < layers_j.size(); ++i)
-            {
-                auto& layer = m_intermediate_layers[i];
-                layer.load(layers_j.at(i));
+                m_intermediate_layers.emplace_back(m_corpus);
+                m_intermediate_layers.back().load(layer_j);
             }
 
             m_output_layer.load(j.at("output_layer"));
@@ -88,6 +85,7 @@ namespace rllm
         catch (const std::exception& e)
         {
             std::println("Failed to load model '{}': {}", filename, e.what());
+            std::abort();
         }
     }
 

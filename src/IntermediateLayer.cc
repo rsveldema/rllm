@@ -53,6 +53,7 @@ namespace rllm
     void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer) const
     {
         output_layer.m_inputs.fill(0.0f);
+
         for (const auto i : enum_iterator<IntermediateLayerIndex>())
         {
             const auto input_value = m_inputs[i];

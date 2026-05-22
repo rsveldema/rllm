@@ -148,16 +148,24 @@ namespace rllm
         return {};
     }
 
-    std::string Corpus::get_line(const InputLine& line) const
+    std::optional<std::string> Corpus::get_line(const InputLine& line) const
     {
         std::string result;
-        for (auto i = PositionIndex::START; i < line.size(); i = inc(i))
+        for (const auto i : enum_iterator<PositionIndex>(line.size()))
         {
             if (!result.empty())
             {
                 result += ' ';
             }
+            if (line[i] == TokenID::UNKNOWN_TOKEN_ID)
+            {
+                return std::nullopt; // line contains unknown token ID, cannot convert to string
+            }
             result += get_token_from_id(line[i]);
+        }
+        if (result.empty())
+        {
+            return std::nullopt; // empty line
         }
         return result;
     }

@@ -16,6 +16,6 @@ target_include_directories(rllm_lib PUBLIC
 )
 
 target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -fopenmp)
-target_link_libraries(rllm_lib PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(rllm_lib PUBLIC nlohmann_json::nlohmann_json -fopenmp)
 
 

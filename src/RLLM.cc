@@ -30,6 +30,16 @@ namespace rllm
             }
             // Process the input line
             auto token_id_list = corpus.get_token_ids(line);
+            const auto full_string_opt = corpus.get_line(token_id_list);
+            if (! full_string_opt.has_value())
+            {
+                std::println("Input contains unknown tokens. Please try again.");
+                continue;
+            }
+            assert(full_string_opt.has_value());
+            const auto& full_string = *full_string_opt;
+
+            std::println("Input tokens: {}", full_string);
 
             static constexpr size_t MAX_NUM_ANSWER_TOKENS = 10;
 
@@ -48,6 +58,21 @@ namespace rllm
                     std::println("No output tokens predicted.");
                     break;
                 }
+
+                int ix = 0;
+                for (const auto& entry : output_token_id_lists)
+                {
+                    const auto predicted_token = nn->get_corpus().get_token_from_id(entry.token_id);
+                    std::println(
+                        "\t     prediction[{}]: '{}' (id: '{}'), {}",
+                        ix,
+                        nn->get_corpus().get_token_from_id(entry.token_id),
+                        static_cast<int>(entry.token_id),
+                        entry.activation
+                    );
+                    ix++;
+                }
+
                 const auto random_index = static_cast<size_t>(rand()) % output_token_id_lists.size();
                 const auto output_token_id = output_token_id_lists[random_index].token_id;
                 const auto output_token = nn->get_corpus().get_token_from_id(output_token_id);

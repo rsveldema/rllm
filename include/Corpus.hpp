@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <optional>
 
 #include <LayerPrimitives.hpp>
 
@@ -20,7 +21,7 @@ namespace rllm
 
         InputLine get_token_ids(const std::string& text) const;
         Token get_token_from_id(TokenID id) const;
-        std::string get_line(const InputLine& line) const;
+        std::optional<std::string> get_line(const InputLine& line) const;
 
         void visit_lines(const visitor_fn_t& visitor) const
         {

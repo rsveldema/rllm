@@ -13,7 +13,7 @@ int main(int argc, char* argv[])
     rllm::RLLM llm;
     bool train_mode = false;
     const char* filename = "model.dat";
-    int num_layers = 3;
+    int num_layers = 4;
     bool verbose = false;
 
     for (int i = 1; i < argc; ++i)

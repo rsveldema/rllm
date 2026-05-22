@@ -33,9 +33,20 @@ namespace rllm
             m_current = inc(m_current);
             return *this;
         }
+
         bool operator!=(const enum_iterator& other) const
         {
             return m_current != other.m_current;
+        }
+
+        void operator += (size_t offset)
+        {
+            m_current = static_cast<Enum>((static_cast<size_t>(m_current) + offset) % static_cast<size_t>(m_end));
+        }
+
+        int operator -(const enum_iterator& other) const
+        {
+            return static_cast<int>(m_current) - static_cast<int>(other.m_current);
         }
 
         enum_iterator begin() const

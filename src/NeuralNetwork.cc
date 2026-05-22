@@ -9,6 +9,8 @@
 namespace rllm
 {
     constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 1000;
+    constexpr float CONVERGENCE_THRESHOLD = 0.001f;
+
 
     // Layers
 
@@ -402,25 +404,35 @@ namespace rllm
 
         int total_lines = m_corpus.count_num_lines();
         int lines_visited = 0;
+
+        std::vector<InputLine> training_lines;
         m_corpus.visit_lines([&](const InputLine& line) {
+            training_lines.push_back(line);
+        });
+
+        #pragma omp parallel for
+        for (const auto& line : training_lines)
+        {
             lines_visited++;
             const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
 
+            const auto full_string_opt = m_corpus.get_line(line);
+            assert(full_string_opt.has_value());
+            const auto& full_string = *full_string_opt;
+
             if (static_cast<int>(line.size()) < 2)
             {
-                const auto full_string = m_corpus.get_line(line);
                 std::println(
                     "Skipping line with size {} (too short for training): '{}'",
                     static_cast<int>(line.size()),
                     full_string
                 );
-                return; // skip too-short lines that can't be used for training
+                continue; // skip too-short lines that can't be used for training
             }
-            const auto full_string = m_corpus.get_line(line);
-            std::println("Training on line: '{}', {:0.2f}% done", full_string, progress * 100.0f);
+            std::println("Training on line[{}]: '{}', {:0.2f}% done", lines_visited, full_string, progress * 100.0f);
 
             do_training(line, verbose);
-        });
+        }
     }
 
 
@@ -431,6 +443,10 @@ namespace rllm
         const auto expected_output_token = train_input.back();
         train_input.pop_back();
 
+        const auto full_string_opt = m_corpus.get_line(train_output);
+        assert(full_string_opt.has_value());
+        const auto& full_string = *full_string_opt;
+
         CircularBuffer<float, 100> recent_losses;
         auto loss_function_converged = [&](float loss) {
             recent_losses.push_back(loss);
@@ -438,7 +454,7 @@ namespace rllm
                 return false; // not enough data yet
             float average_loss = std::accumulate(recent_losses.begin(), recent_losses.end(), 0.0f) /
                 static_cast<float>(recent_losses.size());
-            return average_loss < 0.001f; // convergence threshold
+            return average_loss < CONVERGENCE_THRESHOLD; // convergence threshold
         };
 
         size_t i = 0;
@@ -477,8 +493,6 @@ namespace rllm
 
             if (verbose && i % 100 == 0)
             {
-                const auto full_string = m_corpus.get_line(train_output);
-
                 const auto expected_token = m_corpus.get_token_from_id(expected_output_token);
                 std::println(
                     "Training iteration[{}], wanted: '{}' ({}), full string: '{}'",
