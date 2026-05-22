@@ -30,6 +30,7 @@ namespace rllm
 
         const Corpus& get_corpus() const { return m_corpus; }
         Statistics& get_statistics() const { return m_stats; }
+        const OutputLayer& get_output_layer() const { return m_output_layer; }
 
         void propagate_backward(const Score& score);
         void propagate_forward(const InputLine& input);

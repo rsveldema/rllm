@@ -8,18 +8,18 @@
 
 namespace rllm
 {
-#define LOG_ONCE(...) do { \
-    static std::atomic<bool> logged{false}; \
-    if (!logged.exchange(true)) { \
-        __VA_ARGS__; \
-    } \
-} while(0)
-
-
     static constexpr float MIN_TRIGGER = 0.0001f;
+    // Keep initial triggers spread across the full [0,1] range so that the
+    // per-token output activation stays small (~0.02).  With MAX_TRIGGER=0.5
+    // every layer saturates and all 1132 output tokens activate simultaneously;
+    // the resulting delta[wrong] = -0.5 × 1131 swamps delta[expected] = +1,
+    // collapsing the network to fires-nothing within a few hundred iterations.
     static constexpr float MAX_TRIGGER = 1.0f;
     static constexpr float MIN_WEIGHT = 0.0f;
     static constexpr float MAX_WEIGHT = 1.0f;
+        
+    static constexpr size_t MAX_NUM_CONNECTIONS_PER_NEURON = 200;
+
 
     void IntermediateLayer::set_random_weights_and_connections()
     {
@@ -87,24 +87,29 @@ namespace rllm
         // Each firing neuron fans out to layer_size/corpus_size targets so that,
         // on average, every neuron in the next intermediate layer receives one
         // connection from each corpus token's active input path.
-        const size_t MAX_NUM_CONNECTIONS_PER_NEURON = 50;
         const size_t layer_size  = static_cast<size_t>(IntermediateLayerIndex::MAX);
         assert(m_corpus.number_of_token_types() > 10);
         const size_t corpus_size = m_corpus.number_of_token_types();
-        const size_t MAX_CONNECTIONS_PER_NEURON = std::min(MAX_NUM_CONNECTIONS_PER_NEURON, layer_size / corpus_size);
-        assert(MAX_CONNECTIONS_PER_NEURON > 1);
+        const size_t MAX_INTERMEDIATE_LAYER_CONNECTIONS = std::min(MAX_NUM_CONNECTIONS_PER_NEURON, layer_size / corpus_size);
+        assert(MAX_INTERMEDIATE_LAYER_CONNECTIONS > 1);
+        const size_t MIN_INTERMEDIATE_CONNECTIONS = std::max(size_t{1}, MAX_INTERMEDIATE_LAYER_CONNECTIONS / 10);
+
+        assert(MIN_INTERMEDIATE_CONNECTIONS > 0);
+        assert(MAX_INTERMEDIATE_LAYER_CONNECTIONS <= 10000); // sanity check to avoid accidentally creating a near-fully-connected layer
+
 
         LOG_ONCE(
             std::println(
-                "Randomizing neuron {}: trigger = {:.4f}, weight = {:.4f}, num_connections = {}",
+                "^^^^^^^^^^^^^^ Randomizing neuron {}: trigger = {:.4f}, weight = {:.4f}, num_connection-range = {}-{}",
                 static_cast<int>(i),
                 m_trigger_values[i],
                 m_weights[i],
-                MAX_CONNECTIONS_PER_NEURON
+                MIN_INTERMEDIATE_CONNECTIONS,
+                MAX_INTERMEDIATE_LAYER_CONNECTIONS
             )
         );
 
-        const int num_connections = 1 + (std::rand() % MAX_CONNECTIONS_PER_NEURON);
+        const int num_connections = MIN_INTERMEDIATE_CONNECTIONS + (std::rand() % (MAX_INTERMEDIATE_LAYER_CONNECTIONS - MIN_INTERMEDIATE_CONNECTIONS + 1));
         std::vector<IntermediateLayerIndex> conns;
         conns.reserve(num_connections);
         for (int c = 0; c < num_connections; ++c)
@@ -117,7 +122,7 @@ namespace rllm
         m_inputs[i] = 0.0f;
         m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
         m_weights[i] = get_random_value(MIN_WEIGHT, MAX_WEIGHT);
-        const int num_connections = 1 + std::rand() % 50;
+        const int num_connections = 1 + std::rand() % 5;
         std::vector<IntermediateLayerIndex> conns;
         conns.reserve(num_connections);
         for (int c = 0; c < num_connections; ++c)

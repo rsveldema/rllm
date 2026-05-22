@@ -22,6 +22,7 @@ namespace rllm
         void propagate_forward_to_output(OutputLayer& output_layer) const;
 
         void fill_inputs(float value) { m_inputs.fill(value); }
+        bool count_fires(IntermediateLayerIndex i) const { return m_inputs[i] >= m_trigger_values[i]; }
         void accumulate_input(IntermediateLayerIndex index, float value)
         {
             m_inputs.add_with_clamp(index, value);

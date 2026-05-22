@@ -7,9 +7,23 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <atomic>
+#include <print>
 
 namespace rllm
 {
+    static constexpr auto RED   = "\033[31m";
+    static constexpr auto RESET = "\033[0m";
+
+#define LOG_ONCE(...) do { \
+    static int counter = 0;\
+    if (counter < 3) { \
+        __VA_ARGS__; \
+        ++counter; \
+    } \
+} while(0)
+
+
     template <typename Enum>
     class enum_iterator
     {

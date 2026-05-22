@@ -8,7 +8,7 @@
 
 namespace rllm
 {
-    constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 2000;
+    constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 10000;
 
     // with TokenID::MAX = 2048, the MSE loss of an all-zero prediction is 1/2048 ≈ 0.000488.
     //  the '1' here is becomes of one-hot encoding of the expected output, where the target token has a value of 1 and
@@ -35,6 +35,8 @@ namespace rllm
 
         // Propagate from the last intermediate layer into the output layer.
         m_intermediate_layers.back().propagate_forward_to_output(m_output_layer);
+
+
     }
 
 
@@ -82,7 +84,7 @@ namespace rllm
 
     void NeuralNetwork::propagate_backward(const Score& score)
     {
-        static constexpr float LEARNING_RATE = 0.01f;
+        static constexpr float LEARNING_RATE = 0.1f;
 
         // delta[i] = signed error: target - actual.
         // Positive  → neuron fires too little  → increase weight.
@@ -233,9 +235,11 @@ namespace rllm
             if (i > MAX_TRAINING_ITERATIONS_PER_LINE)
             {
                 std::println(
-                    "Reached maximum training iterations for this line. Stopping training on this line. loss = {:.6f}, max-allowed = {:.6f}",
+                    "{}Reached maximum training iterations for this line. Stopping training on this line. loss = {:.6f}, max-allowed = {:.6f}{}",
+                    rllm::RED,
                     recent_losses.back(),
-                    CONVERGENCE_THRESHOLD
+                    CONVERGENCE_THRESHOLD,
+                    rllm::RESET
                 );
 
                 m_stats.record_learning_failure();
@@ -248,6 +252,25 @@ namespace rllm
             propagate_backward(score);
 
             float loss = compute_loss(expected_output_token);
+
+            // Early exit: if still at fires-nothing loss after the circular buffer fills,
+            // the gradient isn't reaching this example — skip it rather than wasting iterations.
+            // Only abort when loss is truly fires-nothing (no tokens fire at all).
+            // If loss > fires-nothing, wrong tokens ARE firing and training can still correct them.
+            if (i % 100 == 0 && recent_losses.size() == recent_losses.capacity())
+            {
+                const float avg = std::accumulate(recent_losses.begin(), recent_losses.end(), 0.0f) /
+                                  static_cast<float>(recent_losses.size());
+                if (avg >= FIRES_NOTHING_MSE_LOSS * 0.99f && avg <= FIRES_NOTHING_MSE_LOSS * 1.01f)
+                {
+                    std::println(
+                        "{}Fires-nothing for {} iterations, skipping. loss = {:.6f}{}",
+                        rllm::RED, i, avg, rllm::RESET
+                    );
+                    m_stats.record_learning_failure();
+                    break;
+                }
+            }
 
             if (loss_function_converged(loss))
             {

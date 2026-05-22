@@ -9,7 +9,7 @@ namespace rllm
         const size_t t = static_cast<size_t>(tok);
         const size_t p = static_cast<size_t>(pos);
         const size_t h = (t * 2654435761ULL ^ p * 40503ULL) % static_cast<size_t>(IntermediateLayerIndex::MAX);
-        //const size_t h = (t + (p * 1023 * 31)) % static_cast<size_t>(IntermediateLayerIndex::MAX);
+        // const size_t h = (t + (p * 1023 * 31)) % static_cast<size_t>(IntermediateLayerIndex::MAX);
         return static_cast<IntermediateLayerIndex>(h);
     }
 
@@ -21,12 +21,24 @@ namespace rllm
         // 128 tokens, and for each token we do a single hash and an accumulation into the next layer, so this should be
         // very fast.
         // Therefore no need to optimize further by parallelizing or anything like that.
+
+        assert(!input.empty());
+        assert(input.size() <= PositionIndex::MAX);
+
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {
             const TokenID tok = input[pos];
             assert(tok != TokenID::UNKNOWN_TOKEN_ID);
 
             const auto target = hash_input(tok, pos);
+            LOG_ONCE(
+                std::println(
+                    "InputLayer: token (id {}) at position {} maps to neuron {}",
+                    static_cast<int>(tok),
+                    static_cast<int>(pos),
+                    static_cast<int>(target)
+                );
+            );
             next_layer.accumulate_input(target, 1.0f);
         }
     }
