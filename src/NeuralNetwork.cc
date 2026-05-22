@@ -8,22 +8,15 @@
 
 namespace rllm
 {
-    constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 1000;
-    // The MSE loss of an all-zero prediction is 1/TokenID::MAX = 1/2048 ≈ 0.000488.
-    // The threshold must be strictly below that value so training cannot "converge"
-    // on a network that never activates any output neuron.
-    constexpr float CONVERGENCE_THRESHOLD = 0.0001f;
+    constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 2000;
 
     // with TokenID::MAX = 2048, the MSE loss of an all-zero prediction is 1/2048 ≈ 0.000488.
     //  the '1' here is becomes of one-hot encoding of the expected output, where the target token has a value of 1 and
     //  all others have a value of 0.
     constexpr float FIRES_NOTHING_MSE_LOSS = 1.0f / static_cast<float>(static_cast<int>(TokenID::MAX));
-    static_assert(
-        CONVERGENCE_THRESHOLD < FIRES_NOTHING_MSE_LOSS,
-        "CONVERGENCE_THRESHOLD must be below the all-zero prediction loss (1/TokenID::MAX) "
-        "or training will exit before the network learns anything"
-    );
 
+    constexpr float CONVERGENCE_THRESHOLD =
+        FIRES_NOTHING_MSE_LOSS / 10.0f; // Must be below the all-zero prediction loss for training to work.
 
     // Layers
 
@@ -158,7 +151,12 @@ namespace rllm
 
     void NeuralNetwork::train(bool verbose)
     {
-        std::println("Training the neural network...");
+        std::println(
+            "Training the neural network..., convergence threshold: {:.10f}, fires nothing MSE loss: {:.10f}, max iterations per line: {}",
+            CONVERGENCE_THRESHOLD,
+            FIRES_NOTHING_MSE_LOSS,
+            MAX_TRAINING_ITERATIONS_PER_LINE
+        );
 
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
@@ -234,7 +232,11 @@ namespace rllm
 
             if (i > MAX_TRAINING_ITERATIONS_PER_LINE)
             {
-                std::println("Reached maximum training iterations for this line. Stopping training on this line.");
+                std::println(
+                    "Reached maximum training iterations for this line. Stopping training on this line. loss = {:.6f}, max-allowed = {:.6f}",
+                    recent_losses.back(),
+                    CONVERGENCE_THRESHOLD
+                );
 
                 m_stats.record_learning_failure();
                 break;

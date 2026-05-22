@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cassert>
 
 namespace rllm
 {
@@ -20,6 +21,13 @@ namespace rllm
         size_t size() const { return m_count; }
         size_t capacity() const { return N; }
         bool empty() const { return m_count == 0; }
+
+        T back() const
+        {
+            assert(m_count > 0);
+            size_t tail = (m_head + N - m_count) % N;
+            return m_data[(tail + m_count - 1) % N];
+        }
 
         // Iterates elements from oldest to newest.
         struct iterator

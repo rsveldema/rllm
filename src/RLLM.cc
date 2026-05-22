@@ -143,6 +143,7 @@ namespace rllm
                 token_id_list.push_back(entry.token_id);
             }
 
+
             auto reply_id_list = token_id_list.substr(question_size);
             auto reply = corpus.get_line(reply_id_list);
             const auto full_answer_string_opt = corpus.get_line(token_id_list);

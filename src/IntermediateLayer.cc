@@ -1,17 +1,25 @@
 #include <IntermediateLayer.hpp>
 #include <RandomHelpers.hpp>
 
+#include <print>
 #include <algorithm>
 #include <atomic>
 #include <cassert>
 
 namespace rllm
 {
+#define LOG_ONCE(...) do { \
+    static std::atomic<bool> logged{false}; \
+    if (!logged.exchange(true)) { \
+        __VA_ARGS__; \
+    } \
+} while(0)
+
+
     static constexpr float MIN_TRIGGER = 0.0001f;
     static constexpr float MAX_TRIGGER = 1.0f;
     static constexpr float MIN_WEIGHT = 0.0f;
     static constexpr float MAX_WEIGHT = 1.0f;
-    static constexpr size_t MAX_CONNECTIONS_PER_NEURON = 50;
 
     void IntermediateLayer::set_random_weights_and_connections()
     {
@@ -75,6 +83,27 @@ namespace rllm
         m_inputs[i] = 0.0f;
         m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
         m_weights[i] = get_random_value(MIN_WEIGHT, MAX_WEIGHT);
+
+        // Each firing neuron fans out to layer_size/corpus_size targets so that,
+        // on average, every neuron in the next intermediate layer receives one
+        // connection from each corpus token's active input path.
+        const size_t MAX_NUM_CONNECTIONS_PER_NEURON = 50;
+        const size_t layer_size  = static_cast<size_t>(IntermediateLayerIndex::MAX);
+        assert(m_corpus.number_of_token_types() > 10);
+        const size_t corpus_size = m_corpus.number_of_token_types();
+        const size_t MAX_CONNECTIONS_PER_NEURON = std::min(MAX_NUM_CONNECTIONS_PER_NEURON, layer_size / corpus_size);
+        assert(MAX_CONNECTIONS_PER_NEURON > 1);
+
+        LOG_ONCE(
+            std::println(
+                "Randomizing neuron {}: trigger = {:.4f}, weight = {:.4f}, num_connections = {}",
+                static_cast<int>(i),
+                m_trigger_values[i],
+                m_weights[i],
+                MAX_CONNECTIONS_PER_NEURON
+            )
+        );
+
         const int num_connections = 1 + (std::rand() % MAX_CONNECTIONS_PER_NEURON);
         std::vector<IntermediateLayerIndex> conns;
         conns.reserve(num_connections);
@@ -88,7 +117,7 @@ namespace rllm
         m_inputs[i] = 0.0f;
         m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
         m_weights[i] = get_random_value(MIN_WEIGHT, MAX_WEIGHT);
-        const int num_connections = 1 + std::rand() % 5;
+        const int num_connections = 1 + std::rand() % 50;
         std::vector<IntermediateLayerIndex> conns;
         conns.reserve(num_connections);
         for (int c = 0; c < num_connections; ++c)
