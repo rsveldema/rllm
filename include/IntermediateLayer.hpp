@@ -44,6 +44,30 @@ namespace rllm
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
 
+        // private methods made public for testing purposes
+        void randomize_neuron(IntermediateLayerIndex i);
+        void randomize_neuron_to_output(IntermediateLayerIndex i);
+        void forward_neuron(IntermediateLayerIndex i, IntermediateLayer& next_layer);
+        void forward_neuron_to_output(IntermediateLayerIndex i, OutputLayer& output_layer) const;
+        void backward_neuron(
+            IntermediateLayerIndex i,
+            const template_token_vector<float, IntermediateLayerIndex>& delta,
+            template_token_vector<float, IntermediateLayerIndex>& prev_delta,
+            float learning_rate
+        );
+        void backward_neuron_from_output(
+            IntermediateLayerIndex i,
+            const template_token_vector<float, TokenID>& delta,
+            template_token_vector<float, IntermediateLayerIndex>& prev_delta,
+            float learning_rate
+        );
+
+
+        void clear_last_weight_deltas()
+        {
+            m_last_weight_delta.fill(0.0f);
+        }
+
       private:
         Corpus& m_corpus;
         // accumulated input for each neuron in the layer

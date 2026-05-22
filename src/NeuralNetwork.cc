@@ -410,28 +410,36 @@ namespace rllm
             training_lines.push_back(line);
         });
 
-        #pragma omp parallel for
-        for (const auto& line : training_lines)
+        for (const auto& line_of_file : training_lines)
         {
             lines_visited++;
             const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
 
-            const auto full_string_opt = m_corpus.get_line(line);
-            assert(full_string_opt.has_value());
-            const auto& full_string = *full_string_opt;
-
-            if (static_cast<int>(line.size()) < 2)
+            for (const auto& line_substring_length : enum_iterator<PositionIndex>(line_of_file.size()))
             {
-                std::println(
-                    "Skipping line with size {} (too short for training): '{}'",
-                    static_cast<int>(line.size()),
-                    full_string
-                );
-                continue; // skip too-short lines that can't be used for training
-            }
-            std::println("Training on line[{}]: '{}', {:0.2f}% done", lines_visited, full_string, progress * 100.0f);
+                const auto line = line_of_file.substr(line_substring_length);
+                if (line.empty())
+                    continue; // skip empty lines that can't be used for training
 
-            do_training(line, verbose);
+                const auto full_string_opt = m_corpus.get_line(line);
+                assert(full_string_opt.has_value());
+                const auto& full_string = *full_string_opt;
+
+                if (static_cast<int>(line.size()) < 2)
+                {
+                    std::println(
+                        "Skipping line with size {} (too short for training): '{}'",
+                        static_cast<int>(line.size()),
+                        full_string
+                    );
+                    continue; // skip too-short lines that can't be used for training
+                }
+                std::println(
+                    "Training on line[{}]: '{}', {:0.2f}% done", lines_visited, full_string, progress * 100.0f
+                );
+
+                do_training(line, verbose);
+            }
         }
     }
 

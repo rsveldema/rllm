@@ -130,6 +130,20 @@ namespace rllm
         }
         ~template_token_vector() = default;
 
+        template_token_vector substr(LengthType length) const
+        {
+            assert(length <= len);
+            template_token_vector result;
+            for (const auto i : enum_iterator<LengthType>(length))
+            {
+                const auto tok = m_data[static_cast<size_t>(i)];
+                result.push_back(tok);
+            }
+            result.len = length;
+            return result;
+        }
+
+
         void push_back(T value)
         {
             assert(len < LengthType::MAX);
@@ -174,12 +188,14 @@ namespace rllm
             m_data.fill(value);
         }
 
+        /** add a value to an element at index with clamping */
         void add_with_clamp(LengthType index, T delta, Range<T> range = {})
         {
             auto& cell = m_data[static_cast<size_t>(index)];
             cell = std::clamp(cell + delta, range.lo, range.hi);
         }
 
+        /** add a value to an element at index without clamping */
         void add_no_clamp(LengthType index, T delta)
         {
             m_data[static_cast<size_t>(index)] += delta;

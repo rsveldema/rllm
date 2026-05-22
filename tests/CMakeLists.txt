@@ -12,7 +12,8 @@ enable_testing()
 add_executable(test_rllm
     test_rllm.cc
 )
-target_link_libraries(test_rllm PRIVATE rllm_lib GTest::gtest_main)
+target_link_libraries(test_rllm PRIVATE rllm_lib GTest::gtest_main -fopenmp)
+target_compile_options(test_rllm PRIVATE -fopenmp)
 target_include_directories(test_rllm PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 include(GoogleTest)
