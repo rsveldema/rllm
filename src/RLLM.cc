@@ -6,6 +6,57 @@
 
 namespace rllm
 {
+    struct PromptOptions
+    {
+        bool highest_prio_only = true;
+    };
+
+
+    void process_command(const std::string& _command, PromptOptions& options, const Corpus& corpus)
+    {
+        const auto command = _command.empty() ? "/help" :  _command;
+
+        struct command_entry {
+            std::vector<std::string_view> name;
+            std::string_view description;
+            std::function<void()> action;
+        };
+
+        std::vector<command_entry> commands = {
+            { {"/help", "/h", "/?"}, "Show this help message", [&]() {
+                std::println("Available commands:");
+                for (const auto& cmd : commands)
+                {
+                    std::println("  {}: {}", cmd.name[0], cmd.description);
+                }
+            }},
+            { {"/exit"}, "Exit the prompt mode", [&]() {
+                std::println("Exiting prompt mode.");
+                std::exit(0);
+            }},
+            { {"/info"}, "Show information about the loaded model", [&]() {
+                std::println("Model information:");
+                std::println("Number of token types in corpus: {}", corpus.number_of_token_types());
+            }},
+            { {"/toggle_prio"}, "Toggle highest priority only mode", [&]() {
+                options.highest_prio_only = !options.highest_prio_only;
+                std::println("Toggled highest priority only mode. Now highest_prio_only is {}.", options.highest_prio_only);
+            }}
+        };
+
+        for (const auto& cmd : commands)
+        {
+            if (std::find(cmd.name.begin(), cmd.name.end(), command) != cmd.name.end())
+            {
+                cmd.action();
+                return;
+            }
+        }
+
+        std::println("Unknown command: '{}'", command);
+    }
+
+
     RLLM::RLLM()
     {
         // Constructor implementation
@@ -20,18 +71,22 @@ namespace rllm
         auto nn = std::make_unique<NeuralNetwork>(_num_layers, corpus, stats);
         nn->load(filename);
 
+        PromptOptions options;
+
         std::string line;
         while (true)
         {
-            std::cout << "Enter input (or 'exit' to quit): ";
-            if (!std::getline(std::cin, line) || line == "exit")
+            std::cout << "Enter input (or '/exit' to quit): ";
+            if (!std::getline(std::cin, line) || line.starts_with("/") || line.empty())
             {
-                break;
+                process_command(line, options, corpus);
+                continue;
             }
+
             // Process the input line
             auto token_id_list = corpus.get_token_ids(line);
             const auto full_string_opt = corpus.get_line(token_id_list);
-            if (! full_string_opt.has_value())
+            if (!full_string_opt.has_value())
             {
                 std::println("Input contains unknown tokens. Please try again.");
                 continue;
@@ -40,6 +95,8 @@ namespace rllm
             const auto& full_string = *full_string_opt;
 
             std::println("Input tokens: {}", full_string);
+
+            const auto question_size = token_id_list.size();
 
             static constexpr size_t MAX_NUM_ANSWER_TOKENS = 10;
 
@@ -71,16 +128,32 @@ namespace rllm
                     ix++;
                 }
 
-                const auto random_index = static_cast<size_t>(rand()) % output_token_id_lists.size();
-                const auto output_token_id = output_token_id_lists[random_index].token_id;
-                const auto output_token = nn->get_corpus().get_token_from_id(output_token_id);
 
-                std::println("Predicted next token: {}", output_token);
+                size_t random_index = 0;
+                if (!options.highest_prio_only)
+                {
+                    random_index = static_cast<size_t>(rand()) % output_token_id_lists.size();
+                }
 
+                const auto& entry = output_token_id_lists[random_index];
+                const auto output_token = nn->get_corpus().get_token_from_id(entry.token_id);
                 // Add the predicted token ID to the input for the
                 // next iteration
-                token_id_list.push_back(output_token_id);
+                std::println("Predicted next token: {}", output_token);
+                token_id_list.push_back(entry.token_id);
             }
+
+            auto reply_id_list = token_id_list.substr(question_size);
+            auto reply = corpus.get_line(reply_id_list);
+            const auto full_answer_string_opt = corpus.get_line(token_id_list);
+            if (!full_answer_string_opt.has_value())
+            {
+                std::println("Input contains unknown tokens. Please try again.");
+                continue;
+            }
+            assert(full_answer_string_opt.has_value());
+            const auto& full_answer_string = *full_answer_string_opt;
+            std::println("Full answer string: {}", full_answer_string);
         }
     }
 

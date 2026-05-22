@@ -8,8 +8,7 @@ namespace rllm
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {
             const TokenID tok = input[pos];
-            if (tok == TokenID::UNKNOWN_TOKEN_ID)
-                continue;
+            assert (tok != TokenID::UNKNOWN_TOKEN_ID);
 
             const auto target = hash_input(tok, pos);
             next_layer.accumulate_input(target, 1.0f);
