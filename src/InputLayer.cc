@@ -2,17 +2,12 @@
 
 namespace rllm
 {
-    void InputLayer::set_input_layer(const InputLine& input)
-    {
-        m_input = input;
-    }
-
-    void InputLayer::propagate_forward(IntermediateLayer& next_layer) const
+    void InputLayer::propagate_forward(const InputLine& input, IntermediateLayer& next_layer) const
     {
         next_layer.fill_inputs(0.0f);
-        for (const auto pos : enum_iterator<PositionIndex>(m_input.size()))
+        for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {
-            const TokenID tok = m_input[pos];
+            const TokenID tok = input[pos];
             if (tok == TokenID::UNKNOWN_TOKEN_ID)
                 continue;
 

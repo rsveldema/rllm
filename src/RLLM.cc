@@ -46,10 +46,8 @@ namespace rllm
             for (size_t iter = 0; iter < MAX_NUM_ANSWER_TOKENS; ++iter)
             {
                 // Set the input layer of the neural network based on the token IDs
-                nn->set_input_layer(token_id_list);
-
                 // Propagate through the network to get the output
-                nn->propagate_forward();
+                nn->propagate_forward(token_id_list);
 
                 // Get the output and convert it back to a token
                 const auto output_token_id_lists = nn->get_best_output_token_ids(5);

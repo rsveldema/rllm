@@ -17,7 +17,6 @@ namespace rllm
         InputLayer(const InputLayer&) = delete;
         InputLayer& operator=(const InputLayer&) = delete;
 
-        void set_input_layer(const InputLine& input);
 
         // Maps (token, position) to a single IntermediateLayerIndex via a mixing hash
         // so that different (tok, pos) pairs spread uniformly across the layer.
@@ -30,21 +29,12 @@ namespace rllm
             return static_cast<IntermediateLayerIndex>(h);
         }
 
-        float get_input_value(TokenID tok, PositionIndex pos) const
-        {
-            if (pos >= m_input.size())
-                return 0.0f;
-            return m_input[pos] == tok ? 1.0f : 0.0f;
-        }
-
-        void propagate_forward(IntermediateLayer& next_layer) const;
+        void propagate_forward(const InputLine& input, IntermediateLayer& next_layer) const;
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
 
       private:
-        InputLine m_input;
-
         friend class NeuralNetwork;
     };
 

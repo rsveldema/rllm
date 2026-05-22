@@ -33,9 +33,7 @@ namespace rllm
 
         void compute_score(Score& score, const TokenID expected_output_token);
         void propagate_backward(const Score& score);
-        void propagate_forward();
-
-        void set_input_layer(const InputLine& input);
+        void propagate_forward(const InputLine& input);
 
         // returns the top-K with the biggest activation in the output layer, as pairs of (token_id, activation_value)
         std::vector<OutputToken> get_best_output_token_ids(size_t top_k) const;
@@ -56,11 +54,6 @@ namespace rllm
         OutputLayer m_output_layer;
 
         void dump_top_predictions();
-        void dump_weights_and_triggers_for_token(TokenID token_id);
-        void dump_path_weights_and_triggers(TokenID token_id) const;
-        void dump_neurons_whose_weights_were_increasing() const;
-        bool output_is_reachable_from_inputs(TokenID token_id) const;
-        bool has_active_path_to_token(TokenID token_id) const;
         void do_training(const InputLine& train_output, bool verbose);
     };
 
