@@ -39,6 +39,7 @@ TEST(IntermediateLayerOpenMP, ForwardPropagationParallelFasterThanSerial)
 
     const int max_threads = omp_get_max_threads();
 
+    std::srand(0);
     rllm::Corpus corpus;
     rllm::IntermediateLayer src(corpus);
     rllm::IntermediateLayer dst(corpus);
@@ -94,6 +95,7 @@ TEST(IntermediateLayerOpenMP, BackwardPropagationParallelFasterThanSerial)
 
     const int max_threads = omp_get_max_threads();
 
+    std::srand(0);
     rllm::Corpus corpus;
 
     std::srand(2);
@@ -166,6 +168,7 @@ TEST(IntermediateLayerOpenMP, BackwardFromOutputParallelFasterThanSerial)
 
     const int max_threads = omp_get_max_threads();
 
+    std::srand(0);
     rllm::Corpus corpus;
 
     std::srand(3);
