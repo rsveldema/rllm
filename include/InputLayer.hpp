@@ -33,9 +33,6 @@ namespace rllm
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
-
-      private:
-        friend class NeuralNetwork;
     };
 
 } // namespace rllm
