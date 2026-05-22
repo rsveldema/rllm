@@ -13,7 +13,8 @@ namespace rllm
 
     void OutputLayer::compute_deltas(const Score& score, template_token_vector<float, TokenID>& deltas) const
     {
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
+#pragma omp parallel for schedule(static)
+        for (auto i : enum_iterator<TokenID>())
         {
             deltas[i] = score.values[i] - m_inputs[i];
         }

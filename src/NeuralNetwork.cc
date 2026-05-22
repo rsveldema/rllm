@@ -9,7 +9,20 @@
 namespace rllm
 {
     constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 1000;
-    constexpr float CONVERGENCE_THRESHOLD = 0.001f;
+    // The MSE loss of an all-zero prediction is 1/TokenID::MAX = 1/2048 ≈ 0.000488.
+    // The threshold must be strictly below that value so training cannot "converge"
+    // on a network that never activates any output neuron.
+    constexpr float CONVERGENCE_THRESHOLD = 0.0001f;
+
+    // with TokenID::MAX = 2048, the MSE loss of an all-zero prediction is 1/2048 ≈ 0.000488.
+    //  the '1' here is becomes of one-hot encoding of the expected output, where the target token has a value of 1 and
+    //  all others have a value of 0.
+    constexpr float FIRES_NOTHING_MSE_LOSS = 1.0f / static_cast<float>(static_cast<int>(TokenID::MAX));
+    static_assert(
+        CONVERGENCE_THRESHOLD < FIRES_NOTHING_MSE_LOSS,
+        "CONVERGENCE_THRESHOLD must be below the all-zero prediction loss (1/TokenID::MAX) "
+        "or training will exit before the network learns anything"
+    );
 
 
     // Layers
@@ -73,11 +86,6 @@ namespace rllm
         return top_k_pairs;
     }
 
-    void NeuralNetwork::compute_score(Score& score, const TokenID expected_output_token)
-    {
-        m_output_layer.compute_score(score, expected_output_token);
-    }
-
 
     void NeuralNetwork::propagate_backward(const Score& score)
     {
@@ -88,7 +96,6 @@ namespace rllm
         // Negative  → neuron fires too much    → decrease weight.
 
         auto output_layer_delta = std::make_unique<template_token_vector<float, TokenID>>();
-        static_assert(sizeof(*output_layer_delta) < 65536, "output_layer_delta is too large for the stack");
         m_output_layer.compute_deltas(score, *output_layer_delta);
 
         auto delta = std::make_unique<template_token_vector<float, IntermediateLayerIndex>>();
@@ -235,7 +242,7 @@ namespace rllm
 
             Score score;
             propagate_forward(train_input);
-            compute_score(score, expected_output_token);
+            m_output_layer.compute_score(score, expected_output_token);
             propagate_backward(score);
 
             float loss = compute_loss(expected_output_token);

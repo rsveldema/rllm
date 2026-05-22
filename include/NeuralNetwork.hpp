@@ -31,7 +31,6 @@ namespace rllm
         const Corpus& get_corpus() const { return m_corpus; }
         Statistics& get_statistics() const { return m_stats; }
 
-        void compute_score(Score& score, const TokenID expected_output_token);
         void propagate_backward(const Score& score);
         void propagate_forward(const InputLine& input);
 

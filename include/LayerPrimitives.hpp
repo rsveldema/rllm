@@ -95,7 +95,7 @@ namespace rllm
     enum class IntermediateLayerIndex : size_t
     {
         START = 0,
-        MAX = static_cast<size_t>(TokenID::MAX) * 2,
+        MAX = static_cast<size_t>(TokenID::MAX) * 8,
         UNKNOWN_INTERMEDIATE_LAYER_INDEX = static_cast<size_t>(-1)
     };
 
