@@ -1,14 +1,34 @@
-#include <CircularBuffer.hpp>
 #include <NeuralNetwork.hpp>
 #include <TokenIDFormatter.hpp>
 #include <algorithm>
 #include <cassert>
-#include <numeric>
-#include <print>
+#include <format>
+#include <fstream>
+#include <map>
+#include <random>
+#include <set>
+
+static std::ofstream s_nn_log;
+#define LOG_INFO(...) (s_nn_log << std::format(__VA_ARGS__) << '\n')
+
+namespace rllm
+{
+    void set_nn_log_file(const std::string& filename)
+    {
+        if (s_nn_log.is_open())
+            s_nn_log.close();
+        s_nn_log.open(filename);
+    }
+} // namespace rllm
 
 namespace rllm
 {
     constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 3000;
+    constexpr size_t MAX_TRAINING_EPOCHS = 1000;
+    // Per-example gradient steps per epoch: keep small to limit catastrophic forgetting.
+    // Other examples undo large per-example bursts; interleaving more often (smaller bursts,
+    // more epochs) with the same total updates converges much more reliably.
+    constexpr size_t STEPS_PER_EXAMPLE_PER_EPOCH = 20;
 
     // with TokenID::MAX = 2048, the MSE loss of an all-zero prediction is 1/2048 ≈ 0.000488.
     //  the '1' here is becomes of one-hot encoding of the expected output, where the target token has a value of 1 and
@@ -35,8 +55,6 @@ namespace rllm
 
         // Propagate from the last intermediate layer into the output layer.
         m_intermediate_layers.back().propagate_forward_to_output(m_output_layer);
-
-
     }
 
 
@@ -84,7 +102,7 @@ namespace rllm
 
     void NeuralNetwork::propagate_backward(const Score& score)
     {
-        static constexpr float LEARNING_RATE = 0.1f;
+        static constexpr float LEARNING_RATE = 0.01f;
 
         // delta[i] = signed error: target - actual.
         // Positive  → neuron fires too little  → increase weight.
@@ -125,7 +143,7 @@ namespace rllm
         for (const auto& entry : predicted_token_id_lists)
         {
             const auto predicted_token = m_corpus.get_token_from_id(entry.token_id);
-            std::println(
+            LOG_INFO(
                 "\t prediction[{} of {}] / pred:'{}' (id: '{}'), {}",
                 prediction_index,
                 predicted_token_id_lists.size(),
@@ -151,9 +169,76 @@ namespace rllm
         return loss / static_cast<float>(static_cast<int>(TokenID::MAX));
     }
 
+    void NeuralNetwork::train_with_increasingly_longer_sequences(
+        const InputLine& line_of_file,
+        bool verbose,
+        size_t max_iterations
+    )
+    {
+        for (const auto& line_substring_length : enum_iterator<PositionIndex>(line_of_file.size()))
+        {
+            const auto line = line_of_file.substr(line_substring_length);
+            if (line.empty())
+                continue; // skip empty lines that can't be used for training
+
+            const auto full_string_opt = m_corpus.get_line(line);
+            assert(full_string_opt.has_value());
+            const auto& full_string = *full_string_opt;
+
+            if (static_cast<int>(line.size()) < 2)
+            {
+                continue; // skip too-short lines that can't be used for training
+            }
+
+            LOG_INFO("Training on line: '{}'", full_string);
+
+            do_training(line, verbose, max_iterations);
+        }
+    }
+
+    void NeuralNetwork::train_with_two_tok(const InputLine& line_of_file, bool verbose, size_t max_iterations)
+    {
+        // take the 1st token of a sentence and predict the 2nd token.
+        // we are not using the rest of the sentence, which makes this a
+        // fast way to debug the algorithms.
+
+        assert(static_cast<int>(line_of_file.size()) >= 2);
+
+        const auto train_input = line_of_file.substr(static_cast<PositionIndex>(2));
+
+        const auto full_string_opt = m_corpus.get_line(train_input);
+        assert(full_string_opt.has_value());
+        const auto& full_string = *full_string_opt;
+
+        LOG_INFO("Training on line: '{}'", full_string);
+
+        do_training(train_input, verbose, max_iterations);
+    }
+
+    void NeuralNetwork::train_with_three_tok(const InputLine& line_of_file, bool verbose, size_t max_iterations)
+    {
+        // Use the first 2 tokens as input and predict the 3rd token.
+        // Falls back to two-tok for lines with fewer than 3 tokens.
+        if (static_cast<int>(line_of_file.size()) < 3)
+        {
+            train_with_two_tok(line_of_file, verbose, max_iterations);
+            return;
+        }
+
+        const auto train_input = line_of_file.substr(static_cast<PositionIndex>(3));
+
+        const auto full_string_opt = m_corpus.get_line(train_input);
+        assert(full_string_opt.has_value());
+        const auto& full_string = *full_string_opt;
+
+        LOG_INFO("Training on line: '{}'", full_string);
+
+        do_training(train_input, verbose, max_iterations);
+    }
+
     void NeuralNetwork::train(bool verbose)
     {
-        std::println(
+        LOG_INFO(
             "Training the neural network...\n"
             "\t $num_layers: {}\n"
             "\t $corpus_size: {}\n"
@@ -173,54 +258,51 @@ namespace rllm
 
         set_random_weights_and_connections();
 
-        int total_lines = m_corpus.count_num_lines();
-        int lines_visited = 0;
+        std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
 
-        std::vector<InputLine> training_lines;
-        m_corpus.visit_lines([&](const InputLine& line) {
-            if (static_cast<int>(line.size()) < 2)
-            {
-                return; // skip too-short lines that can't be used for training
-            }
-            training_lines.push_back(line);
-        });
+        // Multi-epoch training with shuffling prevents catastrophic forgetting:
+        // each example only gets STEPS_PER_EXAMPLE_PER_EPOCH gradient updates per
+        // pass, so no single example can overwrite all the others.
+        std::mt19937 rng{42};
+        const auto total_lines = training_lines.size();
 
-        if (true) {
-            std::sort(training_lines.begin(), training_lines.end(), [](const InputLine& a, const InputLine& b) {
-                return a.size() < b.size();
-            });
-        }
-
-        for (const auto& line_of_file : training_lines)
+        for (size_t epoch = 0; epoch < MAX_TRAINING_EPOCHS; ++epoch)
         {
-            lines_visited++;
-            const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
+            std::shuffle(training_lines.begin(), training_lines.end(), rng);
 
-            for (const auto& line_substring_length : enum_iterator<PositionIndex>(line_of_file.size()))
+            size_t lines_visited = 0;
+            for (const auto& line_of_file : training_lines)
             {
-                const auto line = line_of_file.substr(line_substring_length);
-                if (line.empty())
-                    continue; // skip empty lines that can't be used for training
+                lines_visited++;
+                const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
 
-                const auto full_string_opt = m_corpus.get_line(line);
-                assert(full_string_opt.has_value());
-                const auto& full_string = *full_string_opt;
-
-                if (static_cast<int>(line.size()) < 2)
-                {
-                    continue; // skip too-short lines that can't be used for training
-                }
-                std::println(
-                    "Training on line[{}]: '{}', {:0.2f}% done", lines_visited, full_string, progress * 100.0f
+                LOG_INFO(
+                    "Epoch[{}%] line[{}]: {:0.2f}% done",
+                    epoch / static_cast<float>(MAX_TRAINING_EPOCHS) * 100.0f,
+                    lines_visited,
+                    progress * 100.0f
                 );
 
-                do_training(line, verbose);
+                switch (m_training_method)
+                {
+                case TrainingMethod::TWO_TOK:
+                    train_with_two_tok(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
+                    break;
+
+                case TrainingMethod::THREE_TOK:
+                    train_with_three_tok(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
+                    break;
+
+                case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
+                    train_with_increasingly_longer_sequences(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
+                    break;
+                }
             }
         }
     }
 
 
-    void NeuralNetwork::do_training(const InputLine& train_output, bool verbose)
+    void NeuralNetwork::do_training(const InputLine& train_output, bool verbose, size_t max_iterations)
     {
         assert(static_cast<int>(train_output.size()) >= 2);
         auto train_input = train_output;
@@ -231,89 +313,51 @@ namespace rllm
         assert(full_string_opt.has_value());
         const auto& full_string = *full_string_opt;
 
-        CircularBuffer<float, 100> recent_losses;
-        auto loss_function_converged = [&](float loss) {
-            recent_losses.push_back(loss);
-            if (recent_losses.size() < recent_losses.capacity())
-                return false; // not enough data yet
-            float average_loss = std::accumulate(recent_losses.begin(), recent_losses.end(), 0.0f) /
-                static_cast<float>(recent_losses.size());
-            return average_loss < CONVERGENCE_THRESHOLD; // convergence threshold
-        };
-
-        size_t i = 0;
-        while (true)
+        // In multi-epoch training each call gets a small fixed budget (max_iterations).
+        // We run all steps unconditionally; convergence emerges across epochs.
+        float loss = 0.0f;
+        for (size_t i = 0; i < max_iterations; ++i)
         {
-            i++;
-
-            if (i > MAX_TRAINING_ITERATIONS_PER_LINE)
-            {
-                std::println(
-                    "{}Reached maximum training iterations ({}) for this line. Stopping training on this line. loss = {:.6f}, max-allowed = {:.6f}{}",
-                    rllm::RED,
-                    MAX_TRAINING_ITERATIONS_PER_LINE,
-                    recent_losses.back(),
-                    CONVERGENCE_THRESHOLD,
-                    rllm::RESET
-                );
-
-                m_stats.record_learning_failure();
-                break;
-            }
-
             Score score;
             propagate_forward(train_input);
             m_output_layer.compute_score(score, expected_output_token);
             propagate_backward(score);
+            loss = compute_loss(expected_output_token);
 
-            float loss = compute_loss(expected_output_token);
-
-            // Early exit: if still at fires-nothing loss after the circular buffer fills,
-            // the gradient isn't reaching this example — skip it rather than wasting iterations.
-            // Only abort when loss is truly fires-nothing (no tokens fire at all).
-            // If loss > fires-nothing, wrong tokens ARE firing and training can still correct them.
-            if (i % 100 == 0 && recent_losses.size() == recent_losses.capacity())
+            if (loss < CONVERGENCE_THRESHOLD)
             {
-                const float avg = std::accumulate(recent_losses.begin(), recent_losses.end(), 0.0f) /
-                                  static_cast<float>(recent_losses.size());
-                if (avg >= FIRES_NOTHING_MSE_LOSS * 0.99f && avg <= FIRES_NOTHING_MSE_LOSS * 1.01f)
-                {
-                    std::println(
-                        "{}Fires-nothing for {} iterations, skipping. loss = {:.6f}{}",
-                        rllm::RED, i, avg, rllm::RESET
-                    );
-                    m_stats.record_learning_failure();
-                    break;
-                }
-            }
-
-            if (loss_function_converged(loss))
-            {
-                std::println(
-                    "Convergence reached at iteration {} for token '{}'",
-                    i,
+                LOG_INFO(
+                    "Convergence reached after {} steps for token '{}'",
+                    max_iterations,
                     m_corpus.get_token_from_id(expected_output_token)
                 );
-                dump_top_predictions();
                 m_stats.record_learning_success();
-                break;
+                return;
             }
 
-            verbose = true;
-            if (verbose && i % 100 == 0)
+
+            if (verbose && i % 25 == 0)
             {
                 const auto expected_token = m_corpus.get_token_from_id(expected_output_token);
-                std::println(
+                LOG_INFO(
                     "Training iteration[{}], wanted: '{}' ({}), full string: '{}'",
                     i,
                     expected_token,
                     expected_output_token,
                     full_string
                 );
-                std::println("  Loss: {:.6f}", loss);
+                LOG_INFO("  Loss: {:.6f}", loss);
                 dump_top_predictions();
             }
         }
+
+        LOG_INFO(
+            "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}",
+            max_iterations,
+            loss,
+            CONVERGENCE_THRESHOLD
+        );
+        m_stats.record_learning_failure();
     }
 
 } // namespace rllm

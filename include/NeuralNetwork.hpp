@@ -13,6 +13,8 @@
 
 namespace rllm
 {
+    void set_nn_log_file(const std::string& filename);
+
     class NeuralNetwork
     {
       public:
@@ -54,7 +56,21 @@ namespace rllm
         OutputLayer m_output_layer;
 
         void dump_top_predictions();
-        void do_training(const InputLine& train_output, bool verbose);
+        void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
+
+        enum class TrainingMethod
+        {
+            TWO_TOK,
+            THREE_TOK,
+            INCREASINGLY_LONGER_SEQUENCES
+        };
+
+        TrainingMethod m_training_method = TrainingMethod::THREE_TOK;
+
+        void train_with_two_tok(const InputLine& line_of_file, bool verbose, size_t max_iterations);
+        void train_with_three_tok(const InputLine& line_of_file, bool verbose, size_t max_iterations);
+        void train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
+
     };
 
 } // namespace rllm

@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 
+#include <nlohmann/json_fwd.hpp>
 #include <LayerPrimitives.hpp>
 
 namespace rllm
@@ -15,13 +16,16 @@ namespace rllm
     class Corpus
     {
       public:
-        Corpus();
+        Corpus(const std::vector<std::string>& filters);
+        void load_files_from_dir();
 
         using visitor_fn_t = std::function<void(const InputLine&)>;
 
         InputLine get_token_ids(const std::string& text) const;
         Token get_token_from_id(TokenID id) const;
         std::optional<std::string> get_line(const InputLine& line) const;
+
+        std::vector<InputLine> get_suitable_training_lines() const;
 
         void visit_lines(const visitor_fn_t& visitor) const
         {
@@ -42,6 +46,8 @@ namespace rllm
         }
 
         void save_token_map(const std::string& filename) const;
+        nlohmann::json save_token_map_json() const;
+        void load_token_map_json(const nlohmann::json& j);
 
         TokenID number_of_token_types() const
         {
@@ -49,6 +55,7 @@ namespace rllm
         }
 
       private:
+        std::vector<std::string> m_filters;
         std::map<Token, TokenID> m_token_to_id;
 
         class TokenData

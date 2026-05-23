@@ -4,6 +4,9 @@
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <cmath>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -146,6 +149,43 @@ namespace rllm
             m_data.fill(T{});
         }
         ~template_token_vector() = default;
+
+
+        float get_highest_value(const LengthType length) const
+        {
+            float max_value = std::numeric_limits<float>::lowest();
+            for (const auto i : enum_iterator<LengthType>(length))
+            {
+                const auto val = m_data[static_cast<size_t>(i)];
+                if (val > max_value)
+                {
+                    max_value = val;
+                }
+            }
+            return max_value;
+        }
+
+        /** Normalize the values using the softmax function.
+         * Each element is <= 1 and >= 0, and the sum of all elements is 1.
+         * This is useful for converting the output of the neural network into
+         * a probability distribution over the tokens.
+         */
+        void normalize_using_softmax(const LengthType length)
+        {
+            const auto max_value = get_highest_value(length);
+
+            float sum_exp = 0.0f;
+            for (const auto i : enum_iterator<LengthType>(length))
+            {
+                sum_exp += std::exp(m_data[static_cast<size_t>(i)] - max_value);
+            }
+
+            for (const auto i : enum_iterator<LengthType>(length))
+            {
+                m_data[static_cast<size_t>(i)] = std::exp(m_data[static_cast<size_t>(i)] - max_value) / sum_exp;
+            }
+        }
+
 
         template_token_vector substr(LengthType length) const
         {

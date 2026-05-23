@@ -31,14 +31,6 @@ namespace rllm
             assert(tok != TokenID::UNKNOWN_TOKEN_ID);
 
             const auto target = hash_input(tok, pos);
-            LOG_ONCE(
-                std::println(
-                    "InputLayer: token (id {}) at position {} maps to neuron {}",
-                    static_cast<int>(tok),
-                    static_cast<int>(pos),
-                    static_cast<int>(target)
-                );
-            );
             next_layer.accumulate_input(target, 1.0f, Range<float>{MIN_NEURON_INPUT, MAX_NEURON_INPUT});
         }
     }

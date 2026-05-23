@@ -1,12 +1,13 @@
 
 #include <Corpus.hpp>
-#include <TokenIDFormatter.hpp>
 #include <JsonTensorHelpers.hpp>
+#include <TokenIDFormatter.hpp>
 
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <print>
 #include <sstream>
 #include <string_view>
@@ -60,7 +61,11 @@ namespace rllm
     }
 
 
-    Corpus::Corpus()
+    Corpus::Corpus(const std::vector<std::string>& filters)
+        : m_filters(filters)
+    {}
+
+    void Corpus::load_files_from_dir()
     {
         const std::filesystem::path corpus_dir{"corpus"};
         if (!std::filesystem::exists(corpus_dir))
@@ -78,6 +83,25 @@ namespace rllm
         {
             if (!entry.is_regular_file())
                 continue;
+
+            if (!m_filters.empty())
+            {
+                const auto filename = entry.path().filename().string();
+                bool matches_filter = false;
+                for (const auto& filter : m_filters)
+                {
+                    if (filename.find(filter) != std::string::npos)
+                    {
+                        matches_filter = true;
+                        break;
+                    }
+                }
+                if (!matches_filter)
+                {
+                    LOG_INFO("Skipping file '{}' due to filters", entry.path().string());
+                    continue;
+                }
+            }
 
             LOG_INFO("Processing file: {}", entry.path().c_str());
 
@@ -188,15 +212,43 @@ namespace rllm
 
     void Corpus::save_token_map(const std::string& filename) const
     {
+        std::ofstream file{filename};
+        file << save_token_map_json().dump(2) << '\n';
+    }
+
+    nlohmann::json Corpus::save_token_map_json() const
+    {
         nlohmann::json j;
         for (const auto& [token, id] : m_token_to_id)
         {
-            j[token] = id;
+            j[token] = static_cast<int32_t>(id);
         }
-        std::ofstream file{filename};
-        file << j.dump(2) << '\n';
+        return j;
     }
 
+    void Corpus::load_token_map_json(const nlohmann::json& j)
+    {
+        m_token_to_id.clear();
+        for (const auto& [token, id_j] : j.items())
+        {
+            m_token_to_id.emplace(token, static_cast<TokenID>(id_j.get<int32_t>()));
+        }
+    }
+
+    std::vector<InputLine> Corpus::get_suitable_training_lines() const
+    {
+        std::vector<InputLine> training_lines;
+
+        assert(!m_token_list.empty());
+        this->visit_lines([&](const InputLine& line) {
+            if (static_cast<int>(line.size()) < 2)
+            {
+                return; // skip too-short lines that can't be used for training
+            }
+            training_lines.push_back(line);
+        });
+        return training_lines;
+    }
 
 
 } // namespace rllm

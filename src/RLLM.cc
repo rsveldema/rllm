@@ -57,14 +57,16 @@ namespace rllm
     }
 
 
-    RLLM::RLLM()
+    RLLM::RLLM(const std::vector<std::string>& filters)
+        : m_filters(filters)
     {
         // Constructor implementation
     }
 
     void RLLM::prompt_mode(const std::string& filename)
     {
-        Corpus corpus;
+        set_nn_log_file("prompt.log");
+        Corpus corpus{m_filters};
         size_t _num_layers = 2; // overriden when loaded from file
         Statistics stats;
 
@@ -161,11 +163,13 @@ namespace rllm
     void RLLM::train_mode(const std::string& filename, size_t num_layers, bool verbose)
     {
         std::println("Training mode");
+        set_nn_log_file("e.log");
 
-        Corpus corpus;
+        Corpus corpus{m_filters};
         Statistics stats;
 
         auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus, stats);
+        corpus.load_files_from_dir();
 
         nn->train(verbose);
 
