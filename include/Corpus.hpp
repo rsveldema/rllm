@@ -43,9 +43,9 @@ namespace rllm
 
         void save_token_map(const std::string& filename) const;
 
-        size_t number_of_token_types() const
+        TokenID number_of_token_types() const
         {
-            return m_token_to_id.size();
+            return static_cast<TokenID>(m_token_to_id.size());
         }
 
       private:

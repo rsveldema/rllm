@@ -16,7 +16,11 @@ namespace rllm
         OutputLayer(const OutputLayer&) = delete;
         OutputLayer& operator=(const OutputLayer&) = delete;
 
-        void update_output_weights(const template_token_vector<float, TokenID>& delta, float learning_rate);
+
+        void accumulate_input(TokenID target_idx, float value, Range<float> range)
+        {
+            m_inputs.add_with_clamp(target_idx, value, range);
+        }
 
         void compute_score(Score& score, const TokenID expected_output_token);
 

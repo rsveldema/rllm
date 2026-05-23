@@ -36,7 +36,7 @@ namespace rllm
             }},
             { {"/info"}, "Show information about the loaded model", [&]() {
                 std::println("Model information:");
-                std::println("Number of token types in corpus: {}", corpus.number_of_token_types());
+                std::println("Number of token types in corpus: {}", static_cast<size_t>(corpus.number_of_token_types()));
             }},
             { {"/toggle_prio"}, "Toggle highest priority only mode", [&]() {
                 options.highest_prio_only = !options.highest_prio_only;

@@ -5,6 +5,11 @@
 
 namespace rllm
 {
+    inline size_t random_int(size_t min, size_t max)
+    {
+        return min + rand() % (max - min + 1);
+    }
+
     /** returns a random value in the range [min, max] */
     inline float get_random_value(float min, float max)
     {

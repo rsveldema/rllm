@@ -32,19 +32,44 @@ namespace rllm
 
     void IntermediateLayer::load(const nlohmann::json& j)
     {
-        json_helpers::deserialize_vector(j.at("trigger_values"), m_trigger_values);
-        json_helpers::deserialize_vector(j.at("weights"), m_weights);
-        json_helpers::deserialize_multi_connection_vector(j.at("connections"), m_connections);
         m_inputs.fill(0.0f);
+
+        const auto& conns_j = j.at("connections");
+        if (!conns_j.is_array() || conns_j.size() != static_cast<size_t>(IntermediateLayerIndex::MAX))
+            throw std::runtime_error("connections array has wrong size");
+
+        for (size_t i = 0; i < static_cast<size_t>(IntermediateLayerIndex::MAX); ++i)
+        {
+            const auto idx = static_cast<IntermediateLayerIndex>(i);
+            auto& vec = m_connections[idx];
+            vec.clear();
+            for (const auto& c : conns_j.at(i))
+            {
+                vec.push_back({
+                    .target_neuron = static_cast<IntermediateLayerIndex>(c.at("target").template get<size_t>()),
+                    .weight        = c.at("weight").template get<float>()
+                });
+            }
+        }
     }
 
     nlohmann::json IntermediateLayer::save() const
     {
-        return {
-            {"trigger_values", json_helpers::serialize_vector(m_trigger_values)},
-            {"weights", json_helpers::serialize_vector(m_weights)},
-            {"connections", json_helpers::serialize_multi_connection_vector(m_connections)}
-        };
+        auto conns_j = nlohmann::json::array();
+        for (size_t i = 0; i < static_cast<size_t>(IntermediateLayerIndex::MAX); ++i)
+        {
+            const auto idx = static_cast<IntermediateLayerIndex>(i);
+            auto neuron_conns = nlohmann::json::array();
+            for (const auto& c : m_connections[idx])
+            {
+                neuron_conns.push_back({
+                    {"target", static_cast<size_t>(c.target_neuron)},
+                    {"weight", c.weight}
+                });
+            }
+            conns_j.push_back(std::move(neuron_conns));
+        }
+        return {{"connections", std::move(conns_j)}};
     }
 
 

@@ -205,41 +205,4 @@ namespace rllm::json_helpers
 
 namespace rllm::json_helpers
 {
-    template <typename Enum>
-    nlohmann::json serialize_multi_connection_vector(
-        const template_token_vector<std::vector<rllm::IntermediateLayerIndex>, Enum>& v
-    )
-    {
-        auto out = nlohmann::json::array();
-        for (size_t x = 0; x < enum_max<Enum>(); ++x)
-        {
-            auto cell = nlohmann::json::array();
-            for (const auto& idx : v[static_cast<Enum>(x)])
-                cell.push_back(static_cast<size_t>(idx));
-            out.push_back(std::move(cell));
-        }
-        return out;
-    }
-
-    template <typename Enum>
-    void deserialize_multi_connection_vector(
-        const nlohmann::json& j,
-        template_token_vector<std::vector<rllm::IntermediateLayerIndex>, Enum>& v
-    )
-    {
-        if (!j.is_array() || j.size() != enum_max<Enum>())
-            throw std::runtime_error("Invalid multi-connection vector size in model JSON");
-        for (size_t x = 0; x < enum_max<Enum>(); ++x)
-        {
-            const auto& cell = j.at(x);
-            if (!cell.is_array())
-                throw std::runtime_error("Invalid multi-connection cell in model JSON");
-            std::vector<rllm::IntermediateLayerIndex> conns;
-            conns.reserve(cell.size());
-            for (const auto& entry : cell)
-                conns.push_back(static_cast<rllm::IntermediateLayerIndex>(entry.template get<size_t>()));
-            v[static_cast<Enum>(x)] = std::move(conns);
-        }
-    }
-
 } // namespace rllm::json_helpers
