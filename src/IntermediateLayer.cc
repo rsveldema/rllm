@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cassert>
 #include <cmath>
+#include <omp.h>
 #include <print>
 
 namespace rllm
@@ -18,6 +19,17 @@ namespace rllm
         static_cast<int>(IntermediateLayerIndex::MAX) / 4;
 
     static constexpr float MOMENTUM_BETA = 0.9f;
+
+    // Atomically add `delta` to `*cell`, clamping the result to [lo, hi].
+    static void atomic_add_clamped(float& cell, float delta, float lo, float hi)
+    {
+        float expected = std::atomic_ref<float>{cell}.load(std::memory_order_relaxed);
+        float desired;
+        do {
+            desired = std::clamp(expected + delta, lo, hi);
+        } while (!std::atomic_ref<float>{cell}.compare_exchange_weak(
+            expected, desired, std::memory_order_relaxed));
+    }
 
     void IntermediateLayer::set_random_weights_and_connections()
     {
@@ -95,15 +107,19 @@ namespace rllm
     void IntermediateLayer::propagate_forward(IntermediateLayer& next_layer)
     {
         next_layer.fill_inputs(0.0f);
-        for (const auto i : enum_iterator<IntermediateLayerIndex>())
-            forward_neuron(i, next_layer);
+        const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
+#pragma omp parallel for schedule(dynamic)
+        for (int idx = 0; idx < max_i; ++idx)
+            forward_neuron(static_cast<IntermediateLayerIndex>(idx), next_layer);
     }
 
     void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer) const
     {
         output_layer.m_inputs.fill(0.0f);
-        for (const auto i : enum_iterator<IntermediateLayerIndex>())
-            forward_neuron_to_output(i, output_layer);
+        const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
+#pragma omp parallel for schedule(dynamic)
+        for (int idx = 0; idx < max_i; ++idx)
+            forward_neuron_to_output(static_cast<IntermediateLayerIndex>(idx), output_layer);
     }
 
 
@@ -113,8 +129,8 @@ namespace rllm
         for (const auto& connection : m_connections[i])
         {
             const auto target_idx = connection.target_neuron;
-            const auto weight = connection.weight;
-            next_layer.accumulate_input(target_idx, input * weight, {-1.0f, 1.0f});
+            const float contrib = input * connection.weight;
+            atomic_add_clamped(next_layer.m_inputs[target_idx], contrib, -1.0f, 1.0f);
         }
     }
 
@@ -125,97 +141,68 @@ namespace rllm
         {
             const auto target_idx = static_cast<TokenID>(connection.target_neuron);
             assert(target_idx < m_corpus.number_of_token_types());
-
-            const auto weight = connection.weight;
-            output_layer.accumulate_input(target_idx, input * weight, {-1.0f, 1.0f});
+            const float contrib = input * connection.weight;
+            atomic_add_clamped(output_layer.m_inputs[target_idx], contrib, -1.0f, 1.0f);
         }
     }
 
 
-        void IntermediateLayer::propagate_backward(
-            const template_token_vector<float, IntermediateLayerIndex>& delta,
-            template_token_vector<float, IntermediateLayerIndex>& prev_delta,
-            float learning_rate
-        ){
+    void IntermediateLayer::propagate_backward(
+        const template_token_vector<float, IntermediateLayerIndex>& delta,
+        template_token_vector<float, IntermediateLayerIndex>& prev_delta,
+        float learning_rate
+    )
+    {
+        const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
+#pragma omp parallel for schedule(static)
+        for (int idx = 0; idx < max_i; ++idx)
+        {
+            const auto i = static_cast<IntermediateLayerIndex>(idx);
+            float neuron_delta = 0.0f;
+            const float act = normal_activation_function(m_inputs[i]);
 
-             // This function should propagate the error (delta) backward through the layer,
-             // updating the weights of the connections and accumulating the delta for the previous layer.
-             // The learning_rate parameter should be used to scale the weight updates.
-
-             // For each neuron in this layer, we need to calculate how much it contributed to the error in the next layer,
-             // and update the weights accordingly. We also need to accumulate the delta for the previous layer.
-
-             // This is a bit complex, so let's break it down step by step.
-
-             // 1. For each neuron in this layer, we will look at its connections to the next layer.
-             // 2. For each connection, we will calculate how much that connection contributed to the error in the next layer.
-             // 3. We will then update the weight of that connection based on the input to that connection and the error.
-             // 4. We will also accumulate the delta for the previous layer based on how much this neuron contributed to the error.
-
-            for (const auto i : enum_iterator<IntermediateLayerIndex>()) {
-                float neuron_delta = 0.0f;
-
-                for (auto& connection : m_connections[i])
-                {
-                    const auto target_idx = connection.target_neuron;
-                    assert(target_idx < IntermediateLayerIndex::MAX);
-
-                    const auto weight = connection.weight;
-                    const auto output_delta = delta[target_idx];
-
-                    // Accumulate the delta for this neuron based on the output layer's delta and the connection weight
-                    neuron_delta += output_delta * weight;
-
-                    // Update the weight using SGD with momentum.
-                    const auto input = normal_activation_function(m_inputs[i]);
-                    const auto weight_update = learning_rate * output_delta * input;
-                    connection.velocity = MOMENTUM_BETA * connection.velocity + weight_update;
-                    connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
-                }
-
-                // Gate the upstream gradient by the Leaky ReLU derivative.
-                prev_delta[i] += neuron_delta * activation_grad(m_inputs[i]);
+            for (auto& connection : m_connections[i])
+            {
+                const auto target_idx = connection.target_neuron;
+                assert(target_idx < IntermediateLayerIndex::MAX);
+                const auto output_delta = delta[target_idx];
+                neuron_delta += output_delta * connection.weight;
+                const auto weight_update = learning_rate * output_delta * act;
+                connection.velocity = MOMENTUM_BETA * connection.velocity + weight_update;
+                connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
             }
+
+            prev_delta[i] += neuron_delta * activation_grad(m_inputs[i]);
         }
+    }
 
-        void IntermediateLayer::propagate_backward_from_output_layer(
-            const template_token_vector<float, TokenID>& delta,
-            template_token_vector<float, IntermediateLayerIndex>& prev_delta,
-            float learning_rate
-        ){
-            // the output layer calls this function to propagate the error backward to the last intermediate layer.
-            // This function is similar to propagate_backward, but it needs to map the output layer's TokenID-based delta to
-            // the IntermediateLayerIndex-based connections.
+    void IntermediateLayer::propagate_backward_from_output_layer(
+        const template_token_vector<float, TokenID>& delta,
+        template_token_vector<float, IntermediateLayerIndex>& prev_delta,
+        float learning_rate
+    )
+    {
+        const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
+#pragma omp parallel for schedule(static)
+        for (int idx = 0; idx < max_i; ++idx)
+        {
+            const auto i = static_cast<IntermediateLayerIndex>(idx);
+            float neuron_delta = 0.0f;
+            const float act = normal_activation_function(m_inputs[i]);
 
-             // For each neuron in this layer, we will look at its connections to the output layer.
-             // For each connection, we will calculate how much that connection contributed to the error in the output layer.
-             // We will then update the weight of that connection based on the input to that connection and the error.
-             // We will also accumulate the delta for the previous layer based on how much this neuron contributed to the error.
-
-            for (const auto i : enum_iterator<IntermediateLayerIndex>()) {
-                float neuron_delta = 0.0f;
-
-                for (auto& connection : m_connections[i])
-                {
-                    const auto target_idx = static_cast<TokenID>(connection.target_neuron);
-                    assert(target_idx < m_corpus.number_of_token_types());
-
-                    const auto weight = connection.weight;
-                    const auto output_delta = delta[target_idx];
-
-                    // Accumulate the delta for this neuron based on the output layer's delta and the connection weight
-                    neuron_delta += output_delta * weight;
-
-                    // Update the weight using SGD with momentum.
-                    const auto input = normal_activation_function(m_inputs[i]);
-                    const auto weight_update = learning_rate * output_delta * input;
-                    connection.velocity = MOMENTUM_BETA * connection.velocity + weight_update;
-                    connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
-                }
-
-                // Gate the upstream gradient by the Leaky ReLU derivative.
-                prev_delta[i] += neuron_delta * activation_grad(m_inputs[i]);
+            for (auto& connection : m_connections[i])
+            {
+                const auto target_idx = static_cast<TokenID>(connection.target_neuron);
+                assert(target_idx < m_corpus.number_of_token_types());
+                const auto output_delta = delta[target_idx];
+                neuron_delta += output_delta * connection.weight;
+                const auto weight_update = learning_rate * output_delta * act;
+                connection.velocity = MOMENTUM_BETA * connection.velocity + weight_update;
+                connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
             }
+
+            prev_delta[i] += neuron_delta * activation_grad(m_inputs[i]);
         }
+    }
 
 } // namespace rllm

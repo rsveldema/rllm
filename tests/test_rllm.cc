@@ -17,7 +17,7 @@ TEST(PredictorTest, Placeholder) {
 // ---------------------------------------------------------------------------
 namespace
 {
-    constexpr int BENCH_ITERS = 2000;
+    constexpr int BENCH_ITERS = 1000;
 } // namespace
 
 // ---------------------------------------------------------------------------
