@@ -9,6 +9,16 @@
 
 namespace rllm
 {
+    static constexpr auto MAX_SANE_CONNECTIONS = 100; // sanity check to avoid infinite loops in case of a bug
+
+    // Radius for picking target neurons in the next intermediate layer.  Using 1/4 of the
+    // layer width ensures the gradient fan-out covers ~50% of the layer across two hops
+    // instead of staying confined to the <2% band that radius-100 produced.
+    static constexpr int INTERMEDIATE_CONNECTION_RADIUS =
+        static_cast<int>(IntermediateLayerIndex::MAX) / 4;
+
+    static constexpr float MOMENTUM_BETA = 0.9f;
+
     void IntermediateLayer::set_random_weights_and_connections()
     {
         for (const auto i : enum_iterator<IntermediateLayerIndex>())
@@ -17,8 +27,8 @@ namespace rllm
 
     void IntermediateLayer::randomize_neuron(IntermediateLayerIndex i) {
         // for each neuron, randomly connect it to 1-4 neurons in the next layer with random weights.
-        const auto num_connections = random_int(1, 4);
-        m_connections[i].reserve(num_connections);
+        const auto num_connections = random_int(1, MAX_SANE_CONNECTIONS);
+        assert(num_connections <= MAX_SANE_CONNECTIONS); // sanity check to avoid infinite loop in case of a bug
         for (size_t j = 0; j < num_connections; ++j)
         {
             m_connections[i].push_back({
@@ -30,7 +40,7 @@ namespace rllm
 
     void IntermediateLayer::randomize_neuron_to_output(IntermediateLayerIndex i) {
         const auto num_connections = random_int(1, 2);
-        m_connections[i].reserve(num_connections);
+        assert(num_connections < MAX_SANE_CONNECTIONS); // sanity check to avoid infinite loop in case of a bug
         for (size_t j = 0; j < num_connections; ++j)
         {
             m_connections[i].push_back({
@@ -48,6 +58,7 @@ namespace rllm
         while (true)
         {
             const auto target = get_random_enum_value<IntermediateLayerIndex>();
+            //const auto target = get_random_enum_value_centered_around<IntermediateLayerIndex>(from_neuron, INTERMEDIATE_CONNECTION_RADIUS);
             if (! have_connection_to_neuron(from_neuron, target))
                 return target;
 
@@ -83,12 +94,14 @@ namespace rllm
 
     void IntermediateLayer::propagate_forward(IntermediateLayer& next_layer)
     {
+        next_layer.fill_inputs(0.0f);
         for (const auto i : enum_iterator<IntermediateLayerIndex>())
             forward_neuron(i, next_layer);
     }
 
     void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer) const
     {
+        output_layer.m_inputs.fill(0.0f);
         for (const auto i : enum_iterator<IntermediateLayerIndex>())
             forward_neuron_to_output(i, output_layer);
     }
@@ -153,14 +166,15 @@ namespace rllm
                     // Accumulate the delta for this neuron based on the output layer's delta and the connection weight
                     neuron_delta += output_delta * weight;
 
-                    // Update the weight of the connection based on the input to that connection and the error
+                    // Update the weight using SGD with momentum.
                     const auto input = normal_activation_function(m_inputs[i]);
                     const auto weight_update = learning_rate * output_delta * input;
-                    connection.weight += weight_update;
+                    connection.velocity = MOMENTUM_BETA * connection.velocity + weight_update;
+                    connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
                 }
 
-                // Accumulate the delta for the previous layer
-                prev_delta[i] += neuron_delta;
+                // Gate the upstream gradient by the Leaky ReLU derivative.
+                prev_delta[i] += neuron_delta * activation_grad(m_inputs[i]);
             }
         }
 
@@ -192,14 +206,15 @@ namespace rllm
                     // Accumulate the delta for this neuron based on the output layer's delta and the connection weight
                     neuron_delta += output_delta * weight;
 
-                    // Update the weight of the connection based on the input to that connection and the error
+                    // Update the weight using SGD with momentum.
                     const auto input = normal_activation_function(m_inputs[i]);
                     const auto weight_update = learning_rate * output_delta * input;
-                    connection.weight += weight_update;
+                    connection.velocity = MOMENTUM_BETA * connection.velocity + weight_update;
+                    connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
                 }
 
-                // Accumulate the delta for the previous layer
-                prev_delta[i] += neuron_delta;
+                // Gate the upstream gradient by the Leaky ReLU derivative.
+                prev_delta[i] += neuron_delta * activation_grad(m_inputs[i]);
             }
         }
 

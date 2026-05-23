@@ -21,6 +21,9 @@ namespace rllm
         // the weight of the connection from the current neuron to the target neuron in the next layer.
         // this is learned during training and can be thought of as the "weight" for the connection.
         float weight;
+
+        // SGD momentum velocity — accumulated gradient; not persisted across save/load.
+        float velocity = 0.0f;
     };
 
     class IntermediateLayer
@@ -101,17 +104,23 @@ namespace rllm
             return false;
         }
 
+        // Leaky ReLU with alpha=0.1: avoids dead neurons by keeping a small
+        // negative slope, ensuring signal and gradient always flow through all layers.
+        static constexpr float LEAKY_ALPHA = 0.3f;
+
         float normal_activation_function(float x) const
         {
-            // simple ReLU activation function. You can experiment with other activation functions if you like.
-            return std::max(0.0f, x);
+            return x > 0.0f ? x : LEAKY_ALPHA * x;
         }
 
         float outputlayer_activation_function(float x) const
         {
-            // Gaussian activation centred at 0 with sigma=1: peaks at 1 when x==0
-            // and decays symmetrically, giving a smooth bounded output in (0,1].
-            return std::exp(-(x * x) / 2.0f);
+            return x > 0.0f ? x : LEAKY_ALPHA * x;
+        }
+
+        static float activation_grad(float x)
+        {
+            return x > 0.0f ? 1.0f : LEAKY_ALPHA;
         }
     };
 

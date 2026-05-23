@@ -299,7 +299,7 @@ namespace rllm
                 break;
             }
 
-
+            verbose = true;
             if (verbose && i % 100 == 0)
             {
                 const auto expected_token = m_corpus.get_token_from_id(expected_output_token);

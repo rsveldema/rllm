@@ -22,32 +22,13 @@ namespace rllm
         return static_cast<T>(rand() % static_cast<int>(max_value));
     }
 
-    template <typename X, typename Y>
-    inline std::pair<X, Y> get_random_value_centered_around(X x, Y y, int range = 3)
-    {
-        int k1 = rand() % (2 * range + 1) - range;
-        int k2 = rand() % (2 * range + 1) - range;
-
-        if ((static_cast<int>(x) + k1) < 0)
-        {
-            k1 = 0;
-        }
-
-        if ((static_cast<int>(y) + k2) < 0)
-        {
-            k2 = 0;
-        }
-
-        if ((static_cast<int>(x) + k1) >= static_cast<int>(X::MAX))
-        {
-            k1 = 0;
-        }
-
-        if (static_cast<int>(y) + k2 >= static_cast<int>(Y::MAX))
-        {
-            k2 = 0;
-        }
-
-        return std::make_pair(static_cast<X>(static_cast<int>(x) + k1), static_cast<Y>(static_cast<int>(y) + k2));
+    template<typename T>
+    T get_random_enum_value_centered_around(T center, int range) {
+        assert(RAND_MAX >= (2 * range + 1)); // sanity check to ensure RAND_MAX is sufficient
+        int offset = (rand() % (2 * range + 1)) - range; // random value in [-range, range]
+        int raw_value = static_cast<int>(center) + offset;
+        int wrapped_value = (raw_value + static_cast<int>(T::MAX)) % static_cast<int>(T::MAX); // wrap around using modulo
+        return static_cast<T>(wrapped_value);
     }
+
 } // namespace rllm
