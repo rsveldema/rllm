@@ -66,7 +66,7 @@ namespace rllm
         // neuron 'i's accumulated input for each neuron in the layer
         template_token_vector<float, IntermediateLayerIndex> m_inputs;
         // neuron 'i' is connected to one or more neurons in the next layer
-        template_token_vector<std::vector<OutConnection>,
+        template_token_vector<template_token_vector<OutConnection, NeuronConnectionIndex>,
             IntermediateLayerIndex> m_connections;
 
 
@@ -87,20 +87,16 @@ namespace rllm
 
         bool have_connection_to_neuron(IntermediateLayerIndex from_neuron, IntermediateLayerIndex to_neuron) const
         {
-            for (const auto& connection : m_connections[from_neuron])
-            {
-                if (connection.target_neuron == to_neuron)
+            for (const auto ci : enum_iterator<NeuronConnectionIndex>(m_connections[from_neuron].size()))
+                if (m_connections[from_neuron][ci].target_neuron == to_neuron)
                     return true;
-            }
             return false;
         }
         bool have_connection_to_neuron(IntermediateLayerIndex from_neuron, TokenID to_neuron) const
         {
-            for (const auto& connection : m_connections[from_neuron])
-            {
-                if (static_cast<TokenID>(connection.target_neuron) == to_neuron)
+            for (const auto ci : enum_iterator<NeuronConnectionIndex>(m_connections[from_neuron].size()))
+                if (static_cast<TokenID>(m_connections[from_neuron][ci].target_neuron) == to_neuron)
                     return true;
-            }
             return false;
         }
 

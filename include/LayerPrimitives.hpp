@@ -149,6 +149,19 @@ namespace rllm
         return static_cast<IntermediateLayerIndex>(static_cast<int32_t>(id) + 1);
     }
 
+    // Index of an outgoing connection slot within a single neuron's connection list.
+    enum class NeuronConnectionIndex : size_t
+    {
+        START = 0,
+        MAX = 128
+    };
+
+    static inline NeuronConnectionIndex inc(NeuronConnectionIndex id)
+    {
+        assert(id < NeuronConnectionIndex::MAX);
+        return static_cast<NeuronConnectionIndex>(static_cast<size_t>(id) + 1);
+    }
+
     template <typename T>
     struct Range
     {
@@ -272,6 +285,11 @@ namespace rllm
         void add_no_clamp(LengthType index, T delta)
         {
             m_data[static_cast<size_t>(index)] += delta;
+        }
+
+        void clear()
+        {
+            len = LengthType::START;
         }
 
       private:

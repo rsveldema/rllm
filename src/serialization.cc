@@ -77,8 +77,9 @@ namespace rllm
         {
             const auto idx = static_cast<IntermediateLayerIndex>(i);
             auto neuron_conns = nlohmann::json::array();
-            for (const auto& c : m_connections[idx])
+            for (const auto ci : enum_iterator<NeuronConnectionIndex>(m_connections[idx].size()))
             {
+                const auto& c = m_connections[idx][ci];
                 neuron_conns.push_back({
                     {"target", static_cast<size_t>(c.target_neuron)},
                     {"weight", c.weight}

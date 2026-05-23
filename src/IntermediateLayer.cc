@@ -10,7 +10,6 @@
 
 namespace rllm
 {
-    static constexpr auto MAX_SANE_CONNECTIONS = 100; // sanity check to avoid infinite loops in case of a bug
 
     // Radius for picking target neurons in the next intermediate layer.  Using 1/4 of the
     // layer width ensures the gradient fan-out covers ~50% of the layer across two hops
@@ -39,8 +38,8 @@ namespace rllm
 
     void IntermediateLayer::randomize_neuron(IntermediateLayerIndex i) {
         // for each neuron, randomly connect it to 1-4 neurons in the next layer with random weights.
-        const auto num_connections = random_int(1, MAX_SANE_CONNECTIONS);
-        assert(num_connections <= MAX_SANE_CONNECTIONS); // sanity check to avoid infinite loop in case of a bug
+        const auto num_connections = random_int(1, static_cast<int>(NeuronConnectionIndex::MAX));
+        assert(num_connections <= static_cast<int>(NeuronConnectionIndex::MAX)); // sanity check to avoid infinite loop in case of a bug
         for (size_t j = 0; j < num_connections; ++j)
         {
             m_connections[i].push_back({
@@ -52,7 +51,7 @@ namespace rllm
 
     void IntermediateLayer::randomize_neuron_to_output(IntermediateLayerIndex i) {
         const auto num_connections = random_int(1, 2);
-        assert(num_connections < MAX_SANE_CONNECTIONS); // sanity check to avoid infinite loop in case of a bug
+        assert(num_connections < static_cast<int>(NeuronConnectionIndex::MAX)); // sanity check to avoid infinite loop in case of a bug
         for (size_t j = 0; j < num_connections; ++j)
         {
             m_connections[i].push_back({
@@ -125,9 +124,11 @@ namespace rllm
 
     void IntermediateLayer::forward_neuron(IntermediateLayerIndex i, IntermediateLayer& next_layer) const
     {
+        const auto& conn = m_connections[i];
         const auto input = normal_activation_function(m_inputs[i]);
-        for (const auto& connection : m_connections[i])
+        for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
         {
+            const auto& connection = conn[ci];
             const auto target_idx = connection.target_neuron;
             const float contrib = input * connection.weight;
             atomic_add_clamped(next_layer.m_inputs[target_idx], contrib, -1.0f, 1.0f);
@@ -136,9 +137,11 @@ namespace rllm
 
     void IntermediateLayer::forward_neuron_to_output(IntermediateLayerIndex i, OutputLayer& output_layer) const
     {
+        const auto& conn = m_connections[i];
         const auto input = outputlayer_activation_function(m_inputs[i]);
-        for (const auto& connection : m_connections[i])
+        for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
         {
+            const auto& connection = conn[ci];
             const auto target_idx = static_cast<TokenID>(connection.target_neuron);
             assert(target_idx < m_corpus.number_of_token_types());
             const float contrib = input * connection.weight;
@@ -160,9 +163,10 @@ namespace rllm
             const auto i = static_cast<IntermediateLayerIndex>(idx);
             float neuron_delta = 0.0f;
             const float act = normal_activation_function(m_inputs[i]);
-
-            for (auto& connection : m_connections[i])
+            auto& conn = m_connections[i];
+            for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
             {
+                auto& connection = conn[ci];
                 const auto target_idx = connection.target_neuron;
                 assert(target_idx < IntermediateLayerIndex::MAX);
                 const auto output_delta = delta[target_idx];
@@ -190,8 +194,10 @@ namespace rllm
             float neuron_delta = 0.0f;
             const float act = normal_activation_function(m_inputs[i]);
 
-            for (auto& connection : m_connections[i])
+            auto& conn = m_connections[i];
+            for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
             {
+                auto& connection = conn[ci];
                 const auto target_idx = static_cast<TokenID>(connection.target_neuron);
                 assert(target_idx < m_corpus.number_of_token_types());
                 const auto output_delta = delta[target_idx];
