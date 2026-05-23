@@ -17,9 +17,9 @@ namespace rllm
         OutputLayer& operator=(const OutputLayer&) = delete;
 
 
-        void accumulate_input(TokenID target_idx, float value, Range<float> range)
+        void accumulate_input(TokenID target_idx, float value)
         {
-            m_inputs.add_with_clamp(target_idx, value, range);
+            m_inputs.add_no_clamp(target_idx, value);
         }
 
         void compute_score(Score& score, const TokenID expected_output_token);

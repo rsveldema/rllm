@@ -162,18 +162,20 @@ namespace rllm
         }
     }
 
-    // Compute mean squared error loss between output activations and expected output
+    // Compute cross-entropy loss: -log(softmax(logits)[target])
     float NeuralNetwork::compute_loss(TokenID expected_output_token) const
     {
-        float loss = 0.0f;
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
-        {
-            float target = (i == expected_output_token) ? 1.0f : 0.0f;
-            float pred = m_output_layer.m_inputs[i];
-            float diff = pred - target;
-            loss += diff * diff;
-        }
-        return loss / static_cast<float>(static_cast<int>(TokenID::MAX));
+        float max_val = m_output_layer.m_inputs[TokenID::START];
+        for (const auto i : enum_iterator<TokenID>())
+            max_val = std::max(max_val, m_output_layer.m_inputs[i]);
+
+        float sum_exp = 0.0f;
+        for (const auto i : enum_iterator<TokenID>())
+            sum_exp += std::exp(m_output_layer.m_inputs[i] - max_val);
+
+        const float log_prob =
+            m_output_layer.m_inputs[expected_output_token] - max_val - std::log(sum_exp);
+        return -log_prob;
     }
 
     void NeuralNetwork::train_with_increasingly_longer_sequences(

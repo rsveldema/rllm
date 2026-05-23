@@ -19,15 +19,15 @@ namespace rllm
 
     static constexpr float MOMENTUM_BETA = 0.9f;
 
-    // Atomically add `delta` to `*cell`, clamping the result to [lo, hi].
-    static void atomic_add_clamped(float& cell, float delta, float lo, float hi)
+    // Clip per-connection raw gradient and accumulated velocity to prevent
+    // SiLU's unbounded positive outputs from causing runaway updates.
+    static constexpr float GRAD_CLIP = 1.0f;
+    static constexpr float VEL_CLIP  = 0.1f;
+
+    // Atomically add `delta` to `*cell` without clamping.
+    static void atomic_add_unclamped(float& cell, float delta)
     {
-        float expected = std::atomic_ref<float>{cell}.load(std::memory_order_relaxed);
-        float desired;
-        do {
-            desired = std::clamp(expected + delta, lo, hi);
-        } while (!std::atomic_ref<float>{cell}.compare_exchange_weak(
-            expected, desired, std::memory_order_relaxed));
+        std::atomic_ref<float>{cell}.fetch_add(delta, std::memory_order_relaxed);
     }
 
     void IntermediateLayer::set_random_weights_and_connections()
@@ -103,8 +103,21 @@ namespace rllm
 
 
 
+    void IntermediateLayer::rms_normalize_inputs()
+    {
+        constexpr float eps = 1e-6f;
+        const int n = static_cast<int>(IntermediateLayerIndex::MAX);
+        float sum_sq = 0.0f;
+        for (const auto i : enum_iterator<IntermediateLayerIndex>())
+            sum_sq += m_inputs[i] * m_inputs[i];
+        const float rms = std::sqrt(sum_sq / static_cast<float>(n) + eps);
+        for (const auto i : enum_iterator<IntermediateLayerIndex>())
+            m_inputs[i] /= rms;
+    }
+
     void IntermediateLayer::propagate_forward(IntermediateLayer& next_layer)
     {
+        rms_normalize_inputs();
         next_layer.fill_inputs(0.0f);
         const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
 #pragma omp parallel for schedule(dynamic)
@@ -112,8 +125,9 @@ namespace rllm
             forward_neuron(static_cast<IntermediateLayerIndex>(idx), next_layer);
     }
 
-    void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer) const
+    void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer)
     {
+        rms_normalize_inputs();
         output_layer.m_inputs.fill(0.0f);
         const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
 #pragma omp parallel for schedule(dynamic)
@@ -131,7 +145,7 @@ namespace rllm
             const auto& connection = conn[ci];
             const auto target_idx = connection.target_neuron;
             const float contrib = input * connection.weight;
-            atomic_add_clamped(next_layer.m_inputs[target_idx], contrib, -1.0f, 1.0f);
+            atomic_add_unclamped(next_layer.m_inputs[target_idx], contrib);
         }
     }
 
@@ -145,7 +159,7 @@ namespace rllm
             const auto target_idx = static_cast<TokenID>(connection.target_neuron);
             assert(target_idx < m_corpus.number_of_token_types());
             const float contrib = input * connection.weight;
-            atomic_add_clamped(output_layer.m_inputs[target_idx], contrib, -1.0f, 1.0f);
+            atomic_add_unclamped(output_layer.m_inputs[target_idx], contrib);
         }
     }
 
@@ -171,8 +185,9 @@ namespace rllm
                 assert(target_idx < IntermediateLayerIndex::MAX);
                 const auto output_delta = delta[target_idx];
                 neuron_delta += output_delta * connection.weight;
-                const auto weight_update = learning_rate * output_delta * act;
-                connection.velocity = MOMENTUM_BETA * connection.velocity + weight_update;
+                const float grad = std::clamp(output_delta * act, -GRAD_CLIP, GRAD_CLIP);
+                connection.velocity = std::clamp(
+                    MOMENTUM_BETA * connection.velocity + learning_rate * grad, -VEL_CLIP, VEL_CLIP);
                 connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
             }
 
@@ -202,8 +217,9 @@ namespace rllm
                 assert(target_idx < m_corpus.number_of_token_types());
                 const auto output_delta = delta[target_idx];
                 neuron_delta += output_delta * connection.weight;
-                const auto weight_update = learning_rate * output_delta * act;
-                connection.velocity = MOMENTUM_BETA * connection.velocity + weight_update;
+                const float grad = std::clamp(output_delta * act, -GRAD_CLIP, GRAD_CLIP);
+                connection.velocity = std::clamp(
+                    MOMENTUM_BETA * connection.velocity + learning_rate * grad, -VEL_CLIP, VEL_CLIP);
                 connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
             }
 

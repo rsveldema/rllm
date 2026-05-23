@@ -35,9 +35,13 @@ namespace rllm
         ~IntermediateLayer() = default;
 
         void propagate_forward(IntermediateLayer& next_layer);
-        void propagate_forward_to_output(OutputLayer& output_layer) const;
+        void propagate_forward_to_output(OutputLayer& output_layer);
 
         void fill_inputs(float value) { m_inputs.fill(value); }
+
+        // RMSNorm: normalize m_inputs to unit RMS so SiLU operates in its
+        // well-behaved range and activations don't compound through layers.
+        void rms_normalize_inputs();
 
         void accumulate_input(IntermediateLayerIndex index, float value, Range<float> range)
         {
@@ -100,23 +104,32 @@ namespace rllm
             return false;
         }
 
-        // Leaky ReLU with alpha=0.1: avoids dead neurons by keeping a small
-        // negative slope, ensuring signal and gradient always flow through all layers.
-        static constexpr float LEAKY_ALPHA = 0.3f;
+        // SiLU (Swish): x * sigmoid(x) — used in LLaMA, Mistral, etc.
+        static float silu(float x)
+        {
+            return x / (1.0f + std::exp(-x));
+        }
+
+        // Derivative of SiLU: sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+        static float silu_grad(float x)
+        {
+            const float sig = 1.0f / (1.0f + std::exp(-x));
+            return sig * (1.0f + x * (1.0f - sig));
+        }
 
         float normal_activation_function(float x) const
         {
-            return x > 0.0f ? x : LEAKY_ALPHA * x;
+            return silu(x);
         }
 
         float outputlayer_activation_function(float x) const
         {
-            return x > 0.0f ? x : LEAKY_ALPHA * x;
+            return silu(x);
         }
 
         static float activation_grad(float x)
         {
-            return x > 0.0f ? 1.0f : LEAKY_ALPHA;
+            return silu_grad(x);
         }
     };
 
