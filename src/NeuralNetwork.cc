@@ -9,7 +9,7 @@
 #include <set>
 
 static std::ofstream s_nn_log;
-#define LOG_INFO(...) (s_nn_log << std::format(__VA_ARGS__) << '\n')
+#define LOG_INFO(...) (s_nn_log << std::format(__VA_ARGS__) << '\n' << std::flush)
 
 namespace rllm
 {
@@ -23,20 +23,12 @@ namespace rllm
 
 namespace rllm
 {
-    constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 3000;
+    // how many times to iterate over the entire training dataset
     constexpr size_t MAX_TRAINING_EPOCHS = 1000;
     // Per-example gradient steps per epoch: keep small to limit catastrophic forgetting.
     // Other examples undo large per-example bursts; interleaving more often (smaller bursts,
     // more epochs) with the same total updates converges much more reliably.
-    constexpr size_t STEPS_PER_EXAMPLE_PER_EPOCH = 20;
-
-    // with TokenID::MAX = 2048, the MSE loss of an all-zero prediction is 1/2048 ≈ 0.000488.
-    //  the '1' here is becomes of one-hot encoding of the expected output, where the target token has a value of 1 and
-    //  all others have a value of 0.
-    constexpr float FIRES_NOTHING_MSE_LOSS = 1.0f / static_cast<float>(static_cast<int>(TokenID::MAX));
-
-    constexpr float CONVERGENCE_THRESHOLD =
-        FIRES_NOTHING_MSE_LOSS / 4.0f; // Must be below the all-zero prediction loss for training to work.
+    constexpr size_t STEPS_PER_EXAMPLE_PER_EPOCH = 200;
 
     // Layers
 
@@ -163,14 +155,16 @@ namespace rllm
     }
 
     // Compute cross-entropy loss: -log(softmax(logits)[target])
+    // Only considers the active corpus tokens, not the full TokenID::MAX space.
     float NeuralNetwork::compute_loss(TokenID expected_output_token) const
     {
+        const auto active_end = static_cast<TokenID>(m_corpus.number_of_token_types());
         float max_val = m_output_layer.m_inputs[TokenID::START];
-        for (const auto i : enum_iterator<TokenID>())
+        for (const auto i : enum_iterator<TokenID>(active_end))
             max_val = std::max(max_val, m_output_layer.m_inputs[i]);
 
         float sum_exp = 0.0f;
-        for (const auto i : enum_iterator<TokenID>())
+        for (const auto i : enum_iterator<TokenID>(active_end))
             sum_exp += std::exp(m_output_layer.m_inputs[i] - max_val);
 
         const float log_prob =
@@ -236,25 +230,25 @@ namespace rllm
 
     void NeuralNetwork::train(bool verbose)
     {
+        Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
+
+        set_random_weights_and_connections();
+
         LOG_INFO(
             "Training the neural network...\n"
             "\t $num_layers: {}\n"
             "\t $corpus_size: {}\n"
             "\t $intermediate_layers width: {}\n"
-            "\t convergence threshold: {:.10f}\n"
-            "\t fires nothing MSE loss: {:.10f}\n"
-            "\t max iterations per line: {}",
+            "\t convergence threshold: {:.6f}\n"
+            "\t fires nothing CE loss:  {:.6f}\n"
+            "\t steps per example per epoch: {}\n",
             m_intermediate_layers.size(),
             m_corpus.number_of_token_types(),
             static_cast<size_t>(IntermediateLayerIndex::MAX),
-            CONVERGENCE_THRESHOLD,
-            FIRES_NOTHING_MSE_LOSS,
-            MAX_TRAINING_ITERATIONS_PER_LINE
+            m_convergence_threshold,
+            m_fires_nothing_ce_loss,
+            STEPS_PER_EXAMPLE_PER_EPOCH
         );
-
-        Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
-
-        set_random_weights_and_connections();
 
         std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
 
@@ -322,7 +316,7 @@ namespace rllm
             propagate_backward(score);
             loss = compute_loss(expected_output_token);
 
-            if (loss < CONVERGENCE_THRESHOLD)
+            if (loss < m_convergence_threshold)
             {
                 LOG_INFO(
                     "Convergence reached after {} steps for token '{}'",
@@ -353,7 +347,7 @@ namespace rllm
             "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}",
             max_iterations,
             loss,
-            CONVERGENCE_THRESHOLD
+            m_convergence_threshold
         );
         m_stats.record_learning_failure();
     }

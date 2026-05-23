@@ -29,7 +29,7 @@ namespace rllm
     class IntermediateLayer
     {
       public:
-        IntermediateLayer(Corpus& corpus)
+        IntermediateLayer(const Corpus& corpus)
             : m_corpus(corpus)
         {}
         ~IntermediateLayer() = default;
@@ -66,7 +66,7 @@ namespace rllm
         nlohmann::json save() const;
 
       private:
-        Corpus& m_corpus;
+        const Corpus& m_corpus;
         // neuron 'i's accumulated input for each neuron in the layer
         template_token_vector<float, IntermediateLayerIndex> m_inputs;
         // neuron 'i' is connected to one or more neurons in the next layer

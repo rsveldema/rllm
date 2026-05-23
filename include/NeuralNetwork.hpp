@@ -19,8 +19,15 @@ namespace rllm
     {
       public:
         NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats)
-        : m_corpus(corpus), m_stats(stats)
+            : m_corpus(corpus)
+            , m_stats(stats)
+            , m_input_layer()
+            , m_output_layer(corpus)
+            // Compute CE-based constants from the actual corpus size.
+            , m_fires_nothing_ce_loss(std::log(static_cast<float>(m_corpus.number_of_token_types())))
+            , m_convergence_threshold(m_fires_nothing_ce_loss / 4.0f)
         {
+
             for (size_t i = 0; i < num_layers; ++i)
             {
                 m_intermediate_layers.emplace_back(m_corpus);
@@ -30,9 +37,18 @@ namespace rllm
         NeuralNetwork(const NeuralNetwork&) = delete;
         NeuralNetwork& operator=(const NeuralNetwork&) = delete;
 
-        const Corpus& get_corpus() const { return m_corpus; }
-        Statistics& get_statistics() const { return m_stats; }
-        const OutputLayer& get_output_layer() const { return m_output_layer; }
+        const Corpus& get_corpus() const
+        {
+            return m_corpus;
+        }
+        Statistics& get_statistics() const
+        {
+            return m_stats;
+        }
+        const OutputLayer& get_output_layer() const
+        {
+            return m_output_layer;
+        }
 
         enum class TrainingMethod
         {
@@ -41,7 +57,10 @@ namespace rllm
             INCREASINGLY_LONGER_SEQUENCES
         };
 
-        void set_training_method(TrainingMethod m) { m_training_method = m; }
+        void set_training_method(TrainingMethod m)
+        {
+            m_training_method = m;
+        }
 
         void propagate_backward(const Score& score);
         void propagate_forward(const InputLine& input);
@@ -65,14 +84,18 @@ namespace rllm
         std::vector<IntermediateLayer> m_intermediate_layers;
         OutputLayer m_output_layer;
 
+        // Computed from the actual corpus size in set_random_weights_and_connections().
+        const float m_fires_nothing_ce_loss; // should never see this value, overriden at runtime
+        const float m_convergence_threshold; // should never see this value, overriden at runtime
+
         void dump_top_predictions();
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
 
         void train_with_up_to_N(const InputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
-        void train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
-
+        void
+        train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
     };
 
 } // namespace rllm

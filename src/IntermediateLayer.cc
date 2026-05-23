@@ -133,6 +133,8 @@ namespace rllm
 #pragma omp parallel for schedule(dynamic)
         for (int idx = 0; idx < max_i; ++idx)
             forward_neuron_to_output(static_cast<IntermediateLayerIndex>(idx), output_layer);
+
+        output_layer.rms_normalize_inputs();
     }
 
 
