@@ -1,13 +1,22 @@
 #include <IntermediateLayer.hpp>
 #include <RandomHelpers.hpp>
 
-#include <print>
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cmath>
+#include <print>
 
 namespace rllm
 {
+    // Gaussian activation centred on `trigger` with width `sigma`.
+    // Returns 1 when input == trigger and decays symmetrically away from it.
+    static float gaussian_penalty(float input, float trigger, float sigma)
+    {
+        const float diff = input - trigger;
+        return std::exp(-(diff * diff) / (2.0f * sigma * sigma));
+    }
+
     static constexpr float MIN_TRIGGER = 0.0001f;
     // Keep initial triggers spread across the full [0,1] range so that the
     // per-token output activation stays small (~0.02).  With MAX_TRIGGER=0.5
@@ -17,8 +26,20 @@ namespace rllm
     static constexpr float MAX_TRIGGER = 1.0f;
     static constexpr float MIN_WEIGHT = 0.0f;
     static constexpr float MAX_WEIGHT = 1.0f;
-        
+
     static constexpr size_t MAX_NUM_CONNECTIONS_PER_NEURON = 200;
+
+    enum class NeuronRandomizationType
+    {
+        RANDOMIZE_ALL,
+        RANDOMIZE_WEIGHTS_ONLY,
+        RANDOMIZE_CONNECTIONS_ONLY,
+        NO_RANDOMIZATION
+    };
+
+
+    // static constexpr auto randomization_type = NeuronRandomizationType::NO_RANDOMIZATION;
+    static constexpr auto randomization_type = NeuronRandomizationType::RANDOMIZE_ALL;
 
 
     void IntermediateLayer::set_random_weights_and_connections()
@@ -78,24 +99,46 @@ namespace rllm
             backward_neuron(static_cast<IntermediateLayerIndex>(idx), delta, prev_delta, learning_rate);
     }
 
+
     void IntermediateLayer::randomize_neuron(IntermediateLayerIndex i)
     {
         m_inputs[i] = 0.0f;
-        m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
-        m_weights[i] = get_random_value(MIN_WEIGHT, MAX_WEIGHT);
+
+        switch (randomization_type)
+        {
+        case NeuronRandomizationType::RANDOMIZE_ALL:
+            m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
+            m_weights[i] = get_random_value(MIN_WEIGHT, MAX_WEIGHT);
+            break;
+        case NeuronRandomizationType::RANDOMIZE_WEIGHTS_ONLY:
+            m_trigger_values[i] = (MAX_TRIGGER - MIN_TRIGGER) /
+                2.0f; // set to middle of range to allow both upward and downward adjustments during training
+            m_weights[i] = get_random_value(MIN_WEIGHT, MAX_WEIGHT);
+            break;
+        case NeuronRandomizationType::RANDOMIZE_CONNECTIONS_ONLY:
+        case NeuronRandomizationType::NO_RANDOMIZATION:
+            m_trigger_values[i] = (MAX_TRIGGER - MIN_TRIGGER) /
+                2.0f; // set to middle of range to allow both upward and downward adjustments during training
+            m_weights[i] = (MAX_WEIGHT - MIN_WEIGHT) /
+                2.0f; // set to middle of range to allow both upward and downward adjustments during training
+            break;
+        }
 
         // Each firing neuron fans out to layer_size/corpus_size targets so that,
         // on average, every neuron in the next intermediate layer receives one
         // connection from each corpus token's active input path.
-        const size_t layer_size  = static_cast<size_t>(IntermediateLayerIndex::MAX);
+        const size_t layer_size = static_cast<size_t>(IntermediateLayerIndex::MAX);
         assert(m_corpus.number_of_token_types() > 10);
         const size_t corpus_size = m_corpus.number_of_token_types();
-        const size_t MAX_INTERMEDIATE_LAYER_CONNECTIONS = std::min(MAX_NUM_CONNECTIONS_PER_NEURON, layer_size / corpus_size);
+        const size_t MAX_INTERMEDIATE_LAYER_CONNECTIONS =
+            std::min(MAX_NUM_CONNECTIONS_PER_NEURON, layer_size / corpus_size);
         assert(MAX_INTERMEDIATE_LAYER_CONNECTIONS > 1);
         const size_t MIN_INTERMEDIATE_CONNECTIONS = std::max(size_t{1}, MAX_INTERMEDIATE_LAYER_CONNECTIONS / 10);
 
         assert(MIN_INTERMEDIATE_CONNECTIONS > 0);
-        assert(MAX_INTERMEDIATE_LAYER_CONNECTIONS <= 10000); // sanity check to avoid accidentally creating a near-fully-connected layer
+        assert(
+            MAX_INTERMEDIATE_LAYER_CONNECTIONS <= 10000
+        ); // sanity check to avoid accidentally creating a near-fully-connected layer
 
 
         LOG_ONCE(
@@ -109,7 +152,8 @@ namespace rllm
             )
         );
 
-        const int num_connections = MIN_INTERMEDIATE_CONNECTIONS + (std::rand() % (MAX_INTERMEDIATE_LAYER_CONNECTIONS - MIN_INTERMEDIATE_CONNECTIONS + 1));
+        const int num_connections = MIN_INTERMEDIATE_CONNECTIONS +
+            (std::rand() % (MAX_INTERMEDIATE_LAYER_CONNECTIONS - MIN_INTERMEDIATE_CONNECTIONS + 1));
         std::vector<IntermediateLayerIndex> conns;
         conns.reserve(num_connections);
         for (int c = 0; c < num_connections; ++c)
@@ -122,12 +166,14 @@ namespace rllm
         m_inputs[i] = 0.0f;
         m_trigger_values[i] = get_random_value(MIN_TRIGGER, MAX_TRIGGER);
         m_weights[i] = get_random_value(MIN_WEIGHT, MAX_WEIGHT);
-        const int num_connections = 1 + std::rand() % 5;
+        const int num_connections = 1 + std::rand() % 2;
         std::vector<IntermediateLayerIndex> conns;
         conns.reserve(num_connections);
         for (int c = 0; c < num_connections; ++c)
         {
-            const auto random_token_index = get_random_enum_value<TokenID>();
+            const auto random_token_index =
+                get_random_enum_value<TokenID>(static_cast<TokenID>(m_corpus.number_of_token_types()));
+            assert(static_cast<size_t>(random_token_index) < m_corpus.number_of_token_types());
             conns.push_back(static_cast<IntermediateLayerIndex>(random_token_index));
         }
         m_connections[i] = std::move(conns);
@@ -136,14 +182,19 @@ namespace rllm
     void IntermediateLayer::forward_neuron_to_output(IntermediateLayerIndex i, OutputLayer& output_layer) const
     {
         const auto input_value = m_inputs[i];
-        if (input_value < m_trigger_values[i])
-            return;
-        const auto weight = m_weights[i];
+        const auto trigger_value = m_trigger_values[i];
+        auto penalty_for_firing = 1.0f;
+        if (input_value < trigger_value)
+        {
+            penalty_for_firing = 0.01f * (trigger_value - input_value);
+        }
+        // if (input_value < m_trigger_values[i])
+        //     return;
+        const auto weight = m_weights[i] * penalty_for_firing;
         for (const auto& target : m_connections[i])
         {
-            const auto token_id = static_cast<TokenID>(
-                static_cast<size_t>(target) % static_cast<size_t>(m_corpus.number_of_token_types())
-            );
+            assert(static_cast<size_t>(target) < m_corpus.number_of_token_types());
+            const auto token_id = static_cast<TokenID>(target);
             output_layer.m_inputs.add_no_clamp(token_id, weight * input_value);
         }
     }
@@ -151,18 +202,17 @@ namespace rllm
     void IntermediateLayer::forward_neuron(IntermediateLayerIndex i, IntermediateLayer& next_layer)
     {
         const auto input_value = m_inputs[i];
-        if (input_value < m_trigger_values[i])
-            return;
-        const auto added_value = m_weights[i] * input_value;
+        auto penalty_for_firing = gaussian_penalty(input_value, m_trigger_values[i], 0.5f);
+        const auto added_value = m_weights[i] * penalty_for_firing;
         for (const auto& target : m_connections[i])
         {
             float& cell = next_layer.m_inputs[target];
             float expected = std::atomic_ref<float>{cell}.load(std::memory_order_relaxed);
             float desired;
-            do {
-                desired = std::clamp(expected + added_value, 0.0f, 1.0f);
-            } while (!std::atomic_ref<float>{cell}.compare_exchange_weak(
-                         expected, desired, std::memory_order_relaxed));
+            do
+            {
+                desired = std::clamp(expected + added_value, MIN_NEURON_INPUT, MAX_NEURON_INPUT);
+            } while (!std::atomic_ref<float>{cell}.compare_exchange_weak(expected, desired, std::memory_order_relaxed));
         }
     }
 
@@ -176,31 +226,13 @@ namespace rllm
         float d = 0.0f;
         for (const auto& target : m_connections[i])
         {
-            const auto token_id = static_cast<TokenID>(
-                static_cast<size_t>(target) % static_cast<size_t>(m_corpus.number_of_token_types())
-            );
-            assert(token_id < TokenID::MAX);
+            const auto token_id = static_cast<TokenID>(target);
+            assert(static_cast<size_t>(token_id) < m_corpus.number_of_token_types());
             d += delta[token_id];
         }
 
-        const bool fired = m_inputs[i] >= m_trigger_values[i];
-
-        if (!fired)
-        {
-            // Neuron didn't fire but downstream wants more signal:
-            // lower the trigger so it fires more easily next time,
-            // and propagate the gradient upstream so earlier layers also adapt.
-            if (d > 0.0f)
-            {
-                const float weight_delta = learning_rate * d;
-                const float trigger_delta = learning_rate * d;
-                m_trigger_values.add_with_clamp(i, -trigger_delta, Range<float>{MIN_TRIGGER, MAX_TRIGGER});
-                m_last_weight_delta[i] = weight_delta;
-                m_weights.add_with_clamp(i, weight_delta, Range<float>{MIN_WEIGHT, MAX_WEIGHT});
-                prev_delta.add_no_clamp(i, d * m_weights[i]);
-            }
-            return;
-        }
+        const float penalty = gaussian_penalty(m_inputs[i], m_trigger_values[i], 0.5f);
+        d *= penalty;
 
         // Neuron fired — full update.
         const float weight_delta = learning_rate * d * m_inputs[i];
@@ -223,23 +255,13 @@ namespace rllm
         for (const auto& target : m_connections[i])
             d += delta[target];
 
-        const bool fired = m_inputs[i] >= m_trigger_values[i];
+        const auto input_value = m_inputs[i];
+        const auto trigger_value = m_trigger_values[i];
 
-        if (!fired)
-        {
-            if (d > 0.0f)
-            {
-                const float weight_delta = learning_rate * d;
-                const float trigger_delta = learning_rate * d;
-                m_trigger_values.add_with_clamp(i, -trigger_delta, Range<float>{MIN_TRIGGER, MAX_TRIGGER});
-                m_weights.add_with_clamp(i, weight_delta, Range<float>{MIN_WEIGHT, MAX_WEIGHT});
-                m_last_weight_delta[i] = weight_delta;
-                prev_delta.add_no_clamp(i, d * m_weights[i]);
-            }
-            return;
-        }
+        const float penalty = gaussian_penalty(input_value, trigger_value, 0.5f);
+        d *= penalty;
 
-        const float weight_delta = learning_rate * d * m_inputs[i];
+        const float weight_delta = learning_rate * d * input_value;
         const float trigger_delta = learning_rate * d;
         m_weights.add_with_clamp(i, weight_delta, Range<float>{MIN_WEIGHT, MAX_WEIGHT});
         m_last_weight_delta[i] = weight_delta;

@@ -39,7 +39,7 @@ namespace rllm
                     static_cast<int>(target)
                 );
             );
-            next_layer.accumulate_input(target, 1.0f);
+            next_layer.accumulate_input(target, 1.0f, Range<float>{MIN_NEURON_INPUT, MAX_NEURON_INPUT});
         }
     }
 

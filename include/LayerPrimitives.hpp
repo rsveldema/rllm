@@ -12,6 +12,9 @@
 
 namespace rllm
 {
+    static constexpr float MIN_NEURON_INPUT = -0.01f;
+    static constexpr float MAX_NEURON_INPUT = 1.0f;
+
     static constexpr auto RED   = "\033[31m";
     static constexpr auto RESET = "\033[0m";
 
@@ -109,7 +112,7 @@ namespace rllm
     enum class IntermediateLayerIndex : size_t
     {
         START = 0,
-        MAX = static_cast<size_t>(TokenID::MAX) * 8,
+        MAX = static_cast<size_t>(TokenID::MAX) * 16,
         UNKNOWN_INTERMEDIATE_LAYER_INDEX = static_cast<size_t>(-1)
     };
 
@@ -203,7 +206,7 @@ namespace rllm
         }
 
         /** add a value to an element at index with clamping */
-        void add_with_clamp(LengthType index, T delta, Range<T> range = {})
+        void add_with_clamp(LengthType index, T delta, Range<T> range)
         {
             auto& cell = m_data[static_cast<size_t>(index)];
             cell = std::clamp(cell + delta, range.lo, range.hi);
@@ -266,13 +269,13 @@ namespace rllm
             }
         }
 
-        void add_with_clamp(const X x, const Y y, T delta, Range<T> range = {})
+        void add_with_clamp(const X x, const Y y, T delta, Range<T> range)
         {
             auto& cell = m_data[static_cast<size_t>(x)][static_cast<size_t>(y)];
             cell = std::clamp(cell + delta, range.lo, range.hi);
         }
 
-        void add_with_clamp(const std::pair<const X, const Y>& indices, T delta, Range<T> range = {})
+        void add_with_clamp(const std::pair<const X, const Y>& indices, T delta, Range<T> range)
         {
             add_with_clamp(indices.first, indices.second, delta, range);
         }

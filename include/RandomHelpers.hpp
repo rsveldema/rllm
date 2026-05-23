@@ -12,9 +12,9 @@ namespace rllm
     }
 
     template<typename T>
-    T get_random_enum_value() {
+    T get_random_enum_value(T max_value = T::MAX) {
         static_assert(RAND_MAX >= static_cast<int>(T::MAX), "RAND_MAX must be greater than or equal to the number of enum values");
-        return static_cast<T>(rand() % static_cast<int>(T::MAX));
+        return static_cast<T>(rand() % static_cast<int>(max_value));
     }
 
     template <typename X, typename Y>

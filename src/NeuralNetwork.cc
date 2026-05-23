@@ -8,7 +8,7 @@
 
 namespace rllm
 {
-    constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 10000;
+    constexpr size_t MAX_TRAINING_ITERATIONS_PER_LINE = 3000;
 
     // with TokenID::MAX = 2048, the MSE loss of an all-zero prediction is 1/2048 ≈ 0.000488.
     //  the '1' here is becomes of one-hot encoding of the expected output, where the target token has a value of 1 and
@@ -16,7 +16,7 @@ namespace rllm
     constexpr float FIRES_NOTHING_MSE_LOSS = 1.0f / static_cast<float>(static_cast<int>(TokenID::MAX));
 
     constexpr float CONVERGENCE_THRESHOLD =
-        FIRES_NOTHING_MSE_LOSS / 10.0f; // Must be below the all-zero prediction loss for training to work.
+        FIRES_NOTHING_MSE_LOSS / 4.0f; // Must be below the all-zero prediction loss for training to work.
 
     // Layers
 
@@ -154,7 +154,16 @@ namespace rllm
     void NeuralNetwork::train(bool verbose)
     {
         std::println(
-            "Training the neural network..., convergence threshold: {:.10f}, fires nothing MSE loss: {:.10f}, max iterations per line: {}",
+            "Training the neural network...\n"
+            "\t $num_layers: {}\n"
+            "\t $corpus_size: {}\n"
+            "\t $intermediate_layers width: {}\n"
+            "\t convergence threshold: {:.10f}\n"
+            "\t fires nothing MSE loss: {:.10f}\n"
+            "\t max iterations per line: {}",
+            m_intermediate_layers.size(),
+            m_corpus.number_of_token_types(),
+            static_cast<size_t>(IntermediateLayerIndex::MAX),
             CONVERGENCE_THRESHOLD,
             FIRES_NOTHING_MSE_LOSS,
             MAX_TRAINING_ITERATIONS_PER_LINE
@@ -169,8 +178,18 @@ namespace rllm
 
         std::vector<InputLine> training_lines;
         m_corpus.visit_lines([&](const InputLine& line) {
+            if (static_cast<int>(line.size()) < 2)
+            {
+                return; // skip too-short lines that can't be used for training
+            }
             training_lines.push_back(line);
         });
+
+        if (true) {
+            std::sort(training_lines.begin(), training_lines.end(), [](const InputLine& a, const InputLine& b) {
+                return a.size() < b.size();
+            });
+        }
 
         for (const auto& line_of_file : training_lines)
         {
@@ -189,11 +208,6 @@ namespace rllm
 
                 if (static_cast<int>(line.size()) < 2)
                 {
-                    std::println(
-                        "Skipping line with size {} (too short for training): '{}'",
-                        static_cast<int>(line.size()),
-                        full_string
-                    );
                     continue; // skip too-short lines that can't be used for training
                 }
                 std::println(
@@ -235,8 +249,9 @@ namespace rllm
             if (i > MAX_TRAINING_ITERATIONS_PER_LINE)
             {
                 std::println(
-                    "{}Reached maximum training iterations for this line. Stopping training on this line. loss = {:.6f}, max-allowed = {:.6f}{}",
+                    "{}Reached maximum training iterations ({}) for this line. Stopping training on this line. loss = {:.6f}, max-allowed = {:.6f}{}",
                     rllm::RED,
+                    MAX_TRAINING_ITERATIONS_PER_LINE,
                     recent_losses.back(),
                     CONVERGENCE_THRESHOLD,
                     rllm::RESET
