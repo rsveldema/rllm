@@ -28,7 +28,7 @@ namespace rllm
     // Per-example gradient steps per epoch: keep small to limit catastrophic forgetting.
     // Other examples undo large per-example bursts; interleaving more often (smaller bursts,
     // more epochs) with the same total updates converges much more reliably.
-    constexpr size_t STEPS_PER_EXAMPLE_PER_EPOCH = 200;
+    constexpr size_t STEPS_PER_EXAMPLE_PER_EPOCH = 30;
 
     // Layers
 

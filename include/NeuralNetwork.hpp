@@ -27,7 +27,7 @@ namespace rllm
             , m_fires_nothing_ce_loss(std::log(static_cast<float>(m_corpus.number_of_token_types())))
             , m_convergence_threshold(m_fires_nothing_ce_loss / 4.0f)
         {
-
+            assert(static_cast<size_t>(m_corpus.number_of_token_types()) > 1); // need at least 2 token types for training to work
             for (size_t i = 0; i < num_layers; ++i)
             {
                 m_intermediate_layers.emplace_back(m_corpus);

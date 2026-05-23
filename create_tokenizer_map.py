@@ -1,0 +1,222 @@
+from collections import defaultdict
+import re
+
+# read the sample data and create a dictionary of longest
+# sequences of characters that appear in the data, and assign each sequence a unique ID.
+# We then generate a C++ table for this for use in the neural network implementation. The
+# table is sorted by sequence length, longest first, to ensure that we match the longest
+# possible sequence when tokenizing input text.
+
+
+
+def read_all_files_in_directory(directory):
+    import os
+    all_text = ""
+    for filename in os.listdir(directory):
+        if filename.endswith(".cpp"):
+            with open(os.path.join(directory, filename), "r", encoding="utf-8") as f:
+                all_text += f.read()
+    return all_text
+
+def get_unique_words(text: list[str]) -> list[str]:
+    unique_words = set()
+    for word in text:
+        if word:
+            unique_words.add(word)
+    return list(unique_words)
+
+def get_unique_words_with_frequency(text: list[str]) -> dict[str, int]:
+    unique_words = defaultdict(int)
+    for word in text:
+        if word:
+            unique_words[word] += 1
+    return unique_words
+
+
+
+def split_text_using_seperators(text, seperators):
+    # split the text into words on the seperators, and also include the seperators as tokens:
+    regex_pattern = '|'.join(map(re.escape, seperators))
+    split = re.split(regex_pattern, text)
+    return split
+
+def compute_bpe_tokens(split: dict[str, int], num_merges: int = 500) -> list[str]:
+    """
+    Byte Pair Encoding: iteratively merge the most frequent adjacent character
+    pair in the weighted word vocabulary until `num_merges` merges have been
+    performed or no pair appears more than once.
+
+    Returns the list of learned multi-character subword tokens (the merge results),
+    not including single characters (those are already added elsewhere).
+    """
+    # Represent every word as a tuple of its characters, weighted by frequency.
+    vocab: dict[tuple, int] = {}
+    for word, freq in split.items():
+        if len(word) >= 2:          # single chars are already in the token set
+            key = tuple(word)
+            vocab[key] = vocab.get(key, 0) + freq
+
+    def get_pair_freqs(vocab: dict[tuple, int]) -> dict[tuple[str, str], int]:
+        pairs: dict[tuple[str, str], int] = defaultdict(int)
+        for symbols, freq in vocab.items():
+            for i in range(len(symbols) - 1):
+                pairs[(symbols[i], symbols[i + 1])] += freq
+        return pairs
+
+    def merge_pair(pair: tuple[str, str], vocab: dict[tuple, int]) -> dict[tuple, int]:
+        merged = pair[0] + pair[1]
+        new_vocab: dict[tuple, int] = {}
+        for symbols, freq in vocab.items():
+            new_syms: list[str] = []
+            i = 0
+            while i < len(symbols):
+                if i < len(symbols) - 1 and symbols[i] == pair[0] and symbols[i + 1] == pair[1]:
+                    new_syms.append(merged)
+                    i += 2
+                else:
+                    new_syms.append(symbols[i])
+                    i += 1
+            new_vocab[tuple(new_syms)] = freq
+        return new_vocab
+
+    learned: list[str] = []
+    seen: set[str] = set()
+
+    for _ in range(num_merges):
+        pairs = get_pair_freqs(vocab)
+        if not pairs:
+            break
+        best, best_freq = max(pairs.items(), key=lambda kv: kv[1])
+        if best_freq < 2:
+            break
+        merged = best[0] + best[1]
+        if merged not in seen:
+            seen.add(merged)
+            learned.append(merged)
+        vocab = merge_pair(best, vocab)
+
+    return learned
+
+def is_all_uppercase(word: str) -> bool:
+    return all(ch.isupper() for ch in word if ch.isalpha())
+
+def is_all_lowercase(word: str) -> bool:
+    return all(ch.islower() for ch in word if ch.isalpha())
+
+def split_camel_case_words(split : list[str]) -> list[str]:
+    # split camel case words into their components, and also include the original word as a token:
+    split_camel_case = []
+    for word in split:
+        if not word:
+            continue
+
+        if is_all_uppercase(word):
+            split_camel_case.append(word)
+            continue
+
+        if is_all_lowercase(word):
+             split_camel_case.append(word)
+             continue
+
+        # if the first letter is uppercase and the rest are lowercase,
+        # it's likely a proper noun or class name, so keep it as a single token:
+        if word[0].isupper() and all(ch.islower() for ch in word[1:]):
+             split_camel_case.append(word)
+             continue
+
+        # mixture of lower/uppercase, likely camel case, so split it:
+        components = re.findall(r'[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)', word)
+        split_camel_case.extend(components)
+    return split_camel_case
+
+
+def create_tokenizer_map(text):
+    # create a combination of all sequences of characters that appear in the text, up to a certain length,
+    # and count the frequency of each sequence. We will use this to create a tokenizer map that maps each sequence to a unique ID, sorted by length and frequency.
+    seperators = ' \n\t(){}[]<>.,;:"\'`~?!@#$%^&*-_=+|\\/0123456789'
+
+    # all seperators are tokens:
+    tokens = []
+    for ch in seperators:
+        tokens.append(ch)
+
+    # each file contains a list of predefined words, one per line,
+    # that should also be included as tokens:
+    predefined_words = read_all_files_in_directory("predefined_words")
+    split = split_text_using_seperators(predefined_words, seperators)
+    split = split_camel_case_words(split)
+    split = get_unique_words(split)
+    tokens.extend(split)
+
+    # split the text into words on the seperators,
+    # and also include the seperators as tokens:
+    split = split_text_using_seperators(text, seperators)
+    split = split_camel_case_words(split)
+    split = get_unique_words_with_frequency(split)
+    bpe_tokens = compute_bpe_tokens(split)
+    tokens.extend(bpe_tokens)
+
+    # Create a dictionary to count the frequency of each token.
+    token_freq = defaultdict(int)
+    for token in tokens:
+        token_freq[token] += 1
+
+    # Sort tokens by length (longest first) and then by frequency (most common first).
+    sorted_tokens = sorted(token_freq.keys(), key=lambda x: (-len(x), -token_freq[x]))
+
+    # Create a mapping of token to unique ID.
+    tokenizer_map = {token: idx for idx, token in enumerate(sorted_tokens)}
+
+    return tokenizer_map
+
+def generate_cpp_table_string(tokenizer_map) -> str:
+    cpp_table = "// This file is generated by create_tokenizer_map.py. Do not edit manually.\n\n"
+    cpp_table += "// Tokenizer map: maps string tokens to their corresponding TokenID enum values.\n"
+    cpp_table += "// Sorted by token length (longest first) to ensure longest match during tokenization.\n"
+    cpp_table += "#include <unordered_map>\n"
+    cpp_table += "#include <string>\n"
+    cpp_table += "#include \"tokenizer_map.hpp\"\n\n"
+    cpp_table += "std::unordered_map<std::string, TokenID> tokenizer_map = {\n"
+    for token, idx in tokenizer_map.items():
+        if token == "\t":
+            display_token = "\\t"
+        elif token == "\n":
+            display_token = "\\n"
+        elif token == "\\":
+            display_token = "\\\\"
+        elif token == "\"":
+            display_token = "\\\""
+        else:
+            display_token = token
+        cpp_table += f'    {{"{display_token}", TokenID::TOK_{idx}}},\n'
+    cpp_table += "};\n"
+    return cpp_table
+
+def generate_cpp_table_header(tokenizer_map) -> str:
+    cpp_table = "#pragma once\n\n"
+    cpp_table += "// This file is generated by create_tokenizer_map.py. Do not edit manually.\n\n"
+    cpp_table += "#include <unordered_map>\n#include <string>\n\n"
+    cpp_table += "enum class TokenID {\n"
+    cpp_table += "    START = TOK_0,\n"
+    cpp_table += f"    MAX = TOK_{len(tokenizer_map) - 1},\n"
+    for _token, idx in tokenizer_map.items():
+        cpp_table += f'    TOK_{idx},\n'
+    cpp_table += "};\n\n"
+    cpp_table += "extern std::unordered_map<std::string, TokenID> tokenizer_map;\n"
+    return cpp_table
+
+def generate_cpp_table(tokenizer_map):
+    with open("src/tokenizer_map.cc", "w", encoding="utf-8") as f:
+        cpp_table = generate_cpp_table_string(tokenizer_map)
+        f.write(cpp_table)
+    with open("include/tokenizer_map.hpp", "w", encoding="utf-8") as f:
+        cpp_table = generate_cpp_table_header(tokenizer_map)
+        f.write(cpp_table)
+
+conatenated_text = read_all_files_in_directory("corpus")
+print(f"Total characters in corpus: {len(conatenated_text)}")
+tokenizer_map = create_tokenizer_map(conatenated_text)
+
+print(f"Total unique tokens: {len(tokenizer_map)}")
+
+generate_cpp_table(tokenizer_map)

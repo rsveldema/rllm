@@ -8,6 +8,7 @@ target_sources(rllm_lib PRIVATE
     OutputLayer.cc
     NeuralNetwork.cc
     serialization.cc
+    tokenizer_map.cpp
 )
 
 target_include_directories(rllm_lib PUBLIC

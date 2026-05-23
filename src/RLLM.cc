@@ -167,11 +167,11 @@ namespace rllm
         set_nn_log_file("e.log");
 
         Corpus corpus{m_filters};
+        corpus.load_files_from_dir();
         Statistics stats;
 
         auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus, stats);
         nn->set_training_method(method);
-        corpus.load_files_from_dir();
 
         nn->train(verbose);
 
