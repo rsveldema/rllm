@@ -160,7 +160,8 @@ namespace rllm
         }
     }
 
-    void RLLM::train_mode(const std::string& filename, size_t num_layers, bool verbose)
+    void RLLM::train_mode(const std::string& filename, size_t num_layers, bool verbose,
+                           NeuralNetwork::TrainingMethod method)
     {
         std::println("Training mode");
         set_nn_log_file("e.log");
@@ -169,6 +170,7 @@ namespace rllm
         Statistics stats;
 
         auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus, stats);
+        nn->set_training_method(method);
         corpus.load_files_from_dir();
 
         nn->train(verbose);

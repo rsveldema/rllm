@@ -44,6 +44,8 @@ namespace rllm
     {
         assert(!m_intermediate_layers.empty());
 
+        m_last_input = input; // retained for embedding backprop
+
         // Propagate from input layer into the first intermediate layer.
         m_input_layer.propagate_forward(input, m_intermediate_layers.front());
 
@@ -123,11 +125,16 @@ namespace rllm
             m_intermediate_layers[l].propagate_backward(*delta, *prev_delta, LEARNING_RATE);
             *delta = *prev_delta;
         }
+
+        // After the loop *delta = ∂L/∂(first_intermediate_layer.m_inputs).
+        // Pass it to the input layer so the embeddings can be updated.
+        m_input_layer.propagate_backward(m_last_input, *delta, LEARNING_RATE);
     }
 
 
     void NeuralNetwork::set_random_weights_and_connections()
     {
+        m_input_layer.set_random_embeddings();
         for (size_t i = 0; i < m_intermediate_layers.size() - 1; ++i)
         {
             m_intermediate_layers[i].set_random_weights_and_connections();
@@ -196,36 +203,25 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::train_with_two_tok(const InputLine& line_of_file, bool verbose, size_t max_iterations)
+    void NeuralNetwork::train_with_up_to_N(
+        const InputLine& line_of_file,
+        bool verbose,
+        size_t max_iterations,
+        int num_tokens
+    )
     {
-        // take the 1st token of a sentence and predict the 2nd token.
-        // we are not using the rest of the sentence, which makes this a
-        // fast way to debug the algorithms.
+        assert(num_tokens >= 2);
 
-        assert(static_cast<int>(line_of_file.size()) >= 2);
-
-        const auto train_input = line_of_file.substr(static_cast<PositionIndex>(2));
-
-        const auto full_string_opt = m_corpus.get_line(train_input);
-        assert(full_string_opt.has_value());
-        const auto& full_string = *full_string_opt;
-
-        LOG_INFO("Training on line: '{}'", full_string);
-
-        do_training(train_input, verbose, max_iterations);
-    }
-
-    void NeuralNetwork::train_with_three_tok(const InputLine& line_of_file, bool verbose, size_t max_iterations)
-    {
-        // Use the first 2 tokens as input and predict the 3rd token.
-        // Falls back to two-tok for lines with fewer than 3 tokens.
-        if (static_cast<int>(line_of_file.size()) < 3)
+        // If the line is too short for num_tokens, fall back to fewer tokens
+        // (minimum 2 so there is always at least one input token and one target).
+        if (static_cast<int>(line_of_file.size()) < num_tokens)
         {
-            train_with_two_tok(line_of_file, verbose, max_iterations);
+            if (num_tokens > 2)
+                train_with_up_to_N(line_of_file, verbose, max_iterations, num_tokens - 1);
             return;
         }
 
-        const auto train_input = line_of_file.substr(static_cast<PositionIndex>(3));
+        const auto train_input = line_of_file.substr(static_cast<PositionIndex>(num_tokens));
 
         const auto full_string_opt = m_corpus.get_line(train_input);
         assert(full_string_opt.has_value());
@@ -286,11 +282,11 @@ namespace rllm
                 switch (m_training_method)
                 {
                 case TrainingMethod::TWO_TOK:
-                    train_with_two_tok(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
+                    train_with_up_to_N(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH, 2);
                     break;
 
                 case TrainingMethod::THREE_TOK:
-                    train_with_three_tok(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
+                    train_with_up_to_N(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH, 3);
                     break;
 
                 case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:

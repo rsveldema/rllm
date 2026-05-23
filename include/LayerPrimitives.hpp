@@ -2,32 +2,35 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cmath>
 #include <functional>
+#include <print>
 #include <string>
 #include <utility>
 #include <vector>
-#include <atomic>
-#include <print>
 
 namespace rllm
 {
     static constexpr float MIN_NEURON_INPUT = -0.01f;
     static constexpr float MAX_NEURON_INPUT = 1.0f;
 
-    static constexpr auto RED   = "\033[31m";
+    static constexpr auto RED = "\033[31m";
     static constexpr auto RESET = "\033[0m";
 
-#define LOG_ONCE(...) do { \
-    static int counter = 0;\
-    if (counter < 3) { \
-        __VA_ARGS__; \
-        ++counter; \
-    } \
-} while(0)
+#define LOG_ONCE(...) \
+    do \
+    { \
+        static int counter = 0; \
+        if (counter < 3) \
+        { \
+            __VA_ARGS__; \
+            ++counter; \
+        } \
+    } while (0)
 
 
     template <typename Enum>
@@ -59,12 +62,12 @@ namespace rllm
             return m_current != other.m_current;
         }
 
-        void operator += (size_t offset)
+        void operator+=(size_t offset)
         {
             m_current = static_cast<Enum>((static_cast<size_t>(m_current) + offset) % static_cast<size_t>(m_end));
         }
 
-        int operator -(const enum_iterator& other) const
+        int operator-(const enum_iterator& other) const
         {
             return static_cast<int>(m_current) - static_cast<int>(other.m_current);
         }
@@ -91,15 +94,15 @@ namespace rllm
         MAX = 1024 * 2
     };
 
-    static inline TokenID inc(TokenID id)
-    {
-        assert(id != TokenID::UNKNOWN_TOKEN_ID);
-        assert(id < TokenID::MAX);
-        return static_cast<TokenID>(static_cast<int32_t>(id) + 1);
-    }
-
-
     using Token = std::string;
+
+    // Dimensionality of each token's learned embedding vector.
+    // The first intermediate layer is tiled as: neuron[p * EmbeddingDimension::MAX + d] for position p, dimension d.
+    enum class EmbeddingDimension : size_t
+    {
+        START = 0,
+        MAX = 512
+    };
 
     // position of a token in the input sequence. For example, in the input "the cat sat", the token "cat" has
     // position 1.
@@ -115,9 +118,22 @@ namespace rllm
     enum class IntermediateLayerIndex : size_t
     {
         START = 0,
-        MAX = static_cast<size_t>(TokenID::MAX) * 16,
+        MAX = static_cast<size_t>(EmbeddingDimension::MAX) * static_cast<size_t>(PositionIndex::MAX),
         UNKNOWN_INTERMEDIATE_LAYER_INDEX = static_cast<size_t>(-1)
     };
+
+    static inline TokenID inc(TokenID id)
+    {
+        assert(id != TokenID::UNKNOWN_TOKEN_ID);
+        assert(id < TokenID::MAX);
+        return static_cast<TokenID>(static_cast<int32_t>(id) + 1);
+    }
+
+    static inline EmbeddingDimension inc(EmbeddingDimension id)
+    {
+        assert(id < EmbeddingDimension::MAX);
+        return static_cast<EmbeddingDimension>(static_cast<size_t>(id) + 1);
+    }
 
     static inline PositionIndex inc(PositionIndex id)
     {

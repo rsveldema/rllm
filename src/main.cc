@@ -16,6 +16,7 @@ int main(int argc, char* argv[])
     const char* filename = "model.json";
     int num_layers = 4;
     bool verbose = false;
+    rllm::NeuralNetwork::TrainingMethod method = rllm::NeuralNetwork::TrainingMethod::TWO_TOK;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -31,6 +32,21 @@ int main(int argc, char* argv[])
         {
             filename = argv[++i];
         }
+        else if (std::strcmp(argv[i], "--method") == 0 && ((i + 1) < argc))
+        {
+            const std::string m = argv[++i];
+            if (m == "two_tok")
+                method = rllm::NeuralNetwork::TrainingMethod::TWO_TOK;
+            else if (m == "three_tok")
+                method = rllm::NeuralNetwork::TrainingMethod::THREE_TOK;
+            else if (m == "increasingly_longer")
+                method = rllm::NeuralNetwork::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
+            else
+            {
+                std::println("Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer", m);
+                return 1;
+            }
+        }
         else if (std::strcmp(argv[i], "--train") == 0)
         {
             train_mode = true;
@@ -44,10 +60,12 @@ int main(int argc, char* argv[])
             std::println(
                 ""
                 "Usage: {} [--train] [--file <filename>] [--verbose] [--filter <filter>]\n"
+                "          [--method <two_tok|three_tok|increasingly_longer>]\n"
                 "  --train         Run in training mode (default is prompt mode)\n"
                 "  --file <filename>  Specify the model file to load/save (default is '{}')\n"
                 "  --verbose       Enable verbose output\n"
-                "  --filter <filter>  Specify a filter to apply",
+                "  --filter <filter>  Specify a filter to apply\n"
+                "  --method        Training method (default: two_tok)",
                 argv[0],
                 filename
             );
@@ -58,7 +76,7 @@ int main(int argc, char* argv[])
     rllm::RLLM llm(filters);
     if (train_mode)
     {
-        llm.train_mode(filename, num_layers, verbose);
+        llm.train_mode(filename, num_layers, verbose, method);
     }
     else
     {

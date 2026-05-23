@@ -34,6 +34,15 @@ namespace rllm
         Statistics& get_statistics() const { return m_stats; }
         const OutputLayer& get_output_layer() const { return m_output_layer; }
 
+        enum class TrainingMethod
+        {
+            TWO_TOK,
+            THREE_TOK,
+            INCREASINGLY_LONGER_SEQUENCES
+        };
+
+        void set_training_method(TrainingMethod m) { m_training_method = m; }
+
         void propagate_backward(const Score& score);
         void propagate_forward(const InputLine& input);
 
@@ -52,23 +61,16 @@ namespace rllm
         Corpus& m_corpus;
         Statistics& m_stats;
         InputLayer m_input_layer;
+        InputLine m_last_input; // stored during propagate_forward for use in propagate_backward
         std::vector<IntermediateLayer> m_intermediate_layers;
         OutputLayer m_output_layer;
 
         void dump_top_predictions();
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
 
-        enum class TrainingMethod
-        {
-            TWO_TOK,
-            THREE_TOK,
-            INCREASINGLY_LONGER_SEQUENCES
-        };
+        TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
 
-        TrainingMethod m_training_method = TrainingMethod::THREE_TOK;
-
-        void train_with_two_tok(const InputLine& line_of_file, bool verbose, size_t max_iterations);
-        void train_with_three_tok(const InputLine& line_of_file, bool verbose, size_t max_iterations);
+        void train_with_up_to_N(const InputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
 
     };

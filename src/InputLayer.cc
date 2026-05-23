@@ -1,37 +1,78 @@
 #include <InputLayer.hpp>
+#include <RandomHelpers.hpp>
+
+#include <algorithm>
+#include <cassert>
 
 namespace rllm
 {
-    // Maps (token, position) to a single IntermediateLayerIndex via a mixing hash
-    // so that different (tok, pos) pairs spread uniformly across the layer.
-    static IntermediateLayerIndex hash_input(TokenID tok, PositionIndex pos)
+    void InputLayer::reset_embeddings()
     {
-        const size_t t = static_cast<size_t>(tok);
-        const size_t p = static_cast<size_t>(pos);
-        const size_t h = (t * 2654435761ULL ^ p * 40503ULL) % static_cast<size_t>(IntermediateLayerIndex::MAX);
-        // const size_t h = (t + (p * 1023 * 31)) % static_cast<size_t>(IntermediateLayerIndex::MAX);
-        return static_cast<IntermediateLayerIndex>(h);
+        for (const auto tok : enum_iterator<TokenID>())
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+                m_embeddings[tok][d] = 0.0f;
+    }
+
+    void InputLayer::set_random_embeddings()
+    {
+        // Xavier-style init: small uniform values so the first intermediate layer
+        // starts with a reasonable signal spread.
+        for (const auto tok : enum_iterator<TokenID>())
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+                m_embeddings[tok][d] = get_random_value(-0.1f, 0.1f);
     }
 
     void InputLayer::propagate_forward(const InputLine& input, IntermediateLayer& next_layer) const
     {
         next_layer.fill_inputs(0.0f);
 
-        // this loop is over the length of the input line, which is at most
-        // 128 tokens, and for each token we do a single hash and an accumulation into the next layer, so this should be
-        // very fast.
-        // Therefore no need to optimize further by parallelizing or anything like that.
-
         assert(!input.empty());
         assert(input.size() <= PositionIndex::MAX);
 
+        // Each position p owns neurons [p*EmbeddingDimension::MAX, p*EmbeddingDimension::MAX + EmbeddingDimension::MAX).
+        // Writing the token's learned embedding into those neurons gives the network a
+        // continuous, updatable representation of each (token, position) pair.
+
+        #pragma omp parallel for schedule(static)
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {
             const TokenID tok = input[pos];
             assert(tok != TokenID::UNKNOWN_TOKEN_ID);
 
-            const auto target = hash_input(tok, pos);
-            next_layer.accumulate_input(target, 1.0f, Range<float>{MIN_NEURON_INPUT, MAX_NEURON_INPUT});
+            const auto& embed = m_embeddings[tok];
+            const size_t base = static_cast<size_t>(pos) * static_cast<size_t>(EmbeddingDimension::MAX);
+
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+            {
+                const auto idx = static_cast<IntermediateLayerIndex>(base + static_cast<size_t>(d));
+                next_layer.accumulate_input(idx, embed[d], Range<float>{MIN_NEURON_INPUT, MAX_NEURON_INPUT});
+            }
+        }
+    }
+
+    void InputLayer::propagate_backward(
+        const InputLine& input,
+        const template_token_vector<float, IntermediateLayerIndex>& delta,
+        float learning_rate
+    )
+    {
+        // delta[i] = ∂L/∂(first_intermediate_layer.m_inputs[i]).
+        // Since the forward pass sets m_inputs[base+d] = embed[tok][d] directly,
+        // ∂L/∂embed[tok][d] = delta[base+d], so we nudge the embedding in that direction.
+        for (const auto pos : enum_iterator<PositionIndex>(input.size()))
+        {
+            const TokenID tok = input[pos];
+            assert(tok != TokenID::UNKNOWN_TOKEN_ID);
+
+            auto& embed = m_embeddings[tok];
+            const size_t base = static_cast<size_t>(pos) * static_cast<size_t>(EmbeddingDimension::MAX);
+
+
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+            {
+                const auto idx = static_cast<IntermediateLayerIndex>(base + static_cast<size_t>(d));
+                embed[d] = std::clamp(embed[d] + learning_rate * delta[idx], -1.0f, 1.0f);
+            }
         }
     }
 

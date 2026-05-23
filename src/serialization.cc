@@ -10,13 +10,30 @@
 namespace rllm
 {
 
-    void InputLayer::load(const nlohmann::json&)
+    void InputLayer::load(const nlohmann::json& j)
     {
+        if (!j.contains("embeddings")) return; // backwards compat: skip if absent
+
+        const auto& emb_j = j.at("embeddings");
+        for (size_t t = 0; t < static_cast<size_t>(TokenID::MAX); ++t)
+        {
+            const auto& row = emb_j.at(t);
+            for (size_t d = 0; d < static_cast<size_t>(EmbeddingDimension::MAX); ++d)
+                m_embeddings[static_cast<TokenID>(t)][static_cast<EmbeddingDimension>(d)] = row.at(d).template get<float>();
+        }
     }
 
     nlohmann::json InputLayer::save() const
     {
-        return {};
+        auto emb_j = nlohmann::json::array();
+        for (size_t t = 0; t < static_cast<size_t>(TokenID::MAX); ++t)
+        {
+            auto row = nlohmann::json::array();
+            for (size_t d = 0; d < static_cast<size_t>(EmbeddingDimension::MAX); ++d)
+                row.push_back(m_embeddings[static_cast<TokenID>(t)][static_cast<EmbeddingDimension>(d)]);
+            emb_j.push_back(std::move(row));
+        }
+        return {{"embeddings", std::move(emb_j)}};
     }
 
     void OutputLayer::load(const nlohmann::json& )

@@ -14,7 +14,8 @@ namespace rllm
         RLLM(const RLLM&) = delete;
         RLLM& operator=(const RLLM&) = delete;
 
-        void train_mode(const std::string& filename, size_t num_layers, bool verbose);
+        void train_mode(const std::string& filename, size_t num_layers, bool verbose,
+                        NeuralNetwork::TrainingMethod method);
         void prompt_mode(const std::string& filename);
 
       private:
