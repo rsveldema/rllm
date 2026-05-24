@@ -2,7 +2,6 @@
 #include <RandomHelpers.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <omp.h>
@@ -23,12 +22,6 @@ namespace rllm
     // SiLU's unbounded positive outputs from causing runaway updates.
     static constexpr float GRAD_CLIP = 1.0f;
     static constexpr float VEL_CLIP  = 0.1f;
-
-    // Atomically add `delta` to `*cell` without clamping.
-    static void atomic_add_unclamped(float& cell, float delta)
-    {
-        std::atomic_ref<float>{cell}.fetch_add(delta, std::memory_order_relaxed);
-    }
 
     void IntermediateLayer::set_random_weights_and_connections()
     {
@@ -124,54 +117,81 @@ namespace rllm
     void IntermediateLayer::propagate_forward(IntermediateLayer& next_layer)
     {
         rms_normalize_inputs();
+        const int n_src = static_cast<int>(IntermediateLayerIndex::MAX);
+        const int n_dst = n_src;
+
+        // Per-thread accumulator buffers: each thread writes to its own slice,
+        // eliminating atomic contention on next_layer.m_inputs.
+        const int n_threads = omp_get_max_threads();
+        std::vector<float> local_sums(static_cast<size_t>(n_threads) * static_cast<size_t>(n_dst), 0.0f);
+
+#pragma omp parallel
+        {
+            float* my = local_sums.data() + omp_get_thread_num() * n_dst;
+#pragma omp for schedule(static)
+            for (int idx = 0; idx < n_src; ++idx)
+            {
+                const auto i    = static_cast<IntermediateLayerIndex>(idx);
+                const float x   = m_inputs[i];
+                const float act = normal_activation_function(x) * attn_gate(x, m_attn_weights[i]);
+                const auto& conn = m_connections[i];
+                for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
+                    my[static_cast<int>(conn[ci].target_neuron)] += act * conn[ci].weight;
+            }
+        }
+
+        // Reduce thread partials into next_layer.m_inputs
         next_layer.fill_inputs(0.0f);
-        const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
-#pragma omp parallel for schedule(dynamic)
-        for (int idx = 0; idx < max_i; ++idx)
-            forward_neuron(static_cast<IntermediateLayerIndex>(idx), next_layer);
+        for (int t = 0; t < n_threads; ++t)
+        {
+            const float* p = local_sums.data() + t * n_dst;
+#pragma omp simd
+            for (int i = 0; i < n_dst; ++i)
+                next_layer.m_inputs[static_cast<IntermediateLayerIndex>(i)] += p[i];
+        }
     }
 
     void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer)
     {
         rms_normalize_inputs();
+        const int n_src = static_cast<int>(IntermediateLayerIndex::MAX);
+        const int n_dst = static_cast<int>(TokenID::MAX);
+
+        const int n_threads = omp_get_max_threads();
+        std::vector<float> local_sums(static_cast<size_t>(n_threads) * static_cast<size_t>(n_dst), 0.0f);
+
+#pragma omp parallel
+        {
+            float* my = local_sums.data() + omp_get_thread_num() * n_dst;
+#pragma omp for schedule(static)
+            for (int idx = 0; idx < n_src; ++idx)
+            {
+                const auto i    = static_cast<IntermediateLayerIndex>(idx);
+                const float x   = m_inputs[i];
+                const float act = outputlayer_activation_function(x) * attn_gate(x, m_attn_weights[i]);
+                const auto& conn = m_connections[i];
+                for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
+                {
+                    const auto target_idx = static_cast<TokenID>(conn[ci].target_neuron);
+                    assert(target_idx < TokenID::MAX);
+                    my[static_cast<int>(target_idx)] += act * conn[ci].weight;
+                }
+            }
+        }
+
         output_layer.m_inputs.fill(0.0f);
-        const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
-#pragma omp parallel for schedule(dynamic)
-        for (int idx = 0; idx < max_i; ++idx)
-            forward_neuron_to_output(static_cast<IntermediateLayerIndex>(idx), output_layer);
+        for (int t = 0; t < n_threads; ++t)
+        {
+            const float* p = local_sums.data() + t * n_dst;
+#pragma omp simd
+            for (int i = 0; i < n_dst; ++i)
+                output_layer.m_inputs[static_cast<TokenID>(i)] += p[i];
+        }
 
         output_layer.rms_normalize_inputs();
     }
 
 
-    void IntermediateLayer::forward_neuron(IntermediateLayerIndex i, IntermediateLayer& next_layer) const
-    {
-        const auto& conn = m_connections[i];
-        const float x    = m_inputs[i];
-        const float gate = attn_gate(x, m_attn_weights[i]);
-        const float act  = normal_activation_function(x) * gate;
-        for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
-        {
-            const auto& connection = conn[ci];
-            const auto target_idx = connection.target_neuron;
-            atomic_add_unclamped(next_layer.m_inputs[target_idx], act * connection.weight);
-        }
-    }
-
-    void IntermediateLayer::forward_neuron_to_output(IntermediateLayerIndex i, OutputLayer& output_layer) const
-    {
-        const auto& conn = m_connections[i];
-        const float x    = m_inputs[i];
-        const float gate = attn_gate(x, m_attn_weights[i]);
-        const float act  = outputlayer_activation_function(x) * gate;
-        for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
-        {
-            const auto& connection = conn[ci];
-            const auto target_idx = static_cast<TokenID>(connection.target_neuron);
-            assert(target_idx < TokenID::MAX);
-            atomic_add_unclamped(output_layer.m_inputs[target_idx], act * connection.weight);
-        }
-    }
 
 
     void IntermediateLayer::propagate_backward(

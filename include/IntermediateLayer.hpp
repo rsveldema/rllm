@@ -92,9 +92,6 @@ namespace rllm
 
 
 
-        void forward_neuron(IntermediateLayerIndex i, IntermediateLayer& next_layer) const;
-        void forward_neuron_to_output(IntermediateLayerIndex i, OutputLayer& output_layer) const;
-
 
 
         bool have_connection_to_neuron(IntermediateLayerIndex from_neuron, IntermediateLayerIndex to_neuron) const
