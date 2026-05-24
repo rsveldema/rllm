@@ -285,8 +285,7 @@ namespace rllm
                     );
                     break;
 
-                case TrainingMethod::WINDOW2:
-                case TrainingMethod::WINDOW3:
+                case TrainingMethod::WINDOW:
                     // window methods don't use the line-based loop; handled separately below
                     assert(false);
                     break;
@@ -359,19 +358,8 @@ namespace rllm
     void NeuralNetwork::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs)
     {
         // Window methods operate on the flat token stream rather than per-line.
-        switch (m_training_method)
-        {
-        case TrainingMethod::WINDOW2:
-            train_with_window(2, verbose, num_epochs);
-            break;
-
-        case TrainingMethod::WINDOW3:
-            train_with_window(3, verbose, num_epochs);
-            break;
-
-        default:
-            assert(false);
-        }
+        assert(m_training_method == TrainingMethod::WINDOW);
+        train_with_window(m_window_size, verbose, num_epochs);
     }
 
 

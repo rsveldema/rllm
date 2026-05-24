@@ -19,10 +19,8 @@ namespace rllm
             return "three_tok";
         case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
             return "increasingly_longer";
-        case TrainingMethod::WINDOW2:
-            return "window2";
-        case TrainingMethod::WINDOW3:
-            return "window3";
+        case TrainingMethod::WINDOW:
+            return "window";
         }
         return "UNKNOWN";
     }
@@ -38,6 +36,7 @@ int main(int argc, char* argv[])
     bool verbose = false;
     size_t num_epochs = 1000;
     auto method = rllm::TrainingMethod::TWO_TOK;
+    int window_size = 2;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -66,13 +65,20 @@ int main(int argc, char* argv[])
                 method = rllm::TrainingMethod::THREE_TOK;
             else if (m == "increasingly_longer")
                 method = rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
-            else if (m == "window2")
-                method = rllm::TrainingMethod::WINDOW2;
-            else if (m == "window3")
-                method = rllm::TrainingMethod::WINDOW3;
+            else if (m.starts_with("window:"))
+            {
+                const int n = std::atoi(m.c_str() + 7);
+                if (n < 2)
+                {
+                    std::println("window:<N> requires N >= 2, got '{}'", m);
+                    return 1;
+                }
+                method = rllm::TrainingMethod::WINDOW;
+                window_size = n;
+            }
             else
             {
-                std::println("Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, window2, window3", m);
+                std::println("Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, window:<N>", m);
                 return 1;
             }
         }
@@ -88,13 +94,14 @@ int main(int argc, char* argv[])
         {
             std::println(
                 "Usage: {} [--train] [--file <filename>] [--verbose] [--filter <filter>]\n"
-                "          [--method <two_tok|three_tok|increasingly_longer|window2|window3>]\n"
+                "          [--method <two_tok|three_tok|increasingly_longer|window:<N>>]\n"
                 "  --train         Run in training mode (default is prompt mode)\n"
                 "  --file <filename>  Specify the model file to load/save (default is '{}')\n"
                 "  --verbose       Enable verbose output\n"
                 "  --filter <filter>  Specify a filter to apply\n"
                 "  --epochs <n>    Number of training epochs (default: {})\n"
-                "  --method        Training method (default: {})",
+                "  --method        Training method (default: {})\n"
+                "  window:<N>      Sliding window of N tokens (N >= 2)",
                 argv[0],
                 filename,
                 num_epochs,
@@ -107,7 +114,7 @@ int main(int argc, char* argv[])
     rllm::RLLM llm(filters);
     if (train_mode)
     {
-        llm.train_mode(filename, num_layers, verbose, method, num_epochs);
+        llm.train_mode(filename, num_layers, verbose, method, window_size, num_epochs);
     }
     else
     {

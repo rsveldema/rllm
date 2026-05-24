@@ -64,7 +64,7 @@ target_include_directories(rllm_prof PRIVATE ${CMAKE_SOURCE_DIR}/src)
 # -O2 keeps inlining manageable; -g + no-omit-frame-pointer gives perf good stacks
 target_compile_options(rllm_prof PRIVATE -O2 -g -fno-omit-frame-pointer)
 
-set(PROFILE_ARGS "--train" "--filter" "simple" "--method" "window2" "--epochs" "5"
+set(PROFILE_ARGS "--train" "--filter" "simple" "--method" "window:2" "--epochs" "5"
     CACHE STRING "Arguments passed to rllm_prof during profiling")
 
 add_custom_target(profile

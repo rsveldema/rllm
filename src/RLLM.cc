@@ -174,6 +174,7 @@ namespace rllm
         size_t num_layers,
         bool verbose,
         TrainingMethod method,
+        int window_size,
         size_t num_epochs
     )
     {
@@ -186,6 +187,7 @@ namespace rllm
 
         auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus, stats);
         nn->set_training_method(method);
+        nn->set_window_size(window_size);
 
         nn->train(verbose, num_epochs);
 
