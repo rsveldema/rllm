@@ -132,21 +132,16 @@ namespace rllm
         m_output_layer.compute_deltas(score, *output_layer_delta);
 
         // Backpropagate through LM head → get dL/dh_last
-        constexpr int D = static_cast<int>(EmbeddingDimension::MAX);
-        const int T = static_cast<int>(m_seq_len);
-        std::vector<float> h_last_vec(m_last_hidden.data() + (T - 1) * D, m_last_hidden.data() + T * D);
-        template_token_vector<float, EmbeddingDimension> h_last;
-        for (int d = 0; d < D; ++d)
-            h_last[static_cast<EmbeddingDimension>(d)] = h_last_vec[d];
-        auto dh_last = m_output_layer.backward_and_update(*output_layer_delta, h_last, LEARNING_RATE);
+        template_token_vector<float, EmbeddingDimension> h_last_vec;
+        const auto last_pos = dec(m_seq_len);
+        for (const auto d : enum_iterator<EmbeddingDimension>())
+            h_last_vec[d] = m_last_hidden[last_pos, d];
+        auto dh_last = m_output_layer.backward_and_update(*output_layer_delta, h_last_vec, LEARNING_RATE);
 
         // Initialise full-sequence gradient: zero everywhere except the last position
-
-
         flexible_size_matrix<float, PositionIndex, EmbeddingDimension> dh(m_seq_len, EmbeddingDimension::MAX);
-        dh.fill(0.f);
-        for (int d = 0; d < D; ++d)
-            dh.data()[(static_cast<int>(m_seq_len) - 1) * D + d] = dh_last[static_cast<EmbeddingDimension>(d)];
+        for (const auto d : enum_iterator<EmbeddingDimension>())
+            dh[last_pos, d] = dh_last[d];
 
         // Backward through transformer blocks in reverse order
         flexible_size_matrix<float, PositionIndex, EmbeddingDimension> din(m_seq_len, EmbeddingDimension::MAX);

@@ -12,8 +12,8 @@
 #include <utility>
 #include <vector>
 
-#include <tokenizer_map.hpp>
 #include <RandomHelpers.hpp>
+#include <tokenizer_map.hpp>
 
 namespace rllm
 {
@@ -113,21 +113,21 @@ namespace rllm
     enum class HeadsIndex : size_t
     {
         START = 0,
-        MAX   = 8
+        MAX = 8
     };
 
     // Per-head embedding dimension: EmbeddingDimension::MAX / HeadsIndex::MAX = 64.
     enum class HeadDimension : size_t
     {
         START = 0,
-        MAX   = static_cast<size_t>(EmbeddingDimension::MAX) / static_cast<size_t>(HeadsIndex::MAX)
+        MAX = static_cast<size_t>(EmbeddingDimension::MAX) / static_cast<size_t>(HeadsIndex::MAX)
     };
 
     // Feed-forward hidden dimension: static_cast<int>(FFDimension::MAX) = 4 × EmbeddingDimension::MAX.
     enum class FFDimension : size_t
     {
         START = 0,
-        MAX   = static_cast<size_t>(EmbeddingDimension::MAX) * 4
+        MAX = static_cast<size_t>(EmbeddingDimension::MAX) * 4
     };
 
     // position of a neuron in the intermediate layer. For example, in the intermediate layer, neuron 0 is connected
@@ -352,13 +352,15 @@ namespace rllm
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         flexible_size_matrix()
-        : m_rows(X::MAX), m_cols(Y::MAX)
+            : m_rows(X::MAX)
+            , m_cols(Y::MAX)
         {
             m_data.fill(ElementType{});
         }
 
         flexible_size_matrix(X rows, Y cols)
-        : m_rows(rows), m_cols(cols)
+            : m_rows(rows)
+            , m_cols(cols)
         {
             m_data.fill(ElementType{});
         }
@@ -445,12 +447,15 @@ namespace rllm
             m_data[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)] += delta;
         }
 
-        // Flat pointer access for BLAS-style routines.  Layout: row-major [ROWS × COLS].
-        ElementType*       data()       { return m_data.data(); }
-        const ElementType* data() const { return m_data.data(); }
+        X num_rows() const
+        {
+            return m_rows;
+        }
 
-        X num_rows() const { return m_rows; }
-        Y num_cols() const { return m_cols; }
+        Y num_cols() const
+        {
+            return m_cols;
+        }
 
       private:
         using flat_data_t = std::array<ElementType, ROWS * COLS>;
