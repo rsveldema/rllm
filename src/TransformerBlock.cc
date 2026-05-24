@@ -50,6 +50,8 @@ namespace rllm
     {
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
+
+        #pragma omp parallel for schedule(static)
         for (const auto t : enum_iterator<PositionIndex>(x.num_rows()))
         {
             float sq = 0.f;
@@ -74,6 +76,8 @@ namespace rllm
     {
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
+
+        #pragma omp parallel for schedule(static)
         for (const auto t : enum_iterator<PositionIndex>(x.num_rows()))
         {
             float sq = 0.f;
@@ -99,6 +103,7 @@ namespace rllm
     void
     TransformerBlock::causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, PositionIndex T)
     {
+        #pragma omp parallel for schedule(static)
         for (const auto i : enum_iterator<PositionIndex>(T))
         {
             float max_val = x[i, PositionIndex::START];
@@ -133,6 +138,7 @@ namespace rllm
         PositionIndex T
     )
     {
+        #pragma omp parallel for schedule(static)
         for (const auto i : enum_iterator<PositionIndex>(T))
         {
             float dot = 0.f;
@@ -207,6 +213,7 @@ namespace rllm
         m_attn_concat.set_rows(seq_len);
         m_attn_concat.fill(0.f);
 
+        #pragma omp parallel for schedule(static)
         for (const auto hi : enum_iterator<HeadsIndex>())
         {
             auto& scores_mat = m_attn_w[hi];
@@ -248,6 +255,8 @@ namespace rllm
         matmul_ABt(m_attn_concat, W_o, attn_proj);
 
         m_h_mid.set_rows(seq_len);
+
+        #pragma omp parallel for schedule(static) collapse(2)
         for (const auto t : enum_iterator<PositionIndex>(seq_len))
             for (const auto d : enum_iterator<EmbeddingDimension>())
                 m_h_mid[t, d] = h[t, d] + attn_proj[t, d];
@@ -263,6 +272,8 @@ namespace rllm
         matmul_ABt(m_h_norm_ff, W_up, m_up_pre);
 
         m_ffn_act.set_rows(seq_len);
+
+        #pragma omp parallel for schedule(static) collapse(2)
         for (const auto t : enum_iterator<PositionIndex>(seq_len))
             for (const auto f : enum_iterator<FFDimension>())
             {
