@@ -203,15 +203,17 @@ namespace rllm
         std::string result;
         for (const auto i : enum_iterator<PositionIndex>(line.size()))
         {
-            if (!result.empty())
-            {
-                result += ' ';
-            }
-            if (line[i] == TokenID::UNKNOWN_TOKEN_ID)
+            auto& token_id = line[i];
+            auto& token_info = tokenizer_map[token_id];
+            if (token_id == TokenID::UNKNOWN_TOKEN_ID)
             {
                 return std::nullopt; // line contains unknown token ID, cannot convert to string
             }
-            result += get_token_from_id(line[i]);
+            result += get_token_from_id(token_id);
+            if (token_info.end_of_word)
+            {
+                result += ' ';
+            }
         }
         if (result.empty())
         {

@@ -35,8 +35,7 @@ namespace rllm
 
 namespace rllm
 {
-    // how many times to iterate over the entire training dataset
-    constexpr size_t MAX_TRAINING_EPOCHS = 1000;
+    // default number of epochs; overridden at runtime via --epochs
     // Per-example gradient steps per epoch: keep small to limit catastrophic forgetting.
     // Other examples undo large per-example bursts; interleaving more often (smaller bursts,
     // more epochs) with the same total updates converges much more reliably.
@@ -239,7 +238,7 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::do_line_based_training(bool verbose)
+    void NeuralNetwork::do_line_based_training(bool verbose, size_t num_epochs)
     {
         std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
 
@@ -249,7 +248,7 @@ namespace rllm
         std::mt19937 rng{42};
         const auto total_lines = training_lines.size();
 
-        for (size_t epoch = 0; epoch < MAX_TRAINING_EPOCHS; ++epoch)
+        for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
             std::shuffle(training_lines.begin(), training_lines.end(), rng);
 
@@ -261,7 +260,7 @@ namespace rllm
 
                 LOG_INFO(
                     "Epoch[{}%] line[{}]: {:0.2f}% done",
-                    epoch / static_cast<float>(MAX_TRAINING_EPOCHS) * 100.0f,
+                    epoch / static_cast<float>(num_epochs) * 100.0f,
                     lines_visited,
                     progress * 100.0f
                 );
@@ -290,7 +289,7 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::train_with_window(int window_size, bool verbose)
+    void NeuralNetwork::train_with_window(int window_size, bool verbose, size_t num_epochs)
     {
         assert(window_size >= 2);
 
@@ -310,9 +309,9 @@ namespace rllm
 
         std::mt19937 rng{42};
         size_t total_windows_trained = 0;
-        for (size_t epoch = 0; epoch < MAX_TRAINING_EPOCHS; ++epoch)
+        for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
-            LOG_INFO("Epoch[{}%]: {:0.2f}% done", epoch / static_cast<float>(MAX_TRAINING_EPOCHS) * 100.0f, 0.0f);
+            LOG_INFO("Epoch[{}%]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, 0.0f);
 
             std::shuffle(indices.begin(), indices.end(), rng);
 
@@ -331,7 +330,7 @@ namespace rllm
                     const auto line_opt = m_corpus.get_line(window);
                     LOG_INFO(
                         "Epoch[{}%] window[{}]: {:0.2f}% done for '{}'",
-                        epoch / static_cast<float>(MAX_TRAINING_EPOCHS) * 100.0f,
+                        epoch / static_cast<float>(num_epochs) * 100.0f,
                         j,
                         progress * 100.0f,
                         line_opt.has_value() ? line_opt->c_str() : "unknown"
@@ -343,17 +342,17 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::do_whole_corpus_window_based_training(bool verbose)
+    void NeuralNetwork::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs)
     {
         // Window methods operate on the flat token stream rather than per-line.
         switch (m_training_method)
         {
         case TrainingMethod::WINDOW2:
-            train_with_window(2, verbose);
+            train_with_window(2, verbose, num_epochs);
             break;
 
         case TrainingMethod::WINDOW3:
-            train_with_window(3, verbose);
+            train_with_window(3, verbose, num_epochs);
             break;
 
         default:
@@ -362,7 +361,7 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::train(bool verbose)
+    void NeuralNetwork::train(bool verbose, size_t num_epochs)
     {
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
@@ -376,6 +375,7 @@ namespace rllm
             "\t convergence threshold: {:.6f}\n"
             "\t fires nothing CE loss:  {:.6f}\n"
             "\t steps per example per epoch: {}\n"
+            "\t num epochs: {}\n"
             "\t training method: {}\n",
             m_intermediate_layers.size(),
             static_cast<size_t>(TokenID::MAX),
@@ -383,6 +383,7 @@ namespace rllm
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
             STEPS_PER_EXAMPLE_PER_EPOCH,
+            num_epochs,
             [this]() -> std::string_view {
                 switch (m_training_method)
                 {
@@ -403,11 +404,11 @@ namespace rllm
 
         if (training_method_is_line_based())
         {
-            do_line_based_training(verbose);
+            do_line_based_training(verbose, num_epochs);
         }
         else
         {
-            do_whole_corpus_window_based_training(verbose);
+            do_whole_corpus_window_based_training(verbose, num_epochs);
         }
     }
 

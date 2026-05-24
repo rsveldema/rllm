@@ -70,7 +70,7 @@ namespace rllm
         // returns the top-K with the biggest activation in the output layer, as pairs of (token_id, activation_value)
         std::vector<OutputToken> get_best_output_token_ids(size_t top_k) const;
 
-        void train(bool verbose);
+        void train(bool verbose, size_t num_epochs);
         // Compute mean squared error loss between output activations and expected output
         float compute_loss(TokenID expected_output_token) const;
         void set_random_weights_and_connections();
@@ -98,10 +98,10 @@ namespace rllm
         void train_with_up_to_N(const InputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void
         train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
-        void train_with_window(int window_size, bool verbose);
+        void train_with_window(int window_size, bool verbose, size_t num_epochs);
 
-        void do_whole_corpus_window_based_training(bool verbose);
-        void do_line_based_training(bool verbose);
+        void do_whole_corpus_window_based_training(bool verbose, size_t num_epochs);
+        void do_line_based_training(bool verbose, size_t num_epochs);
 
         bool training_method_is_line_based() const
         {

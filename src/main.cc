@@ -17,6 +17,7 @@ int main(int argc, char* argv[])
     const char* filename = "model.json";
     int num_layers = 4;
     bool verbose = false;
+    size_t num_epochs = 1000;
     rllm::NeuralNetwork::TrainingMethod method = rllm::NeuralNetwork::TrainingMethod::TWO_TOK;
 
     for (int i = 1; i < argc; ++i)
@@ -28,6 +29,10 @@ int main(int argc, char* argv[])
         else if (std::strcmp(argv[i], "--layers") == 0 && ((i + 1) < argc))
         {
             num_layers = std::atoi(argv[++i]);
+        }
+        else if (std::strcmp(argv[i], "--epochs") == 0 && ((i + 1) < argc))
+        {
+            num_epochs = static_cast<size_t>(std::atoi(argv[++i]));
         }
         else if (std::strcmp(argv[i], "--file") == 0 && ((i + 1) < argc))
         {
@@ -70,6 +75,7 @@ int main(int argc, char* argv[])
                 "  --file <filename>  Specify the model file to load/save (default is '{}')\n"
                 "  --verbose       Enable verbose output\n"
                 "  --filter <filter>  Specify a filter to apply\n"
+                "  --epochs <n>    Number of training epochs (default: 1000)\n"
                 "  --method        Training method (default: two_tok)",
                 argv[0],
                 filename
@@ -81,7 +87,7 @@ int main(int argc, char* argv[])
     rllm::RLLM llm(filters);
     if (train_mode)
     {
-        llm.train_mode(filename, num_layers, verbose, method);
+        llm.train_mode(filename, num_layers, verbose, method, num_epochs);
     }
     else
     {
