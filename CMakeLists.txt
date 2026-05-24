@@ -56,7 +56,8 @@ add_executable(rllm src/main.cc
   include/Range.hpp
   include/enum_iterator.hpp
   include/template_vector.hpp
-  include/fixed_size_matrix.hpp)
+  include/fixed_size_matrix.hpp
+  include/matmul.hpp)
 target_link_libraries(rllm PRIVATE rllm_lib)
 target_include_directories(rllm PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(rllm PRIVATE -O3 -march=native)

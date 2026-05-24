@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <matmul.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <vector>
 
@@ -76,73 +77,6 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, FFDimension> m_gate_pre; // [T × static_cast<int>(FFDimension::MAX)] pre-activation gate branch
         flexible_rows_matrix<float, PositionIndex, FFDimension> m_up_pre;   // [T × static_cast<int>(FFDimension::MAX)] pre-activation up branch
         flexible_rows_matrix<float, PositionIndex, FFDimension> m_ffn_act;  // [T × static_cast<int>(FFDimension::MAX)] silu(gate_pre) * up_pre
-
-        // ── linear algebra helpers ──────────────────────────────────────────
-        // C[m,n]  = A[m,k] @ B[n,k]^T   (B stored row-major [n × k])
-        // Dimensions are deduced from the matrix types; m comes from A.num_rows() at runtime.
-        template<typename K_enum, typename N_enum>
-        static void matmul_ABt(
-            const flexible_rows_matrix<float, PositionIndex, K_enum>& A,
-            const fixed_size_matrix<float, N_enum, K_enum>& B,
-            flexible_rows_matrix<float, PositionIndex, N_enum>& C)
-        {
-            const PositionIndex m = A.num_rows();
-#pragma omp parallel for collapse(2) schedule(static)
-            for (const auto i : enum_iterator<PositionIndex>(m))
-            {
-                for (const auto j : enum_iterator<N_enum>())
-                {
-                    float sum = 0.f;
-                    for (const auto l : enum_iterator<K_enum>())
-                        sum += A[i, l] * B[j, l];
-                    C[i, j] = sum;
-                }
-            }
-        }
-
-        // C[m,n]  = A[m,k] @ B[k,n]     (standard; B stored row-major [k × n])
-        // Dimensions are deduced from the matrix types; m comes from A.num_rows() at runtime.
-        template<typename K_enum, typename N_enum>
-        static void matmul_AB(
-            const flexible_rows_matrix<float, PositionIndex, K_enum>& A,
-            const fixed_size_matrix<float, K_enum, N_enum>& B,
-            flexible_rows_matrix<float, PositionIndex, N_enum>& C)
-        {
-            const PositionIndex m = A.num_rows();
-#pragma omp parallel for collapse(2) schedule(static)
-            for (const auto i : enum_iterator<PositionIndex>(m))
-            {
-                for (const auto j : enum_iterator<N_enum>())
-                {
-                    float sum = 0.f;
-                    for (const auto l : enum_iterator<K_enum>())
-                        sum += A[i, l] * B[l, j];
-                    C[i, j] = sum;
-                }
-            }
-        }
-
-        // C[m,n] += A^T[m,k] @ B[k,n]   (A provided row-major [k × m]; accumulates into C)
-        // Dimensions are deduced from the matrix types; k comes from A.num_rows() at runtime.
-        template<typename M_enum, typename N_enum>
-        static void matmul_AtB_acc(
-            const flexible_rows_matrix<float, PositionIndex, M_enum>& A,
-            const flexible_rows_matrix<float, PositionIndex, N_enum>& B,
-            fixed_size_matrix<float, M_enum, N_enum>& C)
-        {
-            const PositionIndex k = A.num_rows();
-#pragma omp parallel for collapse(2) schedule(static)
-            for (const auto i : enum_iterator<M_enum>())
-            {
-                for (const auto j : enum_iterator<N_enum>())
-                {
-                    float sum = 0.f;
-                    for (const auto l : enum_iterator<PositionIndex>(k))
-                        sum += A[l, i] * B[l, j];
-                    C[i, j] += sum;
-                }
-            }
-        }
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
         static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
