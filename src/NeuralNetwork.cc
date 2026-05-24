@@ -35,11 +35,8 @@ namespace rllm
 
 namespace rllm
 {
-    // default number of epochs; overridden at runtime via --epochs
-    // Per-example gradient steps per epoch: keep small to limit catastrophic forgetting.
-    // Other examples undo large per-example bursts; interleaving more often (smaller bursts,
-    // more epochs) with the same total updates converges much more reliably.
-    constexpr size_t STEPS_PER_EXAMPLE_PER_EPOCH = 30;
+    // Number of gradient-update passes over all layers per training example per epoch.
+    constexpr size_t NUMBER_OF_LAYER_VISITS_PER_EXAMPLE = 8;
 
     // Layers
 
@@ -169,13 +166,16 @@ namespace rllm
     // Only considers the active corpus tokens, not the full TokenID::MAX space.
     float NeuralNetwork::compute_loss(TokenID expected_output_token) const
     {
+        const int n_tok = static_cast<int>(TokenID::MAX);
         float max_val = m_output_layer.m_inputs[TokenID::START];
-        for (const auto i : enum_iterator<TokenID>(TokenID::MAX))
-            max_val = std::max(max_val, m_output_layer.m_inputs[i]);
+#pragma omp simd reduction(max:max_val)
+        for (int i = 0; i < n_tok; ++i)
+            max_val = std::max(max_val, m_output_layer.m_inputs[static_cast<TokenID>(i)]);
 
         float sum_exp = 0.0f;
-        for (const auto i : enum_iterator<TokenID>(TokenID::MAX))
-            sum_exp += std::exp(m_output_layer.m_inputs[i] - max_val);
+#pragma omp simd reduction(+:sum_exp)
+        for (int i = 0; i < n_tok; ++i)
+            sum_exp += std::exp(m_output_layer.m_inputs[static_cast<TokenID>(i)] - max_val);
 
         const float log_prob = m_output_layer.m_inputs[expected_output_token] - max_val - std::log(sum_exp);
         return -log_prob;
@@ -243,7 +243,7 @@ namespace rllm
         std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
 
         // Multi-epoch training with shuffling prevents catastrophic forgetting:
-        // each example only gets STEPS_PER_EXAMPLE_PER_EPOCH gradient updates per
+        // each example only gets 8*num_layers gradient updates per
         // pass, so no single example can overwrite all the others.
         std::mt19937 rng{42};
         const auto total_lines = training_lines.size();
@@ -268,15 +268,21 @@ namespace rllm
                 switch (m_training_method)
                 {
                 case TrainingMethod::TWO_TOK:
-                    train_with_up_to_N(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH, 2);
+                    train_with_up_to_N(
+                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size(), 2
+                    );
                     break;
 
                 case TrainingMethod::THREE_TOK:
-                    train_with_up_to_N(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH, 3);
+                    train_with_up_to_N(
+                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size(), 3
+                    );
                     break;
 
                 case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
-                    train_with_increasingly_longer_sequences(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
+                    train_with_increasingly_longer_sequences(
+                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size()
+                    );
                     break;
 
                 case TrainingMethod::WINDOW2:
@@ -322,22 +328,30 @@ namespace rllm
 
                 InputLine window;
                 for (int k = 0; k < window_size; ++k)
+                {
                     window.push_back(tokens[indices[j] + static_cast<size_t>(k)]);
 
-                total_windows_trained++;
-                if (total_windows_trained % 100 == 0)
-                {
-                    const auto line_opt = m_corpus.get_line(window);
-                    LOG_INFO(
-                        "Epoch[{}%] window[{}]: {:0.2f}% done for '{}'",
-                        epoch / static_cast<float>(num_epochs) * 100.0f,
-                        j,
-                        progress * 100.0f,
-                        line_opt.has_value() ? line_opt->c_str() : "unknown"
-                    );
-                }
+                    if (static_cast<size_t>(window.size()) < 2)
+                    {
+                        // too short for training (single input token), skip
+                        continue;
+                    }
 
-                do_training(window, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
+                    total_windows_trained++;
+                    if (total_windows_trained % 100 == 0)
+                    {
+                        const auto line_opt = m_corpus.get_line(window);
+                        LOG_INFO(
+                            "Epoch[{}%] window[{}]: {:0.2f}% done for '{}'",
+                            epoch / static_cast<float>(num_epochs) * 100.0f,
+                            j,
+                            progress * 100.0f,
+                            line_opt.has_value() ? line_opt->c_str() : "unknown"
+                        );
+                    }
+
+                    do_training(window, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size());
+                }
             }
         }
     }
@@ -382,7 +396,7 @@ namespace rllm
             static_cast<size_t>(IntermediateLayerIndex::MAX),
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
-            STEPS_PER_EXAMPLE_PER_EPOCH,
+            NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size(),
             num_epochs,
             training_method_to_string(m_training_method)
         );
@@ -423,9 +437,11 @@ namespace rllm
             if (loss < m_convergence_threshold)
             {
                 LOG_INFO_EVERY_N(
-                    "Convergence reached after {} steps for token '{}'",
+                    "Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}",
                     max_iterations,
-                    m_corpus.get_token_from_id(expected_output_token)
+                    m_corpus.get_token_from_id(expected_output_token),
+                    full_string,
+                   static_cast<size_t>(train_input.size())
                 );
                 m_stats.record_learning_success();
                 return;
@@ -448,10 +464,14 @@ namespace rllm
         }
 
         LOG_INFO(
-            "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}",
+            "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}, expected token: '{}' ({}), full string: '{}', input size: {}.",
             max_iterations,
             loss,
-            m_convergence_threshold
+            m_convergence_threshold,
+            m_corpus.get_token_from_id(expected_output_token),
+            expected_output_token,
+            full_string,
+            static_cast<size_t>(train_input.size())
         );
         m_stats.record_learning_failure();
     }

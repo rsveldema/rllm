@@ -112,11 +112,13 @@ namespace rllm
         constexpr float eps = 1e-6f;
         const int n = static_cast<int>(IntermediateLayerIndex::MAX);
         float sum_sq = 0.0f;
-        for (const auto i : enum_iterator<IntermediateLayerIndex>())
-            sum_sq += m_inputs[i] * m_inputs[i];
+#pragma omp simd reduction(+:sum_sq)
+        for (int i = 0; i < n; ++i)
+            sum_sq += m_inputs[static_cast<IntermediateLayerIndex>(i)] * m_inputs[static_cast<IntermediateLayerIndex>(i)];
         const float rms = std::sqrt(sum_sq / static_cast<float>(n) + eps);
-        for (const auto i : enum_iterator<IntermediateLayerIndex>())
-            m_inputs[i] /= rms;
+#pragma omp simd
+        for (int i = 0; i < n; ++i)
+            m_inputs[static_cast<IntermediateLayerIndex>(i)] /= rms;
     }
 
     void IntermediateLayer::propagate_forward(IntermediateLayer& next_layer)

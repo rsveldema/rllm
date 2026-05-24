@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <omp.h>
 
 namespace rllm
 {
@@ -12,13 +13,18 @@ namespace rllm
     {
         constexpr float eps = 1e-6f;
         const float n = static_cast<float>(TokenID::MAX);
-        const auto active_end = static_cast<TokenID>(TokenID::MAX);
+        const int n_int = static_cast<int>(TokenID::MAX);
         float sum_sq = 0.0f;
-        for (const auto i : enum_iterator<TokenID>(active_end))
-            sum_sq += m_inputs[i] * m_inputs[i];
+#pragma omp simd reduction(+:sum_sq)
+        for (int i = 0; i < n_int; ++i)
+            {
+                const auto k = m_inputs[static_cast<TokenID>(i)];
+                sum_sq += k * k;
+            }
         const float rms = std::sqrt(sum_sq / n + eps);
-        for (const auto i : enum_iterator<TokenID>(active_end))
-            m_inputs[i] /= rms;
+#pragma omp simd
+        for (int i = 0; i < n_int; ++i)
+            m_inputs[static_cast<TokenID>(i)] /= rms;
     }
 
     // Compute numerically-stable softmax of m_inputs and store the backprop delta
@@ -27,22 +33,24 @@ namespace rllm
     // so the delta must have the sign of (target - actual), NOT (actual - target).
     void OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
-        const auto active_end = static_cast<TokenID>(TokenID::MAX);
         // Numerically stable softmax: subtract max before exponentiation.
+        const int n_tok = static_cast<int>(TokenID::MAX);
         float max_val = m_inputs[TokenID::START];
-        for (const auto i : enum_iterator<TokenID>(active_end))
-            max_val = std::max(max_val, m_inputs[i]);
+#pragma omp simd reduction(max:max_val)
+        for (int i = 0; i < n_tok; ++i)
+            max_val = std::max(max_val, m_inputs[static_cast<TokenID>(i)]);
 
         float sum_exp = 0.0f;
-        for (const auto i : enum_iterator<TokenID>(active_end))
+#pragma omp simd reduction(+:sum_exp)
+        for (int i = 0; i < n_tok; ++i)
         {
-            score.values[i] = std::exp(m_inputs[i] - max_val);
-            sum_exp += score.values[i];
+            score.values[static_cast<TokenID>(i)] = std::exp(m_inputs[static_cast<TokenID>(i)] - max_val);
+            sum_exp += score.values[static_cast<TokenID>(i)];
         }
 
-        // delta = one_hot - softmax: target slot gets (1 - p) > 0, others get -p < 0.
-        for (const auto i : enum_iterator<TokenID>(active_end))
-            score.values[i] = -score.values[i] / sum_exp;
+#pragma omp simd
+        for (int i = 0; i < n_tok; ++i)
+            score.values[static_cast<TokenID>(i)] = -score.values[static_cast<TokenID>(i)] / sum_exp;
 
         score.values[expected_output_token] += 1.0f;
     }

@@ -56,3 +56,25 @@ add_executable(rllm src/main.cc
 target_link_libraries(rllm PRIVATE rllm_lib)
 target_include_directories(rllm PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(rllm PRIVATE -O3 -march=native)
+
+# --- Profiling target --------------------------------------------------------
+add_executable(rllm_prof src/main.cc include/LayerPrimitives.hpp)
+target_link_libraries(rllm_prof PRIVATE rllm_lib)
+target_include_directories(rllm_prof PRIVATE ${CMAKE_SOURCE_DIR}/src)
+# -O2 keeps inlining manageable; -g + no-omit-frame-pointer gives perf good stacks
+target_compile_options(rllm_prof PRIVATE -O2 -g -fno-omit-frame-pointer)
+
+set(PROFILE_ARGS "--train" "--filter" "simple" "--method" "window2" "--epochs" "5"
+    CACHE STRING "Arguments passed to rllm_prof during profiling")
+
+add_custom_target(profile
+    COMMAND perf record -F 99 --call-graph fp -o ${CMAKE_BINARY_DIR}/perf.data
+            -- $<TARGET_FILE:rllm_prof> ${PROFILE_ARGS}
+    COMMAND perf report --stdio --no-pager -n --percent-limit 1
+            -i ${CMAKE_BINARY_DIR}/perf.data
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    DEPENDS rllm_prof
+    COMMENT "Profiling rllm_prof (perf record + perf report). Override args via -DPROFILE_ARGS=..."
+    VERBATIM
+)
+# -----------------------------------------------------------------------------

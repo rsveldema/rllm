@@ -170,9 +170,8 @@ def create_tokenizer_map(text):
     # each file contains a list of predefined words, one per line,
     # that should also be included as tokens:
     predefined_words = read_all_files_in_directory("predefined_words")
-    split = split_text_using_seperators(predefined_words, seperators)
-    split = get_unique_words(split) # guard against duplicates in the predefined word lists, we only want unique tokens
-    tokens.extend(split)
+    predefined_split = split_text_using_seperators(predefined_words, seperators)
+    predefined_split = get_unique_words(predefined_split)
 
     # split the text into words on the seperators,
     # and also include the seperators as tokens:
@@ -180,6 +179,13 @@ def create_tokenizer_map(text):
     split = split_camel_case_words(split)
     split = get_unique_words_with_frequency(split)
     bpe_tokens = compute_bpe_tokens(split)
+
+    # strip EOW markers from BPE tokens to get the set of base strings they cover
+    bpe_base_strings = {t[:-len(EOW_MARKER)] if t.endswith(EOW_MARKER) else t for t in bpe_tokens}
+
+    # only add predefined words not already covered by a BPE token
+    filtered_predefined = [w for w in predefined_split if w not in bpe_base_strings]
+    tokens.extend(filtered_predefined)
     tokens.extend(bpe_tokens)
 
     # Create a dictionary to count the frequency of each token.
