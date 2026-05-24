@@ -4,7 +4,6 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <Corpus.hpp>
-#include <vector>
 
 namespace rllm
 {
@@ -12,7 +11,7 @@ namespace rllm
     // transformer block's hidden state at the final sequence position to
     // vocabulary logits, plus the scoring and serialisation logic.
     //
-    // W_lm_head is [TokenID::MAX × EmbeddingDimension::MAX] (out × in), heap-allocated.
+    // W_lm_head is [TokenID::MAX × EmbeddingDimension::MAX] (out × in).
     class OutputLayer
     {
       public:
@@ -25,13 +24,13 @@ namespace rllm
         void set_random_weights();
 
         // Project h_last[D_MODEL] to vocabulary logits, storing them in m_inputs.
-        void forward_from_hidden(const std::vector<float>& h_last);
+        void forward_from_hidden(const template_token_vector<float, EmbeddingDimension>& h_last);
 
         // Backpropagate the output delta through W_lm_head.
         // Returns d_h_last[D_MODEL] = ∂L/∂h_last and updates W_lm_head via SGD+momentum.
-        std::vector<float> backward_and_update(
+        template_token_vector<float, EmbeddingDimension> backward_and_update(
             const template_token_vector<float, TokenID>& delta,
-            const std::vector<float>& h_last,
+            const template_token_vector<float, EmbeddingDimension>& h_last,
             float learning_rate
         );
 
@@ -49,8 +48,8 @@ namespace rllm
         const Corpus& m_corpus;
 
         // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
-        std::vector<float> W_lm_head;
-        std::vector<float> V_lm_head;  // SGD momentum velocities
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> W_lm_head;
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> V_lm_head;  // SGD momentum velocities
     };
 
 } // namespace rllm

@@ -30,12 +30,13 @@ TEST(TransformerBlockTest, ForwardOutputShape)
 
     const int T = TEST_SEQ_LEN;
     const int D = rllm::TransformerBlock::D_MODEL;
-    std::vector<float> h(T * D, 0.1f);
+    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
+        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    h.fill(0.1f);
 
-    block->forward(h, T);
+    block->forward(h, static_cast<rllm::PositionIndex>(T));
 
-    ASSERT_EQ(static_cast<int>(h.size()), T * D)
-        << "forward() must not change the size of h";
+    ASSERT_EQ(static_cast<size_t>(h.num_rows()), static_cast<size_t>(rllm::PositionIndex::MAX));
 }
 
 // ---------------------------------------------------------------------------
@@ -48,13 +49,19 @@ TEST(TransformerBlockTest, BackwardOutputShape)
 
     const int T = TEST_SEQ_LEN;
     const int D = rllm::TransformerBlock::D_MODEL;
-    std::vector<float> h(T * D, 0.05f);
-    block->forward(h, T);
+    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
+        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    h.fill(0.05f);
+    block->forward(h, static_cast<rllm::PositionIndex>(T));
 
-    std::vector<float> dout(T * D, 0.01f);
-    const auto din = block->backward(dout, 0.01f);
+    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
+        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    dout.fill(0.01f);
+    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
+        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    block->backward(dout, din, 0.01f);
 
-    ASSERT_EQ(static_cast<int>(din.size()), T * D)
+    ASSERT_EQ(static_cast<int>(din.num_rows()) * static_cast<int>(din.num_cols()), T * D)
         << "backward() must return a gradient of the same size as the input";
 }
 
@@ -73,15 +80,17 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
 
     const int T = BENCH_SEQ_LEN;
     const int D = rllm::TransformerBlock::D_MODEL;
-    const std::vector<float> h_template(T * D, 0.1f);
+    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
+        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    h_template.fill(0.1f);
 
     // --- serial baseline (1 thread) ---
     omp_set_num_threads(1);
     const auto t0 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
-        std::vector<float> h = h_template;
-        block->forward(h, T);
+        auto h = h_template;
+        block->forward(h, static_cast<rllm::PositionIndex>(T));
     }
     const auto t1 = std::chrono::steady_clock::now();
 
@@ -90,8 +99,8 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     const auto t2 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
-        std::vector<float> h = h_template;
-        block->forward(h, T);
+        auto h = h_template;
+        block->forward(h, static_cast<rllm::PositionIndex>(T));
     }
     const auto t3 = std::chrono::steady_clock::now();
 

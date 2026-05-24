@@ -108,6 +108,13 @@ namespace rllm
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
+    // Index of an attention head (0..NUM_HEADS-1).
+    enum class HeadsIndex : size_t
+    {
+        START = 0,
+        MAX   = 8
+    };
+
     // Feed-forward hidden dimension: D_FF = 4 × EmbeddingDimension::MAX.
     enum class FFDimension : size_t
     {
@@ -142,6 +149,12 @@ namespace rllm
         assert(id != PositionIndex::UNKNOWN_POSITION_INDEX);
         assert(id < PositionIndex::MAX);
         return static_cast<PositionIndex>(static_cast<int32_t>(id) + 1);
+    }
+
+    static inline HeadsIndex inc(HeadsIndex id)
+    {
+        assert(id < HeadsIndex::MAX);
+        return static_cast<HeadsIndex>(static_cast<size_t>(id) + 1);
     }
 
     static inline FFDimension inc(FFDimension id)
@@ -310,17 +323,122 @@ namespace rllm
 
 
     template <typename ElementType, typename X, typename Y>
-    class template_token_matrix
+    class flexible_size_matrix
     {
       public:
         static constexpr size_t ROWS = static_cast<size_t>(X::MAX);
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
-        template_token_matrix()
+        flexible_size_matrix()
+        : m_rows(X::MAX), m_cols(Y::MAX)
         {
             m_data.fill(ElementType{});
         }
-        ~template_token_matrix() = default;
+
+        flexible_size_matrix(X rows, Y cols)
+        : m_rows(rows), m_cols(cols)
+        {
+            m_data.fill(ElementType{});
+        }
+        ~flexible_size_matrix() = default;
+
+        void set_size(X rows, Y cols)
+        {
+            assert(static_cast<size_t>(rows) <= ROWS);
+            assert(static_cast<size_t>(cols) <= COLS);
+            m_rows = rows;
+            m_cols = cols;
+        }
+
+        void set(const X x, const Y y, ElementType value)
+        {
+            assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
+            assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
+            m_data[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)] = value;
+        }
+
+        void set(const std::pair<const X, const Y>& indices, ElementType value)
+        {
+            set(indices.first, indices.second, value);
+        }
+
+        const ElementType& get(const X x, const Y y) const
+        {
+            assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
+            assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
+            return m_data[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
+        }
+
+        const ElementType& get(const std::pair<const X, const Y>& indices) const
+        {
+            return get(indices.first, indices.second);
+        }
+
+        ElementType& operator[](X x, Y y)
+        {
+            assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
+            assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
+            return m_data[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
+        }
+
+        const ElementType& operator[](X x, Y y) const
+        {
+            assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
+            assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
+            return m_data[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
+        }
+
+        void fill(ElementType value)
+        {
+            m_data.fill(value);
+        }
+
+        void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
+        {
+            assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
+            assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
+            auto& cell = m_data[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
+            cell = std::clamp(cell + delta, range.lo, range.hi);
+        }
+
+        void add_with_clamp(const std::pair<const X, const Y>& indices, ElementType delta, Range<ElementType> range)
+        {
+            add_with_clamp(indices.first, indices.second, delta, range);
+        }
+
+        void add_no_clamp(const X x, const Y y, ElementType delta)
+        {
+            assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
+            assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
+            m_data[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)] += delta;
+        }
+
+        // Flat pointer access for BLAS-style routines.  Layout: row-major [ROWS × COLS].
+        ElementType*       data()       { return m_data.data(); }
+        const ElementType* data() const { return m_data.data(); }
+
+        X num_rows() const { return m_rows; }
+        Y num_cols() const { return m_cols; }
+
+      private:
+        using flat_data_t = std::array<ElementType, ROWS * COLS>;
+        flat_data_t m_data;
+        X m_rows;
+        Y m_cols;
+    };
+
+    template <typename ElementType, typename X, typename Y>
+    class fixed_size_matrix
+    {
+      public:
+        static constexpr size_t ROWS = static_cast<size_t>(X::MAX);
+        static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
+
+        fixed_size_matrix()
+        {
+            m_data.fill(ElementType{});
+        }
+        ~fixed_size_matrix() = default;
 
         void set(const X x, const Y y, ElementType value)
         {
@@ -344,6 +462,20 @@ namespace rllm
         const ElementType& get(const std::pair<const X, const Y>& indices) const
         {
             return get(indices.first, indices.second);
+        }
+
+        ElementType& operator[](X x, Y y)
+        {
+            assert(static_cast<size_t>(x) < ROWS);
+            assert(static_cast<size_t>(y) < COLS);
+            return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+        }
+
+        const ElementType& operator[](X x, Y y) const
+        {
+            assert(static_cast<size_t>(x) < ROWS);
+            assert(static_cast<size_t>(y) < COLS);
+            return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         void fill(ElementType value)

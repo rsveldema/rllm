@@ -16,26 +16,22 @@ namespace rllm
     OutputLayer::OutputLayer(const Corpus& corpus)
         : m_corpus(corpus)
     {
-        const int V = static_cast<int>(TokenID::MAX);
-        const int D = static_cast<int>(EmbeddingDimension::MAX);
-        W_lm_head.assign(V * D, 0.f);
-        V_lm_head.assign(V * D, 0.f);
     }
 
     void OutputLayer::set_random_weights()
     {
-        const int  D     = static_cast<int>(EmbeddingDimension::MAX);
+        const int   D     = static_cast<int>(EmbeddingDimension::MAX);
         const float scale = 1.0f / std::sqrt(static_cast<float>(D));
-        for (float& w : W_lm_head) w = get_random_value(-scale, scale);
-        std::fill(V_lm_head.begin(), V_lm_head.end(), 0.f);
+        const int   n     = static_cast<int>(W_lm_head.ROWS * W_lm_head.COLS);
+        for (int i = 0; i < n; ++i) W_lm_head.data()[i] = get_random_value(-scale, scale);
+        V_lm_head.fill(0.f);
     }
 
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
-    void OutputLayer::forward_from_hidden(const std::vector<float>& h_last)
+    void OutputLayer::forward_from_hidden(const template_token_vector<float, EmbeddingDimension>& h_last)
     {
         const int V = static_cast<int>(TokenID::MAX);
         const int D = static_cast<int>(EmbeddingDimension::MAX);
-        assert(static_cast<int>(h_last.size()) == D);
 
         m_inputs.fill(0.f);
 #pragma omp parallel for schedule(static)
@@ -44,23 +40,23 @@ namespace rllm
             const float* w_row = W_lm_head.data() + v * D;
             float sum = 0.f;
 #pragma omp simd reduction(+:sum)
-            for (int d = 0; d < D; ++d) sum += h_last[d] * w_row[d];
+            for (int d = 0; d < D; ++d) sum += h_last[static_cast<EmbeddingDimension>(d)] * w_row[d];
             m_inputs[static_cast<TokenID>(v)] = sum;
         }
     }
 
     // Returns dL/dh_last[D] and updates W_lm_head.
-    std::vector<float> OutputLayer::backward_and_update(
+    template_token_vector<float, EmbeddingDimension> OutputLayer::backward_and_update(
         const template_token_vector<float, TokenID>& delta,
-        const std::vector<float>&                    h_last,
+        const template_token_vector<float, EmbeddingDimension>& h_last,
         float                                        learning_rate
     )
     {
         const int V = static_cast<int>(TokenID::MAX);
         const int D = static_cast<int>(EmbeddingDimension::MAX);
-        assert(static_cast<int>(h_last.size()) == D);
 
-        std::vector<float> dh(D, 0.f);
+        template_token_vector<float, EmbeddingDimension> dh;
+        dh.fill(0.f);
 
         for (int v = 0; v < V; ++v)
         {
@@ -71,8 +67,8 @@ namespace rllm
 #pragma omp simd
             for (int d = 0; d < D; ++d)
             {
-                dh[d] += dv * w_row[d];
-                const float g = std::clamp(dv * h_last[d], -GRAD_CLIP, GRAD_CLIP);
+                dh[static_cast<EmbeddingDimension>(d)] += dv * w_row[d];
+                const float g = std::clamp(dv * h_last[static_cast<EmbeddingDimension>(d)], -GRAD_CLIP, GRAD_CLIP);
                 vel[d]   = std::clamp(MOMENTUM_BETA * vel[d] + learning_rate * g, -VEL_CLIP, VEL_CLIP);
                 w_row[d] = std::clamp(w_row[d] + vel[d], -WEIGHT_CLAMP, WEIGHT_CLAMP);
             }

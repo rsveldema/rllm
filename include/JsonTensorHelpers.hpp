@@ -39,7 +39,7 @@ namespace rllm::json_helpers
     }
 
     template <typename T, typename X, typename Y>
-    nlohmann::json serialize_matrix(const template_token_matrix<T, X, Y>& m)
+    nlohmann::json serialize_matrix(const fixed_size_matrix<T, X, Y>& m)
     {
         auto rows = nlohmann::json::array();
 
@@ -57,7 +57,7 @@ namespace rllm::json_helpers
     }
 
     template <typename T, typename X, typename Y>
-    void deserialize_matrix(const nlohmann::json& j, template_token_matrix<T, X, Y>& m)
+    void deserialize_matrix(const nlohmann::json& j, fixed_size_matrix<T, X, Y>& m)
     {
         if (!j.is_array() || j.size() != enum_max<X>())
         {
@@ -83,7 +83,7 @@ namespace rllm::json_helpers
 
     template <typename X, typename Y>
     nlohmann::json serialize_connection_matrix(
-        const template_token_matrix<std::pair<rllm::IntermediateLayerIndex, PositionIndex>, X, Y>& m
+        const fixed_size_matrix<std::pair<rllm::IntermediateLayerIndex, PositionIndex>, X, Y>& m
     )
     {
         auto rows = nlohmann::json::array();
@@ -107,7 +107,7 @@ namespace rllm::json_helpers
     template <typename X, typename Y>
     void deserialize_connection_matrix(
         const nlohmann::json& j,
-        template_token_matrix<std::pair<rllm::IntermediateLayerIndex, rllm::PositionIndex>, X, Y>& m
+        fixed_size_matrix<std::pair<rllm::IntermediateLayerIndex, rllm::PositionIndex>, X, Y>& m
     )
     {
         if (!j.is_array() || j.size() != rllm::json_helpers::enum_max<X>())
@@ -145,7 +145,7 @@ namespace rllm::json_helpers
 
     template <typename X, typename Y>
     nlohmann::json serialize_multi_connection_matrix(
-        const template_token_matrix<std::vector<std::pair<rllm::IntermediateLayerIndex, PositionIndex>>, X, Y>& m
+        const fixed_size_matrix<std::vector<std::pair<rllm::IntermediateLayerIndex, PositionIndex>>, X, Y>& m
     )
     {
         auto rows = nlohmann::json::array();
@@ -167,7 +167,7 @@ namespace rllm::json_helpers
     template <typename X, typename Y>
     void deserialize_multi_connection_matrix(
         const nlohmann::json& j,
-        template_token_matrix<std::vector<std::pair<rllm::IntermediateLayerIndex, rllm::PositionIndex>>, X, Y>& m
+        fixed_size_matrix<std::vector<std::pair<rllm::IntermediateLayerIndex, rllm::PositionIndex>>, X, Y>& m
     )
     {
         if (!j.is_array() || j.size() != rllm::json_helpers::enum_max<X>())

@@ -74,8 +74,8 @@ namespace rllm
         OutputLayer m_output_layer;
 
         // Hidden state at the final position after the last transformer block.
-        std::vector<float> m_last_hidden;
-        int m_seq_len{0};
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> m_last_hidden;
+        PositionIndex m_seq_len{PositionIndex::START};
 
         // Computed from the actual corpus size.
         const float m_fires_nothing_ce_loss;

@@ -45,10 +45,10 @@ namespace rllm
         assert(!m_transformer_blocks.empty());
 
         m_last_input = input;
-        m_seq_len    = static_cast<int>(input.size());
+        m_seq_len    = static_cast<PositionIndex>(input.size());
 
         // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
-        std::vector<float> h;
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> h(m_seq_len, EmbeddingDimension::MAX);
         m_input_layer.propagate_forward(input, h);
 
         // Pass through each transformer block in order
@@ -60,7 +60,9 @@ namespace rllm
 
         // Project the last-position hidden state to vocabulary logits
         const int D = TransformerBlock::D_MODEL;
-        std::vector<float> h_last(h.end() - D, h.end());
+        const int T = static_cast<int>(m_seq_len);
+        template_token_vector<float, EmbeddingDimension> h_last;
+        { const float* src = h.data() + (T - 1) * D; for (int d = 0; d < D; ++d) h_last[static_cast<EmbeddingDimension>(d)] = src[d]; }
         m_output_layer.forward_from_hidden(h_last);
     }
 
@@ -116,18 +118,28 @@ namespace rllm
 
         // Backpropagate through LM head → get dL/dh_last
         const int D = TransformerBlock::D_MODEL;
-        std::vector<float> h_last(m_last_hidden.end() - D, m_last_hidden.end());
-        std::vector<float> dh_last =
+        const int T = static_cast<int>(m_seq_len);
+        std::vector<float> h_last_vec(m_last_hidden.data() + (T-1)*D, m_last_hidden.data() + T*D);
+        template_token_vector<float, EmbeddingDimension> h_last;
+        for (int d = 0; d < D; ++d) h_last[static_cast<EmbeddingDimension>(d)] = h_last_vec[d];
+        auto dh_last =
             m_output_layer.backward_and_update(*output_layer_delta, h_last, LEARNING_RATE);
 
         // Initialise full-sequence gradient: zero everywhere except the last position
-        std::vector<float> dh(m_seq_len * D, 0.f);
+
+
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> dh(m_seq_len, EmbeddingDimension::MAX);
+        dh.fill(0.f);
         for (int d = 0; d < D; ++d)
-            dh[(m_seq_len - 1) * D + d] = dh_last[d];
+            dh.data()[(static_cast<int>(m_seq_len) - 1) * D + d] = dh_last[static_cast<EmbeddingDimension>(d)];
 
         // Backward through transformer blocks in reverse order
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> din(m_seq_len, EmbeddingDimension::MAX);
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
-            dh = m_transformer_blocks[i].backward(dh, LEARNING_RATE);
+        {
+            m_transformer_blocks[i].backward(dh, din, LEARNING_RATE);
+            dh = din;
+        }
 
         // Update token embeddings
         m_input_layer.propagate_backward(m_last_input, dh, LEARNING_RATE);

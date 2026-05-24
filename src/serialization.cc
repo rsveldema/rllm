@@ -42,18 +42,18 @@ namespace rllm
         if (j.contains("W_lm_head"))
         {
             const auto& w_j = j.at("W_lm_head");
-            W_lm_head.resize(w_j.size());
-            for (size_t i = 0; i < W_lm_head.size(); ++i)
-                W_lm_head[i] = w_j.at(i).template get<float>();
+            for (size_t i = 0; i < w_j.size(); ++i)
+                W_lm_head.data()[i] = w_j.at(i).template get<float>();
         }
-        V_lm_head.assign(W_lm_head.size(), 0.f);
+        V_lm_head.fill(0.f);
     }
 
     nlohmann::json OutputLayer::save() const
     {
         auto w_j = nlohmann::json::array();
-        w_j.get_ref<nlohmann::json::array_t&>().reserve(W_lm_head.size());
-        for (float v : W_lm_head) w_j.push_back(v);
+        const size_t n = W_lm_head.ROWS * W_lm_head.COLS;
+        w_j.get_ref<nlohmann::json::array_t&>().reserve(n);
+        for (size_t i = 0; i < n; ++i) w_j.push_back(W_lm_head.data()[i]);
         return {{"W_lm_head", std::move(w_j)}};
     }
 

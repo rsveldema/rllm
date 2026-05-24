@@ -23,13 +23,13 @@ namespace rllm
         InputLayer& operator=(const InputLayer&) = delete;
 
         // Fill h[seq_len × D_MODEL] with (token_embedding + positional_encoding).
-        void propagate_forward(const InputLine& input, std::vector<float>& h) const;
+        void propagate_forward(const InputLine& input, flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& h) const;
 
         // Update token embeddings using dh[seq_len × D_MODEL] = ∂L/∂h.
         // Positional encodings are fixed (sinusoidal), so only embeddings change.
         void propagate_backward(
             const InputLine& input,
-            const std::vector<float>& dh,
+            const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dh,
             float learning_rate
         );
 
