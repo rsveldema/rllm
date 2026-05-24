@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 
 namespace rllm
 {
@@ -15,63 +16,64 @@ namespace rllm
 
     void InputLayer::set_random_embeddings()
     {
-        // Xavier-style init: small uniform values so the first intermediate layer
-        // starts with a reasonable signal spread.
         for (const auto tok : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
                 m_embeddings[tok][d] = get_random_value(-0.1f, 0.1f);
     }
 
-    void InputLayer::propagate_forward(const InputLine& input, IntermediateLayer& next_layer) const
+    // Fill h[T × D_MODEL] = token_embedding + sinusoidal positional encoding.
+    // PE[pos, 2i]   = sin(pos / 10000^(2i / D_MODEL))
+    // PE[pos, 2i+1] = cos(pos / 10000^(2i / D_MODEL))
+    void InputLayer::propagate_forward(const InputLine& input, std::vector<float>& h) const
     {
-        next_layer.fill_inputs(0.0f);
+        const int T = static_cast<int>(input.size());
+        const int D = static_cast<int>(EmbeddingDimension::MAX);
+        assert(T > 0);
+        assert(T <= static_cast<int>(PositionIndex::MAX));
 
-        assert(!input.empty());
-        assert(input.size() <= PositionIndex::MAX);
+        h.resize(T * D);
 
-        // Each position p owns neurons [p*EmbeddingDimension::MAX, p*EmbeddingDimension::MAX + EmbeddingDimension::MAX).
-        // Writing the token's learned embedding into those neurons gives the network a
-        // continuous, updatable representation of each (token, position) pair.
-
-        #pragma omp parallel for schedule(static)
-        for (const auto pos : enum_iterator<PositionIndex>(input.size()))
+        for (int pos = 0; pos < T; ++pos)
         {
-            const TokenID tok = input[pos];
-            assert(tok != TokenID::UNKNOWN_TOKEN_ID);
+            const TokenID    tok    = input[static_cast<PositionIndex>(pos)];
+            const auto&      embed  = m_embeddings[tok];
+            float*           h_pos  = h.data() + pos * D;
 
-            const auto& embed = m_embeddings[tok];
-            const size_t base = static_cast<size_t>(pos) * static_cast<size_t>(EmbeddingDimension::MAX);
-
-            for (const auto d : enum_iterator<EmbeddingDimension>())
+            for (int di = 0; di < D; ++di)
             {
-                const auto idx = static_cast<IntermediateLayerIndex>(base + static_cast<size_t>(d));
-                next_layer.accumulate_input(idx, embed[d], Range<float>{MIN_NEURON_INPUT, MAX_NEURON_INPUT});
+                const float emb_val = embed[static_cast<EmbeddingDimension>(di)];
+                // Sinusoidal PE: dimension di uses frequency 10000^(floor(di/2)*2 / D)
+                const float freq = 1.0f /
+                    std::pow(10000.0f, static_cast<float>(di & ~1) / static_cast<float>(D));
+                const float pe = (di % 2 == 0)
+                    ? std::sin(static_cast<float>(pos) * freq)
+                    : std::cos(static_cast<float>(pos) * freq);
+                h_pos[di] = emb_val + pe;
             }
         }
     }
 
+    // Update token embeddings.  dh[T × D_MODEL] = ∂L/∂h.
+    // Positional encodings are fixed, so only the embedding contribution is updated.
     void InputLayer::propagate_backward(
-        const InputLine& input,
-        const template_token_vector<float, IntermediateLayerIndex>& delta,
-        float learning_rate
+        const InputLine&          input,
+        const std::vector<float>& dh,
+        float                     learning_rate
     )
     {
-        // delta[i] = ∂L/∂(first_intermediate_layer.m_inputs[i]).
-        // Since the forward pass sets m_inputs[base+d] = embed[tok][d] directly,
-        // ∂L/∂embed[tok][d] = delta[base+d], so we nudge the embedding in that direction.
-        for (const auto pos : enum_iterator<PositionIndex>(input.size()))
+        const int D = static_cast<int>(EmbeddingDimension::MAX);
+        const int T = static_cast<int>(input.size());
+
+        for (int pos = 0; pos < T; ++pos)
         {
-            const TokenID tok = input[pos];
-            assert(tok != TokenID::UNKNOWN_TOKEN_ID);
+            const TokenID tok    = input[static_cast<PositionIndex>(pos)];
+            auto&         embed  = m_embeddings[tok];
+            const float*  dh_pos = dh.data() + pos * D;
 
-            auto& embed = m_embeddings[tok];
-            const size_t base = static_cast<size_t>(pos) * static_cast<size_t>(EmbeddingDimension::MAX);
-
-
-            for (const auto d : enum_iterator<EmbeddingDimension>())
+            for (int di = 0; di < D; ++di)
             {
-                const auto idx = static_cast<IntermediateLayerIndex>(base + static_cast<size_t>(d));
-                embed[d] = std::clamp(embed[d] + learning_rate * delta[idx], -1.0f, 1.0f);
+                auto& e = embed[static_cast<EmbeddingDimension>(di)];
+                e = std::clamp(e + learning_rate * dh_pos[di], -1.0f, 1.0f);
             }
         }
     }

@@ -42,21 +42,26 @@ namespace rllm
 
     void NeuralNetwork::propagate_forward(const InputLine& input)
     {
-        assert(!m_intermediate_layers.empty());
+        assert(!m_transformer_blocks.empty());
 
-        m_last_input = input; // retained for embedding backprop
+        m_last_input = input;
+        m_seq_len    = static_cast<int>(input.size());
 
-        // Propagate from input layer into the first intermediate layer.
-        m_input_layer.propagate_forward(input, m_intermediate_layers.front());
+        // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
+        std::vector<float> h;
+        m_input_layer.propagate_forward(input, h);
 
-        // Propagate across intermediate layers.
-        for (size_t i = 0; i < (m_intermediate_layers.size() - 1); ++i)
-        {
-            m_intermediate_layers[i].propagate_forward(m_intermediate_layers[i + 1]);
-        }
+        // Pass through each transformer block in order
+        for (auto& block : m_transformer_blocks)
+            block.forward(h, m_seq_len);
 
-        // Propagate from the last intermediate layer into the output layer.
-        m_intermediate_layers.back().propagate_forward_to_output(m_output_layer);
+        // Keep full hidden state for backward pass
+        m_last_hidden = h;
+
+        // Project the last-position hidden state to vocabulary logits
+        const int D = TransformerBlock::D_MODEL;
+        std::vector<float> h_last(h.end() - D, h.end());
+        m_output_layer.forward_from_hidden(h_last);
     }
 
 
@@ -86,7 +91,7 @@ namespace rllm
     // Do not try to return any if the activation is 0 or negative, as that means the token did not activate at all.
     std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k) const
     {
-        assert(!m_intermediate_layers.empty());
+        assert(!m_transformer_blocks.empty());
 
         std::vector<OutputToken> top_k_pairs;
         for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
@@ -106,40 +111,34 @@ namespace rllm
     {
         static constexpr float LEARNING_RATE = 0.01f;
 
-        // delta[i] = signed error: target - actual.
-        // Positive  → neuron fires too little  → increase weight.
-        // Negative  → neuron fires too much    → decrease weight.
-
         auto output_layer_delta = std::make_unique<template_token_vector<float, TokenID>>();
         m_output_layer.compute_deltas(score, *output_layer_delta);
 
-        auto delta = std::make_unique<template_token_vector<float, IntermediateLayerIndex>>();
-        auto prev_delta = std::make_unique<template_token_vector<float, IntermediateLayerIndex>>();
-        m_intermediate_layers.back().propagate_backward_from_output_layer(*output_layer_delta, *delta, LEARNING_RATE);
+        // Backpropagate through LM head → get dL/dh_last
+        const int D = TransformerBlock::D_MODEL;
+        std::vector<float> h_last(m_last_hidden.end() - D, m_last_hidden.end());
+        std::vector<float> dh_last =
+            m_output_layer.backward_and_update(*output_layer_delta, h_last, LEARNING_RATE);
 
-        // Walk backwards through the remaining layers.
-        assert(m_intermediate_layers.size() >= 2);
-        for (int l = static_cast<int>(m_intermediate_layers.size()) - 2; l >= 0; --l)
-        {
-            prev_delta->fill(0.0f);
-            m_intermediate_layers[l].propagate_backward(*delta, *prev_delta, LEARNING_RATE);
-            *delta = *prev_delta;
-        }
+        // Initialise full-sequence gradient: zero everywhere except the last position
+        std::vector<float> dh(m_seq_len * D, 0.f);
+        for (int d = 0; d < D; ++d)
+            dh[(m_seq_len - 1) * D + d] = dh_last[d];
 
-        // After the loop *delta = ∂L/∂(first_intermediate_layer.m_inputs).
-        // Pass it to the input layer so the embeddings can be updated.
-        m_input_layer.propagate_backward(m_last_input, *delta, LEARNING_RATE);
+        // Backward through transformer blocks in reverse order
+        for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
+            dh = m_transformer_blocks[i].backward(dh, LEARNING_RATE);
+
+        // Update token embeddings
+        m_input_layer.propagate_backward(m_last_input, dh, LEARNING_RATE);
     }
 
 
     void NeuralNetwork::set_random_weights_and_connections()
     {
         m_input_layer.set_random_embeddings();
-        for (size_t i = 0; i < m_intermediate_layers.size() - 1; ++i)
-        {
-            m_intermediate_layers[i].set_random_weights_and_connections();
-        }
-        m_intermediate_layers.back().set_random_weights_and_connections_to_output_layer();
+        for (auto& block : m_transformer_blocks) block.randomize();
+        m_output_layer.set_random_weights();
     }
 
 
@@ -269,19 +268,19 @@ namespace rllm
                 {
                 case TrainingMethod::TWO_TOK:
                     train_with_up_to_N(
-                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size(), 2
+                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(), 2
                     );
                     break;
 
                 case TrainingMethod::THREE_TOK:
                     train_with_up_to_N(
-                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size(), 3
+                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(), 3
                     );
                     break;
 
                 case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
                     train_with_increasingly_longer_sequences(
-                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size()
+                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size()
                     );
                     break;
 
@@ -349,7 +348,7 @@ namespace rllm
                         );
                     }
 
-                    do_training(window, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size());
+                    do_training(window, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size());
                 }
             }
         }
@@ -379,12 +378,12 @@ namespace rllm
             "\t steps per example per epoch: {}\n"
             "\t num epochs: {}\n"
             "\t training method: {}\n",
-            m_intermediate_layers.size(),
+            m_transformer_blocks.size(),
             static_cast<size_t>(TokenID::MAX),
             static_cast<size_t>(IntermediateLayerIndex::MAX),
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
-            NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_intermediate_layers.size(),
+            NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(),
             num_epochs,
             training_method_to_string(m_training_method)
         );

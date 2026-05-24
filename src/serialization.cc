@@ -36,80 +36,25 @@ namespace rllm
         return {{"embeddings", std::move(emb_j)}};
     }
 
-    void OutputLayer::load(const nlohmann::json& )
+    void OutputLayer::load(const nlohmann::json& j)
     {
         m_inputs.fill(0.0f);
+        if (j.contains("W_lm_head"))
+        {
+            const auto& w_j = j.at("W_lm_head");
+            W_lm_head.resize(w_j.size());
+            for (size_t i = 0; i < W_lm_head.size(); ++i)
+                W_lm_head[i] = w_j.at(i).template get<float>();
+        }
+        V_lm_head.assign(W_lm_head.size(), 0.f);
     }
 
     nlohmann::json OutputLayer::save() const
     {
-        return {
-        };
-    }
-
-    void IntermediateLayer::load(const nlohmann::json& j)
-    {
-        m_inputs.fill(0.0f);
-
-        const auto& conns_j = j.at("connections");
-        if (!conns_j.is_array() || conns_j.size() != static_cast<size_t>(IntermediateLayerIndex::MAX))
-            throw std::runtime_error("connections array has wrong size");
-
-        for (size_t i = 0; i < static_cast<size_t>(IntermediateLayerIndex::MAX); ++i)
-        {
-            const auto idx = static_cast<IntermediateLayerIndex>(i);
-            auto& vec = m_connections[idx];
-            vec.clear();
-            for (const auto& c : conns_j.at(i))
-            {
-                vec.push_back({
-                    .target_neuron = static_cast<IntermediateLayerIndex>(c.at("target").template get<size_t>()),
-                    .weight        = c.at("weight").template get<float>()
-                });
-            }
-        }
-
-        // attention gate weights (optional for backwards compatibility)
-        if (j.contains("attn_weights"))
-        {
-            const auto& aw_j = j.at("attn_weights");
-            for (size_t i = 0; i < static_cast<size_t>(IntermediateLayerIndex::MAX); ++i)
-                m_attn_weights[static_cast<IntermediateLayerIndex>(i)] = aw_j.at(i).template get<float>();
-        }
-        else
-        {
-            // initialise to 1 so existing checkpoints behave as before (gate = sigmoid(x))
-            m_attn_weights.fill(1.0f);
-        }
-        m_attn_vel.fill(0.0f);
-    }
-
-    nlohmann::json IntermediateLayer::save() const
-    {
-        auto conns_j = nlohmann::json::array();
-        for (size_t i = 0; i < static_cast<size_t>(IntermediateLayerIndex::MAX); ++i)
-        {
-            const auto idx = static_cast<IntermediateLayerIndex>(i);
-            auto neuron_conns = nlohmann::json::array();
-            for (const auto ci : enum_iterator<NeuronConnectionIndex>(m_connections[idx].size()))
-            {
-                const auto& c = m_connections[idx][ci];
-                neuron_conns.push_back({
-                    {"target", static_cast<size_t>(c.target_neuron)},
-                    {"weight", c.weight}
-                });
-            }
-            conns_j.push_back(std::move(neuron_conns));
-        }
-        return {{
-            "connections", std::move(conns_j)},
-            {"attn_weights", [this]{
-                auto aw = nlohmann::json::array();
-                for (size_t i = 0; i < static_cast<size_t>(IntermediateLayerIndex::MAX); ++i)
-                    aw.push_back(m_attn_weights[static_cast<IntermediateLayerIndex>(i)]);
-                return aw;
-            }()}
-        };
+        auto w_j = nlohmann::json::array();
+        w_j.get_ref<nlohmann::json::array_t&>().reserve(W_lm_head.size());
+        for (float v : W_lm_head) w_j.push_back(v);
+        return {{"W_lm_head", std::move(w_j)}};
     }
 
 
@@ -131,18 +76,16 @@ namespace rllm
 
             m_input_layer.load(j.at("input_layer"));
 
-            const auto& layers_j = j.at("intermediate_layers");
-            if (!layers_j.is_array())
+            if (j.contains("transformer_blocks"))
             {
-                throw std::runtime_error("intermediate_layers must be an array");
-            }
-
-            m_intermediate_layers.clear();
-            m_intermediate_layers.reserve(layers_j.size());
-            for (const auto& layer_j : layers_j)
-            {
-                m_intermediate_layers.emplace_back(m_corpus);
-                m_intermediate_layers.back().load(layer_j);
+                const auto& blocks_j = j.at("transformer_blocks");
+                m_transformer_blocks.clear();
+                m_transformer_blocks.reserve(blocks_j.size());
+                for (const auto& b : blocks_j)
+                {
+                    m_transformer_blocks.emplace_back();
+                    m_transformer_blocks.back().load(b);
+                }
             }
 
             m_output_layer.load(j.at("output_layer"));
@@ -161,12 +104,10 @@ namespace rllm
 
         j["input_layer"] = m_input_layer.save();
 
-        auto layers = nlohmann::json::array();
-        for (const auto& layer : m_intermediate_layers)
-        {
-            layers.push_back(layer.save());
-        }
-        j["intermediate_layers"] = std::move(layers);
+        auto blocks = nlohmann::json::array();
+        for (const auto& block : m_transformer_blocks)
+            blocks.push_back(block.save());
+        j["transformer_blocks"] = std::move(blocks);
 
         j["output_layer"] = m_output_layer.save();
 

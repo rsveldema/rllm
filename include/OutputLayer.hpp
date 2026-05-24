@@ -4,40 +4,53 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <Corpus.hpp>
+#include <vector>
 
 namespace rllm
 {
+    // OutputLayer holds the learned linear projection ("LM head") from the last
+    // transformer block's hidden state at the final sequence position to
+    // vocabulary logits, plus the scoring and serialisation logic.
+    //
+    // W_lm_head is [TokenID::MAX × EmbeddingDimension::MAX] (out × in), heap-allocated.
     class OutputLayer
     {
       public:
-        OutputLayer(const Corpus& corpus)
-            : m_corpus(corpus)
-        {}
+        OutputLayer(const Corpus& corpus);
         ~OutputLayer() = default;
         OutputLayer(const OutputLayer&) = delete;
         OutputLayer& operator=(const OutputLayer&) = delete;
 
-        void accumulate_input(TokenID target_idx, float value)
-        {
-            m_inputs.add_no_clamp(target_idx, value);
-        }
+        // Initialise W_lm_head with small random values.
+        void set_random_weights();
+
+        // Project h_last[D_MODEL] to vocabulary logits, storing them in m_inputs.
+        void forward_from_hidden(const std::vector<float>& h_last);
+
+        // Backpropagate the output delta through W_lm_head.
+        // Returns d_h_last[D_MODEL] = ∂L/∂h_last and updates W_lm_head via SGD+momentum.
+        std::vector<float> backward_and_update(
+            const template_token_vector<float, TokenID>& delta,
+            const std::vector<float>& h_last,
+            float learning_rate
+        );
 
         void compute_score(Score& score, const TokenID expected_output_token);
-
         void compute_deltas(const Score& score, template_token_vector<float, TokenID>& deltas) const;
-
-        // RMSNorm the accumulated logits so the softmax sees reasonable magnitudes
-        // regardless of the intermediate-layer fan-in.
         void rms_normalize_inputs();
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
 
-      public:
+        // Vocabulary logits computed by forward_from_hidden().
         template_token_vector<float, TokenID> m_inputs;
 
       private:
         const Corpus& m_corpus;
+
+        // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
+        std::vector<float> W_lm_head;
+        std::vector<float> V_lm_head;  // SGD momentum velocities
     };
 
 } // namespace rllm

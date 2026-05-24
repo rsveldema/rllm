@@ -2,7 +2,7 @@
 
 #include <Corpus.hpp>
 #include <InputLayer.hpp>
-#include <IntermediateLayer.hpp>
+#include <TransformerBlock.hpp>
 #include <LayerPrimitives.hpp>
 #include <OutputLayer.hpp>
 #include <Statistics.hpp>
@@ -37,48 +37,28 @@ namespace rllm
             , m_fires_nothing_ce_loss(std::log(static_cast<float>(TokenID::MAX)))
             , m_convergence_threshold(m_fires_nothing_ce_loss / 4.0f)
         {
-            assert(static_cast<size_t>(TokenID::MAX) > 1); // need at least 2 token types for training to work
+            assert(static_cast<size_t>(TokenID::MAX) > 1);
             for (size_t i = 0; i < num_layers; ++i)
-            {
-                m_intermediate_layers.emplace_back(m_corpus);
-            }
+                m_transformer_blocks.emplace_back();
         }
         ~NeuralNetwork() = default;
         NeuralNetwork(const NeuralNetwork&) = delete;
         NeuralNetwork& operator=(const NeuralNetwork&) = delete;
 
-        const Corpus& get_corpus() const
-        {
-            return m_corpus;
-        }
-        Statistics& get_statistics() const
-        {
-            return m_stats;
-        }
-        const OutputLayer& get_output_layer() const
-        {
-            return m_output_layer;
-        }
+        const Corpus& get_corpus() const { return m_corpus; }
+        Statistics&   get_statistics() const { return m_stats; }
+        const OutputLayer& get_output_layer() const { return m_output_layer; }
 
-        void set_training_method(TrainingMethod m)
-        {
-            m_training_method = m;
-        }
-
-        void set_window_size(int n)
-        {
-            assert(n >= 2);
-            m_window_size = n;
-        }
+        void set_training_method(TrainingMethod m) { m_training_method = m; }
+        void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
 
         void propagate_backward(const Score& score);
         void propagate_forward(const InputLine& input);
 
-        // returns the top-K with the biggest activation in the output layer, as pairs of (token_id, activation_value)
+        // Returns the top-K output tokens with the highest activation.
         std::vector<OutputToken> get_best_output_token_ids(size_t top_k) const;
 
         void train(bool verbose, size_t num_epochs);
-        // Compute mean squared error loss between output activations and expected output
         float compute_loss(TokenID expected_output_token) const;
         void set_random_weights_and_connections();
 
@@ -86,16 +66,20 @@ namespace rllm
         void save(const std::string& filename) const;
 
       private:
-        Corpus& m_corpus;
+        Corpus&    m_corpus;
         Statistics& m_stats;
-        InputLayer m_input_layer;
-        InputLine m_last_input; // stored during propagate_forward for use in propagate_backward
-        std::vector<IntermediateLayer> m_intermediate_layers;
+        InputLayer  m_input_layer;
+        InputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
+        std::vector<TransformerBlock> m_transformer_blocks;
         OutputLayer m_output_layer;
 
-        // Computed from the actual corpus size in set_random_weights_and_connections().
-        const float m_fires_nothing_ce_loss; // should never see this value, overriden at runtime
-        const float m_convergence_threshold; // should never see this value, overriden at runtime
+        // Hidden state at the final position after the last transformer block.
+        std::vector<float> m_last_hidden;
+        int m_seq_len{0};
+
+        // Computed from the actual corpus size.
+        const float m_fires_nothing_ce_loss;
+        const float m_convergence_threshold;
 
         void dump_top_predictions();
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
@@ -104,8 +88,7 @@ namespace rllm
         int m_window_size = 2;
 
         void train_with_up_to_N(const InputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
-        void
-        train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
+        void train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
         void train_with_window(int window_size, bool verbose, size_t num_epochs);
 
         void do_whole_corpus_window_based_training(bool verbose, size_t num_epochs);

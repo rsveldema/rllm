@@ -1,21 +1,19 @@
 #pragma once
 
-#include <Corpus.hpp>
-#include <IntermediateLayer.hpp>
 #include <LayerPrimitives.hpp>
 
-#include <array>
 #include <nlohmann/json_fwd.hpp>
+#include <vector>
 
 namespace rllm
 {
+    // InputLayer converts an InputLine (sequence of token IDs) into a
+    // flat hidden-state vector h[seq_len × EmbeddingDimension::MAX].
+    // Each position receives its learned token embedding plus a
+    // fixed sinusoidal positional encoding.
     class InputLayer
     {
       public:
-        // Each input position gets its own contiguous slice of the first intermediate layer.
-        // EmbeddingDimension::MAX and IntermediateLayerIndex::MAX are defined in LayerPrimitives.hpp.
-        // Token at position p maps to neurons [p*EmbeddingDimension::MAX, p*EmbeddingDimension::MAX + EmbeddingDimension::MAX).
-
         InputLayer()
         {
             reset_embeddings();
@@ -24,13 +22,14 @@ namespace rllm
         InputLayer(const InputLayer&) = delete;
         InputLayer& operator=(const InputLayer&) = delete;
 
-        void propagate_forward(const InputLine& input, IntermediateLayer& next_layer) const;
+        // Fill h[seq_len × D_MODEL] with (token_embedding + positional_encoding).
+        void propagate_forward(const InputLine& input, std::vector<float>& h) const;
 
-        // Update embeddings using the delta from the first intermediate layer.
-        // delta[i] = ∂L/∂(first_intermediate_layer.m_inputs[i]) after the full backward pass.
+        // Update token embeddings using dh[seq_len × D_MODEL] = ∂L/∂h.
+        // Positional encodings are fixed (sinusoidal), so only embeddings change.
         void propagate_backward(
             const InputLine& input,
-            const template_token_vector<float, IntermediateLayerIndex>& delta,
+            const std::vector<float>& dh,
             float learning_rate
         );
 
@@ -40,7 +39,7 @@ namespace rllm
         nlohmann::json save() const;
 
       private:
-        // m_embeddings[token_id][d] — learned embedding value for dimension d of token token_id.
+        // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.
         template_token_vector<template_token_vector<float, EmbeddingDimension>, TokenID> m_embeddings;
 
         void reset_embeddings();

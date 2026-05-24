@@ -296,7 +296,7 @@ namespace rllm
     using InputLine = template_token_vector<TokenID, PositionIndex>;
 
 
-    template <typename T, typename X, typename Y>
+    template <typename ElementType, typename X, typename Y>
     class template_token_matrix
     {
       public:
@@ -304,33 +304,33 @@ namespace rllm
         {
             for (auto& row : m_data)
             {
-                row.fill(T{});
+                row.fill(ElementType{});
             }
         }
         ~template_token_matrix() = default;
 
-        void set(const X x, const Y y, T value)
+        void set(const X x, const Y y, ElementType value)
         {
             auto& inner_data = m_data[static_cast<size_t>(x)];
             inner_data[static_cast<size_t>(y)] = value;
         }
 
-        void set(const std::pair<const X, const Y>& indices, T value)
+        void set(const std::pair<const X, const Y>& indices, ElementType value)
         {
             set(indices.first, indices.second, value);
         }
 
-        const T& get(const X x, const Y y) const
+        const ElementType& get(const X x, const Y y) const
         {
             return m_data[static_cast<size_t>(x)][static_cast<size_t>(y)];
         }
 
-        const T& get(const std::pair<const X, const Y>& indices) const
+        const ElementType& get(const std::pair<const X, const Y>& indices) const
         {
             return get(indices.first, indices.second);
         }
 
-        void fill(T value)
+        void fill(ElementType value)
         {
             for (auto& row : m_data)
             {
@@ -338,24 +338,24 @@ namespace rllm
             }
         }
 
-        void add_with_clamp(const X x, const Y y, T delta, Range<T> range)
+        void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
         {
             auto& cell = m_data[static_cast<size_t>(x)][static_cast<size_t>(y)];
             cell = std::clamp(cell + delta, range.lo, range.hi);
         }
 
-        void add_with_clamp(const std::pair<const X, const Y>& indices, T delta, Range<T> range)
+        void add_with_clamp(const std::pair<const X, const Y>& indices, ElementType delta, Range<ElementType> range)
         {
             add_with_clamp(indices.first, indices.second, delta, range);
         }
 
-        void add_no_clamp(const X x, const Y y, T delta)
+        void add_no_clamp(const X x, const Y y, ElementType delta)
         {
             m_data[static_cast<size_t>(x)][static_cast<size_t>(y)] += delta;
         }
 
       private:
-        using inner_array_t = std::array<T, static_cast<size_t>(Y::MAX)>;
+        using inner_array_t = std::array<ElementType, static_cast<size_t>(Y::MAX)>;
         using matrix_data_t = std::array<inner_array_t, static_cast<size_t>(X::MAX)>;
         matrix_data_t m_data;
     };
