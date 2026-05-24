@@ -33,7 +33,9 @@ namespace rllm
     void IntermediateLayer::set_random_weights_and_connections()
     {
         for (const auto i : enum_iterator<IntermediateLayerIndex>())
+        {
             randomize_neuron(i);
+        }
     }
 
     void IntermediateLayer::randomize_neuron(IntermediateLayerIndex i) {
@@ -47,6 +49,8 @@ namespace rllm
                 .weight = get_random_value(-1.0f, 1.0f)
             });
         }
+        m_attn_weights[i] = get_random_value(-1.0f, 1.0f);
+        m_attn_vel[i]     = 0.0f;
     }
 
     void IntermediateLayer::randomize_neuron_to_output(IntermediateLayerIndex i) {
@@ -141,27 +145,29 @@ namespace rllm
     void IntermediateLayer::forward_neuron(IntermediateLayerIndex i, IntermediateLayer& next_layer) const
     {
         const auto& conn = m_connections[i];
-        const auto input = normal_activation_function(m_inputs[i]);
+        const float x    = m_inputs[i];
+        const float gate = attn_gate(x, m_attn_weights[i]);
+        const float act  = normal_activation_function(x) * gate;
         for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
         {
             const auto& connection = conn[ci];
             const auto target_idx = connection.target_neuron;
-            const float contrib = input * connection.weight;
-            atomic_add_unclamped(next_layer.m_inputs[target_idx], contrib);
+            atomic_add_unclamped(next_layer.m_inputs[target_idx], act * connection.weight);
         }
     }
 
     void IntermediateLayer::forward_neuron_to_output(IntermediateLayerIndex i, OutputLayer& output_layer) const
     {
         const auto& conn = m_connections[i];
-        const auto input = outputlayer_activation_function(m_inputs[i]);
+        const float x    = m_inputs[i];
+        const float gate = attn_gate(x, m_attn_weights[i]);
+        const float act  = outputlayer_activation_function(x) * gate;
         for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
         {
             const auto& connection = conn[ci];
             const auto target_idx = static_cast<TokenID>(connection.target_neuron);
             assert(target_idx < TokenID::MAX);
-            const float contrib = input * connection.weight;
-            atomic_add_unclamped(output_layer.m_inputs[target_idx], contrib);
+            atomic_add_unclamped(output_layer.m_inputs[target_idx], act * connection.weight);
         }
     }
 
@@ -177,8 +183,13 @@ namespace rllm
         for (int idx = 0; idx < max_i; ++idx)
         {
             const auto i = static_cast<IntermediateLayerIndex>(idx);
+            const float x    = m_inputs[i];
+            const float a    = m_attn_weights[i];
+            const float g    = attn_gate(x, a);          // sigmoid(x*a)
+            const float dg   = gate_grad_from_value(g);  // g*(1-g)
+            const float act  = normal_activation_function(x) * g;
+
             float neuron_delta = 0.0f;
-            const float act = normal_activation_function(m_inputs[i]);
             auto& conn = m_connections[i];
             for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
             {
@@ -193,7 +204,16 @@ namespace rllm
                 connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
             }
 
-            prev_delta[i] += neuron_delta * activation_grad(m_inputs[i]);
+            // Update attention gate weight: ∂L/∂a_i = neuron_delta * silu(x) * dg * x
+            const float attn_grad = std::clamp(
+                neuron_delta * normal_activation_function(x) * dg * x, -GRAD_CLIP, GRAD_CLIP);
+            m_attn_vel[i]     = std::clamp(MOMENTUM_BETA * m_attn_vel[i] + learning_rate * attn_grad, -VEL_CLIP, VEL_CLIP);
+            m_attn_weights[i] = std::clamp(m_attn_weights[i] + m_attn_vel[i], -2.0f, 2.0f);
+
+            // prev_delta: gradient through both silu and the gate
+            // ∂L/∂x_i = neuron_delta * (silu_grad(x)*g + silu(x)*dg*a)
+            const float dx = neuron_delta * (activation_grad(x) * g + normal_activation_function(x) * dg * a);
+            prev_delta[i] += dx;
         }
     }
 
@@ -208,9 +228,12 @@ namespace rllm
         for (int idx = 0; idx < max_i; ++idx)
         {
             const auto i = static_cast<IntermediateLayerIndex>(idx);
-            float neuron_delta = 0.0f;
-            const float act = normal_activation_function(m_inputs[i]);
+            const float x    = m_inputs[i];
+            const float a    = m_attn_weights[i];
+            const float g    = attn_gate(x, a);
+            const float dg   = gate_grad_from_value(g);
 
+            float neuron_delta = 0.0f;
             auto& conn = m_connections[i];
             for (const auto ci : enum_iterator<NeuronConnectionIndex>(conn.size()))
             {
@@ -219,13 +242,21 @@ namespace rllm
                 assert(target_idx < TokenID::MAX);
                 const auto output_delta = delta[target_idx];
                 neuron_delta += output_delta * connection.weight;
+                const float act  = normal_activation_function(x) * g;
                 const float grad = std::clamp(output_delta * act, -GRAD_CLIP, GRAD_CLIP);
                 connection.velocity = std::clamp(
                     MOMENTUM_BETA * connection.velocity + learning_rate * grad, -VEL_CLIP, VEL_CLIP);
                 connection.weight = std::clamp(connection.weight + connection.velocity, -2.0f, 2.0f);
             }
 
-            prev_delta[i] += neuron_delta * activation_grad(m_inputs[i]);
+            // Update attention gate weight
+            const float attn_grad = std::clamp(
+                neuron_delta * normal_activation_function(x) * dg * x, -GRAD_CLIP, GRAD_CLIP);
+            m_attn_vel[i]     = std::clamp(MOMENTUM_BETA * m_attn_vel[i] + learning_rate * attn_grad, -VEL_CLIP, VEL_CLIP);
+            m_attn_weights[i] = std::clamp(m_attn_weights[i] + m_attn_vel[i], -2.0f, 2.0f);
+
+            const float dx = neuron_delta * (activation_grad(x) * g + normal_activation_function(x) * dg * a);
+            prev_delta[i] += dx;
         }
     }
 

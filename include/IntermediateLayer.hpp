@@ -73,6 +73,14 @@ namespace rllm
         template_token_vector<template_token_vector<OutConnection, NeuronConnectionIndex>,
             IntermediateLayerIndex> m_connections;
 
+        // Per-neuron attention gate weight a_i.
+        // Forward: gate_i = sigmoid(x_i * a_i); effective_activation = silu(x_i) * gate_i.
+        // This is a SwiGLU-style gating that lets each neuron learn when to fire.
+        template_token_vector<float, IntermediateLayerIndex> m_attn_weights;
+        // SGD momentum velocity for attention gate weights.
+        // This controls how fast the attention gate weights change during training, and is not persisted across save/load.
+        template_token_vector<float, IntermediateLayerIndex> m_attn_vel;
+
 
         void randomize_neuron(IntermediateLayerIndex i);
 
@@ -115,6 +123,19 @@ namespace rllm
         {
             const float sig = 1.0f / (1.0f + std::exp(-x));
             return sig * (1.0f + x * (1.0f - sig));
+        }
+
+        // Sigmoid gate for attention: σ(x * a)
+        static float attn_gate(float x, float a)
+        {
+            return 1.0f / (1.0f + std::exp(-x * a));
+        }
+
+        // Sigmoid derivative as a function of the already-computed sigmoid value g = σ(z):
+        // dσ/dz = g * (1 - g)
+        static float gate_grad_from_value(float g)
+        {
+            return g * (1.0f - g);
         }
 
         float normal_activation_function(float x) const

@@ -41,9 +41,13 @@ int main(int argc, char* argv[])
                 method = rllm::NeuralNetwork::TrainingMethod::THREE_TOK;
             else if (m == "increasingly_longer")
                 method = rllm::NeuralNetwork::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
+            else if (m == "window2")
+                method = rllm::NeuralNetwork::TrainingMethod::WINDOW2;
+            else if (m == "window3")
+                method = rllm::NeuralNetwork::TrainingMethod::WINDOW3;
             else
             {
-                std::println("Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer", m);
+                std::println("Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, window2, window3", m);
                 return 1;
             }
         }
@@ -60,7 +64,7 @@ int main(int argc, char* argv[])
             std::println(
                 ""
                 "Usage: {} [--train] [--file <filename>] [--verbose] [--filter <filter>]\n"
-                "          [--method <two_tok|three_tok|increasingly_longer>]\n"
+                "          [--method <two_tok|three_tok|increasingly_longer|window2|window3>]\n"
                 "  --train         Run in training mode (default is prompt mode)\n"
                 "  --file <filename>  Specify the model file to load/save (default is '{}')\n"
                 "  --verbose       Enable verbose output\n"

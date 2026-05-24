@@ -240,13 +240,23 @@ namespace rllm
             "\t $intermediate_layers width: {}\n"
             "\t convergence threshold: {:.6f}\n"
             "\t fires nothing CE loss:  {:.6f}\n"
-            "\t steps per example per epoch: {}\n",
+            "\t steps per example per epoch: {}\n"
+            "\t training method: {}\n",
             m_intermediate_layers.size(),
             static_cast<size_t>(TokenID::MAX),
             static_cast<size_t>(IntermediateLayerIndex::MAX),
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
-            STEPS_PER_EXAMPLE_PER_EPOCH
+            STEPS_PER_EXAMPLE_PER_EPOCH,
+            [this]() -> std::string_view {
+                switch (m_training_method)
+                {
+                    case TrainingMethod::TWO_TOK:                        return "TWO_TOK";
+                    case TrainingMethod::THREE_TOK:                      return "THREE_TOK";
+                    case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:  return "INCREASINGLY_LONGER_SEQUENCES";
+                }
+                return "UNKNOWN";
+            }()
         );
 
         std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
@@ -287,8 +297,21 @@ namespace rllm
                 case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
                     train_with_increasingly_longer_sequences(line_of_file, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
                     break;
+
+                case TrainingMethod::WINDOW2:
+                case TrainingMethod::WINDOW3:
+                    // window methods don't use the line-based loop; handled separately below
+                    break;
                 }
             }
+        }
+
+        // Window methods operate on the flat token stream rather than per-line.
+        if (m_training_method == TrainingMethod::WINDOW2 ||
+            m_training_method == TrainingMethod::WINDOW3)
+        {
+            const int window_size = (m_training_method == TrainingMethod::WINDOW2) ? 2 : 3;
+            train_with_window(window_size, verbose);
         }
     }
 

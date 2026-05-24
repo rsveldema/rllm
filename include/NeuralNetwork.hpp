@@ -54,7 +54,9 @@ namespace rllm
         {
             TWO_TOK,
             THREE_TOK,
-            INCREASINGLY_LONGER_SEQUENCES
+            INCREASINGLY_LONGER_SEQUENCES,
+            WINDOW2,   // sliding window of 2 tokens over flat corpus (1 input → predict next)
+            WINDOW3,   // sliding window of 3 tokens over flat corpus (2 inputs → predict next)
         };
 
         void set_training_method(TrainingMethod m)
@@ -94,8 +96,8 @@ namespace rllm
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
 
         void train_with_up_to_N(const InputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
-        void
-        train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
+        void train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
+        void train_with_window(int window_size, bool verbose);
     };
 
 } // namespace rllm

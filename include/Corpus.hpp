@@ -19,7 +19,8 @@ namespace rllm
         Corpus(const std::vector<std::string>& filters);
         void load_files_from_dir();
 
-        using visitor_fn_t = std::function<void(const InputLine&)>;
+        using visitor_fn_t       = std::function<void(const InputLine&)>;
+        using token_visitor_fn_t = std::function<void(TokenID)>;
 
         InputLine get_token_ids(const std::string& text) const;
         Token get_token_from_id(TokenID id) const;
@@ -30,9 +31,14 @@ namespace rllm
         void visit_lines(const visitor_fn_t& visitor) const
         {
             for (const auto& token_data : m_token_list)
-            {
                 token_data.visit_lines(visitor);
-            }
+        }
+
+        // Iterate over every token in every file in corpus order.
+        void visit_flat_tokens(const token_visitor_fn_t& visitor) const
+        {
+            for (const auto& token_data : m_token_list)
+                token_data.visit_tokens(visitor);
         }
 
         size_t count_num_lines() const
@@ -87,9 +93,13 @@ namespace rllm
             void visit_lines(const visitor_fn_t& visitor) const
             {
                 for (const auto& line : m_lines)
-                {
                     visitor(line);
-                }
+            }
+
+            void visit_tokens(const token_visitor_fn_t& visitor) const
+            {
+                for (const auto tok : m_tokens_in_file)
+                    visitor(tok);
             }
 
             size_t number_of_lines() const

@@ -68,6 +68,20 @@ namespace rllm
                 });
             }
         }
+
+        // attention gate weights (optional for backwards compatibility)
+        if (j.contains("attn_weights"))
+        {
+            const auto& aw_j = j.at("attn_weights");
+            for (size_t i = 0; i < static_cast<size_t>(IntermediateLayerIndex::MAX); ++i)
+                m_attn_weights[static_cast<IntermediateLayerIndex>(i)] = aw_j.at(i).template get<float>();
+        }
+        else
+        {
+            // initialise to 1 so existing checkpoints behave as before (gate = sigmoid(x))
+            m_attn_weights.fill(1.0f);
+        }
+        m_attn_vel.fill(0.0f);
     }
 
     nlohmann::json IntermediateLayer::save() const
@@ -87,7 +101,15 @@ namespace rllm
             }
             conns_j.push_back(std::move(neuron_conns));
         }
-        return {{"connections", std::move(conns_j)}};
+        return {{
+            "connections", std::move(conns_j)},
+            {"attn_weights", [this]{
+                auto aw = nlohmann::json::array();
+                for (size_t i = 0; i < static_cast<size_t>(IntermediateLayerIndex::MAX); ++i)
+                    aw.push_back(m_attn_weights[static_cast<IntermediateLayerIndex>(i)]);
+                return aw;
+            }()}
+        };
     }
 
 
