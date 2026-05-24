@@ -15,13 +15,29 @@
 
 namespace rllm
 {
+    bool log_info_enabled = true;
+    bool log_debug_enabled = true;
 
-    bool log_enabled = false;
+    static std::ofstream s_log_file{"tokenization.log"};
 
 #define LOG_INFO(...) \
-    if (log_enabled) \
+    if (log_info_enabled) \
     { \
-        std::println(__VA_ARGS__); \
+        std::println(s_log_file, __VA_ARGS__); \
+        s_log_file << std::flush; \
+    }
+
+#define LOG_ERROR(...) \
+    { \
+        std::println(s_log_file, __VA_ARGS__); \
+        s_log_file << std::flush; \
+    }
+
+#define LOG_DEBUG(...) \
+    if (log_debug_enabled) \
+    { \
+        std::println(s_log_file, __VA_ARGS__); \
+        s_log_file << std::flush; \
     }
 
     Corpus::Corpus(const std::vector<std::string>& filters)
@@ -40,6 +56,8 @@ namespace rllm
             abort();
             return;
         }
+
+        LOG_INFO("Loading files from corpus directory: '{}'", corpus_dir.string());
 
         for (const auto& entry : std::filesystem::recursive_directory_iterator(corpus_dir))
         {
@@ -67,7 +85,7 @@ namespace rllm
 
             LOG_INFO("Processing file: {}", entry.path().c_str());
 
-            TokenData& token_data = m_token_list.emplace_back(entry.path().string());
+            auto& token_data = m_token_list.emplace_back(entry.path().string());
 
             std::ifstream file{entry.path()};
             if (!file)
@@ -117,10 +135,17 @@ namespace rllm
             if (!matched_token)
             {
                 // If no token matched, skip this character
+                const auto ch = text[ix];
+                if (ch != ' ')
+                {
+                    // spaces have no explicit token, we just skip them without logging,
+                    // but log other unmatched characters as warnings since they may
+                    // indicate a problem with the tokenizer map.
+                    LOG_ERROR("Warning: No token matched for character '{}', skipping it", ch);
+                }
                 ix++;
-                LOG_INFO("Warning: No token matched for character '{}', skipping it", text[ix - 1]);
             } else {
-                LOG_INFO("Matched token '{}' at position {}", tokenizer_map[result.back()], ix);
+                LOG_DEBUG("Matched token '{}' at position {}", tokenizer_map[result.back()], ix);
             }
         }
 

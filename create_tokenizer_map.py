@@ -9,8 +9,7 @@ import os
 # table is sorted by sequence length, longest first, to ensure that we match the longest
 # possible sequence when tokenizing input text.
 
-training_file_extensions = [".cpp", ".cc", ".h", ".txt"]
-
+training_file_extensions = [".cpp", ".cc", ".h", ".txt", ".text", ".md", ".json", ".yaml", ".yml"]
 
 def read_all_files_in_directory(directory):
     all_text = ""
@@ -19,6 +18,7 @@ def read_all_files_in_directory(directory):
             continue # skip hidden files
         for ext in training_file_extensions:
             if filename.endswith(ext):
+                print(f"Reading file: {os.path.join(directory, filename)}")
                 with open(os.path.join(directory, filename), "r", encoding="utf-8") as f:
                     all_text += f.read()
                 break
