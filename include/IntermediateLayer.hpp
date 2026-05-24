@@ -49,14 +49,14 @@ namespace rllm
         }
 
         void propagate_backward(
-            const template_token_vector<float, IntermediateLayerIndex>& delta,
-            template_token_vector<float, IntermediateLayerIndex>& prev_delta,
+            const template_vector<float, IntermediateLayerIndex>& delta,
+            template_vector<float, IntermediateLayerIndex>& prev_delta,
             float learning_rate
         );
 
         void propagate_backward_from_output_layer(
-            const template_token_vector<float, TokenID>& delta,
-            template_token_vector<float, IntermediateLayerIndex>& prev_delta,
+            const template_vector<float, TokenID>& delta,
+            template_vector<float, IntermediateLayerIndex>& prev_delta,
             float learning_rate
         );
 
@@ -68,18 +68,18 @@ namespace rllm
       private:
         const Corpus& m_corpus;
         // neuron 'i's accumulated input for each neuron in the layer
-        template_token_vector<float, IntermediateLayerIndex> m_inputs;
+        template_vector<float, IntermediateLayerIndex> m_inputs;
         // neuron 'i' is connected to one or more neurons in the next layer
-        template_token_vector<template_token_vector<OutConnection, NeuronConnectionIndex>,
+        template_vector<template_vector<OutConnection, NeuronConnectionIndex>,
             IntermediateLayerIndex> m_connections;
 
         // Per-neuron attention gate weight a_i.
         // Forward: gate_i = sigmoid(x_i * a_i); effective_activation = silu(x_i) * gate_i.
         // This is a SwiGLU-style gating that lets each neuron learn when to fire.
-        template_token_vector<float, IntermediateLayerIndex> m_attn_weights;
+        template_vector<float, IntermediateLayerIndex> m_attn_weights;
         // SGD momentum velocity for attention gate weights.
         // This controls how fast the attention gate weights change during training, and is not persisted across save/load.
-        template_token_vector<float, IntermediateLayerIndex> m_attn_vel;
+        template_vector<float, IntermediateLayerIndex> m_attn_vel;
 
 
         void randomize_neuron(IntermediateLayerIndex i);

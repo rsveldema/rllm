@@ -44,8 +44,8 @@ namespace rllm
 
     // y_t = x_t / rms(x_t)  for each row t
     void TransformerBlock::rms_norm(
-        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& x,
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& y)
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y)
     {
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
@@ -66,9 +66,9 @@ namespace rllm
     // dx += dL/dx  given dy = dL/dy and the original x (not the normalised y).
     // Per row:  dx_j += (1/rms) * (dy_j  -  y_j * mean(dy · y))
     void TransformerBlock::rms_norm_backward(
-        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dy,
-        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& x,
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dx)
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx)
     {
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
@@ -94,7 +94,7 @@ namespace rllm
 
     // In-place causal softmax over a [T × T] score matrix (row i only attends
     // to positions j ≤ i).  stride is the distance between rows in floats.
-    void TransformerBlock::causal_softmax(flexible_size_matrix<float, PositionIndex, PositionIndex>& x, int T)
+    void TransformerBlock::causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, int T)
     {
         for (const auto i : enum_iterator<PositionIndex>(static_cast<PositionIndex>(T)))
         {
@@ -118,9 +118,9 @@ namespace rllm
     // dscores[T×T] += ∂L/∂scores  via the softmax Jacobian.
     // dp/dscores use stride T; p uses p_stride (the cached matrix's row stride).
     void TransformerBlock::softmax_backward(
-        const flexible_size_matrix<float, PositionIndex, PositionIndex>& dp,
-        const flexible_size_matrix<float, PositionIndex, PositionIndex>& p,
-        flexible_size_matrix<float, PositionIndex, PositionIndex>& dscores,
+        const flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& dp,
+        const flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& p,
+        flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& dscores,
         int T
     )
     {
@@ -138,11 +138,11 @@ namespace rllm
 
     void TransformerBlock::swiglu_backward(
         PositionIndex seq,
-        const flexible_size_matrix<float, PositionIndex, FFDimension>& gate_pre,
-        const flexible_size_matrix<float, PositionIndex, FFDimension>& up_pre,
-        const flexible_size_matrix<float, PositionIndex, FFDimension>& d_ffn_act,
-        flexible_size_matrix<float, PositionIndex, FFDimension>& d_gate_pre,
-        flexible_size_matrix<float, PositionIndex, FFDimension>& d_up_pre)
+        const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre,
+        const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre,
+        const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act,
+        flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre,
+        flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre)
     {
 #pragma omp parallel for collapse(2) schedule(static)
         for (const auto t : enum_iterator<PositionIndex>(seq))
@@ -166,7 +166,7 @@ namespace rllm
     // ── forward pass ──────────────────────────────────────────────────────────
 
     void
-    TransformerBlock::forward(flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len)
+    TransformerBlock::forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len)
     {
         const int T = static_cast<int>(seq_len);
         const int Dh = static_cast<int>(HeadDimension::MAX);
@@ -175,20 +175,20 @@ namespace rllm
         m_h_in = h;
 
         // ── 1. Pre-norm (attention) ──────────────────────────────────────────
-        m_h_norm_attn.set_size(seq_len, EmbeddingDimension::MAX);
+        m_h_norm_attn.set_rows(seq_len);
         rms_norm(h, m_h_norm_attn);
 
         // ── 2. Q / K / V projections ─────────────────────────────────────────
-        m_Q.set_size(seq_len, EmbeddingDimension::MAX);
-        m_K.set_size(seq_len, EmbeddingDimension::MAX);
-        m_V.set_size(seq_len, EmbeddingDimension::MAX);
+        m_Q.set_rows(seq_len);
+        m_K.set_rows(seq_len);
+        m_V.set_rows(seq_len);
         matmul_ABt(m_h_norm_attn, W_q, m_Q);
         matmul_ABt(m_h_norm_attn, W_k, m_K);
         matmul_ABt(m_h_norm_attn, W_v, m_V);
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
         constexpr float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
-        m_attn_concat.set_size(seq_len, EmbeddingDimension::MAX);
+        m_attn_concat.set_rows(seq_len);
         m_attn_concat.fill(0.f);
 
         for (const auto hi : enum_iterator<HeadsIndex>())
@@ -227,26 +227,26 @@ namespace rllm
         }
 
         // ── 4. Output projection + residual ──────────────────────────────────
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
-        attn_proj.set_size(seq_len, EmbeddingDimension::MAX);
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
+        attn_proj.set_rows(seq_len);
         matmul_ABt(m_attn_concat, W_o, attn_proj);
 
-        m_h_mid.set_size(seq_len, EmbeddingDimension::MAX);
+        m_h_mid.set_rows(seq_len);
         for (const auto t : enum_iterator<PositionIndex>(seq_len))
             for (const auto d : enum_iterator<EmbeddingDimension>())
                 m_h_mid[t, d] = h[t, d] + attn_proj[t, d];
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
-        m_h_norm_ff.set_size(seq_len, EmbeddingDimension::MAX);
+        m_h_norm_ff.set_rows(seq_len);
         rms_norm(m_h_mid, m_h_norm_ff);
 
         // ── 6. SwiGLU FFN ─────────────────────────────────────────────────────
-        m_gate_pre.set_size(seq_len, FFDimension::MAX);
-        m_up_pre  .set_size(seq_len, FFDimension::MAX);
+        m_gate_pre.set_rows(seq_len);
+        m_up_pre  .set_rows(seq_len);
         matmul_ABt(m_h_norm_ff, W_gate, m_gate_pre);
         matmul_ABt(m_h_norm_ff, W_up, m_up_pre);
 
-        m_ffn_act.set_size(seq_len, FFDimension::MAX);
+        m_ffn_act.set_rows(seq_len);
         for (const auto t : enum_iterator<PositionIndex>(seq_len))
             for (const auto f : enum_iterator<FFDimension>())
             {
@@ -255,8 +255,8 @@ namespace rllm
                 m_ffn_act[t, f] = silu * m_up_pre[t, f];
             }
 
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
-        ffn_out.set_size(seq_len, EmbeddingDimension::MAX);
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
+        ffn_out.set_rows(seq_len);
         matmul_ABt(m_ffn_act, W_down, ffn_out);
 
         // ── 7. Residual ───────────────────────────────────────────────────────
@@ -271,35 +271,35 @@ namespace rllm
     struct BackwardWorkspace
     {
         // FFN backward
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> d_h_mid;
-        flexible_size_matrix<float, PositionIndex, FFDimension>        d_ffn_act;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_mid;
+        flexible_rows_matrix<float, PositionIndex, FFDimension>        d_ffn_act;
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>      dW_down;
-        flexible_size_matrix<float, PositionIndex, FFDimension>        d_gate_pre;
-        flexible_size_matrix<float, PositionIndex, FFDimension>        d_up_pre;
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
+        flexible_rows_matrix<float, PositionIndex, FFDimension>        d_gate_pre;
+        flexible_rows_matrix<float, PositionIndex, FFDimension>        d_up_pre;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>      dW_gate;
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>      dW_up;
         // Attention backward
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_attn_concat;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>   d_attn_concat;
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_o;
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_Q;
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_K;
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_V;
-        flexible_size_matrix<float, PositionIndex, PositionIndex>        d_scores;
-        flexible_size_matrix<float, PositionIndex, PositionIndex>        d_raw;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>   d_Q;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>   d_K;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>   d_V;
+        flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>        d_scores;
+        flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>        d_raw;
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_q;
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_k;
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_h_norm_attn;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>   d_h_norm_attn;
         // Scratch buffer shared by both matmul accumulation loops
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   tmp;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>   tmp;
     };
 
     // ── backward pass ─────────────────────────────────────────────────────────
 
     void TransformerBlock::backward(
-        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dout,
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& din,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din,
         float learning_rate
     )
     {
@@ -307,17 +307,17 @@ namespace rllm
 
         auto ws = std::make_unique<BackwardWorkspace>();
         const auto seq = static_cast<PositionIndex>(T);
-        ws->d_h_mid      .set_size(seq, EmbeddingDimension::MAX);
-        ws->d_ffn_act    .set_size(seq, FFDimension::MAX);
-        ws->d_gate_pre   .set_size(seq, FFDimension::MAX);
-        ws->d_up_pre     .set_size(seq, FFDimension::MAX);
-        ws->d_h_norm_ff  .set_size(seq, EmbeddingDimension::MAX);
-        ws->d_attn_concat.set_size(seq, EmbeddingDimension::MAX);
-        ws->d_Q          .set_size(seq, EmbeddingDimension::MAX);
-        ws->d_K          .set_size(seq, EmbeddingDimension::MAX);
-        ws->d_V          .set_size(seq, EmbeddingDimension::MAX);
-        ws->d_h_norm_attn.set_size(seq, EmbeddingDimension::MAX);
-        ws->tmp          .set_size(seq, EmbeddingDimension::MAX);
+        ws->d_h_mid      .set_rows(seq);
+        ws->d_ffn_act    .set_rows(seq);
+        ws->d_gate_pre   .set_rows(seq);
+        ws->d_up_pre     .set_rows(seq);
+        ws->d_h_norm_ff  .set_rows(seq);
+        ws->d_attn_concat.set_rows(seq);
+        ws->d_Q          .set_rows(seq);
+        ws->d_K          .set_rows(seq);
+        ws->d_V          .set_rows(seq);
+        ws->d_h_norm_attn.set_rows(seq);
+        ws->tmp          .set_rows(seq);
         ws->d_scores     .set_size(seq, seq);
         ws->d_raw        .set_size(seq, seq);
 

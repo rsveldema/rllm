@@ -195,8 +195,8 @@ namespace rllm
 
 
     void IntermediateLayer::propagate_backward(
-        const template_token_vector<float, IntermediateLayerIndex>& delta,
-        template_token_vector<float, IntermediateLayerIndex>& prev_delta,
+        const template_vector<float, IntermediateLayerIndex>& delta,
+        template_vector<float, IntermediateLayerIndex>& prev_delta,
         float learning_rate
     )
     {
@@ -240,8 +240,8 @@ namespace rllm
     }
 
     void IntermediateLayer::propagate_backward_from_output_layer(
-        const template_token_vector<float, TokenID>& delta,
-        template_token_vector<float, IntermediateLayerIndex>& prev_delta,
+        const template_vector<float, TokenID>& delta,
+        template_vector<float, IntermediateLayerIndex>& prev_delta,
         float learning_rate
     )
     {

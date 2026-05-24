@@ -52,7 +52,11 @@ add_subdirectory(src)
 add_subdirectory(tests)
 
 add_executable(rllm src/main.cc
-  include/LayerPrimitives.hpp)
+  include/LayerPrimitives.hpp
+  include/Range.hpp
+  include/enum_iterator.hpp
+  include/template_vector.hpp
+  include/fixed_size_matrix.hpp)
 target_link_libraries(rllm PRIVATE rllm_lib)
 target_include_directories(rllm PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(rllm PRIVATE -O3 -march=native)

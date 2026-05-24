@@ -63,7 +63,7 @@ namespace rllm
         m_seq_len = input.size();
 
         // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> h(m_seq_len, EmbeddingDimension::MAX);
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(m_seq_len);
         m_input_layer.propagate_forward(input, h);
 
         // Pass through each transformer block in order
@@ -74,7 +74,7 @@ namespace rllm
         m_last_hidden = h;
 
         // Project the last-position hidden state to vocabulary logits
-        template_token_vector<float, EmbeddingDimension> h_last;
+        template_vector<float, EmbeddingDimension> h_last;
         const auto last_pos = dec(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
             h_last[d] = h[last_pos, d];
@@ -128,23 +128,23 @@ namespace rllm
     {
         static constexpr float LEARNING_RATE = 0.01f;
 
-        auto output_layer_delta = std::make_unique<template_token_vector<float, TokenID>>();
+        auto output_layer_delta = std::make_unique<template_vector<float, TokenID>>();
         m_output_layer.compute_deltas(score, *output_layer_delta);
 
         // Backpropagate through LM head → get dL/dh_last
-        template_token_vector<float, EmbeddingDimension> h_last_vec;
+        template_vector<float, EmbeddingDimension> h_last_vec;
         const auto last_pos = dec(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
             h_last_vec[d] = m_last_hidden[last_pos, d];
         auto dh_last = m_output_layer.backward_and_update(*output_layer_delta, h_last_vec, LEARNING_RATE);
 
         // Initialise full-sequence gradient: zero everywhere except the last position
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> dh(m_seq_len, EmbeddingDimension::MAX);
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dh(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
             dh[last_pos, d] = dh_last[d];
 
         // Backward through transformer blocks in reverse order
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> din(m_seq_len, EmbeddingDimension::MAX);
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din(m_seq_len);
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
             m_transformer_blocks[i].backward(dh, din, LEARNING_RATE);

@@ -26,10 +26,10 @@ namespace rllm
     // PE[pos, 2i+1] = cos(pos / 10000^(2i / D_MODEL))
     void InputLayer::propagate_forward(
         const InputLine& input,
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& h
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
     ) const
     {
-        h.set_size(static_cast<PositionIndex>(input.size()), EmbeddingDimension::MAX);
+        h.set_rows(static_cast<PositionIndex>(input.size()));
 
         const float D = static_cast<float>(EmbeddingDimension::MAX);
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
@@ -53,7 +53,7 @@ namespace rllm
     // Positional encodings are fixed, so only the embedding contribution is updated.
     void InputLayer::propagate_backward(
         const InputLine& input,
-        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dh,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
         float learning_rate
     )
     {

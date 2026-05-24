@@ -24,25 +24,25 @@ namespace rllm
         void set_random_weights();
 
         // Project h_last[D_MODEL] to vocabulary logits, storing them in m_inputs.
-        void forward_from_hidden(const template_token_vector<float, EmbeddingDimension>& h_last);
+        void forward_from_hidden(const template_vector<float, EmbeddingDimension>& h_last);
 
         // Backpropagate the output delta through W_lm_head.
         // Returns d_h_last[D_MODEL] = ∂L/∂h_last and updates W_lm_head via SGD+momentum.
-        template_token_vector<float, EmbeddingDimension> backward_and_update(
-            const template_token_vector<float, TokenID>& delta,
-            const template_token_vector<float, EmbeddingDimension>& h_last,
+        template_vector<float, EmbeddingDimension> backward_and_update(
+            const template_vector<float, TokenID>& delta,
+            const template_vector<float, EmbeddingDimension>& h_last,
             float learning_rate
         );
 
         void compute_score(Score& score, const TokenID expected_output_token);
-        void compute_deltas(const Score& score, template_token_vector<float, TokenID>& deltas) const;
+        void compute_deltas(const Score& score, template_vector<float, TokenID>& deltas) const;
         void rms_normalize_inputs();
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
 
         // Vocabulary logits computed by forward_from_hidden().
-        template_token_vector<float, TokenID> m_inputs;
+        template_vector<float, TokenID> m_inputs;
 
       private:
         const Corpus& m_corpus;

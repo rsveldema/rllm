@@ -30,8 +30,8 @@ TEST(TransformerBlockTest, ForwardOutputShape)
 
     const int T = TEST_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
-        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
+        static_cast<rllm::PositionIndex>(T));
     h.fill(0.1f);
 
     block->forward(h, static_cast<rllm::PositionIndex>(T));
@@ -49,16 +49,16 @@ TEST(TransformerBlockTest, BackwardOutputShape)
 
     const int T = TEST_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
-        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
+        static_cast<rllm::PositionIndex>(T));
     h.fill(0.05f);
     block->forward(h, static_cast<rllm::PositionIndex>(T));
 
-    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
-        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
+        static_cast<rllm::PositionIndex>(T));
     dout.fill(0.01f);
-    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
-        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
+        static_cast<rllm::PositionIndex>(T));
     block->backward(dout, din, 0.01f);
 
     ASSERT_EQ(static_cast<int>(din.num_rows()) * static_cast<int>(din.num_cols()), T * D)
@@ -80,8 +80,8 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
 
     const int T = BENCH_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
-        static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
+    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
+        static_cast<rllm::PositionIndex>(T));
     h_template.fill(0.1f);
 
     // --- serial baseline (1 thread) ---

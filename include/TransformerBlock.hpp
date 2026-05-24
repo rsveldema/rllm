@@ -29,13 +29,13 @@ namespace rllm
 
         // Forward pass.  h[seq_len × D_MODEL] is modified in-place.
         // Caches intermediate activations for the backward pass.
-        void forward(flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len);
+        void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len);
 
         // Backward pass.  dout[seq_len × D_MODEL] = dL/dh_out.
         // Writes dL/dh_in into din (same shape) and updates all weights.
         void backward(
-            const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dout,
-            flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& din,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din,
             float learning_rate);
 
         void randomize();
@@ -64,27 +64,27 @@ namespace rllm
 
         // Activations cached during forward() for use in backward().
         PositionIndex      m_seq_len{PositionIndex::START};
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> m_h_in;         // [T × D] input to this block
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> m_h_norm_attn;   // [T × D] after 1st RMSNorm
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> m_Q, m_K, m_V;  // [T × D] projected queries/keys/values
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_h_in;         // [T × D] input to this block
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_h_norm_attn;   // [T × D] after 1st RMSNorm
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_Q, m_K, m_V;  // [T × D] projected queries/keys/values
         // Per-head softmax weight matrices; each matrix is [PositionIndex::MAX × PositionIndex::MAX].
         // Only the top-left [T × T] block is live; columns are accessed with stride PositionIndex::MAX.
-        template_token_vector<flexible_size_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> m_attn_w;
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> m_attn_concat;   // [T × D] concatenated per-head outputs
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> m_h_mid;         // [T × D] after attention residual
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> m_h_norm_ff;     // [T × D] after 2nd RMSNorm
-        flexible_size_matrix<float, PositionIndex, FFDimension> m_gate_pre; // [T × static_cast<int>(FFDimension::MAX)] pre-activation gate branch
-        flexible_size_matrix<float, PositionIndex, FFDimension> m_up_pre;   // [T × static_cast<int>(FFDimension::MAX)] pre-activation up branch
-        flexible_size_matrix<float, PositionIndex, FFDimension> m_ffn_act;  // [T × static_cast<int>(FFDimension::MAX)] silu(gate_pre) * up_pre
+        template_vector<flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> m_attn_w;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_attn_concat;   // [T × D] concatenated per-head outputs
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_h_mid;         // [T × D] after attention residual
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_h_norm_ff;     // [T × D] after 2nd RMSNorm
+        flexible_rows_matrix<float, PositionIndex, FFDimension> m_gate_pre; // [T × static_cast<int>(FFDimension::MAX)] pre-activation gate branch
+        flexible_rows_matrix<float, PositionIndex, FFDimension> m_up_pre;   // [T × static_cast<int>(FFDimension::MAX)] pre-activation up branch
+        flexible_rows_matrix<float, PositionIndex, FFDimension> m_ffn_act;  // [T × static_cast<int>(FFDimension::MAX)] silu(gate_pre) * up_pre
 
         // ── linear algebra helpers ──────────────────────────────────────────
         // C[m,n]  = A[m,k] @ B[n,k]^T   (B stored row-major [n × k])
         // Dimensions are deduced from the matrix types; m comes from A.num_rows() at runtime.
         template<typename K_enum, typename N_enum>
         static void matmul_ABt(
-            const flexible_size_matrix<float, PositionIndex, K_enum>& A,
+            const flexible_rows_matrix<float, PositionIndex, K_enum>& A,
             const fixed_size_matrix<float, N_enum, K_enum>& B,
-            flexible_size_matrix<float, PositionIndex, N_enum>& C)
+            flexible_rows_matrix<float, PositionIndex, N_enum>& C)
         {
             const PositionIndex m = A.num_rows();
 #pragma omp parallel for collapse(2) schedule(static)
@@ -104,9 +104,9 @@ namespace rllm
         // Dimensions are deduced from the matrix types; m comes from A.num_rows() at runtime.
         template<typename K_enum, typename N_enum>
         static void matmul_AB(
-            const flexible_size_matrix<float, PositionIndex, K_enum>& A,
+            const flexible_rows_matrix<float, PositionIndex, K_enum>& A,
             const fixed_size_matrix<float, K_enum, N_enum>& B,
-            flexible_size_matrix<float, PositionIndex, N_enum>& C)
+            flexible_rows_matrix<float, PositionIndex, N_enum>& C)
         {
             const PositionIndex m = A.num_rows();
 #pragma omp parallel for collapse(2) schedule(static)
@@ -126,8 +126,8 @@ namespace rllm
         // Dimensions are deduced from the matrix types; k comes from A.num_rows() at runtime.
         template<typename M_enum, typename N_enum>
         static void matmul_AtB_acc(
-            const flexible_size_matrix<float, PositionIndex, M_enum>& A,
-            const flexible_size_matrix<float, PositionIndex, N_enum>& B,
+            const flexible_rows_matrix<float, PositionIndex, M_enum>& A,
+            const flexible_rows_matrix<float, PositionIndex, N_enum>& B,
             fixed_size_matrix<float, M_enum, N_enum>& C)
         {
             const PositionIndex k = A.num_rows();
@@ -145,30 +145,30 @@ namespace rllm
         }
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
-        static void rms_norm(const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& x,
-                             flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& y);
+        static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
+                             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y);
 
         // RMSNorm backward: dx += ∂L/∂x  given dy = ∂L/∂y and the original x
-        static void rms_norm_backward(const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dy,
-                                      const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& x,
-                                      flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dx);
+        static void rms_norm_backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
+                                      const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
+                                      flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx);
 
         // In-place causal softmax over the active [T × T] block of x.
-        static void causal_softmax(flexible_size_matrix<float, PositionIndex, PositionIndex>& x, int T);
+        static void causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, int T);
 
         // Accumulates softmax backward into dscores (stride T).
         // dp is the per-head d_scores matrix; p is the cached per-head softmax matrix.
-        static void softmax_backward(const flexible_size_matrix<float, PositionIndex, PositionIndex>& dp,
-                                     const flexible_size_matrix<float, PositionIndex, PositionIndex>& p,
-                                     flexible_size_matrix<float, PositionIndex, PositionIndex>& dscores, int T);
+        static void softmax_backward(const flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& dp,
+                                     const flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& p,
+                                     flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& dscores, int T);
 
         // SwiGLU backward: computes d_gate_pre and d_up_pre from d_ffn_act.
         static void swiglu_backward(PositionIndex seq,
-                                    const flexible_size_matrix<float, PositionIndex, FFDimension>& gate_pre,
-                                    const flexible_size_matrix<float, PositionIndex, FFDimension>& up_pre,
-                                    const flexible_size_matrix<float, PositionIndex, FFDimension>& d_ffn_act,
-                                    flexible_size_matrix<float, PositionIndex, FFDimension>& d_gate_pre,
-                                    flexible_size_matrix<float, PositionIndex, FFDimension>& d_up_pre);
+                                    const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre,
+                                    const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre,
+                                    const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act,
+                                    flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre,
+                                    flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre);
 
         // SGD + momentum update: clips gradients, clips velocity, clamps weights.
         template<typename R_enum, typename C_enum>
