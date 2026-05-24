@@ -146,12 +146,23 @@ def create_tokenizer_map(text):
     for ch in seperators:
         tokens.append(ch)
 
+    # a-z, A-Z and accented latin characters (U+00C0–U+024F) as single-char tokens
+    # so that every letter can always be tokenized without skipping.
+    import unicodedata
+    for cp in range(ord('A'), ord('Z') + 1):
+        tokens.append(chr(cp))
+    for cp in range(ord('a'), ord('z') + 1):
+        tokens.append(chr(cp))
+    for cp in range(0x00C0, 0x0250):   # Latin Extended-A/B + Latin-1 Supplement letters
+        ch = chr(cp)
+        if unicodedata.category(ch).startswith('L'):
+            tokens.append(ch)
+
     # each file contains a list of predefined words, one per line,
     # that should also be included as tokens:
     predefined_words = read_all_files_in_directory("predefined_words")
     split = split_text_using_seperators(predefined_words, seperators)
-    split = split_camel_case_words(split)
-    split = get_unique_words(split)
+    split = get_unique_words(split) # guard against duplicates in the predefined word lists, we only want unique tokens
     tokens.extend(split)
 
     # split the text into words on the seperators,
@@ -258,15 +269,16 @@ def generate_cpp_table(tokenizer_map, cc_out: str, hpp_out: str):
         cpp_table = generate_cpp_table_header(tokenizer_map)
         f.write(cpp_table)
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--cc-out",  default="src/tokenizer_map.cc")
-parser.add_argument("--hpp-out", default="include/tokenizer_map.hpp")
-args = parser.parse_args()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cc-out",  default="src/tokenizer_map.cc")
+    parser.add_argument("--hpp-out", default="include/tokenizer_map.hpp")
+    args = parser.parse_args()
 
-conatenated_text = read_all_files_in_directory("corpus")
-print(f"Total characters in corpus: {len(conatenated_text)}")
-tokenizer_map = create_tokenizer_map(conatenated_text)
+    conatenated_text = read_all_files_in_directory("corpus")
+    print(f"Total characters in corpus: {len(conatenated_text)}")
+    tokenizer_map = create_tokenizer_map(conatenated_text)
 
-print(f"Total unique tokens: {len(tokenizer_map)}")
+    print(f"Total unique tokens: {len(tokenizer_map)}")
 
-generate_cpp_table(tokenizer_map, args.cc_out, args.hpp_out)
+    generate_cpp_table(tokenizer_map, args.cc_out, args.hpp_out)

@@ -107,6 +107,15 @@ namespace rllm
                 token_data.add(TokenID::TOK_NEWLINE); // add a newline token at the end of each line
             }
         }
+
+        if (m_tokenization_errors > 0)
+        {
+            std::println("Tokenization failed: {} character(s) could not be matched to any token. "
+                         "Check tokenization.log for details. "
+                         "Re-run create_tokenizer_map.py to regenerate the token map.",
+                         m_tokenization_errors);
+            std::abort();
+        }
     }
 
     InputLine Corpus::get_token_ids(const std::string& text) const
@@ -142,6 +151,7 @@ namespace rllm
                     // but log other unmatched characters as warnings since they may
                     // indicate a problem with the tokenizer map.
                     LOG_ERROR("Warning: No token matched for character '{}', skipping it", ch);
+                    ++m_tokenization_errors;
                 }
                 ix++;
             } else {

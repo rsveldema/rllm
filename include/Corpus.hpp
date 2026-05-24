@@ -105,6 +105,7 @@ namespace rllm
 
         std::vector<TokenData> m_token_list;
         const std::vector<std::string>& m_filters;
+        mutable size_t m_tokenization_errors = 0;
     };
 
 } // namespace rllm
