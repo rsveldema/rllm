@@ -16,6 +16,7 @@ TEST(PredictorTest, Placeholder) {
 namespace
 {
     constexpr int BENCH_ITERS          = 20;
+    constexpr int BENCH_FORWARD_ITERS  = 200; // forward is fast; needs more iters for stable timing
     constexpr int TEST_SEQ_LEN         = 8;   // smoke tests
     constexpr int BENCH_SEQ_LEN        = 64;  // speedup benchmark needs more work
 } // namespace
@@ -87,7 +88,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     // --- serial baseline (1 thread) ---
     omp_set_num_threads(1);
     const auto t0 = std::chrono::steady_clock::now();
-    for (int iter = 0; iter < BENCH_ITERS; ++iter)
+    for (int iter = 0; iter < BENCH_FORWARD_ITERS; ++iter)
     {
         auto h = h_template;
         block->forward(h, static_cast<rllm::PositionIndex>(T));
@@ -97,7 +98,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     // --- OpenMP parallel ---
     omp_set_num_threads(max_threads);
     const auto t2 = std::chrono::steady_clock::now();
-    for (int iter = 0; iter < BENCH_ITERS; ++iter)
+    for (int iter = 0; iter < BENCH_FORWARD_ITERS; ++iter)
     {
         auto h = h_template;
         block->forward(h, static_cast<rllm::PositionIndex>(T));
