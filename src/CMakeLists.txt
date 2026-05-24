@@ -18,8 +18,8 @@ target_include_directories(rllm_lib PUBLIC
     ${CMAKE_BINARY_DIR}/generated
 )
 
-#target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -fopenmp -march=native -O3)
-target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -fopenmp)
+target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -fopenmp -march=native -O3)
+#target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -fopenmp)
 add_dependencies(rllm_lib generate_tokenizer_map)
 target_link_libraries(rllm_lib PUBLIC nlohmann_json::nlohmann_json -fopenmp)
 
