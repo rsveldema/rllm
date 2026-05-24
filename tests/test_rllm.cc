@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <memory>
 
 #include <omp.h>
 
@@ -28,9 +29,6 @@ namespace
 // Verifies that the parallel run is faster, i.e. that OMP overhead is
 // outweighed by the speedup on this workload.
 //
-// Thread safety: forward_neuron uses std::atomic_ref CAS to scatter-accumulate
-// into next_layer.m_inputs, so concurrent writes to the same target neuron
-// are safe.
 // ---------------------------------------------------------------------------
 TEST(IntermediateLayerOpenMP, ForwardPropagationParallelFasterThanSerial)
 {
@@ -41,25 +39,25 @@ TEST(IntermediateLayerOpenMP, ForwardPropagationParallelFasterThanSerial)
 
     std::srand(0);
     rllm::Corpus corpus{{}};
-    rllm::IntermediateLayer src(corpus);
-    rllm::IntermediateLayer dst(corpus);
+    auto src = std::make_unique<rllm::IntermediateLayer>(corpus);
+    auto dst = std::make_unique<rllm::IntermediateLayer>(corpus);
 
     std::srand(1);
-    src.set_random_weights_and_connections();
-    src.fill_inputs(0.5f); // ~half of neurons fire given random triggers in (0, 1)
+    src->set_random_weights_and_connections();
+    src->fill_inputs(0.5f); // ~half of neurons fire given random triggers in (0, 1)
 
     // --- serial baseline (1 thread) ---
     omp_set_num_threads(1);
     const auto t0 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
-        src.propagate_forward(dst);
+        src->propagate_forward(*dst);
     const auto t1 = std::chrono::steady_clock::now();
 
     // --- OpenMP parallel ---
     omp_set_num_threads(max_threads);
     const auto t2 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
-        src.propagate_forward(dst);
+        src->propagate_forward(*dst);
     const auto t3 = std::chrono::steady_clock::now();
 
     const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
@@ -99,19 +97,18 @@ TEST(IntermediateLayerOpenMP, BackwardPropagationParallelFasterThanSerial)
     rllm::Corpus corpus{{}};
 
     std::srand(2);
-    rllm::IntermediateLayer serial_layer(corpus);
-    serial_layer.set_random_weights_and_connections();
-    serial_layer.fill_inputs(0.5f);
+    auto serial_layer = std::make_unique<rllm::IntermediateLayer>(corpus);
+    serial_layer->set_random_weights_and_connections();
+    serial_layer->fill_inputs(0.5f);
 
     std::srand(2); // same seed → identical state
-    rllm::IntermediateLayer parallel_layer(corpus);
-    parallel_layer.set_random_weights_and_connections();
-    parallel_layer.fill_inputs(0.5f);
+    auto parallel_layer = std::make_unique<rllm::IntermediateLayer>(corpus);
+    parallel_layer->set_random_weights_and_connections();
+    parallel_layer->fill_inputs(0.5f);
 
-    rllm::template_token_vector<float, rllm::IntermediateLayerIndex> delta;
-    delta.fill(0.5f);
-
-    rllm::template_token_vector<float, rllm::IntermediateLayerIndex> prev_delta;
+    auto delta     = std::make_unique<rllm::template_token_vector<float, rllm::IntermediateLayerIndex>>();
+    auto prev_delta = std::make_unique<rllm::template_token_vector<float, rllm::IntermediateLayerIndex>>();
+    delta->fill(0.5f);
 
     constexpr float learning_rate = 0.01f;
 
@@ -120,8 +117,8 @@ TEST(IntermediateLayerOpenMP, BackwardPropagationParallelFasterThanSerial)
     const auto t0 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
-        prev_delta.fill(0.0f);
-        serial_layer.propagate_backward(delta, prev_delta, learning_rate);
+        prev_delta->fill(0.0f);
+        serial_layer->propagate_backward(*delta, *prev_delta, learning_rate);
     }
     const auto t1 = std::chrono::steady_clock::now();
 
@@ -130,8 +127,8 @@ TEST(IntermediateLayerOpenMP, BackwardPropagationParallelFasterThanSerial)
     const auto t2 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
-        prev_delta.fill(0.0f);
-        parallel_layer.propagate_backward(delta, prev_delta, learning_rate);
+        prev_delta->fill(0.0f);
+        parallel_layer->propagate_backward(*delta, *prev_delta, learning_rate);
     }
     const auto t3 = std::chrono::steady_clock::now();
 
@@ -172,19 +169,18 @@ TEST(IntermediateLayerOpenMP, BackwardFromOutputParallelFasterThanSerial)
     rllm::Corpus corpus{{}};
 
     std::srand(3);
-    rllm::IntermediateLayer serial_layer(corpus);
-    serial_layer.set_random_weights_and_connections_to_output_layer();
-    serial_layer.fill_inputs(0.5f);
+    auto serial_layer = std::make_unique<rllm::IntermediateLayer>(corpus);
+    serial_layer->set_random_weights_and_connections_to_output_layer();
+    serial_layer->fill_inputs(0.5f);
 
-    std::srand(3); // same seed \u2192 identical state
-    rllm::IntermediateLayer parallel_layer(corpus);
-    parallel_layer.set_random_weights_and_connections_to_output_layer();
-    parallel_layer.fill_inputs(0.5f);
+    std::srand(3); // same seed → identical state
+    auto parallel_layer = std::make_unique<rllm::IntermediateLayer>(corpus);
+    parallel_layer->set_random_weights_and_connections_to_output_layer();
+    parallel_layer->fill_inputs(0.5f);
 
-    rllm::template_token_vector<float, rllm::TokenID> delta;
-    delta.fill(0.5f);
-
-    rllm::template_token_vector<float, rllm::IntermediateLayerIndex> prev_delta;
+    auto delta      = std::make_unique<rllm::template_token_vector<float, rllm::TokenID>>();
+    auto prev_delta = std::make_unique<rllm::template_token_vector<float, rllm::IntermediateLayerIndex>>();
+    delta->fill(0.5f);
 
     constexpr float learning_rate = 0.01f;
 
@@ -193,8 +189,8 @@ TEST(IntermediateLayerOpenMP, BackwardFromOutputParallelFasterThanSerial)
     const auto t0 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
-        prev_delta.fill(0.0f);
-        serial_layer.propagate_backward_from_output_layer(delta, prev_delta, learning_rate);
+        prev_delta->fill(0.0f);
+        serial_layer->propagate_backward_from_output_layer(*delta, *prev_delta, learning_rate);
     }
     const auto t1 = std::chrono::steady_clock::now();
 
@@ -203,8 +199,8 @@ TEST(IntermediateLayerOpenMP, BackwardFromOutputParallelFasterThanSerial)
     const auto t2 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
-        prev_delta.fill(0.0f);
-        parallel_layer.propagate_backward_from_output_layer(delta, prev_delta, learning_rate);
+        prev_delta->fill(0.0f);
+        parallel_layer->propagate_backward_from_output_layer(*delta, *prev_delta, learning_rate);
     }
     const auto t3 = std::chrono::steady_clock::now();
 

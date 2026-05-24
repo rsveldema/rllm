@@ -103,7 +103,7 @@ namespace rllm
     void IntermediateLayer::rms_normalize_inputs()
     {
         constexpr float eps = 1e-6f;
-        const int n = static_cast<int>(IntermediateLayerIndex::MAX);
+        constexpr int n = static_cast<int>(IntermediateLayerIndex::MAX);
         float sum_sq = 0.0f;
 #pragma omp simd reduction(+:sum_sq)
         for (int i = 0; i < n; ++i)
@@ -117,8 +117,8 @@ namespace rllm
     void IntermediateLayer::propagate_forward(IntermediateLayer& next_layer)
     {
         rms_normalize_inputs();
-        const int n_src = static_cast<int>(IntermediateLayerIndex::MAX);
-        const int n_dst = n_src;
+        constexpr int n_src = static_cast<int>(IntermediateLayerIndex::MAX);
+        constexpr int n_dst = n_src;
 
         // Per-thread accumulator buffers: each thread writes to its own slice,
         // eliminating atomic contention on next_layer.m_inputs.
@@ -154,8 +154,8 @@ namespace rllm
     void IntermediateLayer::propagate_forward_to_output(OutputLayer& output_layer)
     {
         rms_normalize_inputs();
-        const int n_src = static_cast<int>(IntermediateLayerIndex::MAX);
-        const int n_dst = static_cast<int>(TokenID::MAX);
+        constexpr int n_src = static_cast<int>(IntermediateLayerIndex::MAX);
+        constexpr int n_dst = static_cast<int>(TokenID::MAX);
 
         const int n_threads = omp_get_max_threads();
         std::vector<float> local_sums(static_cast<size_t>(n_threads) * static_cast<size_t>(n_dst), 0.0f);
