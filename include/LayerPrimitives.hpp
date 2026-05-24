@@ -108,6 +108,13 @@ namespace rllm
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
+    // Feed-forward hidden dimension: D_FF = 4 × EmbeddingDimension::MAX.
+    enum class FFDimension : size_t
+    {
+        START = 0,
+        MAX   = static_cast<size_t>(EmbeddingDimension::MAX) * 4
+    };
+
     // position of a neuron in the intermediate layer. For example, in the intermediate layer, neuron 0 is connected
     // to token 0 in the input layer, neuron 1 is connected to token 1 in the input layer, and so on.
     enum class IntermediateLayerIndex : size_t
@@ -135,6 +142,12 @@ namespace rllm
         assert(id != PositionIndex::UNKNOWN_POSITION_INDEX);
         assert(id < PositionIndex::MAX);
         return static_cast<PositionIndex>(static_cast<int32_t>(id) + 1);
+    }
+
+    static inline FFDimension inc(FFDimension id)
+    {
+        assert(id < FFDimension::MAX);
+        return static_cast<FFDimension>(static_cast<size_t>(id) + 1);
     }
 
     static inline IntermediateLayerIndex inc(IntermediateLayerIndex id)
@@ -300,19 +313,20 @@ namespace rllm
     class template_token_matrix
     {
       public:
+        static constexpr size_t ROWS = static_cast<size_t>(X::MAX);
+        static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
+
         template_token_matrix()
         {
-            for (auto& row : m_data)
-            {
-                row.fill(ElementType{});
-            }
+            m_data.fill(ElementType{});
         }
         ~template_token_matrix() = default;
 
         void set(const X x, const Y y, ElementType value)
         {
-            auto& inner_data = m_data[static_cast<size_t>(x)];
-            inner_data[static_cast<size_t>(y)] = value;
+            assert(static_cast<size_t>(x) < ROWS);
+            assert(static_cast<size_t>(y) < COLS);
+            m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] = value;
         }
 
         void set(const std::pair<const X, const Y>& indices, ElementType value)
@@ -322,7 +336,9 @@ namespace rllm
 
         const ElementType& get(const X x, const Y y) const
         {
-            return m_data[static_cast<size_t>(x)][static_cast<size_t>(y)];
+            assert(static_cast<size_t>(x) < ROWS);
+            assert(static_cast<size_t>(y) < COLS);
+            return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         const ElementType& get(const std::pair<const X, const Y>& indices) const
@@ -332,15 +348,14 @@ namespace rllm
 
         void fill(ElementType value)
         {
-            for (auto& row : m_data)
-            {
-                row.fill(value);
-            }
+            m_data.fill(value);
         }
 
         void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
         {
-            auto& cell = m_data[static_cast<size_t>(x)][static_cast<size_t>(y)];
+            assert(static_cast<size_t>(x) < ROWS);
+            assert(static_cast<size_t>(y) < COLS);
+            auto& cell = m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
             cell = std::clamp(cell + delta, range.lo, range.hi);
         }
 
@@ -351,13 +366,18 @@ namespace rllm
 
         void add_no_clamp(const X x, const Y y, ElementType delta)
         {
-            m_data[static_cast<size_t>(x)][static_cast<size_t>(y)] += delta;
+            assert(static_cast<size_t>(x) < ROWS);
+            assert(static_cast<size_t>(y) < COLS);
+            m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] += delta;
         }
 
+        // Flat pointer access for BLAS-style routines.  Layout: row-major [ROWS × COLS].
+        ElementType*       data()       { return m_data.data(); }
+        const ElementType* data() const { return m_data.data(); }
+
       private:
-        using inner_array_t = std::array<ElementType, static_cast<size_t>(Y::MAX)>;
-        using matrix_data_t = std::array<inner_array_t, static_cast<size_t>(X::MAX)>;
-        matrix_data_t m_data;
+        using flat_data_t = std::array<ElementType, ROWS * COLS>;
+        flat_data_t m_data;
     };
 
     struct Score
