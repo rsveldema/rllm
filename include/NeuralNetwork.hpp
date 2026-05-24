@@ -15,6 +15,17 @@ namespace rllm
 {
     void set_nn_log_file(const std::string& filename);
 
+    enum class TrainingMethod
+    {
+        TWO_TOK,
+        THREE_TOK,
+        INCREASINGLY_LONGER_SEQUENCES,
+        WINDOW2, // sliding window of 2 tokens over flat corpus (1 input → predict next)
+        WINDOW3, // sliding window of 3 tokens over flat corpus (2 inputs → predict next)
+    };
+
+    const char* training_method_to_string(TrainingMethod method);
+
     class NeuralNetwork
     {
       public:
@@ -49,15 +60,6 @@ namespace rllm
         {
             return m_output_layer;
         }
-
-        enum class TrainingMethod
-        {
-            TWO_TOK,
-            THREE_TOK,
-            INCREASINGLY_LONGER_SEQUENCES,
-            WINDOW2, // sliding window of 2 tokens over flat corpus (1 input → predict next)
-            WINDOW3, // sliding window of 3 tokens over flat corpus (2 inputs → predict next)
-        };
 
         void set_training_method(TrainingMethod m)
         {

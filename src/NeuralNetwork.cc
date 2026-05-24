@@ -384,22 +384,7 @@ namespace rllm
             m_fires_nothing_ce_loss,
             STEPS_PER_EXAMPLE_PER_EPOCH,
             num_epochs,
-            [this]() -> std::string_view {
-                switch (m_training_method)
-                {
-                case TrainingMethod::TWO_TOK:
-                    return "TWO_TOK";
-                case TrainingMethod::THREE_TOK:
-                    return "THREE_TOK";
-                case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
-                    return "INCREASINGLY_LONGER_SEQUENCES";
-                case TrainingMethod::WINDOW2:
-                    return "WINDOW2";
-                case TrainingMethod::WINDOW3:
-                    return "WINDOW3";
-                }
-                return "UNKNOWN";
-            }()
+            training_method_to_string(m_training_method)
         );
 
         if (training_method_is_line_based())

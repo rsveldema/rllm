@@ -7,7 +7,26 @@
 #include <cstring>
 #include <ctime>
 
-
+namespace rllm
+{
+    const char* training_method_to_string(TrainingMethod method)
+    {
+        switch (method)
+        {
+        case TrainingMethod::TWO_TOK:
+            return "two_tok";
+        case TrainingMethod::THREE_TOK:
+            return "three_tok";
+        case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
+            return "increasingly_longer";
+        case TrainingMethod::WINDOW2:
+            return "window2";
+        case TrainingMethod::WINDOW3:
+            return "window3";
+        }
+        return "UNKNOWN";
+    }
+}
 
 int main(int argc, char* argv[])
 {
@@ -18,7 +37,7 @@ int main(int argc, char* argv[])
     int num_layers = 4;
     bool verbose = false;
     size_t num_epochs = 1000;
-    rllm::NeuralNetwork::TrainingMethod method = rllm::NeuralNetwork::TrainingMethod::TWO_TOK;
+    auto method = rllm::TrainingMethod::TWO_TOK;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -42,15 +61,15 @@ int main(int argc, char* argv[])
         {
             const std::string m = argv[++i];
             if (m == "two_tok")
-                method = rllm::NeuralNetwork::TrainingMethod::TWO_TOK;
+                method = rllm::TrainingMethod::TWO_TOK;
             else if (m == "three_tok")
-                method = rllm::NeuralNetwork::TrainingMethod::THREE_TOK;
+                method = rllm::TrainingMethod::THREE_TOK;
             else if (m == "increasingly_longer")
-                method = rllm::NeuralNetwork::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
+                method = rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
             else if (m == "window2")
-                method = rllm::NeuralNetwork::TrainingMethod::WINDOW2;
+                method = rllm::TrainingMethod::WINDOW2;
             else if (m == "window3")
-                method = rllm::NeuralNetwork::TrainingMethod::WINDOW3;
+                method = rllm::TrainingMethod::WINDOW3;
             else
             {
                 std::println("Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, window2, window3", m);
@@ -68,17 +87,18 @@ int main(int argc, char* argv[])
         else
         {
             std::println(
-                ""
                 "Usage: {} [--train] [--file <filename>] [--verbose] [--filter <filter>]\n"
                 "          [--method <two_tok|three_tok|increasingly_longer|window2|window3>]\n"
                 "  --train         Run in training mode (default is prompt mode)\n"
                 "  --file <filename>  Specify the model file to load/save (default is '{}')\n"
                 "  --verbose       Enable verbose output\n"
                 "  --filter <filter>  Specify a filter to apply\n"
-                "  --epochs <n>    Number of training epochs (default: 1000)\n"
-                "  --method        Training method (default: two_tok)",
+                "  --epochs <n>    Number of training epochs (default: {})\n"
+                "  --method        Training method (default: {})",
                 argv[0],
-                filename
+                filename,
+                num_epochs,
+                rllm::training_method_to_string(method)
             );
             return 1;
         }

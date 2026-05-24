@@ -14,34 +14,43 @@ namespace rllm
 
     void process_command(const std::string& _command, PromptOptions& options)
     {
-        const auto command = _command.empty() ? "/help" :  _command;
+        const auto command = _command.empty() ? "/help" : _command;
 
-        struct command_entry {
+        struct command_entry
+        {
             std::vector<std::string_view> name;
             std::string_view description;
             std::function<void()> action;
         };
 
         std::vector<command_entry> commands = {
-            { {"/help", "/h", "/?"}, "Show this help message", [&]() {
-                std::println("Available commands:");
-                for (const auto& cmd : commands)
-                {
-                    std::println("  {}: {}", cmd.name[0], cmd.description);
-                }
-            }},
-            { {"/exit"}, "Exit the prompt mode", [&]() {
-                std::println("Exiting prompt mode.");
-                std::exit(0);
-            }},
-            { {"/info"}, "Show information about the loaded model", [&]() {
-                std::println("Model information:");
-                std::println("Number of token types in corpus: {}", static_cast<size_t>(TokenID::MAX));
-            }},
-            { {"/toggle_prio"}, "Toggle highest priority only mode", [&]() {
-                options.highest_prio_only = !options.highest_prio_only;
-                std::println("Toggled highest priority only mode. Now highest_prio_only is {}.", options.highest_prio_only);
-            }}
+            {{"/help", "/h", "/?"},
+             "Show this help message",
+             [&]() {
+                 std::println("Available commands:");
+                 for (const auto& cmd : commands)
+                 {
+                     std::println("  {}: {}", cmd.name[0], cmd.description);
+                 }
+             }},
+            {{"/exit"},
+             "Exit the prompt mode",
+             [&]() {
+                 std::println("Exiting prompt mode.");
+                 std::exit(0);
+             }},
+            {{"/info"},
+             "Show information about the loaded model",
+             [&]() {
+                 std::println("Model information:");
+                 std::println("Number of token types in corpus: {}", static_cast<size_t>(TokenID::MAX));
+             }},
+            {{"/toggle_prio"}, "Toggle highest priority only mode", [&]() {
+                 options.highest_prio_only = !options.highest_prio_only;
+                 std::println(
+                     "Toggled highest priority only mode. Now highest_prio_only is {}.", options.highest_prio_only
+                 );
+             }}
         };
 
         for (const auto& cmd : commands)
@@ -160,8 +169,13 @@ namespace rllm
         }
     }
 
-    void RLLM::train_mode(const std::string& filename, size_t num_layers, bool verbose,
-                           NeuralNetwork::TrainingMethod method, size_t num_epochs)
+    void RLLM::train_mode(
+        const std::string& filename,
+        size_t num_layers,
+        bool verbose,
+        TrainingMethod method,
+        size_t num_epochs
+    )
     {
         std::println("Training mode");
         set_nn_log_file("train.log");
