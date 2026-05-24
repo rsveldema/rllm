@@ -4,6 +4,7 @@
 #include <TokenIDFormatter.hpp>
 
 #include <cassert>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -110,10 +111,12 @@ namespace rllm
 
         if (m_tokenization_errors > 0)
         {
-            std::println("Tokenization failed: {} character(s) could not be matched to any token. "
-                         "Check tokenization.log for details. "
-                         "Re-run create_tokenizer_map.py to regenerate the token map.",
-                         m_tokenization_errors);
+            std::println(
+                "Tokenization failed: {} character(s) could not be matched to any token. "
+                "Check tokenization.log for details. "
+                "Re-run create_tokenizer_map.py to regenerate the token map.",
+                m_tokenization_errors
+            );
             std::abort();
         }
     }
@@ -130,12 +133,33 @@ namespace rllm
             for (const auto& token_id_and_string : tokenizer_map)
             {
                 const auto& token_id = token_id_and_string.first;
-                const auto& token_string = token_id_and_string.second;
+                const auto& token_info = token_id_and_string.second;
+                const auto token_len = std::strlen(token_info.str);
 
-                if (text.compare(ix, token_string.size(), token_string) == 0)
+                if (text.compare(ix, token_len, token_info.str) == 0)
                 {
+                    if (token_info.end_of_word)
+                    {
+                        const size_t next_ix = ix + token_len;
+                        if (next_ix < text.size())
+                        {
+                            const auto next_char = text[next_ix];
+                            if (std::isalnum((unsigned char) next_char) || next_char == '_')
+                            {
+                                LOG_DEBUG(
+                                    "Matched token '{}/{}' at position {}, but not at a word boundary, skipping it "
+                                    "(remaining text: '{}')",
+                                    token_info.str,
+                                    token_id,
+                                    ix,
+                                    next_char
+                                );
+                                continue; // matched string, but not at a word boundary
+                            }
+                        }
+                    }
                     result.push_back(token_id);
-                    ix += token_string.size();
+                    ix += token_len;
                     matched_token = true;
                     break;
                 }
@@ -154,8 +178,10 @@ namespace rllm
                     ++m_tokenization_errors;
                 }
                 ix++;
-            } else {
-                LOG_DEBUG("Matched token '{}' at position {}", tokenizer_map[result.back()], ix);
+            }
+            else
+            {
+                LOG_DEBUG("Matched token '{}'/{} at position {}", tokenizer_map[result.back()].str, result.back(), ix);
             }
         }
 
@@ -169,7 +195,7 @@ namespace rllm
             return "<UNK>";
         }
         assert(id < TokenID::MAX);
-        return tokenizer_map[id];
+        return tokenizer_map[id].str;
     }
 
     std::optional<std::string> Corpus::get_line(const InputLine& line) const

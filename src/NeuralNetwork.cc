@@ -5,11 +5,23 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <numeric>
 #include <random>
 #include <set>
 
 static std::ofstream s_nn_log;
 #define LOG_INFO(...) (s_nn_log << std::format(__VA_ARGS__) << '\n' << std::flush)
+
+
+#define LOG_INFO_EVERY_N(...) \
+    do \
+    { \
+        static int counter = 0; \
+        if (counter++ % 100 == 0) \
+        { \
+            LOG_INFO(__VA_ARGS__); \
+        } \
+    } while (0)
 
 namespace rllm
 {
@@ -166,8 +178,7 @@ namespace rllm
         for (const auto i : enum_iterator<TokenID>(TokenID::MAX))
             sum_exp += std::exp(m_output_layer.m_inputs[i] - max_val);
 
-        const float log_prob =
-            m_output_layer.m_inputs[expected_output_token] - max_val - std::log(sum_exp);
+        const float log_prob = m_output_layer.m_inputs[expected_output_token] - max_val - std::log(sum_exp);
         return -log_prob;
     }
 
@@ -227,38 +238,9 @@ namespace rllm
         do_training(train_input, verbose, max_iterations);
     }
 
-    void NeuralNetwork::train(bool verbose)
+
+    void NeuralNetwork::do_line_based_training(bool verbose)
     {
-        Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
-
-        set_random_weights_and_connections();
-
-        LOG_INFO(
-            "Training the neural network...\n"
-            "\t $num_layers: {}\n"
-            "\t $corpus_size: {}\n"
-            "\t $intermediate_layers width: {}\n"
-            "\t convergence threshold: {:.6f}\n"
-            "\t fires nothing CE loss:  {:.6f}\n"
-            "\t steps per example per epoch: {}\n"
-            "\t training method: {}\n",
-            m_intermediate_layers.size(),
-            static_cast<size_t>(TokenID::MAX),
-            static_cast<size_t>(IntermediateLayerIndex::MAX),
-            m_convergence_threshold,
-            m_fires_nothing_ce_loss,
-            STEPS_PER_EXAMPLE_PER_EPOCH,
-            [this]() -> std::string_view {
-                switch (m_training_method)
-                {
-                    case TrainingMethod::TWO_TOK:                        return "TWO_TOK";
-                    case TrainingMethod::THREE_TOK:                      return "THREE_TOK";
-                    case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:  return "INCREASINGLY_LONGER_SEQUENCES";
-                }
-                return "UNKNOWN";
-            }()
-        );
-
         std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
 
         // Multi-epoch training with shuffling prevents catastrophic forgetting:
@@ -301,17 +283,131 @@ namespace rllm
                 case TrainingMethod::WINDOW2:
                 case TrainingMethod::WINDOW3:
                     // window methods don't use the line-based loop; handled separately below
+                    assert(false);
                     break;
                 }
             }
         }
+    }
 
-        // Window methods operate on the flat token stream rather than per-line.
-        if (m_training_method == TrainingMethod::WINDOW2 ||
-            m_training_method == TrainingMethod::WINDOW3)
+    void NeuralNetwork::train_with_window(int window_size, bool verbose)
+    {
+        assert(window_size >= 2);
+
+        // Collect the full flat token sequence from every corpus file.
+        std::vector<TokenID> tokens;
+        m_corpus.visit_flat_tokens([&](TokenID tok) {
+            tokens.push_back(tok);
+        });
+
+        if (tokens.size() < static_cast<size_t>(window_size))
+            return;
+
+        // Each valid start index yields one training example.
+        const size_t num_windows = tokens.size() - static_cast<size_t>(window_size) + 1;
+        std::vector<size_t> indices(num_windows);
+        std::iota(indices.begin(), indices.end(), 0);
+
+        std::mt19937 rng{42};
+        size_t total_windows_trained = 0;
+        for (size_t epoch = 0; epoch < MAX_TRAINING_EPOCHS; ++epoch)
         {
-            const int window_size = (m_training_method == TrainingMethod::WINDOW2) ? 2 : 3;
-            train_with_window(window_size, verbose);
+            LOG_INFO("Epoch[{}%]: {:0.2f}% done", epoch / static_cast<float>(MAX_TRAINING_EPOCHS) * 100.0f, 0.0f);
+
+            std::shuffle(indices.begin(), indices.end(), rng);
+
+            for (size_t j = 0; j < num_windows; ++j)
+            {
+                const float progress = static_cast<float>(j) / static_cast<float>(num_windows);
+
+
+                InputLine window;
+                for (int k = 0; k < window_size; ++k)
+                    window.push_back(tokens[indices[j] + static_cast<size_t>(k)]);
+
+                total_windows_trained++;
+                if (total_windows_trained % 100 == 0)
+                {
+                    const auto line_opt = m_corpus.get_line(window);
+                    LOG_INFO(
+                        "Epoch[{}%] window[{}]: {:0.2f}% done for '{}'",
+                        epoch / static_cast<float>(MAX_TRAINING_EPOCHS) * 100.0f,
+                        j,
+                        progress * 100.0f,
+                        line_opt.has_value() ? line_opt->c_str() : "unknown"
+                    );
+                }
+
+                do_training(window, verbose, STEPS_PER_EXAMPLE_PER_EPOCH);
+            }
+        }
+    }
+
+    void NeuralNetwork::do_whole_corpus_window_based_training(bool verbose)
+    {
+        // Window methods operate on the flat token stream rather than per-line.
+        switch (m_training_method)
+        {
+        case TrainingMethod::WINDOW2:
+            train_with_window(2, verbose);
+            break;
+
+        case TrainingMethod::WINDOW3:
+            train_with_window(3, verbose);
+            break;
+
+        default:
+            assert(false);
+        }
+    }
+
+
+    void NeuralNetwork::train(bool verbose)
+    {
+        Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
+
+        set_random_weights_and_connections();
+
+        LOG_INFO(
+            "Training the neural network...\n"
+            "\t $num_layers: {}\n"
+            "\t $corpus_size: {}\n"
+            "\t $intermediate_layers width: {}\n"
+            "\t convergence threshold: {:.6f}\n"
+            "\t fires nothing CE loss:  {:.6f}\n"
+            "\t steps per example per epoch: {}\n"
+            "\t training method: {}\n",
+            m_intermediate_layers.size(),
+            static_cast<size_t>(TokenID::MAX),
+            static_cast<size_t>(IntermediateLayerIndex::MAX),
+            m_convergence_threshold,
+            m_fires_nothing_ce_loss,
+            STEPS_PER_EXAMPLE_PER_EPOCH,
+            [this]() -> std::string_view {
+                switch (m_training_method)
+                {
+                case TrainingMethod::TWO_TOK:
+                    return "TWO_TOK";
+                case TrainingMethod::THREE_TOK:
+                    return "THREE_TOK";
+                case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
+                    return "INCREASINGLY_LONGER_SEQUENCES";
+                case TrainingMethod::WINDOW2:
+                    return "WINDOW2";
+                case TrainingMethod::WINDOW3:
+                    return "WINDOW3";
+                }
+                return "UNKNOWN";
+            }()
+        );
+
+        if (training_method_is_line_based())
+        {
+            do_line_based_training(verbose);
+        }
+        else
+        {
+            do_whole_corpus_window_based_training(verbose);
         }
     }
 
@@ -340,7 +436,7 @@ namespace rllm
 
             if (loss < m_convergence_threshold)
             {
-                LOG_INFO(
+                LOG_INFO_EVERY_N(
                     "Convergence reached after {} steps for token '{}'",
                     max_iterations,
                     m_corpus.get_token_from_id(expected_output_token)
@@ -373,5 +469,6 @@ namespace rllm
         );
         m_stats.record_learning_failure();
     }
+
 
 } // namespace rllm
