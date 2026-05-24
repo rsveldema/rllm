@@ -42,8 +42,10 @@ namespace rllm
         if (j.contains("W_lm_head"))
         {
             const auto& w_j = j.at("W_lm_head");
-            for (size_t i = 0; i < w_j.size(); ++i)
-                W_lm_head.data()[i] = w_j.at(i).template get<float>();
+            size_t i = 0;
+            for (const auto t : enum_iterator<TokenID>())
+                for (const auto d : enum_iterator<EmbeddingDimension>())
+                    W_lm_head[t, d] = w_j.at(i++).template get<float>();
         }
         V_lm_head.fill(0.f);
     }
@@ -51,9 +53,10 @@ namespace rllm
     nlohmann::json OutputLayer::save() const
     {
         auto w_j = nlohmann::json::array();
-        const size_t n = W_lm_head.ROWS * W_lm_head.COLS;
-        w_j.get_ref<nlohmann::json::array_t&>().reserve(n);
-        for (size_t i = 0; i < n; ++i) w_j.push_back(W_lm_head.data()[i]);
+        w_j.get_ref<nlohmann::json::array_t&>().reserve(W_lm_head.ROWS * W_lm_head.COLS);
+        for (const auto t : enum_iterator<TokenID>())
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+                w_j.push_back(W_lm_head[t, d]);
         return {{"W_lm_head", std::move(w_j)}};
     }
 

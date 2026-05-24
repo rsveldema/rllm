@@ -5,46 +5,31 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <omp.h>
 
 namespace rllm
 {
     static_assert(
-        TransformerBlock::D_MODEL == static_cast<int>(EmbeddingDimension::MAX),
-        "D_MODEL must match EmbeddingDimension::MAX"
+        static_cast<int>(EmbeddingDimension::MAX) % static_cast<int>(HeadsIndex::MAX) == 0,
+        "EmbeddingDimension::MAX must be divisible by HeadsIndex::MAX"
     );
-    static_assert(
-        TransformerBlock::D_MODEL % TransformerBlock::NUM_HEADS == 0,
-        "D_MODEL must be divisible by NUM_HEADS"
-    );
-
-    static constexpr float MOMENTUM_BETA = 0.9f;
-    static constexpr float GRAD_CLIP = 1.0f;
-    static constexpr float VEL_CLIP = 0.1f;
-    static constexpr float WEIGHT_CLAMP = 2.0f;
 
     // ── randomize ─────────────────────────────────────────────────────────────
 
     void TransformerBlock::randomize()
     {
-        const float sd = 1.0f / std::sqrt(static_cast<float>(D_MODEL));
-        const float sf = 1.0f / std::sqrt(static_cast<float>(D_FF));
-        const int dd = D_MODEL * D_MODEL;
-        const int dff_d = D_FF * D_MODEL;
+        constexpr float sd = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(EmbeddingDimension::MAX)));
+        constexpr float sf = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(FFDimension::MAX)));
 
-        auto fill_rand = [](float* p, int n, float lo, float hi) {
-            for (int i = 0; i < n; ++i)
-                p[i] = get_random_value(lo, hi);
-        };
-
-        fill_rand(W_q.data(), dd, -sd, sd);
-        fill_rand(W_k.data(), dd, -sd, sd);
-        fill_rand(W_v.data(), dd, -sd, sd);
-        fill_rand(W_o.data(), dd, -sd, sd);
-        fill_rand(W_gate.data(), dff_d, -sd, sd);
-        fill_rand(W_up.data(), dff_d, -sd, sd);
-        fill_rand(W_down.data(), dff_d, -sf, sf);
+        W_q.fill_rand(-sd, sd);
+        W_k.fill_rand(-sd, sd);
+        W_v.fill_rand(-sd, sd);
+        W_o.fill_rand(-sd, sd);
+        W_gate.fill_rand(-sd, sd);
+        W_up.fill_rand(-sd, sd);
+        W_down.fill_rand(-sf, sf);
 
         V_q.fill(0.f);
         V_k.fill(0.f);
@@ -55,109 +40,53 @@ namespace rllm
         V_down.fill(0.f);
     }
 
-    // ── matrix helpers ────────────────────────────────────────────────────────
-
-    // C[m, n] = A[m, k] @ B[n, k]^T   (B stored row-major [n × k])
-    // C[i, j] = sum_l  A[i*k+l] * B[j*k+l]
-    void TransformerBlock::matmul_ABt(const float* A, const float* B, float* C, int m, int n, int k)
-    {
-#pragma omp parallel for collapse(2) schedule(static)
-        for (int i = 0; i < m; ++i)
-        {
-            for (int j = 0; j < n; ++j)
-            {
-                float sum = 0.f;
-#pragma omp simd reduction(+ : sum)
-                for (int l = 0; l < k; ++l)
-                    sum += A[i * k + l] * B[j * k + l];
-                C[i * n + j] = sum;
-            }
-        }
-    }
-
-    // C[m, n] = A[m, k] @ B[k, n]     (standard; B stored row-major [k × n])
-    // C[i, j] = sum_l  A[i*k+l] * B[l*n+j]
-    void TransformerBlock::matmul_AB(const float* A, const float* B, float* C, int m, int n, int k)
-    {
-#pragma omp parallel for collapse(2) schedule(static)
-        for (int i = 0; i < m; ++i)
-        {
-            for (int j = 0; j < n; ++j)
-            {
-                float sum = 0.f;
-                for (int l = 0; l < k; ++l)
-                    sum += A[i * k + l] * B[l * n + j];
-                C[i * n + j] = sum;
-            }
-        }
-    }
-
-    // C[m, n] += A^T @ B  where A is stored row-major [k × m], B is [k × n]
-    // C[i, j] += sum_l  A[l*m+i] * B[l*n+j]
-    void TransformerBlock::matmul_AtB_acc(const float* A, const float* B, float* C, int m, int n, int k)
-    {
-#pragma omp parallel for collapse(2) schedule(static)
-        for (int i = 0; i < m; ++i)
-        {
-            for (int j = 0; j < n; ++j)
-            {
-                float sum = 0.f;
-                for (int l = 0; l < k; ++l)
-                    sum += A[l * m + i] * B[l * n + j];
-                C[i * n + j] += sum;
-            }
-        }
-    }
-
     // ── normalisation ──────────────────────────────────────────────────────────
 
     // y_t = x_t / rms(x_t)  for each row t
-    void TransformerBlock::rms_norm(const float* x, float* y, int T, int d)
+    void TransformerBlock::rms_norm(
+        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& x,
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& y)
     {
-        const float eps = 1e-6f;
-        for (int t = 0; t < T; ++t)
+        constexpr float eps = 1e-6f;
+        constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
+        for (const auto t : enum_iterator<PositionIndex>(x.num_rows()))
         {
-            const float* xr = x + t * d;
-            float* yr = y + t * d;
             float sq = 0.f;
-#pragma omp simd reduction(+ : sq)
-            for (int i = 0; i < d; ++i)
-                sq += xr[i] * xr[i];
-            const float inv = 1.0f / std::sqrt(sq / static_cast<float>(d) + eps);
-#pragma omp simd
-            for (int i = 0; i < d; ++i)
-                yr[i] = xr[i] * inv;
+            for (const auto i : enum_iterator<EmbeddingDimension>())
+            {
+                const auto val = x[t, i];
+                sq += val * val;
+            }
+            const float inv = 1.0f / std::sqrt(sq / fd + eps);
+            for (const auto i : enum_iterator<EmbeddingDimension>())
+                y[t, i] = x[t, i] * inv;
         }
     }
 
     // dx += dL/dx  given dy = dL/dy and the original x (not the normalised y).
     // Per row:  dx_j += (1/rms) * (dy_j  -  y_j * mean(dy · y))
-    void TransformerBlock::rms_norm_backward(const float* dy, const float* x, float* dx, int T, int d)
+    void TransformerBlock::rms_norm_backward(
+        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dy,
+        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& x,
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dx)
     {
-        const float eps = 1e-6f;
-        const float fd = static_cast<float>(d);
-        for (int t = 0; t < T; ++t)
+        constexpr float eps = 1e-6f;
+        constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
+        for (const auto t : enum_iterator<PositionIndex>(x.num_rows()))
         {
-            const float* xr = x + t * d;
-            const float* dyr = dy + t * d;
-            float* dxr = dx + t * d;
-
             float sq = 0.f;
-#pragma omp simd reduction(+ : sq)
-            for (int i = 0; i < d; ++i)
-                sq += xr[i] * xr[i];
+            for (const auto i : enum_iterator<EmbeddingDimension>())
+                sq += x[t, i] * x[t, i];
             const float inv = 1.0f / std::sqrt(sq / fd + eps);
 
             // dot = mean(dy · y) = (1/d) * sum_i dy[i] * x[i] * inv
             float dot = 0.f;
-#pragma omp simd reduction(+ : dot)
-            for (int i = 0; i < d; ++i)
-                dot += dyr[i] * xr[i] * inv;
+            for (const auto i : enum_iterator<EmbeddingDimension>())
+                dot += dy[t, i] * x[t, i] * inv;
             dot /= fd;
 
-#pragma omp simd
-            for (int i = 0; i < d; ++i)
-                dxr[i] += inv * (dyr[i] - xr[i] * inv * dot);
+            for (const auto i : enum_iterator<EmbeddingDimension>())
+                dx[t, i] += inv * (dy[t, i] - x[t, i] * inv * dot);
         }
     }
 
@@ -205,18 +134,34 @@ namespace rllm
         }
     }
 
-    // ── SGD + momentum ─────────────────────────────────────────────────────────
+    // ── SwiGLU backward ───────────────────────────────────────────────────────
 
-    void TransformerBlock::sgd_update(float* W, float* vel, const float* grad, int n, float lr)
+    void TransformerBlock::swiglu_backward(
+        PositionIndex seq,
+        const flexible_size_matrix<float, PositionIndex, FFDimension>& gate_pre,
+        const flexible_size_matrix<float, PositionIndex, FFDimension>& up_pre,
+        const flexible_size_matrix<float, PositionIndex, FFDimension>& d_ffn_act,
+        flexible_size_matrix<float, PositionIndex, FFDimension>& d_gate_pre,
+        flexible_size_matrix<float, PositionIndex, FFDimension>& d_up_pre)
     {
-#pragma omp simd
-        for (int i = 0; i < n; ++i)
+#pragma omp parallel for collapse(2) schedule(static)
+        for (const auto t : enum_iterator<PositionIndex>(seq))
         {
-            const float g = std::clamp(grad[i], -GRAD_CLIP, GRAD_CLIP);
-            vel[i] = std::clamp(MOMENTUM_BETA * vel[i] + lr * g, -VEL_CLIP, VEL_CLIP);
-            W[i] = std::clamp(W[i] + vel[i], -WEIGHT_CLAMP, WEIGHT_CLAMP);
+            for (const auto f : enum_iterator<FFDimension>())
+            {
+                const float g = gate_pre[t, f];
+                const float sg = 1.0f / (1.0f + std::exp(-g)); // sigma(g)
+                const float silu = g * sg;
+                // silu'(g) = sigma(g) * (1 + g * (1 - sigma(g)))
+                // Avoids exp(-g)*sigma(g) which gives inf*0=NaN for g < -88 in float32.
+                const float dsilu_dg = sg * (1.0f + g * (1.0f - sg));
+                d_gate_pre[t, f] = d_ffn_act[t, f] * up_pre[t, f] * dsilu_dg;
+                d_up_pre  [t, f] = d_ffn_act[t, f] * silu;
+            }
         }
     }
+
+    // ── SGD + momentum ─────────────────────────────────────────────────────────
 
     // ── forward pass ──────────────────────────────────────────────────────────
 
@@ -224,95 +169,131 @@ namespace rllm
     TransformerBlock::forward(flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len)
     {
         const int T = static_cast<int>(seq_len);
-        const int D = D_MODEL;
-        const int H = NUM_HEADS;
-        const int Dh = HEAD_DIM;
-        const int Dff = D_FF;
+        const int Dh = static_cast<int>(HeadDimension::MAX);
 
         m_seq_len = seq_len;
-        std::copy(h.data(), h.data() + T * D, m_h_in.data()); // cache for backward
+        m_h_in = h;
 
         // ── 1. Pre-norm (attention) ──────────────────────────────────────────
-        rms_norm(h.data(), m_h_norm_attn.data(), T, D);
+        m_h_norm_attn.set_size(seq_len, EmbeddingDimension::MAX);
+        rms_norm(h, m_h_norm_attn);
 
         // ── 2. Q / K / V projections ─────────────────────────────────────────
-        matmul_ABt(m_h_norm_attn.data(), W_q.data(), m_Q.data(), T, D, D);
-        matmul_ABt(m_h_norm_attn.data(), W_k.data(), m_K.data(), T, D, D);
-        matmul_ABt(m_h_norm_attn.data(), W_v.data(), m_V.data(), T, D, D);
+        m_Q.set_size(seq_len, EmbeddingDimension::MAX);
+        m_K.set_size(seq_len, EmbeddingDimension::MAX);
+        m_V.set_size(seq_len, EmbeddingDimension::MAX);
+        matmul_ABt(m_h_norm_attn, W_q, m_Q);
+        matmul_ABt(m_h_norm_attn, W_k, m_K);
+        matmul_ABt(m_h_norm_attn, W_v, m_V);
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
-        const float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
+        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
+        m_attn_concat.set_size(seq_len, EmbeddingDimension::MAX);
         m_attn_concat.fill(0.f);
 
-        for (int hi = 0; hi < H; ++hi)
+        for (const auto hi : enum_iterator<HeadsIndex>())
         {
-            auto& scores_mat = m_attn_w[static_cast<HeadsIndex>(hi)];
-            scores_mat.set_size(static_cast<PositionIndex>(T), static_cast<PositionIndex>(T));
+            auto& scores_mat = m_attn_w[hi];
+            scores_mat.set_size(seq_len, seq_len);
+
+            const auto hi_int = static_cast<size_t>(hi);
+            const auto hStart = static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
+            const auto hEnd   = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
 
             // scores_mat[i, j] = Q[i, hi*Dh..] · K[j, hi*Dh..] * scale
-            for (int i = 0; i < T; ++i)
+            for (const auto i : enum_iterator<PositionIndex>(seq_len))
             {
-                const float* qi = m_Q.data() + i * D + hi * Dh;
-                for (int j = 0; j < T; ++j)
+                for (const auto j : enum_iterator<PositionIndex>(seq_len))
                 {
-                    const float* kj = m_K.data() + j * D + hi * Dh;
                     float dot = 0.f;
-#pragma omp simd reduction(+ : dot)
-                    for (int d = 0; d < Dh; ++d)
-                        dot += qi[d] * kj[d];
-                    scores_mat.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), dot * scale);
+                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                        dot += m_Q[i, d] * m_K[j, d];
+                    scores_mat[i, j] = dot * scale;
                 }
             }
+
             causal_softmax(scores_mat, T);
 
-            // attn_concat[i, hi*Dh..] = sum_j scores_mat[i,j] * V[j, hi*Dh..]
-            for (int i = 0; i < T; ++i)
+            // attn_concat[i, d] = sum_j scores_mat[i,j] * V[j, d]  (causal: j ≤ i)
+            for (const auto i : enum_iterator<PositionIndex>(seq_len))
             {
-                float* out = m_attn_concat.data() + i * D + hi * Dh;
-                std::fill(out, out + Dh, 0.f);
-                for (int j = 0; j <= i; ++j)
+                for (const auto j : enum_iterator<PositionIndex>(inc(i)))
                 {
-                    const float* vj = m_V.data() + j * D + hi * Dh;
-                    const float w = scores_mat[static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)];
-#pragma omp simd
-                    for (int d = 0; d < Dh; ++d)
-                        out[d] += w * vj[d];
+                    const float w = scores_mat[i, j];
+                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                        m_attn_concat[i, d] += w * m_V[j, d];
                 }
             }
         }
 
         // ── 4. Output projection + residual ──────────────────────────────────
-        fixed_size_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
-        matmul_ABt(m_attn_concat.data(), W_o.data(), attn_proj.data(), T, D, D);
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
+        attn_proj.set_size(seq_len, EmbeddingDimension::MAX);
+        matmul_ABt(m_attn_concat, W_o, attn_proj);
 
-#pragma omp simd
-        for (int i = 0; i < T * D; ++i)
-            m_h_mid.data()[i] = h.data()[i] + attn_proj.data()[i];
+        m_h_mid.set_size(seq_len, EmbeddingDimension::MAX);
+        for (const auto t : enum_iterator<PositionIndex>(seq_len))
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+                m_h_mid[t, d] = h[t, d] + attn_proj[t, d];
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
-
-        rms_norm(m_h_mid.data(), m_h_norm_ff.data(), T, D);
+        m_h_norm_ff.set_size(seq_len, EmbeddingDimension::MAX);
+        rms_norm(m_h_mid, m_h_norm_ff);
 
         // ── 6. SwiGLU FFN ─────────────────────────────────────────────────────
-        matmul_ABt(m_h_norm_ff.data(), W_gate.data(), m_gate_pre.data(), T, Dff, D);
-        matmul_ABt(m_h_norm_ff.data(), W_up.data(), m_up_pre.data(), T, Dff, D);
+        m_gate_pre.set_size(seq_len, FFDimension::MAX);
+        m_up_pre  .set_size(seq_len, FFDimension::MAX);
+        matmul_ABt(m_h_norm_ff, W_gate, m_gate_pre);
+        matmul_ABt(m_h_norm_ff, W_up, m_up_pre);
 
-#pragma omp simd
-        for (int i = 0; i < T * Dff; ++i)
-        {
-            const float g = m_gate_pre.data()[i];
-            const float silu = g / (1.0f + std::exp(-g));
-            m_ffn_act.data()[i] = silu * m_up_pre.data()[i];
-        }
+        m_ffn_act.set_size(seq_len, FFDimension::MAX);
+        for (const auto t : enum_iterator<PositionIndex>(seq_len))
+            for (const auto f : enum_iterator<FFDimension>())
+            {
+                const float g = m_gate_pre[t, f];
+                const float silu = g / (1.0f + std::exp(-g));
+                m_ffn_act[t, f] = silu * m_up_pre[t, f];
+            }
 
-        fixed_size_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
-        matmul_ABt(m_ffn_act.data(), W_down.data(), ffn_out.data(), T, D, Dff);
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
+        ffn_out.set_size(seq_len, EmbeddingDimension::MAX);
+        matmul_ABt(m_ffn_act, W_down, ffn_out);
 
         // ── 7. Residual ───────────────────────────────────────────────────────
-#pragma omp simd
-        for (int i = 0; i < T * D; ++i)
-            h.data()[i] = m_h_mid.data()[i] + ffn_out.data()[i];
+        for (const auto t : enum_iterator<PositionIndex>(seq_len))
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+                h[t, d] = m_h_mid[t, d] + ffn_out[t, d];
     }
+
+    // ── backward temporaries ──────────────────────────────────────────────────
+    // All large matrices live here so they are heap-allocated via unique_ptr and
+    // do not blow the stack (~21 MB combined).
+    struct BackwardWorkspace
+    {
+        // FFN backward
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> d_h_mid;
+        flexible_size_matrix<float, PositionIndex, FFDimension>        d_ffn_act;
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension>      dW_down;
+        flexible_size_matrix<float, PositionIndex, FFDimension>        d_gate_pre;
+        flexible_size_matrix<float, PositionIndex, FFDimension>        d_up_pre;
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension>      dW_gate;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension>      dW_up;
+        // Attention backward
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_attn_concat;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_o;
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_Q;
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_K;
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_V;
+        flexible_size_matrix<float, PositionIndex, PositionIndex>        d_scores;
+        flexible_size_matrix<float, PositionIndex, PositionIndex>        d_raw;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_q;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_k;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   d_h_norm_attn;
+        // Scratch buffer shared by both matmul accumulation loops
+        flexible_size_matrix<float, PositionIndex, EmbeddingDimension>   tmp;
+    };
 
     // ── backward pass ─────────────────────────────────────────────────────────
 
@@ -323,193 +304,140 @@ namespace rllm
     )
     {
         const int T = static_cast<int>(m_seq_len);
-        const int D = D_MODEL;
-        const int H = NUM_HEADS;
-        const int Dh = HEAD_DIM;
-        const int Dff = D_FF;
+
+        auto ws = std::make_unique<BackwardWorkspace>();
+        const auto seq = static_cast<PositionIndex>(T);
+        ws->d_h_mid      .set_size(seq, EmbeddingDimension::MAX);
+        ws->d_ffn_act    .set_size(seq, FFDimension::MAX);
+        ws->d_gate_pre   .set_size(seq, FFDimension::MAX);
+        ws->d_up_pre     .set_size(seq, FFDimension::MAX);
+        ws->d_h_norm_ff  .set_size(seq, EmbeddingDimension::MAX);
+        ws->d_attn_concat.set_size(seq, EmbeddingDimension::MAX);
+        ws->d_Q          .set_size(seq, EmbeddingDimension::MAX);
+        ws->d_K          .set_size(seq, EmbeddingDimension::MAX);
+        ws->d_V          .set_size(seq, EmbeddingDimension::MAX);
+        ws->d_h_norm_attn.set_size(seq, EmbeddingDimension::MAX);
+        ws->tmp          .set_size(seq, EmbeddingDimension::MAX);
+        ws->d_scores     .set_size(seq, seq);
+        ws->d_raw        .set_size(seq, seq);
 
         // ── FFN backward ──────────────────────────────────────────────────────
         // h_out = h_mid + ffn_out  → d_h_mid += dout,  d_ffn_out = dout (same buffer)
-        flexible_size_matrix<float, PositionIndex, EmbeddingDimension> d_h_mid(
-            static_cast<PositionIndex>(T), EmbeddingDimension::MAX
-        );
-        std::copy(dout.data(), dout.data() + T * D, d_h_mid.data());
+        ws->d_h_mid = dout; // copy first to avoid overwriting dout before it's used in dW_down
 
         // d_ffn_act = d_ffn_out @ W_down   (W_down[D × Dff])
-        // C[T, Dff] = A[T, D] @ B[D, Dff]
-        std::vector<float> d_ffn_act(T * Dff, 0.f);
-        matmul_AB(dout.data(), W_down.data(), d_ffn_act.data(), T, Dff, D);
+        matmul_AB(dout, W_down, ws->d_ffn_act);
 
         // dW_down[D, Dff] += dout^T @ ffn_act
-        std::vector<float> dW_down(D * Dff, 0.f);
-        matmul_AtB_acc(dout.data(), m_ffn_act.data(), dW_down.data(), D, Dff, T);
+        matmul_AtB_acc(dout, m_ffn_act, ws->dW_down);
 
         // SwiGLU backward: d(silu(g)*u) / dg, du
-        std::vector<float> d_gate_pre(T * Dff);
-        std::vector<float> d_up_pre(T * Dff);
-#pragma omp simd
-        for (int i = 0; i < T * Dff; ++i)
-        {
-            const float g = m_gate_pre.data()[i];
-            const float sg = 1.0f / (1.0f + std::exp(-g)); // sigma(g), 0 when g << 0
-            const float silu = g * sg;
-            // silu'(g) = sigma(g) * (1 + g * (1 - sigma(g)))
-            // Avoids exp(-g)*sigma(g) which gives inf*0=NaN for g < -88 in float32.
-            const float dsilu_dg = sg * (1.0f + g * (1.0f - sg));
-            d_gate_pre[i] = d_ffn_act[i] * m_up_pre.data()[i] * dsilu_dg;
-            d_up_pre[i] = d_ffn_act[i] * silu;
-        }
+        swiglu_backward(seq, m_gate_pre, m_up_pre, ws->d_ffn_act, ws->d_gate_pre, ws->d_up_pre);
 
         // d_h_norm_ff = d_gate_pre @ W_gate  +  d_up_pre @ W_up
-        fixed_size_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
-        d_h_norm_ff.fill(0.f);
-        {
-            std::vector<float> tmp(T * D);
-            matmul_AB(d_gate_pre.data(), W_gate.data(), tmp.data(), T, D, Dff);
-#pragma omp simd
-            for (int i = 0; i < T * D; ++i)
-                d_h_norm_ff.data()[i] += tmp[i];
-            matmul_AB(d_up_pre.data(), W_up.data(), tmp.data(), T, D, Dff);
-#pragma omp simd
-            for (int i = 0; i < T * D; ++i)
-                d_h_norm_ff.data()[i] += tmp[i];
-        }
+        matmul_AB(ws->d_gate_pre, W_gate, ws->tmp);
+        ws->d_h_norm_ff.element_wise_add(ws->tmp);
+        matmul_AB(ws->d_up_pre, W_up, ws->tmp);
+        ws->d_h_norm_ff.element_wise_add(ws->tmp);
 
         // weight gradients for gate, up
-        std::vector<float> dW_gate(Dff * D, 0.f);
-        std::vector<float> dW_up(Dff * D, 0.f);
-        matmul_AtB_acc(d_gate_pre.data(), m_h_norm_ff.data(), dW_gate.data(), Dff, D, T);
-        matmul_AtB_acc(d_up_pre.data(), m_h_norm_ff.data(), dW_up.data(), Dff, D, T);
+        matmul_AtB_acc(ws->d_gate_pre, m_h_norm_ff, ws->dW_gate);
+        matmul_AtB_acc(ws->d_up_pre,   m_h_norm_ff, ws->dW_up);
 
         // RMSNorm backward for FFN: d_h_mid += rms_bwd(d_h_norm_ff, h_mid)
-        rms_norm_backward(d_h_norm_ff.data(), m_h_mid.data(), d_h_mid.data(), T, D);
+        rms_norm_backward(ws->d_h_norm_ff, m_h_mid, ws->d_h_mid);
 
         // ── Attention backward ─────────────────────────────────────────────────
         // h_mid = h_in + attn_proj  → d_attn_proj = d_h_mid (passed through residual)
         //                             d_h_in (residual part) = d_h_mid (accumulated below)
 
         // d_attn_concat = d_attn_proj @ W_o
-        std::vector<float> d_attn_concat(T * D, 0.f);
-        matmul_AB(d_h_mid.data(), W_o.data(), d_attn_concat.data(), T, D, D);
-
-        std::vector<float> dW_o(D * D, 0.f);
-        matmul_AtB_acc(d_h_mid.data(), m_attn_concat.data(), dW_o.data(), D, D, T);
+        matmul_AB(ws->d_h_mid, W_o, ws->d_attn_concat);
+        matmul_AtB_acc(ws->d_h_mid, m_attn_concat, ws->dW_o);
 
         // Per-head backward
-        std::vector<float> d_Q(T * D, 0.f);
-        std::vector<float> d_K(T * D, 0.f);
-        std::vector<float> d_V(T * D, 0.f);
-
-        for (int hi = 0; hi < H; ++hi)
+        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
+        for (const auto hi : enum_iterator<HeadsIndex>())
         {
-            const auto& scores_mat = m_attn_w[static_cast<HeadsIndex>(hi)];
-            const float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
+            ws->d_raw.fill(0.f); // d_raw accumulates per head; reset each iteration
 
-            // d_V_h[j, :] += sum_i scores_mat[i,j] * d_attn_concat[i, hi*Dh..]
-            for (int j = 0; j < T; ++j)
+            const auto& scores_mat = m_attn_w[hi];
+            const auto hi_int = static_cast<size_t>(hi);
+            const auto hStart = static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
+            const auto hEnd   = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
+
+            // d_V_h[j, d] += sum_i scores_mat[i,j] * d_attn_concat[i, d]
+            for (const auto j : enum_iterator<PositionIndex>(seq))
             {
-                float* dvj = d_V.data() + j * D + hi * Dh;
-                for (int i = j; i < T; ++i) // only non-masked rows
+                for (const auto i : enum_iterator<PositionIndex>(j, seq)) // only non-masked rows
                 {
-                    const float* do_i = d_attn_concat.data() + i * D + hi * Dh;
-                    const float w = scores_mat[static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)];
-#pragma omp simd
-                    for (int d = 0; d < Dh; ++d)
-                        dvj[d] += w * do_i[d];
+                    const float w = scores_mat[i, j];
+                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                        ws->d_V[j, d] += w * ws->d_attn_concat[i, d];
                 }
             }
 
-            // d_scores[i,j] = d_attn_concat[i, hi*Dh..] · V[j, hi*Dh..]
-            flexible_size_matrix<float, PositionIndex, PositionIndex> d_scores(
-                static_cast<PositionIndex>(T), static_cast<PositionIndex>(T)
-            );
-            for (int i = 0; i < T; ++i)
+            // d_scores[i,j] = d_attn_concat[i, d] · V[j, d]
+            for (const auto i : enum_iterator<PositionIndex>(seq))
             {
-                const float* do_i = d_attn_concat.data() + i * D + hi * Dh;
-                for (int j = 0; j <= i; ++j)
+                for (const auto j : enum_iterator<PositionIndex>(inc(i)))
                 {
-                    const float* vj = m_V.data() + j * D + hi * Dh;
                     float dot = 0.f;
-#pragma omp simd reduction(+ : dot)
-                    for (int d = 0; d < Dh; ++d)
-                        dot += do_i[d] * vj[d];
-                    d_scores.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), dot);
+                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                        dot += ws->d_attn_concat[i, d] * m_V[j, d];
+                    ws->d_scores[i, j] = dot;
                 }
             }
 
             // Backward through causal softmax
-            flexible_size_matrix<float, PositionIndex, PositionIndex> d_raw(
-                static_cast<PositionIndex>(T), static_cast<PositionIndex>(T)
-            );
-            softmax_backward(d_scores, scores_mat, d_raw, T);
+            softmax_backward(ws->d_scores, scores_mat, ws->d_raw, T);
 
             // d_Q and d_K
-            for (int i = 0; i < T; ++i)
+            for (const auto i : enum_iterator<PositionIndex>(seq))
             {
-                float* dqi = d_Q.data() + i * D + hi * Dh;
-                for (int j = 0; j <= i; ++j)
+                for (const auto j : enum_iterator<PositionIndex>(inc(i)))
                 {
-                    const float* kj = m_K.data() + j * D + hi * Dh;
-                    const float ds = d_raw.get(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)) * scale;
-#pragma omp simd
-                    for (int d = 0; d < Dh; ++d)
-                        dqi[d] += ds * kj[d];
+                    const float ds = ws->d_raw[i, j] * scale;
+                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                        ws->d_Q[i, d] += ds * m_K[j, d];
                 }
             }
-            for (int j = 0; j < T; ++j)
+            for (const auto j : enum_iterator<PositionIndex>(seq))
             {
-                float* dkj = d_K.data() + j * D + hi * Dh;
-                for (int i = j; i < T; ++i)
+                for (const auto i : enum_iterator<PositionIndex>(j, seq))
                 {
-                    const float* qi = m_Q.data() + i * D + hi * Dh;
-                    const float ds = d_raw.get(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)) * scale;
-#pragma omp simd
-                    for (int d = 0; d < Dh; ++d)
-                        dkj[d] += ds * qi[d];
+                    const float ds = ws->d_raw[i, j] * scale;
+                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                        ws->d_K[j, d] += ds * m_Q[i, d];
                 }
             }
         }
 
         // Weight gradients for W_q, W_k, W_v
-        std::vector<float> dW_q(D * D, 0.f);
-        std::vector<float> dW_k(D * D, 0.f);
-        std::vector<float> dW_v(D * D, 0.f);
-        matmul_AtB_acc(d_Q.data(), m_h_norm_attn.data(), dW_q.data(), D, D, T);
-        matmul_AtB_acc(d_K.data(), m_h_norm_attn.data(), dW_k.data(), D, D, T);
-        matmul_AtB_acc(d_V.data(), m_h_norm_attn.data(), dW_v.data(), D, D, T);
+        matmul_AtB_acc(ws->d_Q, m_h_norm_attn, ws->dW_q);
+        matmul_AtB_acc(ws->d_K, m_h_norm_attn, ws->dW_k);
+        matmul_AtB_acc(ws->d_V, m_h_norm_attn, ws->dW_v);
 
         // d_h_norm_attn = d_Q @ W_q  +  d_K @ W_k  +  d_V @ W_v
-        std::vector<float> d_h_norm_attn(T * D, 0.f);
-        {
-            std::vector<float> tmp(T * D);
-            matmul_AB(d_Q.data(), W_q.data(), tmp.data(), T, D, D);
-#pragma omp simd
-            for (int i = 0; i < T * D; ++i)
-                d_h_norm_attn[i] += tmp[i];
-            matmul_AB(d_K.data(), W_k.data(), tmp.data(), T, D, D);
-#pragma omp simd
-            for (int i = 0; i < T * D; ++i)
-                d_h_norm_attn[i] += tmp[i];
-            matmul_AB(d_V.data(), W_v.data(), tmp.data(), T, D, D);
-#pragma omp simd
-            for (int i = 0; i < T * D; ++i)
-                d_h_norm_attn[i] += tmp[i];
-        }
+        matmul_AB(ws->d_Q, W_q, ws->tmp);
+        ws->d_h_norm_attn.element_wise_add(ws->tmp);
+        matmul_AB(ws->d_K, W_k, ws->tmp);
+        ws->d_h_norm_attn.element_wise_add(ws->tmp);
+        matmul_AB(ws->d_V, W_v, ws->tmp);
+        ws->d_h_norm_attn.element_wise_add(ws->tmp);
 
         // d_h_in: residual from d_h_mid + RMSNorm backward
-        std::copy(d_h_mid.data(), d_h_mid.data() + T * D, din.data());
-        rms_norm_backward(d_h_norm_attn.data(), m_h_in.data(), din.data(), T, D);
+        din = ws->d_h_mid;
+        rms_norm_backward(ws->d_h_norm_attn, m_h_in, din);
 
         // ── Weight updates ─────────────────────────────────────────────────────
-        const int dd = D_MODEL * D_MODEL;
-        const int dff_d = D_FF * D_MODEL;
-        sgd_update(W_q.data(), V_q.data(), dW_q.data(), dd, learning_rate);
-        sgd_update(W_k.data(), V_k.data(), dW_k.data(), dd, learning_rate);
-        sgd_update(W_v.data(), V_v.data(), dW_v.data(), dd, learning_rate);
-        sgd_update(W_o.data(), V_o.data(), dW_o.data(), dd, learning_rate);
-        sgd_update(W_gate.data(), V_gate.data(), dW_gate.data(), dff_d, learning_rate);
-        sgd_update(W_up.data(), V_up.data(), dW_up.data(), dff_d, learning_rate);
-        sgd_update(W_down.data(), V_down.data(), dW_down.data(), dff_d, learning_rate);
+        sgd_update(W_q,    V_q,    ws->dW_q,    learning_rate);
+        sgd_update(W_k,    V_k,    ws->dW_k,    learning_rate);
+        sgd_update(W_v,    V_v,    ws->dW_v,    learning_rate);
+        sgd_update(W_o,    V_o,    ws->dW_o,    learning_rate);
+        sgd_update(W_gate, V_gate, ws->dW_gate, learning_rate);
+        sgd_update(W_up,   V_up,   ws->dW_up,   learning_rate);
+        sgd_update(W_down, V_down, ws->dW_down, learning_rate);
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────

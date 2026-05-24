@@ -9,6 +9,21 @@
 #include <random>
 #include <set>
 
+namespace rllm
+{
+    const char* training_method_to_string(TrainingMethod method)
+    {
+        switch (method)
+        {
+        case TrainingMethod::TWO_TOK:                    return "two_tok";
+        case TrainingMethod::THREE_TOK:                  return "three_tok";
+        case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES: return "increasingly_longer";
+        case TrainingMethod::WINDOW:                     return "window";
+        }
+        return "UNKNOWN";
+    }
+} // namespace rllm
+
 static std::ofstream s_nn_log;
 #define LOG_INFO(...) (s_nn_log << std::format(__VA_ARGS__) << '\n' << std::flush)
 
@@ -45,7 +60,7 @@ namespace rllm
         assert(!m_transformer_blocks.empty());
 
         m_last_input = input;
-        m_seq_len    = static_cast<PositionIndex>(input.size());
+        m_seq_len = input.size();
 
         // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
         flexible_size_matrix<float, PositionIndex, EmbeddingDimension> h(m_seq_len, EmbeddingDimension::MAX);
@@ -59,10 +74,10 @@ namespace rllm
         m_last_hidden = h;
 
         // Project the last-position hidden state to vocabulary logits
-        const int D = TransformerBlock::D_MODEL;
-        const int T = static_cast<int>(m_seq_len);
         template_token_vector<float, EmbeddingDimension> h_last;
-        { const float* src = h.data() + (T - 1) * D; for (int d = 0; d < D; ++d) h_last[static_cast<EmbeddingDimension>(d)] = src[d]; }
+        const auto last_pos = dec(m_seq_len);
+        for (const auto d : enum_iterator<EmbeddingDimension>())
+            h_last[d] = h[last_pos, d];
         m_output_layer.forward_from_hidden(h_last);
     }
 
@@ -117,13 +132,13 @@ namespace rllm
         m_output_layer.compute_deltas(score, *output_layer_delta);
 
         // Backpropagate through LM head → get dL/dh_last
-        const int D = TransformerBlock::D_MODEL;
+        constexpr int D = static_cast<int>(EmbeddingDimension::MAX);
         const int T = static_cast<int>(m_seq_len);
-        std::vector<float> h_last_vec(m_last_hidden.data() + (T-1)*D, m_last_hidden.data() + T*D);
+        std::vector<float> h_last_vec(m_last_hidden.data() + (T - 1) * D, m_last_hidden.data() + T * D);
         template_token_vector<float, EmbeddingDimension> h_last;
-        for (int d = 0; d < D; ++d) h_last[static_cast<EmbeddingDimension>(d)] = h_last_vec[d];
-        auto dh_last =
-            m_output_layer.backward_and_update(*output_layer_delta, h_last, LEARNING_RATE);
+        for (int d = 0; d < D; ++d)
+            h_last[static_cast<EmbeddingDimension>(d)] = h_last_vec[d];
+        auto dh_last = m_output_layer.backward_and_update(*output_layer_delta, h_last, LEARNING_RATE);
 
         // Initialise full-sequence gradient: zero everywhere except the last position
 
@@ -149,7 +164,8 @@ namespace rllm
     void NeuralNetwork::set_random_weights_and_connections()
     {
         m_input_layer.set_random_embeddings();
-        for (auto& block : m_transformer_blocks) block.randomize();
+        for (auto& block : m_transformer_blocks)
+            block.randomize();
         m_output_layer.set_random_weights();
     }
 
@@ -179,12 +195,12 @@ namespace rllm
     {
         const int n_tok = static_cast<int>(TokenID::MAX);
         float max_val = m_output_layer.m_inputs[TokenID::START];
-#pragma omp simd reduction(max:max_val)
+#pragma omp simd reduction(max : max_val)
         for (int i = 0; i < n_tok; ++i)
             max_val = std::max(max_val, m_output_layer.m_inputs[static_cast<TokenID>(i)]);
 
         float sum_exp = 0.0f;
-#pragma omp simd reduction(+:sum_exp)
+#pragma omp simd reduction(+ : sum_exp)
         for (int i = 0; i < n_tok; ++i)
             sum_exp += std::exp(m_output_layer.m_inputs[static_cast<TokenID>(i)] - max_val);
 
@@ -440,7 +456,7 @@ namespace rllm
                     max_iterations,
                     m_corpus.get_token_from_id(expected_output_token),
                     full_string,
-                   static_cast<size_t>(train_input.size())
+                    static_cast<size_t>(train_input.size())
                 );
                 m_stats.record_learning_success();
                 return;
@@ -463,7 +479,8 @@ namespace rllm
         }
 
         LOG_INFO(
-            "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}, expected token: '{}' ({}), full string: '{}', input size: {}.",
+            "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}, expected token: '{}' ({}), full "
+            "string: '{}', input size: {}.",
             max_iterations,
             loss,
             m_convergence_threshold,

@@ -7,25 +7,6 @@
 #include <cstring>
 #include <ctime>
 
-namespace rllm
-{
-    const char* training_method_to_string(TrainingMethod method)
-    {
-        switch (method)
-        {
-        case TrainingMethod::TWO_TOK:
-            return "two_tok";
-        case TrainingMethod::THREE_TOK:
-            return "three_tok";
-        case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
-            return "increasingly_longer";
-        case TrainingMethod::WINDOW:
-            return "window";
-        }
-        return "UNKNOWN";
-    }
-}
-
 int main(int argc, char* argv[])
 {
     std::srand(0);

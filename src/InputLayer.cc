@@ -51,12 +51,15 @@ namespace rllm
 
     // Update token embeddings.  dh[T × D_MODEL] = ∂L/∂h.
     // Positional encodings are fixed, so only the embedding contribution is updated.
-    void InputLayer::propagate_backward(const InputLine& input,
-        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dh, float learning_rate)
+    void InputLayer::propagate_backward(
+        const InputLine& input,
+        const flexible_size_matrix<float, PositionIndex, EmbeddingDimension>& dh,
+        float learning_rate
+    )
     {
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {
-            const TokenID tok = input[pos];
+            const auto tok = input[pos];
             auto& embed = m_embeddings[tok];
 
             for (const auto di : enum_iterator<EmbeddingDimension>())
@@ -66,5 +69,4 @@ namespace rllm
             }
         }
     }
-
 } // namespace rllm

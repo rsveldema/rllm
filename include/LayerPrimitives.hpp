@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tokenizer_map.hpp>
+#include <RandomHelpers.hpp>
 
 namespace rllm
 {
@@ -115,7 +116,14 @@ namespace rllm
         MAX   = 8
     };
 
-    // Feed-forward hidden dimension: D_FF = 4 × EmbeddingDimension::MAX.
+    // Per-head embedding dimension: EmbeddingDimension::MAX / HeadsIndex::MAX = 64.
+    enum class HeadDimension : size_t
+    {
+        START = 0,
+        MAX   = static_cast<size_t>(EmbeddingDimension::MAX) / static_cast<size_t>(HeadsIndex::MAX)
+    };
+
+    // Feed-forward hidden dimension: static_cast<int>(FFDimension::MAX) = 4 × EmbeddingDimension::MAX.
     enum class FFDimension : size_t
     {
         START = 0,
@@ -151,10 +159,24 @@ namespace rllm
         return static_cast<PositionIndex>(static_cast<int32_t>(id) + 1);
     }
 
+    static inline PositionIndex dec(PositionIndex id)
+    {
+        assert(id != PositionIndex::UNKNOWN_POSITION_INDEX);
+        assert(id < PositionIndex::MAX);
+        assert(id > PositionIndex::START);
+        return static_cast<PositionIndex>(static_cast<int32_t>(id) - 1);
+    }
+
     static inline HeadsIndex inc(HeadsIndex id)
     {
         assert(id < HeadsIndex::MAX);
         return static_cast<HeadsIndex>(static_cast<size_t>(id) + 1);
+    }
+
+    static inline HeadDimension inc(HeadDimension id)
+    {
+        assert(id < HeadDimension::MAX);
+        return static_cast<HeadDimension>(static_cast<size_t>(id) + 1);
     }
 
     static inline FFDimension inc(FFDimension id)
@@ -393,6 +415,16 @@ namespace rllm
             m_data.fill(value);
         }
 
+        // Adds each element of other (must have the same runtime dimensions) into this matrix.
+        void element_wise_add(const flexible_size_matrix& other)
+        {
+            assert(m_rows == other.m_rows && m_cols == other.m_cols);
+            const size_t n = static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols);
+#pragma omp simd
+            for (size_t i = 0; i < n; ++i)
+                m_data[i] += other.m_data[i];
+        }
+
         void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
@@ -483,6 +515,12 @@ namespace rllm
             m_data.fill(value);
         }
 
+        void fill_rand(ElementType lo, ElementType hi)
+        {
+            for (auto& v : m_data)
+                v = get_random_value(lo, hi);
+        }
+
         void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
         {
             assert(static_cast<size_t>(x) < ROWS);
@@ -502,10 +540,6 @@ namespace rllm
             assert(static_cast<size_t>(y) < COLS);
             m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] += delta;
         }
-
-        // Flat pointer access for BLAS-style routines.  Layout: row-major [ROWS × COLS].
-        ElementType*       data()       { return m_data.data(); }
-        const ElementType* data() const { return m_data.data(); }
 
       private:
         using flat_data_t = std::array<ElementType, ROWS * COLS>;

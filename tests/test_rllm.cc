@@ -29,7 +29,7 @@ TEST(TransformerBlockTest, ForwardOutputShape)
     block->randomize();
 
     const int T = TEST_SEQ_LEN;
-    const int D = rllm::TransformerBlock::D_MODEL;
+    const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
     rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
         static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
     h.fill(0.1f);
@@ -48,7 +48,7 @@ TEST(TransformerBlockTest, BackwardOutputShape)
     block->randomize();
 
     const int T = TEST_SEQ_LEN;
-    const int D = rllm::TransformerBlock::D_MODEL;
+    const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
     rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
         static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
     h.fill(0.05f);
@@ -79,7 +79,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     block->randomize();
 
     const int T = BENCH_SEQ_LEN;
-    const int D = rllm::TransformerBlock::D_MODEL;
+    const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
     rllm::flexible_size_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
         static_cast<rllm::PositionIndex>(T), rllm::EmbeddingDimension::MAX);
     h_template.fill(0.1f);
