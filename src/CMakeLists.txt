@@ -8,15 +8,17 @@ target_sources(rllm_lib PRIVATE
     OutputLayer.cc
     NeuralNetwork.cc
     serialization.cc
-    tokenizer_map.cpp
+    "${CMAKE_BINARY_DIR}/generated/tokenizer_map.cc"
 )
 
 target_include_directories(rllm_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/generated
 )
 
 target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -fopenmp -march=native -O3)
+add_dependencies(rllm_lib generate_tokenizer_map)
 #target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -fopenmp)
 target_link_libraries(rllm_lib PUBLIC nlohmann_json::nlohmann_json -fopenmp)
 

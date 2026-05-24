@@ -12,7 +12,7 @@ namespace rllm
     };
 
 
-    void process_command(const std::string& _command, PromptOptions& options, const Corpus& corpus)
+    void process_command(const std::string& _command, PromptOptions& options)
     {
         const auto command = _command.empty() ? "/help" :  _command;
 
@@ -36,7 +36,7 @@ namespace rllm
             }},
             { {"/info"}, "Show information about the loaded model", [&]() {
                 std::println("Model information:");
-                std::println("Number of token types in corpus: {}", static_cast<size_t>(corpus.number_of_token_types()));
+                std::println("Number of token types in corpus: {}", static_cast<size_t>(TokenID::MAX));
             }},
             { {"/toggle_prio"}, "Toggle highest priority only mode", [&]() {
                 options.highest_prio_only = !options.highest_prio_only;
@@ -81,7 +81,7 @@ namespace rllm
             std::cout << "Enter input (or '/exit' to quit): ";
             if (!std::getline(std::cin, line) || line.starts_with("/") || line.empty())
             {
-                process_command(line, options, corpus);
+                process_command(line, options);
                 continue;
             }
 

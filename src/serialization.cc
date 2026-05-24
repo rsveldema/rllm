@@ -124,11 +124,6 @@ namespace rllm
             }
 
             m_output_layer.load(j.at("output_layer"));
-
-            if (j.contains("token_map"))
-            {
-                m_corpus.load_token_map_json(j.at("token_map"));
-            }
         }
         catch (const std::exception& e)
         {
@@ -152,7 +147,6 @@ namespace rllm
         j["intermediate_layers"] = std::move(layers);
 
         j["output_layer"] = m_output_layer.save();
-        j["token_map"]    = m_corpus.save_token_map_json();
 
         std::ofstream file{filename};
         file << j.dump(2) << '\n';

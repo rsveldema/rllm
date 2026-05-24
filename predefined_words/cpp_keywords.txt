@@ -19,3 +19,12 @@ const
 static
 template
 typename
+define
+include
+ifndef
+sizeof
+enum
+union
+typedef
+using
+pragma

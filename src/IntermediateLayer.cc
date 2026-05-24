@@ -86,7 +86,7 @@ namespace rllm
         // In a more complex implementation, you might want to enforce some structure here.
         while (true)
         {
-            const auto target = get_random_enum_value<TokenID>(m_corpus.number_of_token_types());
+            const auto target = get_random_enum_value<TokenID>(TokenID::MAX);
             if (! have_connection_to_neuron(from_neuron, target))
                 return target;
         }
@@ -159,7 +159,7 @@ namespace rllm
         {
             const auto& connection = conn[ci];
             const auto target_idx = static_cast<TokenID>(connection.target_neuron);
-            assert(target_idx < m_corpus.number_of_token_types());
+            assert(target_idx < TokenID::MAX);
             const float contrib = input * connection.weight;
             atomic_add_unclamped(output_layer.m_inputs[target_idx], contrib);
         }
@@ -216,7 +216,7 @@ namespace rllm
             {
                 auto& connection = conn[ci];
                 const auto target_idx = static_cast<TokenID>(connection.target_neuron);
-                assert(target_idx < m_corpus.number_of_token_types());
+                assert(target_idx < TokenID::MAX);
                 const auto output_delta = delta[target_idx];
                 neuron_delta += output_delta * connection.weight;
                 const float grad = std::clamp(output_delta * act, -GRAD_CLIP, GRAD_CLIP);

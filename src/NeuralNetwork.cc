@@ -158,13 +158,12 @@ namespace rllm
     // Only considers the active corpus tokens, not the full TokenID::MAX space.
     float NeuralNetwork::compute_loss(TokenID expected_output_token) const
     {
-        const auto active_end = static_cast<TokenID>(m_corpus.number_of_token_types());
         float max_val = m_output_layer.m_inputs[TokenID::START];
-        for (const auto i : enum_iterator<TokenID>(active_end))
+        for (const auto i : enum_iterator<TokenID>(TokenID::MAX))
             max_val = std::max(max_val, m_output_layer.m_inputs[i]);
 
         float sum_exp = 0.0f;
-        for (const auto i : enum_iterator<TokenID>(active_end))
+        for (const auto i : enum_iterator<TokenID>(TokenID::MAX))
             sum_exp += std::exp(m_output_layer.m_inputs[i] - max_val);
 
         const float log_prob =
@@ -243,7 +242,7 @@ namespace rllm
             "\t fires nothing CE loss:  {:.6f}\n"
             "\t steps per example per epoch: {}\n",
             m_intermediate_layers.size(),
-            m_corpus.number_of_token_types(),
+            static_cast<size_t>(TokenID::MAX),
             static_cast<size_t>(IntermediateLayerIndex::MAX),
             m_convergence_threshold,
             m_fires_nothing_ce_loss,

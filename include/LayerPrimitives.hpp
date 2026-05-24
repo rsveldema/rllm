@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include <tokenizer_map.hpp>
+
 namespace rllm
 {
     static constexpr float MIN_NEURON_INPUT = -0.01f;
@@ -87,12 +89,6 @@ namespace rllm
         Enum m_end;
     };
 
-    enum class TokenID : int32_t
-    {
-        UNKNOWN_TOKEN_ID = -1,
-        START = 0,
-        MAX = 1024 * 2
-    };
 
     using Token = std::string;
 

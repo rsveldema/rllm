@@ -24,43 +24,6 @@ namespace rllm
         std::println(__VA_ARGS__); \
     }
 
-
-    static std::vector<std::string> tokenize(std::string_view text)
-    {
-        std::vector<std::string> tokens;
-        std::string word;
-        for (char c : text)
-        {
-            if (std::isspace(static_cast<unsigned char>(c)))
-            {
-                if (!word.empty())
-                {
-                    tokens.push_back(std::move(word));
-                    word.clear();
-                }
-            }
-            else if (std::ispunct(static_cast<unsigned char>(c)) and c != '_')
-            {
-                if (!word.empty())
-                {
-                    tokens.push_back(std::move(word));
-                    word.clear();
-                }
-                tokens.push_back(std::string(1, c));
-            }
-            else
-            {
-                word += c;
-            }
-        }
-        if (!word.empty())
-        {
-            tokens.push_back(std::move(word));
-        }
-        return tokens;
-    }
-
-
     Corpus::Corpus(const std::vector<std::string>& filters)
         : m_filters(filters)
     {}
@@ -78,7 +41,6 @@ namespace rllm
             return;
         }
 
-        TokenID next_id = TokenID::START;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(corpus_dir))
         {
             if (!entry.is_regular_file())
@@ -108,68 +70,71 @@ namespace rllm
             TokenData& token_data = m_token_list.emplace_back(entry.path().string());
 
             std::ifstream file{entry.path()};
+            if (!file)
+            {
+                std::println("Failed to open file '{}'", entry.path().string());
+                continue;
+            }
+
             std::string line;
             while (std::getline(file, line))
             {
-                const auto tokens = tokenize(line);
-                if (tokens.empty())
-                    continue;
-                token_data.next_line();
-                for (const auto& token : tokens)
+                const auto input_line = get_token_ids(line);
+                for (const auto i : enum_iterator<PositionIndex>(input_line.size()))
                 {
-                    const auto it = m_token_to_id.find(token);
-                    if (it == m_token_to_id.end())
-                    {
-                        const auto new_id = inc(next_id);
-                        next_id = new_id;
-
-                        m_token_to_id.emplace(token, new_id);
-
-                        token_data.add(new_id);
-                        LOG_INFO("new token: {} with ID: {}", token, new_id);
-                    }
-                    else
-                    {
-                        token_data.add(it->second);
-                        LOG_INFO("Found token: {} with ID: {}", token, it->second);
-                    }
+                    assert(input_line[i] >= TokenID::START);
+                    assert(input_line[i] < TokenID::MAX);
+                    token_data.add(input_line[i]);
                 }
+                token_data.add(TokenID::TOK_NEWLINE); // add a newline token at the end of each line
             }
         }
-
-        std::println("Corpus initialized with {} unique tokens", m_token_to_id.size());
-
-        save_token_map("token_map.json");
     }
 
     InputLine Corpus::get_token_ids(const std::string& text) const
     {
-        InputLine ids;
-        for (const auto& token : tokenize(text))
+        InputLine result;
+
+        size_t ix = 0;
+
+        while (ix < text.size())
         {
-            const auto it = m_token_to_id.find(token);
-            if (it != m_token_to_id.end())
+            bool matched_token = false;
+            for (const auto& token_id_and_string : tokenizer_map)
             {
-                ids.push_back(it->second);
+                const auto& token_id = token_id_and_string.first;
+                const auto& token_string = token_id_and_string.second;
+
+                if (text.compare(ix, token_string.size(), token_string) == 0)
+                {
+                    result.push_back(token_id);
+                    ix += token_string.size();
+                    matched_token = true;
+                    break;
+                }
             }
-            else
+
+            if (!matched_token)
             {
-                ids.push_back(TokenID::UNKNOWN_TOKEN_ID); // Use a special ID for unknown tokens
+                // If no token matched, skip this character
+                ix++;
+                LOG_INFO("Warning: No token matched for character '{}', skipping it", text[ix - 1]);
+            } else {
+                LOG_INFO("Matched token '{}' at position {}", tokenizer_map[result.back()], ix);
             }
         }
-        return ids;
+
+        return result;
     }
 
     Token Corpus::get_token_from_id(TokenID id) const
     {
-        for (const auto& [token, token_id] : m_token_to_id)
+        if (id == TokenID::UNKNOWN_TOKEN_ID)
         {
-            if (token_id == id)
-            {
-                return token;
-            }
+            return "<UNK>";
         }
-        return {};
+        assert(id < TokenID::MAX);
+        return tokenizer_map[id];
     }
 
     std::optional<std::string> Corpus::get_line(const InputLine& line) const
@@ -192,47 +157,6 @@ namespace rllm
             return std::nullopt; // empty line
         }
         return result;
-    }
-
-    /*
-    InputLine Corpus::get_training_input_line(size_t min_size) const
-    {
-        assert(!m_token_list.empty());
-
-        for (const auto& token_data : m_token_list)
-        {
-            return token_data.get_training_input_line(min_size);
-        }
-
-        assert(false);
-        const size_t random_index = static_cast<size_t>(rand()) % m_token_list.size();
-        return m_token_list[random_index].get_training_input_line(min_size);
-    }
-        */
-
-    void Corpus::save_token_map(const std::string& filename) const
-    {
-        std::ofstream file{filename};
-        file << save_token_map_json().dump(2) << '\n';
-    }
-
-    nlohmann::json Corpus::save_token_map_json() const
-    {
-        nlohmann::json j;
-        for (const auto& [token, id] : m_token_to_id)
-        {
-            j[token] = static_cast<int32_t>(id);
-        }
-        return j;
-    }
-
-    void Corpus::load_token_map_json(const nlohmann::json& j)
-    {
-        m_token_to_id.clear();
-        for (const auto& [token, id_j] : j.items())
-        {
-            m_token_to_id.emplace(token, static_cast<TokenID>(id_j.get<int32_t>()));
-        }
     }
 
     std::vector<InputLine> Corpus::get_suitable_training_lines() const

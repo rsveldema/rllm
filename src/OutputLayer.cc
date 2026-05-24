@@ -11,8 +11,8 @@ namespace rllm
     void OutputLayer::rms_normalize_inputs()
     {
         constexpr float eps = 1e-6f;
-        const float n = static_cast<float>(m_corpus.number_of_token_types());
-        const auto active_end = static_cast<TokenID>(m_corpus.number_of_token_types());
+        const float n = static_cast<float>(TokenID::MAX);
+        const auto active_end = static_cast<TokenID>(TokenID::MAX);
         float sum_sq = 0.0f;
         for (const auto i : enum_iterator<TokenID>(active_end))
             sum_sq += m_inputs[i] * m_inputs[i];
@@ -27,7 +27,7 @@ namespace rllm
     // so the delta must have the sign of (target - actual), NOT (actual - target).
     void OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
-        const auto active_end = static_cast<TokenID>(m_corpus.number_of_token_types());
+        const auto active_end = static_cast<TokenID>(TokenID::MAX);
         // Numerically stable softmax: subtract max before exponentiation.
         float max_val = m_inputs[TokenID::START];
         for (const auto i : enum_iterator<TokenID>(active_end))

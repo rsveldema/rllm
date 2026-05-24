@@ -40,24 +40,12 @@ namespace rllm
             size_t total = 0;
             for (const auto& token_data : m_token_list)
             {
-                total += token_data.size();
+                total += token_data.number_of_lines();
             }
             return total;
         }
 
-        void save_token_map(const std::string& filename) const;
-        nlohmann::json save_token_map_json() const;
-        void load_token_map_json(const nlohmann::json& j);
-
-        TokenID number_of_token_types() const
-        {
-            return static_cast<TokenID>(m_token_to_id.size());
-        }
-
       private:
-        std::vector<std::string> m_filters;
-        std::map<Token, TokenID> m_token_to_id;
-
         class TokenData
         {
           public:
@@ -67,24 +55,27 @@ namespace rllm
 
             void add(TokenID id)
             {
-                if (m_data.empty())
+                m_tokens_in_file.push_back(id);
+                if (m_lines.empty())
                 {
-                    m_data.emplace_back();
+                    m_lines.emplace_back();
+                    m_lines.back().push_back(id);
+                    return;
                 }
-                m_data.back().push_back(id);
-            }
 
-            void next_line()
-            {
-                m_data.emplace_back();
+                m_lines.back().push_back(id);
+                if (id == TokenID::TOK_NEWLINE)
+                {
+                    m_lines.emplace_back();
+                }
             }
 
             InputLine get_training_input_line(size_t min_size) const
             {
                 while (true)
                 {
-                    const auto random_index = static_cast<size_t>(rand()) % m_data.size();
-                    InputLine result = m_data[random_index];
+                    const auto random_index = static_cast<size_t>(rand()) % m_lines.size();
+                    InputLine result = m_lines[random_index];
                     if (static_cast<int>(result.size()) >= min_size)
                     {
                         return result;
@@ -95,23 +86,25 @@ namespace rllm
 
             void visit_lines(const visitor_fn_t& visitor) const
             {
-                for (const auto& line : m_data)
+                for (const auto& line : m_lines)
                 {
                     visitor(line);
                 }
             }
 
-            size_t size() const
+            size_t number_of_lines() const
             {
-                return m_data.size();
+                return m_lines.size();
             }
 
           private:
             std::string filename;
-            std::vector<InputLine> m_data; // positions of the token in the corpus
+            std::vector<InputLine> m_lines; // positions of the token in the corpus
+            std::vector<TokenID> m_tokens_in_file; // the actual token IDs in the file, in order
         };
 
         std::vector<TokenData> m_token_list;
+        const std::vector<std::string>& m_filters;
     };
 
 } // namespace rllm
