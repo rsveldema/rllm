@@ -164,7 +164,7 @@ namespace rllm
                            NeuralNetwork::TrainingMethod method, size_t num_epochs)
     {
         std::println("Training mode");
-        set_nn_log_file("e.log");
+        set_nn_log_file("train.log");
 
         Corpus corpus{m_filters};
         corpus.load_files_from_dir();
