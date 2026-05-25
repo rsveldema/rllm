@@ -362,33 +362,27 @@ namespace rllm
             {
                 const float progress = static_cast<float>(j) / static_cast<float>(num_windows);
 
-
                 InputLine window;
                 for (int k = 0; k < window_size; ++k)
                 {
                     window.push_back(tokens[indices[j] + static_cast<size_t>(k)]);
-
-                    if (static_cast<size_t>(window.size()) < 2)
-                    {
-                        // too short for training (single input token), skip
-                        continue;
-                    }
-
-                    total_windows_trained++;
-                    if (total_windows_trained % 100 == 0)
-                    {
-                        const auto line_opt = m_corpus.get_line(window);
-                        LOG_INFO(
-                            "Epoch[{}%] window[{}]: {:0.2f}% done for '{}'",
-                            epoch / static_cast<float>(num_epochs) * 100.0f,
-                            j,
-                            progress * 100.0f,
-                            line_opt.has_value() ? line_opt->c_str() : "unknown"
-                        );
-                    }
-
-                    do_training(window, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size());
                 }
+                assert(window.size() == static_cast<PositionIndex>(window_size));
+
+                total_windows_trained++;
+                if (total_windows_trained % 100 == 0)
+                {
+                    const auto line_opt = m_corpus.get_line(window);
+                    LOG_INFO(
+                        "Epoch[{}%] window[{}]: {:0.2f}% done for '{}'",
+                        epoch / static_cast<float>(num_epochs) * 100.0f,
+                        j,
+                        progress * 100.0f,
+                        line_opt.has_value() ? line_opt->c_str() : "unknown"
+                    );
+                }
+
+                do_training(window, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size());
             }
         }
     }
@@ -401,14 +395,13 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::train(bool verbose, size_t num_epochs,
-                    const std::optional<std::string>& input_filename)
+    void NeuralNetwork::train(bool verbose, size_t num_epochs, const std::optional<std::string>& input_filename)
     {
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
         if (input_filename)
         {
-            if (! load(*input_filename))
+            if (!load(*input_filename))
             {
                 std::println("Failed to load model from '{}'", *input_filename);
                 std::exit(1);
@@ -417,6 +410,7 @@ namespace rllm
         }
         else
         {
+            std::println("No input model specified, starting with random weights.");
             set_random_weights_and_connections();
         }
 

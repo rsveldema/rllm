@@ -138,10 +138,14 @@ namespace rllm
                 for (const auto& entry : output_token_id_lists)
                 {
                     const auto predicted_token = nn->get_corpus().get_token_from_id(entry.token_id);
+                    auto tok = nn->get_corpus().get_token_from_id(entry.token_id);
+                    if (tok == "\n") {
+                        tok = "\\n";
+                    }
                     std::println(
                         "\t     prediction[{}]: '{}' (id: '{}'), {:.2f}%",
                         ix,
-                        nn->get_corpus().get_token_from_id(entry.token_id),
+                        tok,
                         static_cast<int>(entry.token_id),
                         entry.activation * 100.0f
                     );
