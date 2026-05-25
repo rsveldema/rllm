@@ -61,6 +61,13 @@ namespace rllm
 
     // Layers
 
+    struct ForwardWorkspace
+    {
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;
+        template_vector<float, EmbeddingDimension> h_last;
+        explicit ForwardWorkspace(PositionIndex seq_len) : h(seq_len) {}
+    };
+
     void NeuralNetwork::propagate_forward(const InputLine& input)
     {
         assert(!m_transformer_blocks.empty());
@@ -68,23 +75,23 @@ namespace rllm
         m_last_input = input;
         m_seq_len = input.size();
 
+        auto ws = std::make_unique<ForwardWorkspace>(m_seq_len);
+
         // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(m_seq_len);
-        m_input_layer.propagate_forward(input, h);
+        m_input_layer.propagate_forward(input, ws->h);
 
         // Pass through each transformer block in order
         for (auto& block : m_transformer_blocks)
-            block.forward(h, m_seq_len);
+            block.forward(ws->h, m_seq_len);
 
         // Keep full hidden state for backward pass
-        m_last_hidden = h;
+        m_last_hidden = ws->h;
 
         // Project the last-position hidden state to vocabulary logits
-        template_vector<float, EmbeddingDimension> h_last;
         const auto last_pos = dec(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
-            h_last[d] = h[last_pos, d];
-        m_output_layer.forward_from_hidden(h_last);
+            ws->h_last[d] = ws->h[last_pos, d];
+        m_output_layer.forward_from_hidden(ws->h_last);
     }
 
 
@@ -140,35 +147,43 @@ namespace rllm
     }
 
 
+    struct BackwardPropWorkspace
+    {
+        template_vector<float, TokenID>                                   output_layer_delta;
+        template_vector<float, EmbeddingDimension>                        h_last_vec;
+        template_vector<float, EmbeddingDimension>                        dh_last;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>    dh;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>    din;
+        explicit BackwardPropWorkspace(PositionIndex seq_len) : dh(seq_len), din(seq_len) {}
+    };
+
     void NeuralNetwork::propagate_backward(const Score& score)
     {
         static constexpr float LEARNING_RATE = 0.01f;
 
-        auto output_layer_delta = std::make_unique<template_vector<float, TokenID>>();
-        m_output_layer.compute_deltas(score, *output_layer_delta);
+        auto ws = std::make_unique<BackwardPropWorkspace>(m_seq_len);
+
+        m_output_layer.compute_deltas(score, ws->output_layer_delta);
 
         // Backpropagate through LM head → get dL/dh_last
-        template_vector<float, EmbeddingDimension> h_last_vec;
         const auto last_pos = dec(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
-            h_last_vec[d] = m_last_hidden[last_pos, d];
-        auto dh_last = m_output_layer.backward_and_update(*output_layer_delta, h_last_vec, LEARNING_RATE);
+            ws->h_last_vec[d] = m_last_hidden[last_pos, d];
+        ws->dh_last = m_output_layer.backward_and_update(ws->output_layer_delta, ws->h_last_vec, LEARNING_RATE);
 
         // Initialise full-sequence gradient: zero everywhere except the last position
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dh(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
-            dh[last_pos, d] = dh_last[d];
+            ws->dh[last_pos, d] = ws->dh_last[d];
 
         // Backward through transformer blocks in reverse order
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din(m_seq_len);
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
-            m_transformer_blocks[i].backward(dh, din, LEARNING_RATE);
-            dh = din;
+            m_transformer_blocks[i].backward(ws->dh, ws->din, LEARNING_RATE);
+            ws->dh = ws->din;
         }
 
         // Update token embeddings
-        m_input_layer.propagate_backward(m_last_input, dh, LEARNING_RATE);
+        m_input_layer.propagate_backward(m_last_input, ws->dh, LEARNING_RATE);
     }
 
 
@@ -440,7 +455,6 @@ namespace rllm
             "Training the neural network...\n"
             "\t $num_layers: {}\n"
             "\t $corpus_size: {}\n"
-            "\t $intermediate_layers width: {}\n"
             "\t convergence threshold: {:.6f}\n"
             "\t fires nothing CE loss:  {:.6f}\n"
             "\t steps per example per epoch: {}\n"
@@ -448,7 +462,6 @@ namespace rllm
             "\t training method: {}\n",
             m_transformer_blocks.size(),
             static_cast<size_t>(TokenID::MAX),
-            static_cast<size_t>(IntermediateLayerIndex::MAX),
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
             NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(),

@@ -82,15 +82,6 @@ namespace rllm
         MAX = static_cast<size_t>(EmbeddingDimension::MAX) * 4
     };
 
-    // position of a neuron in the intermediate layer. For example, in the intermediate layer, neuron 0 is connected
-    // to token 0 in the input layer, neuron 1 is connected to token 1 in the input layer, and so on.
-    enum class IntermediateLayerIndex : size_t
-    {
-        START = 0,
-        MAX = static_cast<size_t>(EmbeddingDimension::MAX) * static_cast<size_t>(PositionIndex::MAX),
-        UNKNOWN_INTERMEDIATE_LAYER_INDEX = static_cast<size_t>(-1)
-    };
-
     static inline TokenID inc(TokenID id)
     {
         assert(id != TokenID::UNKNOWN_TOKEN_ID);
@@ -135,13 +126,6 @@ namespace rllm
     {
         assert(id < FFDimension::MAX);
         return static_cast<FFDimension>(static_cast<size_t>(id) + 1);
-    }
-
-    static inline IntermediateLayerIndex inc(IntermediateLayerIndex id)
-    {
-        assert(id != IntermediateLayerIndex::UNKNOWN_INTERMEDIATE_LAYER_INDEX);
-        assert(id < IntermediateLayerIndex::MAX);
-        return static_cast<IntermediateLayerIndex>(static_cast<int32_t>(id) + 1);
     }
 
     // Index of an outgoing connection slot within a single neuron's connection list.

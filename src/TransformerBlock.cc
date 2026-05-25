@@ -1,13 +1,13 @@
 #include <JsonTensorHelpers.hpp>
 #include <RandomHelpers.hpp>
 #include <TransformerBlock.hpp>
+#include <parallel.hpp>
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include <omp.h>
 
 namespace rllm
 {
@@ -51,9 +51,7 @@ namespace rllm
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
 
-        #pragma omp parallel for schedule(static)
-        for (const auto t : enum_iterator<PositionIndex>(x.num_rows()))
-        {
+        PARFOR(t, enum_iterator<PositionIndex>(x.num_rows()))
             float sq = 0.f;
             for (const auto i : enum_iterator<EmbeddingDimension>())
             {
@@ -63,7 +61,7 @@ namespace rllm
             const float inv = 1.0f / std::sqrt(sq / fd + eps);
             for (const auto i : enum_iterator<EmbeddingDimension>())
                 y[t, i] = x[t, i] * inv;
-        }
+        ENDFOR
     }
 
     // dx += dL/dx  given dy = dL/dy and the original x (not the normalised y).
@@ -77,9 +75,7 @@ namespace rllm
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
 
-        #pragma omp parallel for schedule(static)
-        for (const auto t : enum_iterator<PositionIndex>(x.num_rows()))
-        {
+        PARFOR(t, enum_iterator<PositionIndex>(x.num_rows()))
             float sq = 0.f;
             for (const auto i : enum_iterator<EmbeddingDimension>())
                 sq += x[t, i] * x[t, i];
@@ -93,7 +89,7 @@ namespace rllm
 
             for (const auto i : enum_iterator<EmbeddingDimension>())
                 dx[t, i] += inv * (dy[t, i] - x[t, i] * inv * dot);
-        }
+        ENDFOR
     }
 
     // ── attention helpers ──────────────────────────────────────────────────────
@@ -103,9 +99,7 @@ namespace rllm
     void
     TransformerBlock::causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, PositionIndex T)
     {
-        #pragma omp parallel for schedule(static)
-        for (const auto i : enum_iterator<PositionIndex>(T))
-        {
+        PARFOR(i, enum_iterator<PositionIndex>(T))
             float max_val = x[i, PositionIndex::START];
             for (const auto j : enum_iterator<PositionIndex>(inc(PositionIndex::START), inc(i)))
                 max_val = std::max(max_val, x[i, j]);
@@ -126,7 +120,7 @@ namespace rllm
             // to avoid stale values affecting the backward pass
             for (const auto j : enum_iterator<PositionIndex>(inc(i), T))
                 x[i, j] = 0.f;
-        }
+        ENDFOR
     }
 
     // dscores[T×T] += ∂L/∂scores  via the softmax Jacobian.
@@ -138,15 +132,13 @@ namespace rllm
         PositionIndex T
     )
     {
-        #pragma omp parallel for schedule(static)
-        for (const auto i : enum_iterator<PositionIndex>(T))
-        {
+        PARFOR(i, enum_iterator<PositionIndex>(T))
             float dot = 0.f;
             for (const auto j : enum_iterator<PositionIndex>(inc(i)))
                 dot += dp[i, j] * p[i, j];
             for (const auto j : enum_iterator<PositionIndex>(inc(i)))
                 dscores[i, j] += p[i, j] * (dp[i, j] - dot);
-        }
+        ENDFOR
     }
 
     // ── SwiGLU backward ───────────────────────────────────────────────────────
@@ -160,9 +152,7 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre
     )
     {
-#pragma omp parallel for schedule(static)
-        for (const auto [t, f] : enum_iterator2D<PositionIndex, FFDimension>(seq))
-        {
+        PARFOR_2D(t, f, enum_iterator2D<PositionIndex, FFDimension>(seq))
             const float g = gate_pre[t, f];
             const float sg = 1.0f / (1.0f + std::exp(-g)); // sigma(g)
             const float silu = g * sg;
@@ -171,7 +161,7 @@ namespace rllm
             const float dsilu_dg = sg * (1.0f + g * (1.0f - sg));
             d_gate_pre[t, f] = d_ffn_act[t, f] * up_pre[t, f] * dsilu_dg;
             d_up_pre[t, f] = d_ffn_act[t, f] * silu;
-        }
+        ENDFOR
     }
 
     // ── SGD + momentum ─────────────────────────────────────────────────────────
@@ -195,24 +185,20 @@ namespace rllm
         m_K.set_rows(seq_len);
         m_V.set_rows(seq_len);
 
-        #pragma omp parallel sections
-        {
-            #pragma omp section
+        PARSECTIONS_BEGIN
             matmul_ABt(m_h_norm_attn, W_q, m_Q);
-            #pragma omp section
+        PARSECTION
             matmul_ABt(m_h_norm_attn, W_k, m_K);
-            #pragma omp section
+        PARSECTION
             matmul_ABt(m_h_norm_attn, W_v, m_V);
-        }
+        PARSECTIONS_END
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
         constexpr float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
         m_attn_concat.set_rows(seq_len);
         m_attn_concat.fill(0.f);
 
-        #pragma omp parallel for schedule(static)
-        for (const auto hi : enum_iterator<HeadsIndex>())
-        {
+        PARFOR(hi, enum_iterator<HeadsIndex>())
             auto& scores_mat = m_attn_w[hi];
             scores_mat.set_size(seq_len, seq_len);
 
@@ -244,7 +230,7 @@ namespace rllm
                         m_attn_concat[i, d] += w * m_V[j, d];
                 }
             }
-        }
+        ENDFOR
 
         // ── 4. Output projection + residual ──────────────────────────────────
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
@@ -253,9 +239,9 @@ namespace rllm
 
         m_h_mid.set_rows(seq_len);
 
-#pragma omp parallel for schedule(static)
-        for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
+        PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
             m_h_mid[t, d] = h[t, d] + attn_proj[t, d];
+        ENDFOR
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
         m_h_norm_ff.set_rows(seq_len);
@@ -269,13 +255,11 @@ namespace rllm
 
         m_ffn_act.set_rows(seq_len);
 
-#pragma omp parallel for schedule(static)
-        for (const auto [t, f] : enum_iterator2D<PositionIndex, FFDimension>(seq_len))
-        {
+        PARFOR_2D(t, f, enum_iterator2D<PositionIndex, FFDimension>(seq_len))
             const float g = m_gate_pre[t, f];
             const float silu = g / (1.0f + std::exp(-g));
             m_ffn_act[t, f] = silu * m_up_pre[t, f];
-        }
+        ENDFOR
 
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
         ffn_out.set_rows(seq_len);
