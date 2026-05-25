@@ -276,7 +276,7 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::do_line_based_training(bool verbose, size_t num_epochs)
+    void NeuralNetwork::do_line_based_training(bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval)
     {
         std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
 
@@ -295,6 +295,15 @@ namespace rllm
             {
                 lines_visited++;
                 const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
+
+                if (checkpointing_interval.has_value())
+                {
+                    if ((lines_visited % checkpointing_interval.value()) == 0)
+                    {
+                        std::println("creating checkpoint at epoch {}, line {}, total lines visited {}", epoch, lines_visited, total_lines);
+                        save(std::format("models/checkpoint-{}.json", epoch * total_lines + lines_visited));
+                    }
+                }
 
                 LOG_INFO(
                     "Epoch[{}%] line[{}]: {:0.2f}% done",
@@ -332,7 +341,7 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::train_with_window(int window_size, bool verbose, size_t num_epochs)
+    void NeuralNetwork::train_with_window(int window_size, bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval)
     {
         assert(window_size >= 2);
 
@@ -371,9 +380,9 @@ namespace rllm
 
                 total_windows_trained++;
 
-                if (m_checkpointing_interval.has_value())
+                if (checkpointing_interval.has_value())
                 {
-                    if ((total_windows_trained % m_checkpointing_interval.value()) == 0)
+                    if ((total_windows_trained % checkpointing_interval.value()) == 0)
                     {
                         std::println("creating checkpoint at epoch {}, window {}, total windows trained {}", epoch, j, total_windows_trained);
                         save(std::format("models/checkpoint-{}.json", total_windows_trained));
@@ -400,11 +409,11 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs)
+    void NeuralNetwork::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval)
     {
         // Window methods operate on the flat token stream rather than per-line.
         assert(m_training_method == TrainingMethod::WINDOW);
-        train_with_window(m_window_size, verbose, num_epochs);
+        train_with_window(m_window_size, verbose, num_epochs, checkpointing_interval);
     }
 
 
@@ -449,11 +458,11 @@ namespace rllm
 
         if (training_method_is_line_based())
         {
-            do_line_based_training(verbose, num_epochs);
+            do_line_based_training(verbose, num_epochs,  checkpointing_interval);
         }
         else
         {
-            do_whole_corpus_window_based_training(verbose, num_epochs);
+            do_whole_corpus_window_based_training(verbose, num_epochs,  checkpointing_interval);
         }
     }
 

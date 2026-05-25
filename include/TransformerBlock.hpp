@@ -129,15 +129,12 @@ namespace rllm
             float lr
         )
         {
-#pragma omp parallel for collapse(2) schedule(static)
-            for (const auto r : enum_iterator<R_enum>())
+#pragma omp parallel for schedule(static)
+            for (const auto [r, c] : enum_iterator2D<R_enum, C_enum>())
             {
-                for (const auto c : enum_iterator<C_enum>())
-                {
-                    const float g = std::clamp(grad[r, c], -GRAD_CLIP, GRAD_CLIP);
-                    vel[r, c] = std::clamp(MOMENTUM_BETA * vel[r, c] + lr * g, -VEL_CLIP, VEL_CLIP);
-                    W[r, c] = std::clamp(W[r, c] + vel[r, c], -WEIGHT_CLAMP, WEIGHT_CLAMP);
-                }
+                const float g = std::clamp(grad[r, c], -GRAD_CLIP, GRAD_CLIP);
+                vel[r, c] = std::clamp(MOMENTUM_BETA * vel[r, c] + lr * g, -VEL_CLIP, VEL_CLIP);
+                W[r, c] = std::clamp(W[r, c] + vel[r, c], -WEIGHT_CLAMP, WEIGHT_CLAMP);
             }
         }
     };

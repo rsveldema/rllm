@@ -1,0 +1,3 @@
+[submodule "libfork"]
+	path = src/libfork
+	url = https://github.com/ConorWilliams/libfork.git

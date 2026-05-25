@@ -67,9 +67,6 @@ namespace rllm
         bool load(const std::string& filename);
         void save(const std::string& filename) const;
 
-        void disable_checkpointing() { m_checkpointing_interval = std::nullopt; }
-        void enable_checkpointing(size_t interval) { m_checkpointing_interval = interval; }
-
       private:
         Corpus&    m_corpus;
         Statistics& m_stats;
@@ -86,8 +83,6 @@ namespace rllm
         const float m_fires_nothing_ce_loss;
         const float m_convergence_threshold;
 
-        std::optional<size_t> m_checkpointing_interval = 5000;
-
         void dump_top_predictions();
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
 
@@ -96,10 +91,10 @@ namespace rllm
 
         void train_with_up_to_N(const InputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
-        void train_with_window(int window_size, bool verbose, size_t num_epochs);
+        void train_with_window(int window_size, bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval);
 
-        void do_whole_corpus_window_based_training(bool verbose, size_t num_epochs);
-        void do_line_based_training(bool verbose, size_t num_epochs);
+        void do_whole_corpus_window_based_training(bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval);
+        void do_line_based_training(bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval);
 
         bool training_method_is_line_based() const
         {

@@ -160,20 +160,17 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre
     )
     {
-#pragma omp parallel for collapse(2) schedule(static)
-        for (const auto t : enum_iterator<PositionIndex>(seq))
+#pragma omp parallel for schedule(static)
+        for (const auto [t, f] : enum_iterator2D<PositionIndex, FFDimension>(seq))
         {
-            for (const auto f : enum_iterator<FFDimension>())
-            {
-                const float g = gate_pre[t, f];
-                const float sg = 1.0f / (1.0f + std::exp(-g)); // sigma(g)
-                const float silu = g * sg;
-                // silu'(g) = sigma(g) * (1 + g * (1 - sigma(g)))
-                // Avoids exp(-g)*sigma(g) which gives inf*0=NaN for g < -88 in float32.
-                const float dsilu_dg = sg * (1.0f + g * (1.0f - sg));
-                d_gate_pre[t, f] = d_ffn_act[t, f] * up_pre[t, f] * dsilu_dg;
-                d_up_pre[t, f] = d_ffn_act[t, f] * silu;
-            }
+            const float g = gate_pre[t, f];
+            const float sg = 1.0f / (1.0f + std::exp(-g)); // sigma(g)
+            const float silu = g * sg;
+            // silu'(g) = sigma(g) * (1 + g * (1 - sigma(g)))
+            // Avoids exp(-g)*sigma(g) which gives inf*0=NaN for g < -88 in float32.
+            const float dsilu_dg = sg * (1.0f + g * (1.0f - sg));
+            d_gate_pre[t, f] = d_ffn_act[t, f] * up_pre[t, f] * dsilu_dg;
+            d_up_pre[t, f] = d_ffn_act[t, f] * silu;
         }
     }
 
@@ -256,10 +253,9 @@ namespace rllm
 
         m_h_mid.set_rows(seq_len);
 
-        #pragma omp parallel for schedule(static) collapse(2)
-        for (const auto t : enum_iterator<PositionIndex>(seq_len))
-            for (const auto d : enum_iterator<EmbeddingDimension>())
-                m_h_mid[t, d] = h[t, d] + attn_proj[t, d];
+#pragma omp parallel for schedule(static)
+        for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
+            m_h_mid[t, d] = h[t, d] + attn_proj[t, d];
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
         m_h_norm_ff.set_rows(seq_len);
@@ -273,23 +269,21 @@ namespace rllm
 
         m_ffn_act.set_rows(seq_len);
 
-        #pragma omp parallel for schedule(static) collapse(2)
-        for (const auto t : enum_iterator<PositionIndex>(seq_len))
-            for (const auto f : enum_iterator<FFDimension>())
-            {
-                const float g = m_gate_pre[t, f];
-                const float silu = g / (1.0f + std::exp(-g));
-                m_ffn_act[t, f] = silu * m_up_pre[t, f];
-            }
+#pragma omp parallel for schedule(static)
+        for (const auto [t, f] : enum_iterator2D<PositionIndex, FFDimension>(seq_len))
+        {
+            const float g = m_gate_pre[t, f];
+            const float silu = g / (1.0f + std::exp(-g));
+            m_ffn_act[t, f] = silu * m_up_pre[t, f];
+        }
 
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
         ffn_out.set_rows(seq_len);
         matmul_ABt(m_ffn_act, W_down, ffn_out);
 
         // ── 7. Residual ───────────────────────────────────────────────────────
-        for (const auto t : enum_iterator<PositionIndex>(seq_len))
-            for (const auto d : enum_iterator<EmbeddingDimension>())
-                h[t, d] = m_h_mid[t, d] + ffn_out[t, d];
+        for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
+            h[t, d] = m_h_mid[t, d] + ffn_out[t, d];
     }
 
     // ── backward temporaries ──────────────────────────────────────────────────
