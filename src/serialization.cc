@@ -61,13 +61,14 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::load(const std::string& filename)
+    bool NeuralNetwork::load(const std::string& filename)
     {
         try
         {
             std::ifstream file{filename};
-            if (!file)
-                return;
+            if (!file) {
+                return false;
+            }
 
             const auto j = nlohmann::json::parse(file);
 
@@ -98,6 +99,7 @@ namespace rllm
             std::println("Failed to load model '{}': {}", filename, e.what());
             std::abort();
         }
+        return true;
     }
 
     void NeuralNetwork::save(const std::string& filename) const

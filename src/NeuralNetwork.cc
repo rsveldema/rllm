@@ -408,7 +408,11 @@ namespace rllm
 
         if (input_filename)
         {
-            load(*input_filename);
+            if (! load(*input_filename))
+            {
+                std::println("Failed to load model from '{}'", *input_filename);
+                std::exit(1);
+            }
             LOG_INFO("Loaded model from '{}'", *input_filename);
         }
         else

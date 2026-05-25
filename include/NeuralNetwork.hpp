@@ -63,7 +63,8 @@ namespace rllm
         float compute_loss(TokenID expected_output_token) const;
         void set_random_weights_and_connections();
 
-        void load(const std::string& filename);
+        // returns true on success, false on failure (e.g. file not found or parse error)
+        bool load(const std::string& filename);
         void save(const std::string& filename) const;
 
       private:
