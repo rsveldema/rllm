@@ -440,7 +440,6 @@ namespace rllm
             "Training the neural network...\n"
             "\t $num_layers: {}\n"
             "\t $corpus_size: {}\n"
-            "\t $intermediate_layers width: {}\n"
             "\t convergence threshold: {:.6f}\n"
             "\t fires nothing CE loss:  {:.6f}\n"
             "\t steps per example per epoch: {}\n"
@@ -448,7 +447,6 @@ namespace rllm
             "\t training method: {}\n",
             m_transformer_blocks.size(),
             static_cast<size_t>(TokenID::MAX),
-            static_cast<size_t>(IntermediateLayerIndex::MAX),
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
             NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(),
