@@ -89,15 +89,28 @@ namespace rllm
         Statistics stats;
 
         auto nn = std::make_unique<NeuralNetwork>(_num_layers, corpus, stats);
-        nn->load(filename);
+
+
+        std::println("Loading '{}'...", filename);
+        if (! nn->load(filename))
+        {
+            std::println("Failed to load model from file: '{}'", filename);
+            return;
+        }
+        std::println("Loaded.");
 
         PromptOptions options;
-
         std::string line;
         while (true)
         {
-            std::cout << "Enter input (or '/exit' to quit): ";
-            if (!std::getline(std::cin, line) || line.starts_with("/") || line.empty())
+            std::println("Enter input (or '/exit' to quit): ");
+            std::print("> ");
+            if (!std::getline(std::cin, line))
+            {
+                std::println("Exiting prompt mode.");
+                break;
+            }
+            if (line.starts_with("/") || line.empty())
             {
                 process_command(line, options);
                 continue;
@@ -209,6 +222,7 @@ namespace rllm
         size_t num_layers,
         bool verbose,
         TrainingMethod method,
+        std::optional<size_t> checkpointing_interval,
         int window_size,
         size_t num_epochs,
         const std::string& train_corpus_dir
@@ -225,7 +239,7 @@ namespace rllm
         nn->set_training_method(method);
         nn->set_window_size(window_size);
 
-        nn->train(verbose, num_epochs, input_filename);
+        nn->train(verbose, num_epochs, input_filename, checkpointing_interval);
 
         stats.print_statistics();
 

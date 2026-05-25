@@ -59,13 +59,16 @@ namespace rllm
         std::vector<OutputToken> get_best_output_token_ids(size_t top_k) const;
 
         void train(bool verbose, size_t num_epochs,
-            const std::optional<std::string>& input_filename);
+            const std::optional<std::string>& input_filename, const std::optional<size_t>& checkpointing_interval = std::nullopt);
         float compute_loss(TokenID expected_output_token) const;
         void set_random_weights_and_connections();
 
         // returns true on success, false on failure (e.g. file not found or parse error)
         bool load(const std::string& filename);
         void save(const std::string& filename) const;
+
+        void disable_checkpointing() { m_checkpointing_interval = std::nullopt; }
+        void enable_checkpointing(size_t interval) { m_checkpointing_interval = interval; }
 
       private:
         Corpus&    m_corpus;
@@ -82,6 +85,8 @@ namespace rllm
         // Computed from the actual corpus size.
         const float m_fires_nothing_ce_loss;
         const float m_convergence_threshold;
+
+        std::optional<size_t> m_checkpointing_interval = 5000;
 
         void dump_top_predictions();
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);

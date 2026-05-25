@@ -55,6 +55,10 @@ namespace rllm
             std::println("Total learning process took {} ms", duration);
         }
 
+        size_t num_learning_failures() const { return m_learning_failures; }
+        size_t num_learning_successes() const { return m_learning_successes; }
+        size_t total_learning_duration_ms() const { return total_learning_duration.load(); }
+
       private:
         size_t m_learning_failures = 0;
         size_t m_learning_successes = 0;

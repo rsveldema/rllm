@@ -20,6 +20,7 @@ namespace rllm
             size_t num_layers,
             bool verbose,
             TrainingMethod method,
+            std::optional<size_t> checkpointing_interval,
             int window_size,
             size_t num_epochs,
             const std::string& train_corpus_dir

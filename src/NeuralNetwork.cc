@@ -370,15 +370,28 @@ namespace rllm
                 assert(window.size() == static_cast<PositionIndex>(window_size));
 
                 total_windows_trained++;
+
+                if (m_checkpointing_interval.has_value())
+                {
+                    if ((total_windows_trained % m_checkpointing_interval.value()) == 0)
+                    {
+                        std::println("creating checkpoint at epoch {}, window {}, total windows trained {}", epoch, j, total_windows_trained);
+                        save(std::format("models/checkpoint-{}.json", total_windows_trained));
+                    }
+                }
+
+
                 if (total_windows_trained % 100 == 0)
                 {
                     const auto line_opt = m_corpus.get_line(window);
                     LOG_INFO(
-                        "Epoch[{}%] window[{}]: {:0.2f}% done for '{}'",
+                        "Epoch[{}%] window[{}]: {:0.2f}% done for '{}', successes: {}, failures: {}",
                         epoch / static_cast<float>(num_epochs) * 100.0f,
                         j,
                         progress * 100.0f,
-                        line_opt.has_value() ? line_opt->c_str() : "unknown"
+                        line_opt.has_value() ? line_opt->c_str() : "unknown",
+                        m_stats.num_learning_successes(),
+                        m_stats.num_learning_failures()
                     );
                 }
 
@@ -395,7 +408,7 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::train(bool verbose, size_t num_epochs, const std::optional<std::string>& input_filename)
+    void NeuralNetwork::train(bool verbose, size_t num_epochs, const std::optional<std::string>& input_filename, const std::optional<size_t>& checkpointing_interval)
     {
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 

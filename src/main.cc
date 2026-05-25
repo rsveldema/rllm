@@ -20,6 +20,7 @@ int main(int argc, char* argv[])
     size_t num_epochs = 1000;
     auto method = rllm::TrainingMethod::TWO_TOK;
     int window_size = 2;
+    std::optional<size_t> checkpointing_interval = 5000;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -30,6 +31,10 @@ int main(int argc, char* argv[])
         else if (std::strcmp(argv[i], "--layers") == 0 && ((i + 1) < argc))
         {
             num_layers = std::atoi(argv[++i]);
+        }
+        else if (std::strcmp(argv[i], "--checkpoint-interval") == 0 && ((i + 1) < argc))
+        {
+            checkpointing_interval = static_cast<size_t>(std::atoi(argv[++i]));
         }
         else if (std::strcmp(argv[i], "--train-dir") == 0 && ((i + 1) < argc))
         {
@@ -97,12 +102,14 @@ int main(int argc, char* argv[])
                 "  --filter <filter>  Specify a filter to apply\n"
                 "  --epochs <n>    Number of training epochs (default: {})\n"
                 "  --method        Training method (default: {})\n"
+                "  --checkpoint-interval <n>  Interval of training iterations between checkpoints (default: {})\n"
                 "  window:<N>      Sliding window of N tokens (N >= 2)",
                 argv[0],
                 train_corpus_dir,
                 output_filename,
                 num_epochs,
-                rllm::training_method_to_string(method)
+                rllm::training_method_to_string(method),
+                checkpointing_interval.has_value() ? std::to_string(*checkpointing_interval) : "disabled"
             );
             return 1;
         }
@@ -111,8 +118,17 @@ int main(int argc, char* argv[])
     rllm::RLLM llm(filters);
     if (train_mode)
     {
-        llm.train_mode(input_filename, output_filename, num_layers, verbose, method, window_size, num_epochs,
-        train_corpus_dir);
+        llm.train_mode(
+            input_filename,
+            output_filename,
+            num_layers,
+            verbose,
+            method,
+            checkpointing_interval,
+            window_size,
+            num_epochs,
+            train_corpus_dir
+        );
     }
     else
     {
