@@ -1,4 +1,5 @@
-add_library(rllm_lib STATIC)
+add_library(rllm_lib STATIC
+    parallel.cc)
 
 target_sources(rllm_lib PRIVATE
     RLLM.cc

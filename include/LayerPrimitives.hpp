@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include <parallel.hpp>
+
 #include <RandomHelpers.hpp>
 #include <tokenizer_map.hpp>
 #include <Range.hpp>

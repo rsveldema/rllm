@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <omp.h>
+#include <parallel.hpp>
 #include <print>
 
 namespace rllm
@@ -122,12 +122,12 @@ namespace rllm
 
         // Per-thread accumulator buffers: each thread writes to its own slice,
         // eliminating atomic contention on next_layer.m_inputs.
-        const int n_threads = omp_get_max_threads();
+        const int n_threads = parallel::get_max_threads();
         std::vector<float> local_sums(static_cast<size_t>(n_threads) * static_cast<size_t>(n_dst), 0.0f);
 
 #pragma omp parallel
         {
-            float* my = local_sums.data() + omp_get_thread_num() * n_dst;
+            float* my = local_sums.data() + parallel::get_thread_num() * n_dst;
 #pragma omp for schedule(static)
             for (int idx = 0; idx < n_src; ++idx)
             {
@@ -157,12 +157,12 @@ namespace rllm
         constexpr int n_src = static_cast<int>(IntermediateLayerIndex::MAX);
         constexpr int n_dst = static_cast<int>(TokenID::MAX);
 
-        const int n_threads = omp_get_max_threads();
+        const int n_threads = parallel::get_max_threads();
         std::vector<float> local_sums(static_cast<size_t>(n_threads) * static_cast<size_t>(n_dst), 0.0f);
 
 #pragma omp parallel
         {
-            float* my = local_sums.data() + omp_get_thread_num() * n_dst;
+            float* my = local_sums.data() + parallel::get_thread_num() * n_dst;
 #pragma omp for schedule(static)
             for (int idx = 0; idx < n_src; ++idx)
             {
@@ -200,11 +200,7 @@ namespace rllm
         float learning_rate
     )
     {
-        const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
-#pragma omp parallel for schedule(static)
-        for (int idx = 0; idx < max_i; ++idx)
-        {
-            const auto i = static_cast<IntermediateLayerIndex>(idx);
+        PARFOR(i, enum_iterator<IntermediateLayerIndex>())
             const float x    = m_inputs[i];
             const float a    = m_attn_weights[i];
             const float g    = attn_gate(x, a);          // sigmoid(x*a)
@@ -236,7 +232,7 @@ namespace rllm
             // ∂L/∂x_i = neuron_delta * (silu_grad(x)*g + silu(x)*dg*a)
             const float dx = neuron_delta * (activation_grad(x) * g + normal_activation_function(x) * dg * a);
             prev_delta[i] += dx;
-        }
+        ENDFOR
     }
 
     void IntermediateLayer::propagate_backward_from_output_layer(
@@ -245,11 +241,7 @@ namespace rllm
         float learning_rate
     )
     {
-        const int max_i = static_cast<int>(IntermediateLayerIndex::MAX);
-#pragma omp parallel for schedule(static)
-        for (int idx = 0; idx < max_i; ++idx)
-        {
-            const auto i = static_cast<IntermediateLayerIndex>(idx);
+        PARFOR(i, enum_iterator<IntermediateLayerIndex>())
             const float x    = m_inputs[i];
             const float a    = m_attn_weights[i];
             const float g    = attn_gate(x, a);
@@ -279,7 +271,7 @@ namespace rllm
 
             const float dx = neuron_delta * (activation_grad(x) * g + normal_activation_function(x) * dg * a);
             prev_delta[i] += dx;
-        }
+        ENDFOR
     }
 
 } // namespace rllm

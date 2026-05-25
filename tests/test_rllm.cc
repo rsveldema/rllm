@@ -71,10 +71,10 @@ TEST(TransformerBlockTest, BackwardOutputShape)
 // ---------------------------------------------------------------------------
 TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
 {
-    if (omp_get_max_threads() < 2)
+    if (parallel::get_max_threads() < 2)
         GTEST_SKIP() << "OpenMP thread count < 2 - no parallelism available";
 
-    const int max_threads = omp_get_max_threads();
+    const int max_threads = parallel::get_max_threads();
 
     auto block = std::make_unique<rllm::TransformerBlock>();
     block->randomize();
@@ -126,10 +126,10 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
 // ---------------------------------------------------------------------------
 TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
 {
-    if (omp_get_max_threads() < 2)
+    if (parallel::get_max_threads() < 2)
         GTEST_SKIP() << "OpenMP thread count < 2 - no parallelism available";
 
-    const int max_threads = omp_get_max_threads();
+    const int max_threads = parallel::get_max_threads();
 
     auto block = std::make_unique<rllm::TransformerBlock>();
     block->randomize();

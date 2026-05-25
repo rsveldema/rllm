@@ -2,6 +2,7 @@
 
 #include <LayerPrimitives.hpp>
 #include <matmul.hpp>
+#include <parallel.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <vector>
 
@@ -129,13 +130,11 @@ namespace rllm
             float lr
         )
         {
-#pragma omp parallel for schedule(static)
-            for (const auto [r, c] : enum_iterator2D<R_enum, C_enum>())
-            {
+            PARFOR_2D(r, c, enum_iterator2D<R_enum, C_enum>())
                 const float g = std::clamp(grad[r, c], -GRAD_CLIP, GRAD_CLIP);
                 vel[r, c] = std::clamp(MOMENTUM_BETA * vel[r, c] + lr * g, -VEL_CLIP, VEL_CLIP);
                 W[r, c] = std::clamp(W[r, c] + vel[r, c], -WEIGHT_CLAMP, WEIGHT_CLAMP);
-            }
+            ENDFOR
         }
     };
 
