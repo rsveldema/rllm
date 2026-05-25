@@ -31,6 +31,7 @@ def read_all_files_in_directory(directory):
                 break
     return all_text
 
+
 def get_unique_words(text: list[str]) -> list[str]:
     unique_words = set()
     for word in text:
@@ -144,7 +145,7 @@ def split_camel_case_words(split : list[str]) -> list[str]:
     return split_camel_case
 
 
-def create_tokenizer_map(text):
+def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> dict[str, int]:
     # create a combination of all sequences of characters that appear in the text, up to a certain length,
     # and count the frequency of each sequence. We will use this to create a tokenizer map that maps each sequence to a unique ID, sorted by length and frequency.
     seperators = ' \n\t(){}[]<>.,;:"\'`~?!@#$%^&*-_=+|\\/0123456789'
@@ -162,16 +163,13 @@ def create_tokenizer_map(text):
         tokens.append(chr(cp))
     for cp in range(ord('a'), ord('z') + 1):
         tokens.append(chr(cp))
-    for cp in range(0x00C0, 0x0250):   # Latin Extended-A/B + Latin-1 Supplement letters
-        ch = chr(cp)
-        if unicodedata.category(ch).startswith('L'):
-            tokens.append(ch)
 
-    # each file contains a list of predefined words, one per line,
-    # that should also be included as tokens:
-    predefined_words = read_all_files_in_directory("predefined_words")
-    predefined_split = split_text_using_seperators(predefined_words, seperators)
-    predefined_split = get_unique_words(predefined_split)
+    if support_extra_latin_characters:
+        for cp in range(0x00C0, 0x0250):   # Latin Extended-A/B + Latin-1 Supplement letters
+            ch = chr(cp)
+            if unicodedata.category(ch).startswith('L'):
+                tokens.append(ch)
+
 
     # split the text into words on the seperators,
     # and also include the seperators as tokens:
@@ -179,13 +177,6 @@ def create_tokenizer_map(text):
     split = split_camel_case_words(split)
     split = get_unique_words_with_frequency(split)
     bpe_tokens = compute_bpe_tokens(split)
-
-    # strip EOW markers from BPE tokens to get the set of base strings they cover
-    bpe_base_strings = {t[:-len(EOW_MARKER)] if t.endswith(EOW_MARKER) else t for t in bpe_tokens}
-
-    # only add predefined words not already covered by a BPE token
-    filtered_predefined = [w for w in predefined_split if w not in bpe_base_strings]
-    tokens.extend(filtered_predefined)
     tokens.extend(bpe_tokens)
 
     # Create a dictionary to count the frequency of each token.
@@ -273,7 +264,7 @@ def generate_cpp_table_header(tokenizer_map) -> str:
         if _token == EOW_MARKER:
             cpp_table += f'    TOK_EOW = TOK_{idx},\n'
     cpp_table += "    START = TOK_0,\n"
-    cpp_table += f"    MAX = TOK_{len(tokenizer_map) - 1},\n"
+    cpp_table += f"    MAX = {len(tokenizer_map)},\n"
     cpp_table += "    UNKNOWN_TOKEN_ID = -1\n"
     cpp_table += "};\n\n"
     cpp_table += "struct TokenInfo {\n"
@@ -298,11 +289,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--cc-out",  default="src/tokenizer_map.cc")
     parser.add_argument("--hpp-out", default="include/tokenizer_map.hpp")
+    parser.add_argument("--support-extra-latin-characters", action="store_true", help="Include additional Latin characters (beyond basic ASCII) as single-character tokens")
     args = parser.parse_args()
 
-    conatenated_text = read_all_files_in_directory("corpus")
+    conatenated_text = read_all_files_in_directory("tokenizer_training_data")
     print(f"Total characters in corpus: {len(conatenated_text)}")
-    tokenizer_map = create_tokenizer_map(conatenated_text)
+    tokenizer_map = create_tokenizer_map(conatenated_text, support_extra_latin_characters=args.support_extra_latin_characters)
 
     print(f"Total unique tokens: {len(tokenizer_map)}")
 

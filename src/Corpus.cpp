@@ -45,9 +45,9 @@ namespace rllm
         : m_filters(filters)
     {}
 
-    void Corpus::load_files_from_dir()
+    void Corpus::load_files_from_dir(const std::string& train_corpus_dir)
     {
-        const std::filesystem::path corpus_dir{"corpus"};
+        const std::filesystem::path corpus_dir{train_corpus_dir};
         if (!std::filesystem::exists(corpus_dir))
         {
             std::println(

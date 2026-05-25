@@ -17,7 +17,7 @@ namespace rllm
     {
       public:
         Corpus(const std::vector<std::string>& filters);
-        void load_files_from_dir();
+        void load_files_from_dir(const std::string& train_corpus_dir);
 
         using visitor_fn_t       = std::function<void(const InputLine&)>;
         using token_visitor_fn_t = std::function<void(TokenID)>;

@@ -14,9 +14,17 @@ namespace rllm
         RLLM(const RLLM&) = delete;
         RLLM& operator=(const RLLM&) = delete;
 
-        void train_mode(const std::string& filename, size_t num_layers, bool verbose,
-                        TrainingMethod method, int window_size, size_t num_epochs);
-        void prompt_mode(const std::string& filename);
+        void train_mode(
+            const std::optional<std::string>& input_filename,
+            const std::string& output_filename,
+            size_t num_layers,
+            bool verbose,
+            TrainingMethod method,
+            int window_size,
+            size_t num_epochs,
+            const std::string& train_corpus_dir
+        );
+        void prompt_mode(const std::string& input_filename);
 
       private:
         const std::vector<std::string> m_filters;

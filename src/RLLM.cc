@@ -6,10 +6,19 @@
 
 namespace rllm
 {
+    // maximum number of tokens to generate in response to a prompt before stopping
+    static constexpr size_t MAX_NUM_ANSWER_TOKENS = 10;
+
+    // Threshold for considering a predicted token as valid (not just noise).
+    // This is a tunable hyperparameter.
+    static constexpr float VALID_PREDICTION_THRESHOLD = 10.0f / 100.0f;
+
     struct PromptOptions
     {
         bool highest_prio_only = true;
     };
+
+
 
 
     void process_command(const std::string& _command, PromptOptions& options)
@@ -109,7 +118,6 @@ namespace rllm
 
             const auto question_size = token_id_list.size();
 
-            static constexpr size_t MAX_NUM_ANSWER_TOKENS = 10;
 
             for (size_t iter = 0; iter < MAX_NUM_ANSWER_TOKENS; ++iter)
             {
@@ -126,30 +134,52 @@ namespace rllm
                 }
 
                 int ix = 0;
+                int num_valid_tokens = 0;
                 for (const auto& entry : output_token_id_lists)
                 {
                     const auto predicted_token = nn->get_corpus().get_token_from_id(entry.token_id);
                     std::println(
-                        "\t     prediction[{}]: '{}' (id: '{}'), {}",
+                        "\t     prediction[{}]: '{}' (id: '{}'), {:.2f}%",
                         ix,
                         nn->get_corpus().get_token_from_id(entry.token_id),
                         static_cast<int>(entry.token_id),
-                        entry.activation
+                        entry.activation * 100.0f
                     );
                     ix++;
+                    if (entry.activation > VALID_PREDICTION_THRESHOLD)
+                    {
+                        num_valid_tokens++;
+                    }
+                }
+
+                if (num_valid_tokens == 0)
+                {
+                    std::println("No output tokens predicted.");
+                    break;
                 }
 
 
                 size_t random_index = 0;
                 if (!options.highest_prio_only)
                 {
-                    random_index = static_cast<size_t>(rand()) % output_token_id_lists.size();
+                    random_index = static_cast<size_t>(rand()) % num_valid_tokens;
                 }
 
                 const auto& entry = output_token_id_lists[random_index];
-                const auto output_token = nn->get_corpus().get_token_from_id(entry.token_id);
+                auto output_token = nn->get_corpus().get_token_from_id(entry.token_id);
                 // Add the predicted token ID to the input for the
                 // next iteration
+                if (output_token == "<UNK>")
+                {
+                    std::println("Predicted next token is unknown. Stopping generation.");
+                    break;
+                }
+                if (output_token == "\n") {
+                    output_token = "\\n";
+                }
+                if (output_token == "\t") {
+                    output_token = "\\t";
+                }
                 std::println("Predicted next token: {}", output_token);
                 token_id_list.push_back(entry.token_id);
             }
@@ -170,29 +200,31 @@ namespace rllm
     }
 
     void RLLM::train_mode(
-        const std::string& filename,
+        const std::optional<std::string>& input_filename,
+        const std::string& output_filename,
         size_t num_layers,
         bool verbose,
         TrainingMethod method,
         int window_size,
-        size_t num_epochs
+        size_t num_epochs,
+        const std::string& train_corpus_dir
     )
     {
         std::println("Training mode");
         set_nn_log_file("train.log");
 
         Corpus corpus{m_filters};
-        corpus.load_files_from_dir();
+        corpus.load_files_from_dir(train_corpus_dir);
         Statistics stats;
 
         auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus, stats);
         nn->set_training_method(method);
         nn->set_window_size(window_size);
 
-        nn->train(verbose, num_epochs);
+        nn->train(verbose, num_epochs, input_filename);
 
         stats.print_statistics();
 
-        nn->save(filename);
+        nn->save(output_filename);
     }
 } // namespace rllm

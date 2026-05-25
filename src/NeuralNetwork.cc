@@ -2,8 +2,10 @@
 #include <TokenIDFormatter.hpp>
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <random>
@@ -15,10 +17,14 @@ namespace rllm
     {
         switch (method)
         {
-        case TrainingMethod::TWO_TOK:                    return "two_tok";
-        case TrainingMethod::THREE_TOK:                  return "three_tok";
-        case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES: return "increasingly_longer";
-        case TrainingMethod::WINDOW:                     return "window";
+        case TrainingMethod::TWO_TOK:
+            return "two_tok";
+        case TrainingMethod::THREE_TOK:
+            return "three_tok";
+        case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
+            return "increasingly_longer";
+        case TrainingMethod::WINDOW:
+            return "window";
         }
         return "UNKNOWN";
     }
@@ -103,22 +109,32 @@ namespace rllm
     }
 
     // returns the top-K with the biggest activation in the output layer,
-    // sorted descending by activation.
+    // sorted descending by activation (as softmax probabilities).
     // if no prediction can be made, returns an empty list.
-    // Do not try to return any if the activation is 0 or negative, as that means the token did not activate at all.
+    // Do not try to return any if the logit is 0 or negative, as that means the token did not activate at all.
     std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k) const
     {
         assert(!m_transformer_blocks.empty());
 
+        // Compute softmax over all logits for numerically stable probabilities.
+        float max_logit = -std::numeric_limits<float>::infinity();
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
+            max_logit = std::max(max_logit, m_output_layer.m_inputs[i]);
+
+        float sum_exp = 0.0f;
+        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
+            sum_exp += std::exp(m_output_layer.m_inputs[i] - max_logit);
+
         std::vector<OutputToken> top_k_pairs;
         for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
         {
-            const auto activation = m_output_layer.m_inputs[i];
-            if (activation <= 0.0f)
+            const auto logit = m_output_layer.m_inputs[i];
+            if (logit <= 0.0f)
             {
                 continue; // skip tokens that did not activate at all
             }
-            try_add_to_top_k(top_k_pairs, i, activation, top_k);
+            const float prob = std::exp(logit - max_logit) / sum_exp;
+            try_add_to_top_k(top_k_pairs, i, prob, top_k);
         }
         return top_k_pairs;
     }
@@ -385,11 +401,20 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::train(bool verbose, size_t num_epochs)
+    void NeuralNetwork::train(bool verbose, size_t num_epochs,
+                    const std::optional<std::string>& input_filename)
     {
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
-        set_random_weights_and_connections();
+        if (input_filename)
+        {
+            load(*input_filename);
+            LOG_INFO("Loaded model from '{}'", *input_filename);
+        }
+        else
+        {
+            set_random_weights_and_connections();
+        }
 
         LOG_INFO(
             "Training the neural network...\n"

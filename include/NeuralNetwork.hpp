@@ -58,7 +58,8 @@ namespace rllm
         // Returns the top-K output tokens with the highest activation.
         std::vector<OutputToken> get_best_output_token_ids(size_t top_k) const;
 
-        void train(bool verbose, size_t num_epochs);
+        void train(bool verbose, size_t num_epochs,
+            const std::optional<std::string>& input_filename);
         float compute_loss(TokenID expected_output_token) const;
         void set_random_weights_and_connections();
 

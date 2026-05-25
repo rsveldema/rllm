@@ -1,5 +1,7 @@
 __pycache__
 build_prof
+build_clang
+perf_fwd.data
 build
 *.o
 *.a

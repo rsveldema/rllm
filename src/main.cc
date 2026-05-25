@@ -10,9 +10,11 @@
 int main(int argc, char* argv[])
 {
     std::srand(0);
+    std::string train_corpus_dir = "training_data";
     std::vector<std::string> filters;
     bool train_mode = false;
-    const char* filename = "model.json";
+    std::string output_filename = "model.json";
+    std::optional<std::string> input_filename;
     int num_layers = 4;
     bool verbose = false;
     size_t num_epochs = 1000;
@@ -29,13 +31,21 @@ int main(int argc, char* argv[])
         {
             num_layers = std::atoi(argv[++i]);
         }
+        else if (std::strcmp(argv[i], "--train-dir") == 0 && ((i + 1) < argc))
+        {
+            train_corpus_dir = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--epochs") == 0 && ((i + 1) < argc))
         {
             num_epochs = static_cast<size_t>(std::atoi(argv[++i]));
         }
-        else if (std::strcmp(argv[i], "--file") == 0 && ((i + 1) < argc))
+        else if (std::strcmp(argv[i], "-o") == 0 && ((i + 1) < argc))
         {
-            filename = argv[++i];
+            output_filename = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "-i") == 0 && ((i + 1) < argc))
+        {
+            input_filename = argv[++i];
         }
         else if (std::strcmp(argv[i], "--method") == 0 && ((i + 1) < argc))
         {
@@ -59,7 +69,9 @@ int main(int argc, char* argv[])
             }
             else
             {
-                std::println("Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, window:<N>", m);
+                std::println(
+                    "Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, window:<N>", m
+                );
                 return 1;
             }
         }
@@ -75,16 +87,20 @@ int main(int argc, char* argv[])
         {
             std::println(
                 "Usage: {} [--train] [--file <filename>] [--verbose] [--filter <filter>]\n"
+                "          [--train-dir <directory>]\n"
                 "          [--method <two_tok|three_tok|increasingly_longer|window:<N>>]\n"
                 "  --train         Run in training mode (default is prompt mode)\n"
-                "  --file <filename>  Specify the model file to load/save (default is '{}')\n"
+                "  --train-dir <directory>  Directory containing training text files (default is '{}')\n"
+                "  -i <filename>  Specify the model file to load (trainer will init the model if not provided)\n"
+                "  -o <filename>  Specify the model file to save (default is '{}')\n"
                 "  --verbose       Enable verbose output\n"
                 "  --filter <filter>  Specify a filter to apply\n"
                 "  --epochs <n>    Number of training epochs (default: {})\n"
                 "  --method        Training method (default: {})\n"
                 "  window:<N>      Sliding window of N tokens (N >= 2)",
                 argv[0],
-                filename,
+                train_corpus_dir,
+                output_filename,
                 num_epochs,
                 rllm::training_method_to_string(method)
             );
@@ -95,11 +111,12 @@ int main(int argc, char* argv[])
     rllm::RLLM llm(filters);
     if (train_mode)
     {
-        llm.train_mode(filename, num_layers, verbose, method, window_size, num_epochs);
+        llm.train_mode(input_filename, output_filename, num_layers, verbose, method, window_size, num_epochs,
+        train_corpus_dir);
     }
     else
     {
-        llm.prompt_mode(filename);
+        llm.prompt_mode(input_filename ? *input_filename : output_filename);
     }
 
     return 0;
