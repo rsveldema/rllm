@@ -9,70 +9,51 @@ namespace rllm
     {
       public:
         enum_iterator2D(Enum1 end1 = Enum1::MAX, Enum2 end2 = Enum2::MAX)
-            : m_current1(Enum1::START)
-            , m_current2(Enum2::START)
-            , m_end1(end1)
-            , m_end2(end2)
-        {}
-
-        enum_iterator2D(Enum1 start1, Enum1 end1, Enum2 start2, Enum2 end2)
-            : m_current1(start1)
-            , m_current2(start2)
-            , m_end1(end1)
-            , m_end2(end2)
+            : m_pos(0)
+            , m_end((static_cast<size_t>(end1) - static_cast<size_t>(Enum1::START)) *
+                    (static_cast<size_t>(end2) - static_cast<size_t>(Enum2::START)))
+            , m_size2(static_cast<size_t>(end2) - static_cast<size_t>(Enum2::START))
         {}
 
         std::pair<Enum1, Enum2> operator*() const
         {
-            return {m_current1, m_current2};
+            return {
+                static_cast<Enum1>(static_cast<size_t>(Enum1::START) + m_pos / m_size2),
+                static_cast<Enum2>(static_cast<size_t>(Enum2::START) + m_pos % m_size2)
+            };
         }
+
         enum_iterator2D& operator++()
         {
-            m_current2 = inc(m_current2);
-            if (m_current2 == m_end2)
-            {
-                m_current2 = Enum2::START;
-                m_current1 = inc(m_current1);
-            }
+            ++m_pos;
             return *this;
         }
 
         bool operator!=(const enum_iterator2D& other) const
         {
-            return m_current1 != other.m_current1 || m_current2 != other.m_current2;
+            return m_pos != other.m_pos;
         }
 
         void operator+=(size_t offset)
         {
-            const size_t total_size = static_cast<size_t>(m_end1) * static_cast<size_t>(m_end2);
-            const size_t current_pos = static_cast<size_t>(m_current1) * static_cast<size_t>(m_end2) + static_cast<size_t>(m_current2);
-            const size_t new_pos = (current_pos + offset) % total_size;
-            m_current1 = static_cast<Enum1>(new_pos / static_cast<size_t>(m_end2));
-            m_current2 = static_cast<Enum2>(new_pos % static_cast<size_t>(m_end2));
+            m_pos = (m_pos + offset) % m_end;
         }
 
         int operator-(const enum_iterator2D& other) const
         {
-            const size_t total_size = static_cast<size_t>(m_end1) * static_cast<size_t>(m_end2);
-            const size_t current_pos = static_cast<size_t>(m_current1) * static_cast<size_t>(m_end2) + static_cast<size_t>(m_current2);
-            const size_t other_pos = static_cast<size_t>(other.m_current1) * static_cast<size_t>(m_end2) + static_cast<size_t>(other.m_current2);
-            return static_cast<int>((current_pos + total_size - other_pos) % total_size);
+            return static_cast<int>(m_pos) - static_cast<int>(other.m_pos);
         }
 
-        enum_iterator2D begin() const
-        {
-            return enum_iterator2D{Enum1::START, m_end1, Enum2::START, m_end2};
-        }
-
-        enum_iterator2D end() const
-        {
-            return enum_iterator2D{m_end1, m_end1, m_end2, m_end2};
-        }
+        enum_iterator2D begin() const { return {0,     m_end, m_size2}; }
+        enum_iterator2D end()   const { return {m_end, m_end, m_size2}; }
 
       private:
-        Enum1 m_current1;
-        Enum2 m_current2;
-        Enum1 m_end1;
-        Enum2 m_end2;
+        enum_iterator2D(size_t pos, size_t end, size_t size2)
+            : m_pos(pos), m_end(end), m_size2(size2)
+        {}
+
+        size_t m_pos;    // flat index in [0, m_end)
+        size_t m_end;    // total iterations = size1 * size2
+        size_t m_size2;  // stride of the inner dimension
     };
 } // namespace rllm
