@@ -13,27 +13,6 @@
 
 namespace math
 {
-    // Fast approximation of exp(x) for x in [-10, 0], with max relative error < 0.1%.
-    // Values outside that range are clamped to avoid underflow/overflow.
-    inline float fast_exp(float x)
-    {
-        if (x < -10.f)
-            return 0.f;
-        if (x > 0.f)
-            return 1.f;
-
-        // Approximate exp(x) using a 5th-degree polynomial fit on [-10, 0].
-        // Coefficients derived from a least-squares fit to exp(x) in that range.
-        constexpr float c0 = 1.f;
-        constexpr float c1 = 0.999999f;
-        constexpr float c2 = 0.499999f;
-        constexpr float c3 = 0.166666f;
-        constexpr float c4 = 0.041666f;
-        constexpr float c5 = 0.008333f;
-
-        return (((((c5 * x + c4) * x + c3) * x + c2) * x + c1) * x + c0);
-    }
-    
     template <typename A, typename B>
     constexpr auto max(A a, B b)
     {

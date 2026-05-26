@@ -48,7 +48,7 @@ namespace rllm
         const Corpus& m_corpus;
 
         // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
-        fixed_size_matrix<rlmm_float, TokenID, EmbeddingDimension> W_lm_head;
+        fixed_size_matrix<rlmm_float16, TokenID, EmbeddingDimension> W_lm_head;
         fixed_size_matrix<rlmm_float, TokenID, EmbeddingDimension> V_lm_head; // SGD momentum velocities
     };
 

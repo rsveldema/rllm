@@ -59,14 +59,14 @@ namespace rllm
         static constexpr float WEIGHT_CLAMP = 2.0f;
 
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
+        fixed_size_matrix<rlmm_float16, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
         fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
 
         // SwiGLU FFN:
         //   gate, up:  [static_cast<int>(FFDimension::MAX)    × D_MODEL]  (out × in)
         //   down:      [D_MODEL × static_cast<int>(FFDimension::MAX)   ]  (out × in)
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> W_gate, W_up;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> W_down;
+        fixed_size_matrix<rlmm_float16, FFDimension, EmbeddingDimension> W_gate, W_up;
+        fixed_size_matrix<rlmm_float16, EmbeddingDimension, FFDimension> W_down;
         fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> V_gate, V_up;
         fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> V_down;
 
