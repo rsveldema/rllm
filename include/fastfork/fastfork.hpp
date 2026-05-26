@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace fastfork
 {
@@ -51,4 +53,16 @@ namespace fastfork
 
     // Participate in work-stealing until ctx is empty.
     void wait_local(Context& ctx);
+
+    // Per-worker statistics (indexed by thread ID 0..get_max_threads()-1).
+    struct WorkerStats
+    {
+        uint64_t tasks_executed_own{0}; // tasks run from thread's own queue
+        uint64_t tasks_stolen{0};       // tasks run stolen from another thread
+        uint64_t idle_polls{0};         // full steal_order scans that found nothing
+        uint64_t tasks_enqueued{0};     // tasks deposited into this thread's queue
+    };
+
+    std::vector<WorkerStats> get_worker_stats();
+    void                     reset_worker_stats();
 }

@@ -1,13 +1,12 @@
 #include <fastfork/fastfork.hpp>
+#include <fastfork/circular_queue.hpp>
 
 #include <hwloc.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <latch>
-#include <mutex>
-#include <queue>
+#include <optional>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -19,10 +18,23 @@ namespace fastfork
         static int                      s_num_threads = 0;
         static std::vector<std::thread> s_workers;
         static std::atomic<bool>        s_stop{false};
+        static std::atomic<uint64_t>    s_work_epoch{0}; // bumped + notify_one per enqueue
         static thread_local int         tl_thread_id   = 0;
         static thread_local int         tl_fork_cursor = 0; // per-core, no atomic needed
 
+        // Per-worker stats; cache-line padded to avoid false sharing.
+        struct alignas(64) Stats
+        {
+            uint64_t tasks_executed_own{0};
+            uint64_t tasks_stolen{0};
+            uint64_t idle_polls{0};
+            uint64_t tasks_enqueued{0};
+        };
+        static std::vector<Stats> s_stats;
+
         hwloc_topology_t s_topology = nullptr;
+
+        static constexpr int QUEUE_CAPACITY = 4096 * 128;
 
         // ── TaskQueue tree ─────────────────────────────────────────────────
         // One node per hwloc object.  Only leaf nodes (thread_id ≥ 0) carry
@@ -34,8 +46,7 @@ namespace fastfork
             int                          thread_id = -1;   // ≥ 0 at leaves
             TaskQueueNode*               parent    = nullptr;
             std::vector<TaskQueueNode*>  children;          // non-owning
-            std::queue<task_t>           queue;             // leaves only
-            std::mutex                   mutex;             // leaves only
+            WSDeque<task_t, QUEUE_CAPACITY>       queue;     // leaves only
             std::vector<TaskQueueNode*>  steal_order;       // leaves only
         };
 
@@ -106,44 +117,81 @@ namespace fastfork
             }
         }
 
-        static constexpr int MAX_STEAL = 32;
+        static constexpr int MAX_STEAL       = 32;
+        static constexpr int IDLE_SPIN_COUNT = 2000; // iters before sleeping via futex
 
-        // Try own queue first, then steal in topology order.
-        // Steals min(MAX_STEAL, max(1, queue_size / num_threads)) tasks per lock
-        // acquisition into a stack-local array, amortising mutex cost without
-        // heap allocation.
+        // Cilk-style poll:
+        //   own queue  → pop_bottom  (LIFO: hottest cache lines first)
+        //   other queues → steal_top (FIFO: coarsest/oldest tasks first)
+        // Both paths steal up to min(MAX_STEAL, max(1, approx/n_threads)) tasks
+        // into a local batch to amortise per-op overhead.
         bool poll_and_execute_one(int thread_id)
         {
-            for (auto* qnode : s_leaves[thread_id]->steal_order)
+            auto* own = s_leaves[thread_id];
+
+            // ── own deque: LIFO pop ────────────────────────────────────────
             {
-                std::array<task_t, MAX_STEAL> batch;
+                const auto approx = own->queue.approx_size();
+                if (approx > 0)
+                {
+                    std::array<std::optional<task_t>, MAX_STEAL> batch;
+                    int count = 0;
+                    const int want = static_cast<int>(
+                        std::min((int64_t)MAX_STEAL,
+                                 std::max((int64_t)1, approx / s_num_threads)));
+                    for (; count < want; ++count)
+                    {
+                        task_t tmp;
+                        if (!own->queue.pop_bottom(tmp)) break;
+                        batch[count] = std::move(tmp);
+                    }
+                    if (count > 0)
+                    {
+                        s_stats[thread_id].tasks_executed_own += count;
+                        for (int i = 0; i < count; ++i) (*batch[i])();
+                        return true;
+                    }
+                }
+            }
+
+            // ── other deques: FIFO steal (topology order) ─────────────────
+            for (auto* qnode : own->steal_order)
+            {
+                if (qnode == own) continue;
+                const auto approx = qnode->queue.approx_size();
+                if (approx <= 0) continue;
+                std::array<std::optional<task_t>, MAX_STEAL> batch;
                 int count = 0;
                 {
-                    std::lock_guard<std::mutex> lock(qnode->mutex);
-                    const int n = static_cast<int>(qnode->queue.size());
-                    if (n > 0)
+                    const int want = static_cast<int>(
+                        std::min((int64_t)MAX_STEAL,
+                                 std::max((int64_t)1, approx / s_num_threads)));
+                    for (; count < want; ++count)
                     {
-                        count = std::min(MAX_STEAL, std::max(1, n / s_num_threads));
-                        for (int i = 0; i < count; ++i)
-                        {
-                            batch[i] = std::move(qnode->queue.front());
-                            qnode->queue.pop();
-                        }
+                        task_t tmp;
+                        if (!qnode->queue.steal_top(tmp)) break;
+                        batch[count] = std::move(tmp);
                     }
                 }
                 if (count > 0)
                 {
-                    for (int i = 0; i < count; ++i)
-                        batch[i]();
+                    s_stats[thread_id].tasks_stolen += count;
+                    for (int i = 0; i < count; ++i) (*batch[i])();
                     return true;
                 }
             }
+
+            ++s_stats[thread_id].idle_polls;
             return false;
         }
 
         void shutdown()
         {
             s_stop.store(true, std::memory_order_release);
+            // Bump epoch with release so the s_stop write above is visible to any
+            // thread that acquire-loads the epoch just before entering wait().
+            s_work_epoch.fetch_add(1, std::memory_order_release);
+            s_work_epoch.notify_all();
             for (auto& w : s_workers)
                 if (w.joinable()) w.join();
             s_workers.clear();
@@ -158,6 +206,7 @@ namespace fastfork
         {
             s_nodes.clear();
             s_leaves.clear();
+            s_stats.assign(s_num_threads, Stats{});
             int leaf_counter = 0;
             build_tree(hwloc_get_root_obj(s_topology), nullptr, leaf_counter);
             compute_steal_orders();
@@ -174,7 +223,30 @@ namespace fastfork
                         tl_fork_cursor = i;
                         ready.count_down(); // signal: this thread is running
                         while (!s_stop.load(std::memory_order_relaxed))
-                            poll_and_execute_one(i);
+                        {
+                            // Spin briefly so we respond quickly to new work.
+                            bool found = false;
+                            for (int k = 0; k < IDLE_SPIN_COUNT; ++k)
+                            {
+                                if (poll_and_execute_one(i)) { found = true; break; }
+#ifdef __x86_64__
+                                __builtin_ia32_pause();
+#endif
+                            }
+                            if (!found)
+                            {
+                                // Load epoch first, then check s_stop to avoid a
+                                // lost-wakeup race with shutdown(): if shutdown()
+                                // increments epoch between our load and wait(), then
+                                // wait(old_epoch) returns immediately because the
+                                // value already changed.
+                                const uint64_t epoch =
+                                    s_work_epoch.load(std::memory_order_acquire);
+                                if (s_stop.load(std::memory_order_relaxed)) break;
+                                if (!poll_and_execute_one(i))
+                                    s_work_epoch.wait(epoch, std::memory_order_relaxed);
+                            }
+                        }
                     });
                 ready.wait(); // returns only after all workers have checked in
             }
@@ -215,11 +287,20 @@ namespace fastfork
 
     void fork_task(task_t t)
     {
-        const int target = tl_fork_cursor % s_num_threads;
-        tl_fork_cursor   = target + 1; // pre-wrap to avoid a second % on the next call
-        if (tl_fork_cursor >= s_num_threads) tl_fork_cursor = 0;
-        std::lock_guard<std::mutex> lock(s_leaves[target]->mutex);
-        s_leaves[target]->queue.push(std::move(t));
+        // Cilk-style: always push to the bottom of the calling thread's own
+        // deque.  Other workers will steal from our top when they run out of
+        // work.  tl_thread_id is 0 for the main thread (which acts as worker 0)
+        // and 1..n-1 for spawned workers, so s_leaves[tl_thread_id] is always
+        // valid after init().
+        if (s_leaves[tl_thread_id]->queue.push_bottom(std::move(t)))
+        {
+            ++s_stats[tl_thread_id].tasks_enqueued;
+            // Wake one parked worker (if any).
+            s_work_epoch.fetch_add(1, std::memory_order_release);
+            s_work_epoch.notify_one();
+            return;
+        }
+        t(); // own deque full — execute inline
     }
 
     void fork_task(Context& ctx, task_t t)
@@ -238,5 +319,23 @@ namespace fastfork
     }
 
     Context::~Context() { wait_local(*this); }
+
+    std::vector<WorkerStats> get_worker_stats()
+    {
+        std::vector<WorkerStats> out(s_stats.size());
+        for (size_t i = 0; i < s_stats.size(); ++i)
+        {
+            out[i].tasks_executed_own = s_stats[i].tasks_executed_own;
+            out[i].tasks_stolen       = s_stats[i].tasks_stolen;
+            out[i].idle_polls         = s_stats[i].idle_polls;
+            out[i].tasks_enqueued     = s_stats[i].tasks_enqueued;
+        }
+        return out;
+    }
+
+    void reset_worker_stats()
+    {
+        for (auto& s : s_stats) s = Stats{};
+    }
 
 } // namespace fastfork

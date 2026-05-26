@@ -8,8 +8,6 @@
 #include <memory>
 #include <vector>
 
-#include <omp.h>
-
 int main(int argc, char** argv)
 {
     parallel::init_parallel();
@@ -75,14 +73,14 @@ TEST(TransformerBlockTest, BackwardOutputShape)
 }
 
 // ---------------------------------------------------------------------------
-// TransformerBlock OpenMP test: parallel forward faster than serial
+// TransformerBlock test: parallel forward faster than serial
 // ---------------------------------------------------------------------------
 TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
 {
-    if (omp_get_max_threads() < 2)
-        GTEST_SKIP() << "OpenMP thread count < 2 - no parallelism available";
+    if (parallel::get_max_threads() < 2)
+        GTEST_SKIP() << "thread count < 2 - no parallelism available";
 
-    const int max_threads = omp_get_max_threads();
+    const int max_threads = parallel::get_max_threads();
 
     auto block = std::make_unique<rllm::TransformerBlock>();
     block->randomize();
@@ -94,7 +92,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     h_template.fill(0.1f);
 
     // --- serial baseline (1 thread) ---
-    omp_set_num_threads(1);
+    parallel::set_num_threads(1);
     const auto t0 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_FORWARD_ITERS; ++iter)
     {
@@ -103,8 +101,8 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     }
     const auto t1 = std::chrono::steady_clock::now();
 
-    // --- OpenMP parallel ---
-    omp_set_num_threads(max_threads);
+    // --- parallel ---
+    parallel::set_num_threads(max_threads);
     const auto t2 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_FORWARD_ITERS; ++iter)
     {
@@ -121,23 +119,25 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     RecordProperty("parallel_us", parallel_us);
     RecordProperty("speedup",     speedup);
 
-    fprintf(stderr, "TransformerBlock Forward - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+    fprintf(stdout, "TransformerBlock Forward - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
             static_cast<long long>(serial_us), static_cast<long long>(parallel_us), speedup);
 
     EXPECT_GT(speedup, 1.0)
-        << "OpenMP parallelisation of TransformerBlock::forward is slower than serial "
-        << "(serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup << ").";
+        << "parallelisation of TransformerBlock::forward is slower than serial "
+        << "(serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup << ")."
+;
+    PARALLEL_DUMP_STATS();
 }
 
 // ---------------------------------------------------------------------------
-// TransformerBlock OpenMP test: parallel backward faster than serial
+// TransformerBlock test: parallel backward faster than serial
 // ---------------------------------------------------------------------------
 TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
 {
-    if (omp_get_max_threads() < 2)
-        GTEST_SKIP() << "OpenMP thread count < 2 - no parallelism available";
+    if (parallel::get_max_threads() < 2)
+        GTEST_SKIP() << "thread count < 2 - no parallelism available";
 
-    const int max_threads = omp_get_max_threads();
+    const int max_threads = parallel::get_max_threads();
 
     auto block = std::make_unique<rllm::TransformerBlock>();
     block->randomize();
@@ -157,7 +157,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     }
 
     // --- serial baseline (1 thread) ---
-    omp_set_num_threads(1);
+    parallel::set_num_threads(1);
     const auto t0 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
@@ -167,8 +167,8 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     }
     const auto t1 = std::chrono::steady_clock::now();
 
-    // --- OpenMP parallel ---
-    omp_set_num_threads(max_threads);
+    // --- parallel ---
+    parallel::set_num_threads(max_threads);
     const auto t2 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
@@ -186,11 +186,12 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     RecordProperty("parallel_us", parallel_us);
     RecordProperty("speedup",     speedup);
 
-    fprintf(stderr, "TransformerBlock Backward - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+    fprintf(stdout, "TransformerBlock Backward - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
             static_cast<long long>(serial_us), static_cast<long long>(parallel_us), speedup);
+    PARALLEL_DUMP_STATS();
 
     EXPECT_GT(speedup, 1.0)
-        << "OpenMP parallelisation of TransformerBlock::backward is slower than serial "
+        << "parallelisation of TransformerBlock::backward is slower than serial "
         << "(serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup << ").";
 }
 
@@ -246,4 +247,79 @@ TEST(EnumIterator2DTest, ZeroBoundProducesNoIterations)
     for (const auto [h, d] : enum_iterator2D<HeadsIndex, HeadDimension>(HeadsIndex::START))
         ++count;
     EXPECT_EQ(count, 0);
+}
+
+// ---------------------------------------------------------------------------
+// PARFOR_2D performance test: parallel 2D loop faster than serial
+// ---------------------------------------------------------------------------
+// Dimensions mirror the most common PARFOR_2D usage in TransformerBlock:
+// PositionIndex (outer, BENCH_SEQ_LEN rows) x EmbeddingDimension (inner, 512 cols).
+// Each cell does WORK_PER_CELL float multiply-adds so that fork overhead is
+// clearly amortised even if task count is small.
+TEST(ParFor2DTest, SpeedupFasterThanSerial)
+{
+    if (parallel::get_max_threads() < 2)
+        GTEST_SKIP() << "thread count < 2 - no parallelism available";
+
+    const int max_threads = parallel::get_max_threads();
+
+    constexpr int ROWS          = BENCH_SEQ_LEN;                                   // 64
+    constexpr int COLS          = static_cast<int>(rllm::EmbeddingDimension::MAX); // 512
+    constexpr int WORK_PER_CELL = 128; // float multiply-adds per cell
+    constexpr int ITERS         = 100;
+
+    const auto seq = static_cast<rllm::PositionIndex>(ROWS);
+    std::vector<float> buf(ROWS * COLS, 0.0f);
+
+    // --- serial baseline (1 thread) ---
+    parallel::set_num_threads(1);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int it = 0; it < ITERS; ++it)
+    {
+        for (const auto [t, d] :
+             rllm::enum_iterator2D<rllm::PositionIndex, rllm::EmbeddingDimension>(seq))
+        {
+            float v = static_cast<float>(static_cast<int>(t) * COLS + static_cast<int>(d) + it);
+            for (int k = 0; k < WORK_PER_CELL; ++k)
+                v = v * 1.00001f + 0.00001f;
+            buf[static_cast<int>(t) * COLS + static_cast<int>(d)] = v;
+        }
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+
+    // --- parallel (PARFOR_2D) ---
+    parallel::set_num_threads(max_threads);
+    std::fill(buf.begin(), buf.end(), 0.0f);
+    const auto t2 = std::chrono::steady_clock::now();
+    for (int it = 0; it < ITERS; ++it)
+    {
+        PARFOR_2D(t, d, rllm::enum_iterator2D<rllm::PositionIndex, rllm::EmbeddingDimension>(seq))
+            float v = static_cast<float>(static_cast<int>(t) * COLS + static_cast<int>(d) + it);
+            for (int k = 0; k < WORK_PER_CELL; ++k)
+                v = v * 1.00001f + 0.00001f;
+            buf[static_cast<int>(t) * COLS + static_cast<int>(d)] = v;
+        ENDFOR
+    }
+    const auto t3 = std::chrono::steady_clock::now();
+
+    const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const auto parallel_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
+    const double speedup   = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
+
+    RecordProperty("serial_us",   serial_us);
+    RecordProperty("parallel_us", parallel_us);
+    RecordProperty("speedup",     speedup);
+
+    fprintf(stderr,
+            "PARFOR_2D (%d outer x %d inner, work=%d, iters=%d, threads=%d)"
+            " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+            ROWS, COLS, WORK_PER_CELL, ITERS, max_threads,
+            static_cast<long long>(serial_us),
+            static_cast<long long>(parallel_us),
+            speedup);
+
+    EXPECT_GT(speedup, 1.0)
+        << "PARFOR_2D was not faster than serial"
+        << " (serial=" << serial_us << "us, parallel=" << parallel_us
+        << "us, speedup=" << speedup << ").";
 }

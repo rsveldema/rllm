@@ -217,6 +217,18 @@ TEST(FastforkTest, SpeedupEmbarrassinglyParallel)
     std::println("FastFork speedup ({} threads) - Serial: {}us, Parallel: {}us, Speedup: {:.2f}x",
                  max, serial_us, parallel_us, speedup);
 
+    // Print per-worker stats to reveal load balance and steal behaviour.
+    const auto stats = fastfork::get_worker_stats();
+    std::println("  {:>4}  {:>12}  {:>12}  {:>12}  {:>12}",
+                 "tid", "exec_own", "stolen", "idle_polls", "enqueued");
+    for (int i = 0; i < max; ++i)
+        std::println("  {:>4}  {:>12}  {:>12}  {:>12}  {:>12}",
+                     i,
+                     stats[i].tasks_executed_own,
+                     stats[i].tasks_stolen,
+                     stats[i].idle_polls,
+                     stats[i].tasks_enqueued);
+
     EXPECT_GT(speedup, 1.0) << "parallel was not faster than serial";
 }
 

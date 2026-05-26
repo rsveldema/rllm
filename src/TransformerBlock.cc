@@ -287,8 +287,11 @@ namespace rllm
         rms_norm(ws.h_mid, ws.h_norm_ff);
 
         // ── 6. SwiGLU FFN ─────────────────────────────────────────────────────
-        matmul_ABt(ws.h_norm_ff, W_gate, ws.gate_pre);
-        matmul_ABt(ws.h_norm_ff, W_up, ws.up_pre);
+        PARSECTIONS_BEGIN
+            matmul_ABt(ws.h_norm_ff, W_gate, ws.gate_pre);
+        PARSECTION
+            matmul_ABt(ws.h_norm_ff, W_up, ws.up_pre);
+        PARSECTIONS_END
 
         PARFOR_2D(t, f, enum_iterator2D<PositionIndex, FFDimension>(seq_len))
             const float g = ws.gate_pre[t, f];
@@ -299,8 +302,9 @@ namespace rllm
         matmul_ABt(ws.ffn_act, W_down, ws.ffn_out);
 
         // ── 7. Residual ───────────────────────────────────────────────────────
-        for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
+        PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
             h[t, d] = ws.h_mid[t, d] + ws.ffn_out[t, d];
+        ENDFOR
     }
 
     // ── backward temporaries ──────────────────────────────────────────────────
@@ -404,8 +408,11 @@ namespace rllm
         ws->d_h_norm_ff.element_wise_add(ws->tmp);
 
         // weight gradients for gate, up
-        matmul_AtB_acc(ws->d_gate_pre, fwd.h_norm_ff, ws->dW_gate);
-        matmul_AtB_acc(ws->d_up_pre, fwd.h_norm_ff, ws->dW_up);
+        PARSECTIONS_BEGIN
+            matmul_AtB_acc(ws->d_gate_pre, fwd.h_norm_ff, ws->dW_gate);
+        PARSECTION
+            matmul_AtB_acc(ws->d_up_pre, fwd.h_norm_ff, ws->dW_up);
+        PARSECTIONS_END
 
         // RMSNorm backward for FFN: d_h_mid += rms_bwd(d_h_norm_ff, h_mid)
         rms_norm_backward(ws->d_h_norm_ff, fwd.h_mid, ws->d_h_mid);
@@ -477,9 +484,13 @@ namespace rllm
         }
 
         // Weight gradients for W_q, W_k, W_v
-        matmul_AtB_acc(ws->d_Q, fwd.h_norm_attn, ws->dW_q);
-        matmul_AtB_acc(ws->d_K, fwd.h_norm_attn, ws->dW_k);
-        matmul_AtB_acc(ws->d_V, fwd.h_norm_attn, ws->dW_v);
+        PARSECTIONS_BEGIN
+            matmul_AtB_acc(ws->d_Q, fwd.h_norm_attn, ws->dW_q);
+        PARSECTION
+            matmul_AtB_acc(ws->d_K, fwd.h_norm_attn, ws->dW_k);
+        PARSECTION
+            matmul_AtB_acc(ws->d_V, fwd.h_norm_attn, ws->dW_v);
+        PARSECTIONS_END
 
         // d_h_norm_attn = d_Q @ W_q  +  d_K @ W_k  +  d_V @ W_v
         matmul_AB(ws->d_Q, W_q, ws->tmp);
