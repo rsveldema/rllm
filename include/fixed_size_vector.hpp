@@ -12,14 +12,17 @@
 namespace rllm
 {
     template <typename T, typename LengthType>
-    class template_vector
+    class fixed_size_vector
     {
       public:
-        template_vector()
+        fixed_size_vector()
         {
-            m_data.fill(T{});
+            if constexpr (std::is_trivially_default_constructible_v<T>)
+                m_data.fill(T{});
+            // else: T's own default constructor already initialises each element.
         }
-        ~template_vector() = default;
+        
+        ~fixed_size_vector() = default;
 
         float get_highest_value(const LengthType length) const
         {
@@ -56,10 +59,10 @@ namespace rllm
             }
         }
 
-        template_vector substr(LengthType length) const
+        fixed_size_vector substr(LengthType length) const
         {
             assert(length <= len);
-            template_vector result;
+            fixed_size_vector result;
             for (const auto i : enum_iterator<LengthType>(length))
             {
                 const auto tok = m_data[static_cast<size_t>(i)];

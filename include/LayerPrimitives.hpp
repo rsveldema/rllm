@@ -20,7 +20,7 @@
 #include <flexible_rows_matrix.hpp>
 #include <flexible_rows_cols_matrix.hpp>
 #include <fixed_size_matrix.hpp>
-#include <template_vector.hpp>
+#include <fixed_size_vector.hpp>
 
 namespace rllm
 {
@@ -141,12 +141,12 @@ namespace rllm
         return static_cast<NeuronConnectionIndex>(static_cast<size_t>(id) + 1);
     }
 
-    using InputLine = template_vector<TokenID, PositionIndex>;
+    using InputLine = fixed_size_vector<TokenID, PositionIndex>;
 
 
     struct Score
     {
-        template_vector<float, TokenID> values;
+        fixed_size_vector<float, TokenID> values;
     };
 
     struct OutputToken

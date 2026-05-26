@@ -29,6 +29,7 @@ namespace rllm
         {
             m_data.fill(ElementType{});
         }
+        
         ~flexible_rows_matrix() = default;
 
         void set_rows(X rows)

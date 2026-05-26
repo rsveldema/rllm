@@ -14,7 +14,7 @@ namespace rllm::json_helpers
     }
 
     template <typename Enum, typename T>
-    nlohmann::json serialize_vector(const template_vector<T, Enum>& v)
+    nlohmann::json serialize_vector(const fixed_size_vector<T, Enum>& v)
     {
         auto out = nlohmann::json::array();
         for (size_t i = 0; i < enum_max<Enum>(); ++i)
@@ -25,7 +25,7 @@ namespace rllm::json_helpers
     }
 
     template <typename Enum, typename T>
-    void deserialize_vector(const nlohmann::json& j, template_vector<T, Enum>& v)
+    void deserialize_vector(const nlohmann::json& j, fixed_size_vector<T, Enum>& v)
     {
         if (!j.is_array() || j.size() != enum_max<Enum>())
         {

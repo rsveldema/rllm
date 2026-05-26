@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <TransformerBlock.hpp>
+#include <parallel.hpp>
 
 #include <chrono>
 #include <cstdlib>
@@ -8,6 +9,13 @@
 #include <vector>
 
 #include <omp.h>
+
+int main(int argc, char** argv)
+{
+    parallel::init_parallel();
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}
 
 TEST(PredictorTest, Placeholder) {
     SUCCEED();

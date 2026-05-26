@@ -41,7 +41,7 @@ namespace rllm
 
       private:
         // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.
-        template_vector<template_vector<float, EmbeddingDimension>, TokenID> m_embeddings;
+        fixed_size_vector<fixed_size_vector<float, EmbeddingDimension>, TokenID> m_embeddings;
 
         void reset_embeddings();
     };

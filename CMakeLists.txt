@@ -55,7 +55,7 @@ add_executable(rllm src/main.cc
   include/LayerPrimitives.hpp
   include/Range.hpp
   include/enum_iterator.hpp
-  include/template_vector.hpp
+  include/fixed_size_vector.hpp
   include/fixed_size_matrix.hpp
   include/matmul.hpp
   src/fastfork/fastfork.cc)

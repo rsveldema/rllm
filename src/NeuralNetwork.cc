@@ -64,7 +64,7 @@ namespace rllm
     struct ForwardWorkspace
     {
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;
-        template_vector<float, EmbeddingDimension> h_last;
+        fixed_size_vector<float, EmbeddingDimension> h_last;
         explicit ForwardWorkspace(PositionIndex seq_len) : h(seq_len) {}
     };
 
@@ -149,9 +149,9 @@ namespace rllm
 
     struct BackwardPropWorkspace
     {
-        template_vector<float, TokenID>                                   output_layer_delta;
-        template_vector<float, EmbeddingDimension>                        h_last_vec;
-        template_vector<float, EmbeddingDimension>                        dh_last;
+        fixed_size_vector<float, TokenID>                                   output_layer_delta;
+        fixed_size_vector<float, EmbeddingDimension>                        h_last_vec;
+        fixed_size_vector<float, EmbeddingDimension>                        dh_last;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>    dh;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>    din;
         explicit BackwardPropWorkspace(PositionIndex seq_len) : dh(seq_len), din(seq_len) {}

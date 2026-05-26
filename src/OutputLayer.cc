@@ -28,7 +28,7 @@ namespace rllm
     }
 
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
-    void OutputLayer::forward_from_hidden(const template_vector<float, EmbeddingDimension>& h_last)
+    void OutputLayer::forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last)
     {
         m_inputs.fill(0.f);
         for (const auto v : enum_iterator<TokenID>())
@@ -41,13 +41,13 @@ namespace rllm
     }
 
     // Returns dL/dh_last[D] and updates W_lm_head.
-    template_vector<float, EmbeddingDimension> OutputLayer::backward_and_update(
-        const template_vector<float, TokenID>& delta,
-        const template_vector<float, EmbeddingDimension>& h_last,
+    fixed_size_vector<float, EmbeddingDimension> OutputLayer::backward_and_update(
+        const fixed_size_vector<float, TokenID>& delta,
+        const fixed_size_vector<float, EmbeddingDimension>& h_last,
         float learning_rate
     )
     {
-        template_vector<float, EmbeddingDimension> dh;
+        fixed_size_vector<float, EmbeddingDimension> dh;
 
         for (const auto v : enum_iterator<TokenID>())
         {
@@ -96,7 +96,7 @@ namespace rllm
         score.values[expected_output_token] += 1.0f;
     }
 
-    void OutputLayer::compute_deltas(const Score& score, template_vector<float, TokenID>& deltas) const
+    void OutputLayer::compute_deltas(const Score& score, fixed_size_vector<float, TokenID>& deltas) const
     {
         deltas = score.values;
     }

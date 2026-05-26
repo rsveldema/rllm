@@ -66,7 +66,7 @@ namespace parallel {
     inline int  get_max_threads()      { return 1; }
     inline void set_num_threads(int)   {}
     inline int  get_thread_num()       { return 0; }
-    inline void init_parallel()        {}
+    void init_parallel();
 }
 
 #define PARFOR(v, ...)          for (auto v : (__VA_ARGS__)) {

@@ -3,10 +3,15 @@
 #include <LayerPrimitives.hpp>
 #include <matmul.hpp>
 #include <nlohmann/json_fwd.hpp>
+#include <memory>
 #include <vector>
 
 namespace rllm
 {
+    // Forward declaration for heap-allocated forward-pass activation workspace.
+    struct ForwardWorkspace;
+    // Forward declaration for heap-allocated backward-pass scratch workspace.
+    struct BackwardWorkspace;
     // A single transformer decoder block:
     //   Pre-RMSNorm → causal multi-head self-attention → residual
     //   Pre-RMSNorm → SwiGLU feed-forward network       → residual
@@ -21,10 +26,10 @@ namespace rllm
     class TransformerBlock
     {
       public:
-        TransformerBlock() = default;
-        ~TransformerBlock() = default;
-        TransformerBlock(TransformerBlock&&) = default;
-        TransformerBlock& operator=(TransformerBlock&&) = default;
+        TransformerBlock();            // defined in .cc after ForwardWorkspace is complete
+        ~TransformerBlock();           // defined in .cc after ForwardWorkspace is complete
+        TransformerBlock(TransformerBlock&&) noexcept;            // defined in .cc
+        TransformerBlock& operator=(TransformerBlock&&) noexcept; // defined in .cc
         TransformerBlock(const TransformerBlock&) = delete;
         TransformerBlock& operator=(const TransformerBlock&) = delete;
 
@@ -65,24 +70,10 @@ namespace rllm
         fixed_size_matrix<float, EmbeddingDimension, FFDimension> V_down;
 
         // Activations cached during forward() for use in backward().
-        PositionIndex m_seq_len{PositionIndex::START};
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_h_in; // [T × D] input to this block
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_h_norm_attn; // [T × D] after 1st RMSNorm
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_Q, m_K,
-            m_V; // [T × D] projected queries/keys/values
-        // Per-head softmax weight matrices; each matrix is [PositionIndex::MAX × PositionIndex::MAX].
-        // Only the top-left [T × T] block is live; columns are accessed with stride PositionIndex::MAX.
-        template_vector<flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> m_attn_w;
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>
-            m_attn_concat; // [T × D] concatenated per-head outputs
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_h_mid; // [T × D] after attention residual
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_h_norm_ff; // [T × D] after 2nd RMSNorm
-        flexible_rows_matrix<float, PositionIndex, FFDimension>
-            m_gate_pre; // [T × static_cast<int>(FFDimension::MAX)] pre-activation gate branch
-        flexible_rows_matrix<float, PositionIndex, FFDimension>
-            m_up_pre; // [T × static_cast<int>(FFDimension::MAX)] pre-activation up branch
-        flexible_rows_matrix<float, PositionIndex, FFDimension>
-            m_ffn_act; // [T × static_cast<int>(FFDimension::MAX)] silu(gate_pre) * up_pre
+        // Heap-allocated to avoid blowing the stack (~21 MB of fixed-size arrays).
+        std::unique_ptr<ForwardWorkspace> m_fwd_ws;
+        // Scratch workspace for backward(); cached to avoid per-call heap allocation.
+        std::unique_ptr<BackwardWorkspace> m_bwd_ws;
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
         static void rms_norm(
