@@ -1,6 +1,7 @@
 #include <print>
 #include <string>
 
+#include <parallel.hpp>
 #include <RLLM.hpp>
 
 #include <cstdlib>
@@ -10,6 +11,7 @@
 int main(int argc, char* argv[])
 {
     std::srand(0);
+    parallel::init_parallel();
     std::string train_corpus_dir = "training_data";
     std::vector<std::string> filters;
     bool train_mode = false;

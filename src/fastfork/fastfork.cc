@@ -48,6 +48,8 @@ namespace fastfork
             std::vector<TaskQueueNode*>  children;          // non-owning
             WSDeque<task_t, QUEUE_CAPACITY>       queue;     // leaves only
             std::vector<TaskQueueNode*>  steal_order;       // leaves only
+            hwloc_cpuset_t               cpuset    = nullptr; // leaves only; bind target
+            ~TaskQueueNode() { if (cpuset) hwloc_bitmap_free(cpuset); }
         };
 
         // s_nodes owns every TaskQueueNode; s_leaves[i] is thread i's leaf.
@@ -76,6 +78,7 @@ namespace fastfork
             if (obj->type == HWLOC_OBJ_PU || obj->arity == 0)
             {
                 node->thread_id = leaf_counter++;
+                node->cpuset    = hwloc_bitmap_dup(obj->cpuset);
                 s_leaves.push_back(node);
             }
             else
