@@ -87,16 +87,16 @@ namespace parallel {
       const size_t _ff_nt_ = static_cast<size_t>(fastfork::get_max_threads()); \
       const size_t _ff_k_  = (_ff_os_ * _ff_is_ < size_t{FF_PARFOR_2D_SMALL_THRESH}) \
                              ? size_t{1} : size_t{FF_PARFOR_2D_TASKS_PER_THREAD}; \
-      const size_t _ff_to_ = std::max(size_t{1}, _ff_os_ / _ff_nt_); \
+      const size_t _ff_to_ = math::max(size_t{1}, _ff_os_ / _ff_nt_); \
       const size_t _ff_n_ob_ = (_ff_os_ + _ff_to_ - 1) / _ff_to_; \
       const size_t _ff_ti_ = std::bit_floor( \
-          std::max(size_t{1}, \
+          math::max(size_t{1}, \
                    _ff_is_ * _ff_n_ob_ / (_ff_k_ * _ff_nt_))); \
       for (size_t _ff_ob_ = 0; _ff_ob_ < _ff_os_; _ff_ob_ += _ff_to_) \
           for (size_t _ff_ib_ = 0; _ff_ib_ < _ff_is_; _ff_ib_ += _ff_ti_) \
               fastfork::fork_task(_ff_ctx_, [&, _ff_ob_, _ff_ib_, _ff_to_, _ff_ti_]() { \
-                  const size_t _ff_oe_ = std::min(_ff_ob_ + _ff_to_, _ff_os_); \
-                  const size_t _ff_ie_ = std::min(_ff_ib_ + _ff_ti_, _ff_is_); \
+                  const size_t _ff_oe_ = math::min(_ff_ob_ + _ff_to_, _ff_os_); \
+                  const size_t _ff_ie_ = math::min(_ff_ib_ + _ff_ti_, _ff_is_); \
                   for (const auto [v1, v2] : _ff_rng_.block_range(_ff_ob_, _ff_oe_, _ff_ib_, _ff_ie_)) {
 #define ENDFOR \
           }}); \

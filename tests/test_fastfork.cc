@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <fastfork/fastfork.hpp>
+#include <math_utils.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -141,7 +142,7 @@ TEST(FastforkTest, TasksRunOnMultipleThreads)
 TEST(FastforkTest, SetNumThreadsRespawns)
 {
     const int original = fastfork::get_max_threads();
-    const int reduced  = std::max(1, original / 2);
+    const int reduced  = math::max(1, original / 2);
 
     fastfork::set_num_threads(reduced);
     EXPECT_EQ(fastfork::get_max_threads(), reduced);

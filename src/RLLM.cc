@@ -11,7 +11,7 @@ namespace rllm
 
     // Threshold for considering a predicted token as valid (not just noise).
     // This is a tunable hyperparameter.
-    static constexpr float VALID_PREDICTION_THRESHOLD = 10.0f / 100.0f;
+    static constexpr float VALID_PREDICTION_THRESHOLD = 0.5f / 100.0f;
 
     struct PromptOptions
     {

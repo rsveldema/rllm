@@ -120,7 +120,7 @@ namespace rllm
         void add_with_clamp(LengthType index, T delta, Range<T> range)
         {
             auto& cell = m_data[static_cast<size_t>(index)];
-            cell = std::clamp(cell + delta, range.lo, range.hi);
+            cell = math::clamp(cell + delta, range.lo, range.hi);
         }
 
         /** add a value to an element at index without clamping */

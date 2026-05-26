@@ -36,13 +36,13 @@ namespace rllm
 
         // Forward pass.  h[seq_len × D_MODEL] is modified in-place.
         // Caches intermediate activations for the backward pass.
-        void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len);
+        void forward(flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len);
 
         // Backward pass.  dout[seq_len × D_MODEL] = dL/dh_out.
         // Writes dL/dh_in into din (same shape) and updates all weights.
         void backward(
-            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout,
-            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din,
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout,
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din,
             float learning_rate
         );
 
@@ -59,16 +59,16 @@ namespace rllm
         static constexpr float WEIGHT_CLAMP = 2.0f;
 
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
 
         // SwiGLU FFN:
         //   gate, up:  [static_cast<int>(FFDimension::MAX)    × D_MODEL]  (out × in)
         //   down:      [D_MODEL × static_cast<int>(FFDimension::MAX)   ]  (out × in)
-        fixed_size_matrix<float, FFDimension, EmbeddingDimension> W_gate, W_up;
-        fixed_size_matrix<float, EmbeddingDimension, FFDimension> W_down;
-        fixed_size_matrix<float, FFDimension, EmbeddingDimension> V_gate, V_up;
-        fixed_size_matrix<float, EmbeddingDimension, FFDimension> V_down;
+        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> W_gate, W_up;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> W_down;
+        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> V_gate, V_up;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> V_down;
 
         // Activations cached during forward() for use in backward().
         // Heap-allocated to avoid blowing the stack (~21 MB of fixed-size arrays).
@@ -78,53 +78,65 @@ namespace rllm
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
         static void rms_norm(
-            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
-            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y
         );
 
         // RMSNorm backward: dx += ∂L/∂x  given dy = ∂L/∂y and the original x
         static void rms_norm_backward(
-            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
-            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
-            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dy,
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dx
         );
 
         // In-place causal softmax over the active [T × T] block of x.
-        static void causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x,
+        static void causal_softmax(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x,
           PositionIndex T);
 
         // Accumulates softmax backward into dscores (stride T).
         // dp is the per-head d_scores matrix; p is the cached per-head softmax matrix.
         static void softmax_backward(
-            const flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& dp,
-            const flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& p,
-            flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& dscores,
+            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dp,
+            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& p,
+            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dscores,
             PositionIndex T
         );
 
         // SwiGLU backward: computes d_gate_pre and d_up_pre from d_ffn_act.
         static void swiglu_backward(
             PositionIndex seq,
-            const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre,
-            const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre,
-            const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act,
-            flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre,
-            flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre
+            const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& gate_pre,
+            const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& up_pre,
+            const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_ffn_act,
+            flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_gate_pre,
+            flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_up_pre
         );
 
         // SGD + momentum update: clips gradients, clips velocity, clamps weights.
         template <typename R_enum, typename C_enum>
         static void sgd_update(
-            fixed_size_matrix<float, R_enum, C_enum>& W,
-            fixed_size_matrix<float, R_enum, C_enum>& vel,
-            const fixed_size_matrix<float, R_enum, C_enum>& grad,
+            fixed_size_matrix<rlmm_float, R_enum, C_enum>& W,
+            fixed_size_matrix<rlmm_float, R_enum, C_enum>& vel,
+            const fixed_size_matrix<rlmm_float, R_enum, C_enum>& grad,
             float lr
         )
         {
             PARFOR_2D(r, c, enum_iterator2D<R_enum, C_enum>())
-                const float g = std::clamp(grad[r, c], -GRAD_CLIP, GRAD_CLIP);
-                vel[r, c] = std::clamp(MOMENTUM_BETA * vel[r, c] + lr * g, -VEL_CLIP, VEL_CLIP);
-                W[r, c] = std::clamp(W[r, c] + vel[r, c], -WEIGHT_CLAMP, WEIGHT_CLAMP);
+                const rlmm_float g = math::clamp(
+                    grad[r, c],
+                    -GRAD_CLIP,
+                    GRAD_CLIP
+                );
+                vel[r, c] = math::clamp(
+                    MOMENTUM_BETA * vel[r, c] + lr * g,
+                    -VEL_CLIP,
+                    VEL_CLIP
+                );
+                W[r, c] = math::clamp(
+                    W[r, c] + vel[r, c],
+                    -WEIGHT_CLAMP,
+                    WEIGHT_CLAMP
+                );
             ENDFOR
         }
     };

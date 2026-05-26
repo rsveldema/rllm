@@ -76,7 +76,7 @@ namespace rllm
         OutputLayer m_output_layer;
 
         // Hidden state at the final position after the last transformer block.
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_last_hidden;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> m_last_hidden;
         PositionIndex m_seq_len{PositionIndex::START};
 
         // Computed from the actual corpus size.

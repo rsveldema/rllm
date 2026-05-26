@@ -96,7 +96,7 @@ namespace rllm
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
             auto& cell = m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
-            cell = std::clamp(cell + delta, range.lo, range.hi);
+            cell = math::clamp(cell + delta, range.lo, range.hi);
         }
 
         void add_with_clamp(const std::pair<const X, const Y>& indices, ElementType delta, Range<ElementType> range)

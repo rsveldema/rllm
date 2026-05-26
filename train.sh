@@ -1,7 +1,7 @@
 
 ./build/rllm --train -i models/start.json \
     -o models/after_training.json \
-     --filter iuring --method window:3 --epochs 5
+    --filter iuring --filter simple --method window:6 --epochs 20
 
 # ./build/rllm --train -i models/start.json \
 #     -o models/after_training.json \

@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include <math_utils.hpp>
+
 #include <RandomHelpers.hpp>
 #include <tokenizer_map.hpp>
 #include <Range.hpp>
@@ -24,6 +26,11 @@
 
 namespace rllm
 {
+    using rlmm_float = float;
+    static constexpr rlmm_float RLMM_ZERO = rlmm_float{0};
+    static constexpr rlmm_float RLMM_ONE = rlmm_float{1};
+    static constexpr rlmm_float RLMM_NEG_ONE = rlmm_float{-1};
+
     static constexpr float MIN_NEURON_INPUT = -0.01f;
     static constexpr float MAX_NEURON_INPUT = 1.0f;
 
@@ -146,7 +153,7 @@ namespace rllm
 
     struct Score
     {
-        fixed_size_vector<float, TokenID> values;
+        fixed_size_vector<rlmm_float, TokenID> values;
     };
 
     struct OutputToken

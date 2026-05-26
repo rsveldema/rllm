@@ -11,14 +11,14 @@ namespace rllm
     {
         for (const auto tok : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
-                m_embeddings[tok][d] = 0.0f;
+                m_embeddings[tok][d] = RLMM_ZERO;
     }
 
     void InputLayer::set_random_embeddings()
     {
         for (const auto tok : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
-                m_embeddings[tok][d] = get_random_value(-0.1f, 0.1f);
+                m_embeddings[tok][d] = static_cast<rlmm_float>(get_random_value(-0.1f, 0.1f));
     }
 
     // Fill h[T × D_MODEL] = token_embedding + sinusoidal positional encoding.
@@ -26,7 +26,7 @@ namespace rllm
     // PE[pos, 2i+1] = cos(pos / 10000^(2i / D_MODEL))
     void InputLayer::propagate_forward(
         const InputLine& input,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h
     ) const
     {
         h.set_rows(static_cast<PositionIndex>(input.size()));
@@ -44,7 +44,7 @@ namespace rllm
                 const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / D);
                 const float pe = (di_int % 2 == 0) ? std::sin(static_cast<float>(pos) * freq)
                                                    : std::cos(static_cast<float>(pos) * freq);
-                h[pos, di] = emb_val + pe;
+                h[pos, di] = static_cast<rlmm_float>(emb_val + pe);
             }
         }
     }
@@ -53,7 +53,7 @@ namespace rllm
     // Positional encodings are fixed, so only the embedding contribution is updated.
     void InputLayer::propagate_backward(
         const InputLine& input,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dh,
         float learning_rate
     )
     {
@@ -65,7 +65,7 @@ namespace rllm
             for (const auto di : enum_iterator<EmbeddingDimension>())
             {
                 auto& e = embed[di];
-                e = std::clamp(e + learning_rate * dh[pos, di], -1.0f, 1.0f);
+                e = math::clamp(e + learning_rate * static_cast<rlmm_float>(dh[pos, di]), RLMM_NEG_ONE, RLMM_ONE);
             }
         }
     }

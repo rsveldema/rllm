@@ -63,8 +63,8 @@ namespace rllm
 
     struct ForwardWorkspace
     {
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;
-        fixed_size_vector<float, EmbeddingDimension> h_last;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h;
+        fixed_size_vector<rlmm_float, EmbeddingDimension> h_last;
         explicit ForwardWorkspace(PositionIndex seq_len) : h(seq_len) {}
     };
 
@@ -115,31 +115,26 @@ namespace rllm
         }
     }
 
-    // returns the top-K with the biggest activation in the output layer,
-    // sorted descending by activation (as softmax probabilities).
-    // if no prediction can be made, returns an empty list.
-    // Do not try to return any if the logit is 0 or negative, as that means the token did not activate at all.
+    // Returns the top-K tokens by softmax probability over the full vocabulary.
+    // Logit sign is not a validity criterion: a negative logit can still have
+    // a meaningful probability relative to the rest of the distribution.
     std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k) const
     {
         assert(!m_transformer_blocks.empty());
 
         // Compute softmax over all logits for numerically stable probabilities.
         float max_logit = -std::numeric_limits<float>::infinity();
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
-            max_logit = std::max(max_logit, m_output_layer.m_inputs[i]);
+        for (const auto i : enum_iterator<TokenID>())
+            max_logit = math::max(max_logit, m_output_layer.m_inputs[i]);
 
         float sum_exp = 0.0f;
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
+        for (const auto i : enum_iterator<TokenID>())
             sum_exp += std::exp(m_output_layer.m_inputs[i] - max_logit);
 
         std::vector<OutputToken> top_k_pairs;
-        for (auto i = TokenID::START; i < TokenID::MAX; i = inc(i))
+        for (const auto i : enum_iterator<TokenID>())
         {
             const auto logit = m_output_layer.m_inputs[i];
-            if (logit <= 0.0f)
-            {
-                continue; // skip tokens that did not activate at all
-            }
             const float prob = std::exp(logit - max_logit) / sum_exp;
             try_add_to_top_k(top_k_pairs, i, prob, top_k);
         }
@@ -149,11 +144,11 @@ namespace rllm
 
     struct BackwardPropWorkspace
     {
-        fixed_size_vector<float, TokenID>                                   output_layer_delta;
-        fixed_size_vector<float, EmbeddingDimension>                        h_last_vec;
-        fixed_size_vector<float, EmbeddingDimension>                        dh_last;
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>    dh;
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>    din;
+        fixed_size_vector<rlmm_float, TokenID>                                   output_layer_delta;
+        fixed_size_vector<rlmm_float, EmbeddingDimension>                        h_last_vec;
+        fixed_size_vector<rlmm_float, EmbeddingDimension>                        dh_last;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>    dh;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>    din;
         explicit BackwardPropWorkspace(PositionIndex seq_len) : dh(seq_len), din(seq_len) {}
     };
 
@@ -172,6 +167,8 @@ namespace rllm
         ws->dh_last = m_output_layer.backward_and_update(ws->output_layer_delta, ws->h_last_vec, LEARNING_RATE);
 
         // Initialise full-sequence gradient: zero everywhere except the last position
+        ws->dh.fill(RLMM_ZERO);
+        ws->din.fill(RLMM_ZERO);
         for (const auto d : enum_iterator<EmbeddingDimension>())
             ws->dh[last_pos, d] = ws->dh_last[d];
 
@@ -223,12 +220,16 @@ namespace rllm
         float max_val = m_output_layer.m_inputs[TokenID::START];
 #pragma omp simd reduction(max : max_val)
         for (int i = 0; i < n_tok; ++i)
-            max_val = std::max(max_val, m_output_layer.m_inputs[static_cast<TokenID>(i)]);
+            max_val = math::max(max_val, m_output_layer.m_inputs[static_cast<TokenID>(i)]);
 
         float sum_exp = 0.0f;
 #pragma omp simd reduction(+ : sum_exp)
         for (int i = 0; i < n_tok; ++i)
-            sum_exp += std::exp(m_output_layer.m_inputs[static_cast<TokenID>(i)] - max_val);
+        {
+            const float term = std::exp(m_output_layer.m_inputs[static_cast<TokenID>(i)] - max_val);
+            OVERFLOW_CHECK_ADD(sum_exp, term);
+            sum_exp += term;
+        }
 
         const float log_prob = m_output_layer.m_inputs[expected_output_token] - max_val - std::log(sum_exp);
         return -log_prob;
@@ -387,11 +388,12 @@ namespace rllm
                 const float progress = static_cast<float>(j) / static_cast<float>(num_windows);
 
                 InputLine window;
-                for (int k = 0; k < window_size; ++k)
+                int current_try_len = 2 + random_int(0, window_size - 2); // random length between 2 and window_size
+                for (int k = 0; k < current_try_len; ++k)
                 {
                     window.push_back(tokens[indices[j] + static_cast<size_t>(k)]);
                 }
-                assert(window.size() == static_cast<PositionIndex>(window_size));
+                assert(window.size() == static_cast<PositionIndex>(current_try_len));
 
                 total_windows_trained++;
 

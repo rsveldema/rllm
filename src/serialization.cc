@@ -2,13 +2,40 @@
 #include <JsonTensorHelpers.hpp>
 
 #include <fstream>
+#include <format>
 #include <nlohmann/json.hpp>
 #include <print>
 #include <stdexcept>
+#include <string>
 
 
 namespace rllm
 {
+    namespace
+    {
+        // Stable checksum of tokenizer contents to detect model/tokenizer mismatch.
+        uint64_t tokenizer_signature()
+        {
+            uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
+            for (const auto& [id, info] : tokenizer_map)
+            {
+                const auto id_val = static_cast<uint64_t>(static_cast<int32_t>(id));
+                h ^= id_val;
+                h *= 1099511628211ULL;
+
+                for (const char* p = info.str; *p != '\0'; ++p)
+                {
+                    h ^= static_cast<uint64_t>(static_cast<unsigned char>(*p));
+                    h *= 1099511628211ULL;
+                }
+
+                h ^= static_cast<uint64_t>(info.end_of_word ? 1 : 0);
+                h *= 1099511628211ULL;
+            }
+            return h;
+        }
+    } // namespace
+
 
     void InputLayer::load(const nlohmann::json& j)
     {
@@ -38,7 +65,7 @@ namespace rllm
 
     void OutputLayer::load(const nlohmann::json& j)
     {
-        m_inputs.fill(0.0f);
+        m_inputs.fill(RLMM_ZERO);
         if (j.contains("W_lm_head"))
         {
             const auto& w_j = j.at("W_lm_head");
@@ -47,7 +74,7 @@ namespace rllm
                 for (const auto d : enum_iterator<EmbeddingDimension>())
                     W_lm_head[t, d] = w_j.at(i++).template get<float>();
         }
-        V_lm_head.fill(0.f);
+        V_lm_head.fill(RLMM_ZERO);
     }
 
     nlohmann::json OutputLayer::save() const
@@ -78,6 +105,36 @@ namespace rllm
                 throw std::runtime_error("Unsupported model version");
             }
 
+            const auto expected_vocab_size = static_cast<size_t>(TokenID::MAX);
+            if (j.contains("tokenizer_vocab_size"))
+            {
+                const auto model_vocab_size = j.at("tokenizer_vocab_size").template get<size_t>();
+                if (model_vocab_size != expected_vocab_size)
+                {
+                    throw std::runtime_error(
+                        std::format(
+                            "Tokenizer vocab size mismatch (model={}, runtime={}). "
+                            "Rebuild/regenerate tokenizer map and retrain or load a compatible model.",
+                            model_vocab_size,
+                            expected_vocab_size
+                        )
+                    );
+                }
+            }
+
+            if (j.contains("tokenizer_signature"))
+            {
+                const auto model_sig = j.at("tokenizer_signature").template get<uint64_t>();
+                const auto runtime_sig = tokenizer_signature();
+                if (model_sig != runtime_sig)
+                {
+                    throw std::runtime_error(
+                        "Tokenizer signature mismatch between model and runtime tokenizer map. "
+                        "Rebuild/regenerate tokenizer map and retrain or load a compatible model."
+                    );
+                }
+            }
+
             m_input_layer.load(j.at("input_layer"));
 
             if (j.contains("transformer_blocks"))
@@ -106,6 +163,8 @@ namespace rllm
     {
         nlohmann::json j;
         j["version"] = 1;
+        j["tokenizer_vocab_size"] = static_cast<size_t>(TokenID::MAX);
+        j["tokenizer_signature"] = tokenizer_signature();
 
         j["input_layer"] = m_input_layer.save();
 

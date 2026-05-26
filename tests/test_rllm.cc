@@ -8,6 +8,8 @@
 #include <memory>
 #include <vector>
 
+using rllm::rlmm_float;
+
 int main(int argc, char** argv)
 {
     parallel::init_parallel();
@@ -37,7 +39,7 @@ TEST(TransformerBlockTest, ForwardOutputShape)
 
     const int T = TEST_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
+    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
         static_cast<rllm::PositionIndex>(T));
     h.fill(0.1f);
 
@@ -56,15 +58,15 @@ TEST(TransformerBlockTest, BackwardOutputShape)
 
     const int T = TEST_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
+    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
         static_cast<rllm::PositionIndex>(T));
     h.fill(0.05f);
     block->forward(h, static_cast<rllm::PositionIndex>(T));
 
-    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
+    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
         static_cast<rllm::PositionIndex>(T));
     dout.fill(0.01f);
-    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
+    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
         static_cast<rllm::PositionIndex>(T));
     block->backward(dout, din, 0.01f);
 
@@ -87,7 +89,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
 
     const int T = BENCH_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
+    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
         static_cast<rllm::PositionIndex>(T));
     h_template.fill(0.1f);
 
@@ -143,10 +145,10 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     block->randomize();
 
     const int T = BENCH_SEQ_LEN;
-    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
+    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
         static_cast<rllm::PositionIndex>(T));
     h_template.fill(0.1f);
-    rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> dout_template(
+    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout_template(
         static_cast<rllm::PositionIndex>(T));
     dout_template.fill(0.01f);
 
@@ -161,7 +163,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     const auto t0 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
-        rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
+        rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
             static_cast<rllm::PositionIndex>(T));
         block->backward(dout_template, din, 0.01f);
     }
@@ -172,7 +174,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     const auto t2 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
-        rllm::flexible_rows_matrix<float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
+        rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
             static_cast<rllm::PositionIndex>(T));
         block->backward(dout_template, din, 0.01f);
     }

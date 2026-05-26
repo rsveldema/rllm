@@ -70,7 +70,7 @@ namespace rllm
         void fill_rand(ElementType lo, ElementType hi)
         {
             for (auto& v : m_data)
-                v = get_random_value(lo, hi);
+                v = static_cast<ElementType>(get_random_value(lo, hi));
         }
 
         void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
@@ -78,7 +78,7 @@ namespace rllm
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
             auto& cell = m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
-            cell = std::clamp(cell + delta, range.lo, range.hi);
+            cell = math::clamp(cell + delta, range.lo, range.hi);
         }
 
         void add_with_clamp(const std::pair<const X, const Y>& indices, ElementType delta, Range<ElementType> range)

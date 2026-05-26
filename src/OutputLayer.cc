@@ -24,13 +24,13 @@ namespace rllm
         for (const auto v : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
                 W_lm_head[v, d] = get_random_value(-scale, scale);
-        V_lm_head.fill(0.f);
+        V_lm_head.fill(RLMM_ZERO);
     }
 
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
-    void OutputLayer::forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last)
+    void OutputLayer::forward_from_hidden(const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last)
     {
-        m_inputs.fill(0.f);
+        m_inputs.fill(RLMM_ZERO);
         for (const auto v : enum_iterator<TokenID>())
         {
             float sum = 0.f;
@@ -41,13 +41,13 @@ namespace rllm
     }
 
     // Returns dL/dh_last[D] and updates W_lm_head.
-    fixed_size_vector<float, EmbeddingDimension> OutputLayer::backward_and_update(
-        const fixed_size_vector<float, TokenID>& delta,
-        const fixed_size_vector<float, EmbeddingDimension>& h_last,
+    fixed_size_vector<rlmm_float, EmbeddingDimension> OutputLayer::backward_and_update(
+        const fixed_size_vector<rlmm_float, TokenID>& delta,
+        const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
         float learning_rate
     )
     {
-        fixed_size_vector<float, EmbeddingDimension> dh;
+        fixed_size_vector<rlmm_float, EmbeddingDimension> dh;
 
         for (const auto v : enum_iterator<TokenID>())
         {
@@ -55,9 +55,17 @@ namespace rllm
             for (const auto d : enum_iterator<EmbeddingDimension>())
             {
                 dh[d] += dv * W_lm_head[v, d];
-                const float g = std::clamp(dv * h_last[d], -GRAD_CLIP, GRAD_CLIP);
-                V_lm_head[v, d] = std::clamp(MOMENTUM_BETA * V_lm_head[v, d] + learning_rate * g, -VEL_CLIP, VEL_CLIP);
-                W_lm_head[v, d] = std::clamp(W_lm_head[v, d] + V_lm_head[v, d], -WEIGHT_CLAMP, WEIGHT_CLAMP);
+                const float g = math::clamp(dv * h_last[d], -GRAD_CLIP, GRAD_CLIP);
+                V_lm_head[v, d] = math::clamp(
+                    MOMENTUM_BETA * V_lm_head[v, d] + learning_rate * g,
+                    -VEL_CLIP,
+                    VEL_CLIP
+                );
+                W_lm_head[v, d] = math::clamp(
+                    W_lm_head[v, d] + V_lm_head[v, d],
+                    -WEIGHT_CLAMP,
+                    WEIGHT_CLAMP
+                );
             }
         }
         return dh;
@@ -81,7 +89,7 @@ namespace rllm
     {
         float max_val = m_inputs[TokenID::START];
         for (const auto i : enum_iterator<TokenID>())
-            max_val = std::max(max_val, m_inputs[i]);
+            max_val = math::max(max_val, m_inputs[i]);
 
         float sum_exp = 0.0f;
         for (const auto i : enum_iterator<TokenID>())
@@ -93,10 +101,10 @@ namespace rllm
         for (const auto i : enum_iterator<TokenID>())
             score.values[i] = -score.values[i] / sum_exp;
 
-        score.values[expected_output_token] += 1.0f;
+        score.values[expected_output_token] += RLMM_ONE;
     }
 
-    void OutputLayer::compute_deltas(const Score& score, fixed_size_vector<float, TokenID>& deltas) const
+    void OutputLayer::compute_deltas(const Score& score, fixed_size_vector<rlmm_float, TokenID>& deltas) const
     {
         deltas = score.values;
     }
