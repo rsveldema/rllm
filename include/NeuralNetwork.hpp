@@ -28,6 +28,10 @@ namespace rllm
     class NeuralNetwork
     {
       public:
+        // Denominator for convergence threshold: fires_nothing_ce_loss / k.
+        // Higher k = tighter threshold = more gradient steps per example.
+        static constexpr float k_convergence_divisor = 16.0f;
+
         NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats)
             : m_corpus(corpus)
             , m_stats(stats)
@@ -35,7 +39,7 @@ namespace rllm
             , m_output_layer(corpus)
             // Compute CE-based constants from the actual corpus size.
             , m_fires_nothing_ce_loss(std::log(static_cast<float>(TokenID::MAX)))
-            , m_convergence_threshold(m_fires_nothing_ce_loss / 4.0f)
+            , m_convergence_threshold(m_fires_nothing_ce_loss / k_convergence_divisor)
         {
             assert(static_cast<size_t>(TokenID::MAX) > 1);
             for (size_t i = 0; i < num_layers; ++i)
@@ -48,6 +52,8 @@ namespace rllm
         const Corpus& get_corpus() const { return m_corpus; }
         Statistics&   get_statistics() const { return m_stats; }
         const OutputLayer& get_output_layer() const { return m_output_layer; }
+        const InputLayer& get_input_layer() const { return m_input_layer; }
+        size_t get_transformer_block_count() const { return m_transformer_blocks.size(); }
 
         void set_training_method(TrainingMethod m) { m_training_method = m; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
@@ -66,6 +72,25 @@ namespace rllm
         // returns true on success, false on failure (e.g. file not found or parse error)
         bool load(const std::string& filename);
         void save(const std::string& filename) const;
+
+        // Mean-pool the last transformer block's hidden state over the sequence dimension.
+        // Equivalent to last_hidden_state.mean(dim=1) in PyTorch.
+        // Must be called after propagate_forward().
+        fixed_size_vector<rlmm_float, EmbeddingDimension> get_last_hidden_mean() const
+        {
+            fixed_size_vector<rlmm_float, EmbeddingDimension> result;
+            const size_t seq_len = static_cast<size_t>(m_seq_len);
+            if (seq_len == 0)
+                return result;
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+            {
+                float sum = 0.0f;
+                for (const auto pos : enum_iterator<PositionIndex>(m_seq_len))
+                    sum += static_cast<float>(m_last_hidden[pos, d]);
+                result[d] = static_cast<rlmm_float>(sum / static_cast<float>(seq_len));
+            }
+            return result;
+        }
 
       private:
         Corpus&    m_corpus;

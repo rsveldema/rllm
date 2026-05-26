@@ -27,7 +27,7 @@ target_include_directories(rllm_lib PUBLIC
     ${CMAKE_BINARY_DIR}/generated
 )
 
-target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -march=native -O3 -Wstack-usage=10000 -fopenmp-simd)
+target_compile_options(rllm_lib PRIVATE -Wall -Wextra -Wpedantic -march=native -O3 -Wstack-usage=10000 -fopenmp-simd -Wno-narrowing)
 #target_compile_definitions(rllm_lib PUBLIC RLLM_ENABLE_OVERFLOW_CHECK_ADD)
 add_dependencies(rllm_lib generate_tokenizer_map)
 target_link_libraries(rllm_lib PUBLIC nlohmann_json::nlohmann_json)

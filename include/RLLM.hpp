@@ -25,9 +25,16 @@ namespace rllm
             size_t num_epochs,
             const std::string& train_corpus_dir
         );
-        void prompt_mode(const std::string& input_filename);
+        void prompt_mode(const std::string& input_filename, const std::optional<std::string>& one_shot_prompt = std::nullopt);
+
+        struct PromptOptions
+        {
+            bool highest_prio_only = true;
+        };
 
       private:
+        void process_line(const std::string& line, Corpus& corpus, NeuralNetwork& nn, PromptOptions& options);
+
         const std::vector<std::string> m_filters;
     };
 

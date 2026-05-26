@@ -17,6 +17,7 @@ int main(int argc, char* argv[])
     bool train_mode = false;
     std::string output_filename = "model.json";
     std::optional<std::string> input_filename;
+    std::optional<std::string> one_shot_prompt;
     int num_layers = 4;
     bool verbose = false;
     size_t num_epochs = 1000;
@@ -53,8 +54,10 @@ int main(int argc, char* argv[])
         else if (std::strcmp(argv[i], "-i") == 0 && ((i + 1) < argc))
         {
             input_filename = argv[++i];
-        }
-        else if (std::strcmp(argv[i], "--method") == 0 && ((i + 1) < argc))
+        }        else if (std::strcmp(argv[i], "-c") == 0 && ((i + 1) < argc))
+        {
+            one_shot_prompt = argv[++i];
+        }        else if (std::strcmp(argv[i], "--method") == 0 && ((i + 1) < argc))
         {
             const std::string m = argv[++i];
             if (m == "two_tok")
@@ -99,6 +102,7 @@ int main(int argc, char* argv[])
                 "  --train         Run in training mode (default is prompt mode)\n"
                 "  --train-dir <directory>  Directory containing training text files (default is '{}')\n"
                 "  -i <filename>  Specify the model file to load (trainer will init the model if not provided)\n"
+                "  -c <string>    Run prompt mode with this string, print predictions, then exit\n"
                 "  -o <filename>  Specify the model file to save (default is '{}')\n"
                 "  --verbose       Enable verbose output\n"
                 "  --filter <filter>  Specify a filter to apply\n"
@@ -134,7 +138,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-        llm.prompt_mode(input_filename ? *input_filename : output_filename);
+        llm.prompt_mode(input_filename ? *input_filename : output_filename, one_shot_prompt);
     }
 
     return 0;

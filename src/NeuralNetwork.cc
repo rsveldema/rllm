@@ -453,20 +453,34 @@ namespace rllm
             set_random_weights_and_connections();
         }
 
+        const size_t vocab       = static_cast<size_t>(TokenID::MAX);
+        const size_t d_model     = static_cast<size_t>(EmbeddingDimension::MAX);
+        const size_t d_ff        = static_cast<size_t>(FFDimension::MAX);
+        const size_t n_layers    = m_transformer_blocks.size();
+        const size_t params_embed    = vocab * d_model;           // token embeddings
+        const size_t params_lm_head  = vocab * d_model;           // LM head
+        const size_t params_attn     = 4 * d_model * d_model;     // W_q, W_k, W_v, W_o per block
+        const size_t params_ffn      = 3 * d_model * d_ff;        // W_gate, W_up, W_down per block (2*d_ff*d_model + d_model*d_ff)
+        const size_t params_per_block = params_attn + params_ffn;
+        const size_t total_params    = params_embed + params_lm_head + n_layers * params_per_block;
+
         LOG_INFO(
             "Training the neural network...\n"
             "\t $num_layers: {}\n"
             "\t $corpus_size: {}\n"
+            "\t $total_params: {} ({:.2f}M)  [embed:{} lm_head:{} blocks:{}x{}]\n"
             "\t convergence threshold: {:.6f}\n"
             "\t fires nothing CE loss:  {:.6f}\n"
             "\t steps per example per epoch: {}\n"
             "\t num epochs: {}\n"
             "\t training method: {}\n",
-            m_transformer_blocks.size(),
-            static_cast<size_t>(TokenID::MAX),
+            n_layers,
+            vocab,
+            total_params, static_cast<float>(total_params) / 1e6f,
+            params_embed, params_lm_head, n_layers, params_per_block,
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
-            NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(),
+            NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * n_layers,
             num_epochs,
             training_method_to_string(m_training_method)
         );
@@ -508,7 +522,7 @@ namespace rllm
             {
                 LOG_INFO_EVERY_N(
                     "Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}",
-                    max_iterations,
+                    i + 1,
                     m_corpus.get_token_from_id(expected_output_token),
                     full_string,
                     static_cast<size_t>(train_input.size())
