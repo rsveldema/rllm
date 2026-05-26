@@ -31,33 +31,39 @@ namespace parallel {
 // ── fastfork backend ──────────────────────────────────────────────────────────
 #elif defined(USE_FASTFORK)
 
+#include <atomic>
 #include <fastfork/fastfork.hpp>
 
 namespace parallel {
-    inline void init_parallel() { fastfork::init(); }
+    void init_parallel();
     inline int  get_max_threads() { return fastfork::get_max_threads(); }
     inline void set_num_threads(int n) { fastfork::set_num_threads(n); }
     // fastfork does not expose per-thread IDs
     inline int get_thread_num() { return fastfork::get_thread_num(); }
 }
 
-// Each loop iteration is forked as an independent task; ENDFOR waits for all.
-// Loop variables are captured by value so each task sees its own copy.
+// Each loop iteration is forked as an independent task.
+// A per-invocation atomic counter (_ff_n_) is decremented inside each task
+// so that ENDFOR's wait_local() only waits for THIS batch, not all globally
+// pending tasks.  This makes nested PARFOR (e.g. a helper that uses PARFOR
+// called from inside a PARFOR task) safe.
 #define PARFOR(v, ...) \
     { auto _ff_rng_ = (__VA_ARGS__); \
+      fastfork::Context _ff_ctx_; \
       for (auto v : _ff_rng_) \
-          fastfork::fork_task([&, v]() {
+          fastfork::fork_task(_ff_ctx_, [&, v]() {
 #define PARFOR_2D(v1, v2, ...) \
     { auto _ff_rng_ = (__VA_ARGS__); \
+      fastfork::Context _ff_ctx_; \
       for (auto [v1, v2] : _ff_rng_) \
-          fastfork::fork_task([&, v1 = v1, v2 = v2]() {
+          fastfork::fork_task(_ff_ctx_, [&, v1 = v1, v2 = v2]() {
 #define ENDFOR \
-      }); \
-      fastfork::wait_for_all_tasks(); }
+          }); \
+      }
 
-#define PARSECTIONS_BEGIN  { fastfork::fork_task([&]() {
-#define PARSECTION         }); fastfork::fork_task([&]() {
-#define PARSECTIONS_END    }); fastfork::wait_for_all_tasks(); }
+#define PARSECTIONS_BEGIN  { fastfork::Context _ff_ctx_; fastfork::fork_task(_ff_ctx_, [&]() {
+#define PARSECTION         }); fastfork::fork_task(_ff_ctx_, [&]() {
+#define PARSECTIONS_END    }); }
 
 // ── Sequential fallback ───────────────────────────────────────────────────────
 #else

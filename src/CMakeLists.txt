@@ -2,7 +2,7 @@ add_library(rllm_lib STATIC)
 
 # ── Parallel backend selection ────────────────────────────────────────────────
 # cmake -DPARALLEL_BACKEND=openmp|fastfork|sequential  (default: openmp)
-set(PARALLEL_BACKEND "openmp" CACHE STRING "Parallel backend: openmp, fastfork, or sequential")
+set(PARALLEL_BACKEND "fastfork" CACHE STRING "Parallel backend: openmp, fastfork, or sequential")
 set_property(CACHE PARALLEL_BACKEND PROPERTY STRINGS openmp fastfork sequential)
 
 if(NOT PARALLEL_BACKEND MATCHES "^(openmp|fastfork|sequential)$")
@@ -34,6 +34,7 @@ target_link_libraries(rllm_lib PUBLIC nlohmann_json::nlohmann_json)
 if(PARALLEL_BACKEND STREQUAL "fastfork")
     target_sources(rllm_lib PRIVATE fastfork/fastfork.cc)
     target_compile_definitions(rllm_lib PUBLIC USE_FASTFORK)
+    target_link_libraries(rllm_lib PUBLIC hwloc)
     message(STATUS "Parallel backend: fastfork")
 elseif(PARALLEL_BACKEND STREQUAL "openmp")
     find_package(OpenMP REQUIRED)

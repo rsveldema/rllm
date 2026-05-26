@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 
 namespace fastfork
@@ -24,6 +25,30 @@ namespace fastfork
     // to schedule tasks on the same NUMA node as the data they access.
     void fork_task(task_t t);
 
-    // Wait for all forked tasks to complete.
-    void wait_for_all_tasks();
+    // Scoped batch handle.
+    //   fork_task(ctx, t)  — increments ctx, wraps t to decrement on completion.
+    //   ctx destructor     — calls wait_local(ctx) so the batch always drains
+    //                        before ctx goes out of scope.
+    // Outer in-flight tasks are not counted, so nested fork/wait is deadlock-free.
+    class Context
+    {
+    public:
+        Context() = default;
+        ~Context();                         // defined in fastfork.cc; calls wait_local
+        Context(const Context&) = delete;
+        Context& operator=(const Context&) = delete;
+
+        void operator++() noexcept { m_n.fetch_add(1, std::memory_order_relaxed); }
+        void operator--() noexcept { m_n.fetch_sub(1, std::memory_order_release); }
+        bool empty()  const noexcept { return m_n.load(std::memory_order_acquire) == 0; }
+
+    private:
+        std::atomic<int> m_n{0};
+    };
+
+    // Fork a task and register it with a Context batch.
+    void fork_task(Context& ctx, task_t t);
+
+    // Participate in work-stealing until ctx is empty.
+    void wait_local(Context& ctx);
 }

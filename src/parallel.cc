@@ -12,22 +12,10 @@ namespace parallel {
 
 #elif defined(USE_FASTFORK)
 
-#include <atomic>
-#include <thread>
-
 namespace parallel {
-    static int s_num_threads = static_cast<int>(std::thread::hardware_concurrency());
-
     void init_parallel() {
+        fastfork::init();
         std::println("Using FastFork with {} threads", get_max_threads());
-    }
-
-    inline int get_max_threads() {
-        return s_num_threads;
-    }
-
-    inline void set_num_threads(int n) {
-        s_num_threads = n;
     }
 }
 
