@@ -15,10 +15,10 @@ namespace rllm
 {
     // C[m,n]  = A[m,k] @ B[n,k]^T   (B stored row-major [n × k])
     // m comes from A.num_rows() at runtime.
-    template<typename K_enum, typename N_enum>
+    template<typename K_enum, typename N_enum, typename BType>
     static void matmul_ABt(
         const flexible_rows_matrix<rlmm_float, PositionIndex, K_enum>& A,
-        const fixed_size_matrix<rlmm_float, N_enum, K_enum>& B,
+        const fixed_size_matrix<BType, N_enum, K_enum>& B,
         flexible_rows_matrix<rlmm_float, PositionIndex, N_enum>& C)
     {
         const PositionIndex m = A.num_rows();
@@ -37,10 +37,10 @@ namespace rllm
 
     // C[m,n]  = A[m,k] @ B[k,n]     (B stored row-major [k × n])
     // m comes from A.num_rows() at runtime.
-    template<typename K_enum, typename N_enum>
+    template<typename K_enum, typename N_enum, typename BType>
     static void matmul_AB(
         const flexible_rows_matrix<rlmm_float, PositionIndex, K_enum>& A,
-        const fixed_size_matrix<rlmm_float, K_enum, N_enum>& B,
+        const fixed_size_matrix<BType, K_enum, N_enum>& B,
         flexible_rows_matrix<rlmm_float, PositionIndex, N_enum>& C)
     {
         const PositionIndex m = A.num_rows();

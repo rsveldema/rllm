@@ -24,12 +24,12 @@ namespace math
 
         // Approximate exp(x) using a 5th-degree polynomial fit on [-10, 0].
         // Coefficients derived from a least-squares fit to exp(x) in that range.
-        const float c0 = 1.f;
-        const float c1 = 0.999999f;
-        const float c2 = 0.499999f;
-        const float c3 = 0.166666f;
-        const float c4 = 0.041666f;
-        const float c5 = 0.008333f;
+        constexpr float c0 = 1.f;
+        constexpr float c1 = 0.999999f;
+        constexpr float c2 = 0.499999f;
+        constexpr float c3 = 0.166666f;
+        constexpr float c4 = 0.041666f;
+        constexpr float c5 = 0.008333f;
 
         return (((((c5 * x + c4) * x + c3) * x + c2) * x + c1) * x + c0);
     }

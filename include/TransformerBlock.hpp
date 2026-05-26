@@ -113,16 +113,16 @@ namespace rllm
         );
 
         // SGD + momentum update: clips gradients, clips velocity, clamps weights.
-        template <typename R_enum, typename C_enum>
+        template <typename R_enum, typename C_enum, typename WType, typename VType, typename GType>
         static void sgd_update(
-            fixed_size_matrix<rlmm_float, R_enum, C_enum>& W,
-            fixed_size_matrix<rlmm_float, R_enum, C_enum>& vel,
-            const fixed_size_matrix<rlmm_float, R_enum, C_enum>& grad,
+            fixed_size_matrix<WType, R_enum, C_enum>& W,
+            fixed_size_matrix<VType, R_enum, C_enum>& vel,
+            const fixed_size_matrix<GType, R_enum, C_enum>& grad,
             float lr
         )
         {
             PARFOR_2D(r, c, enum_iterator2D<R_enum, C_enum>())
-                const rlmm_float g = math::clamp(
+                const float g = math::clamp(
                     grad[r, c],
                     -GRAD_CLIP,
                     GRAD_CLIP

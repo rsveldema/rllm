@@ -20,8 +20,8 @@ namespace rllm
 
     void TransformerBlock::randomize()
     {
-        constexpr float sd = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(EmbeddingDimension::MAX)));
-        constexpr float sf = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(FFDimension::MAX)));
+        const float sd = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(EmbeddingDimension::MAX)));
+        const float sf = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(FFDimension::MAX)));
 
         W_q.fill_rand(-sd, sd);
         W_k.fill_rand(-sd, sd);
@@ -239,7 +239,7 @@ namespace rllm
         PARSECTIONS_END
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
-        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
+        const float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
         ws.attn_concat.fill(RLMM_ZERO);
 
         PARFOR(hi, enum_iterator<HeadsIndex>())
@@ -425,7 +425,7 @@ namespace rllm
         matmul_AtB_acc(ws->d_h_mid, fwd.attn_concat, ws->dW_o);
 
         // Per-head backward
-        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
+        const float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
         for (const auto hi : enum_iterator<HeadsIndex>())
         {
             ws->d_raw.fill(RLMM_ZERO); // d_raw accumulates per head; reset each iteration
