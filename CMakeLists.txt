@@ -27,6 +27,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # Glob the input files so CMake re-runs if any of them change.
 file(GLOB PREDEFINED_WORDS_FILES "${CMAKE_SOURCE_DIR}/predefined_words/*")
 file(GLOB CORPUS_FILES            "${CMAKE_SOURCE_DIR}/corpus/*")
+file(GLOB TOKENIZER_TRAINING_FILES "${CMAKE_SOURCE_DIR}/tokenizer_training_data/*")
 
 set(TOKENIZER_GEN_DIR "${CMAKE_BINARY_DIR}/generated")
 set(TOKENIZER_CC  "${TOKENIZER_GEN_DIR}/tokenizer_map.cc")
@@ -44,6 +45,7 @@ add_custom_command(
         "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
         ${PREDEFINED_WORDS_FILES}
         ${CORPUS_FILES}
+        ${TOKENIZER_TRAINING_FILES}
     COMMENT "Generating tokenizer_map.cc and tokenizer_map.hpp in build/generated"
     VERBATIM
 )

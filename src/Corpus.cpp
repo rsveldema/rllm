@@ -12,6 +12,7 @@
 #include <print>
 #include <sstream>
 #include <string_view>
+#include <unordered_set>
 
 
 namespace rllm
@@ -225,6 +226,18 @@ namespace rllm
     std::vector<InputLine> Corpus::get_suitable_training_lines() const
     {
         std::vector<InputLine> training_lines;
+        std::unordered_set<std::string> seen_training_line_keys;
+
+        auto make_line_key = [](const InputLine& line) {
+            std::string key;
+            key.reserve(static_cast<size_t>(line.size()) * 6);
+            for (const auto i : enum_iterator<PositionIndex>(line.size()))
+            {
+                key += std::to_string(static_cast<int>(line[i]));
+                key.push_back(',');
+            }
+            return key;
+        };
 
         assert(!m_token_list.empty());
         this->visit_lines([&](const InputLine& line) {
@@ -237,6 +250,11 @@ namespace rllm
 
             if (static_cast<int>(stripped.size()) < 2)
                 return; // too short to produce a valid (input, target) pair
+
+            const auto dedupe_key = make_line_key(stripped);
+            if (!seen_training_line_keys.insert(dedupe_key).second)
+                return; // duplicate line in corpus; already included once
+
             training_lines.push_back(stripped);
         });
         return training_lines;

@@ -90,7 +90,9 @@ namespace rllm
         // Keep full hidden state for backward pass
         m_last_hidden = ws->h;
 
-        // Project the last-position hidden state to vocabulary logits
+        // Project the last-position hidden state to vocabulary logits.
+        // Given a string of N tokens, the model learns to predict the N+1'th token,
+        // so the final output is based on the hidden state at the last input position.
         const auto last_pos = dec(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
             ws->h_last[d] = ws->h[last_pos, d];
@@ -368,7 +370,12 @@ namespace rllm
         if (total_lines == 0)
             return;
 
-        std::uniform_int_distribution<size_t> line_dist(0, total_lines - 1);
+        // Visit each line exactly once per epoch (in random order).
+        // Sampling with replacement over-emphasizes some lines while skipping others,
+        // which causes unstable learning and apparent forgetting.
+        std::vector<size_t> line_indices(total_lines);
+        std::iota(line_indices.begin(), line_indices.end(), 0);
+        std::shuffle(line_indices.begin(), line_indices.end(), rng);
 
         for (size_t lines_visited = 1; lines_visited <= total_lines; ++lines_visited)
         {
@@ -392,7 +399,7 @@ namespace rllm
                 progress * 100.0f
             );
 
-            const auto& random_line = training_lines[line_dist(rng)];
+            const auto& random_line = training_lines[line_indices[lines_visited - 1]];
             train_with_random_len_from_start(
                 random_line,
                 verbose,
@@ -661,6 +668,8 @@ namespace rllm
 
     void NeuralNetwork::do_training(const InputLine& train_output, bool verbose, size_t max_iterations)
     {
+        // given a training example line [5,34,3,4,1], we use the first N-1 tokens
+        // as input ([5,34,3,4]) and the last token as the expected output (1).
         assert(static_cast<int>(train_output.size()) >= 2);
         auto train_input = train_output;
         const auto expected_output_token = train_input.back();
