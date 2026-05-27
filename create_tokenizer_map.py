@@ -232,7 +232,7 @@ def generate_cpp_table_header(tokenizer_map) -> str:
     for _token, idx in tokenizer_map.items():
         if _token == " ":
             continue # skip space, we will handle it as a special case in the tokenizer
-        cpp_table += f'    TOK_{idx},\n'
+        cpp_table += f'    TOK_{idx} = {idx},\n'
         if _token == "\n":
             cpp_table += f'    TOK_NEWLINE = TOK_{idx},\n'
         if _token == "\t":

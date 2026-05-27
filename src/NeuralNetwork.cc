@@ -64,11 +64,11 @@ namespace rllm
 
     // Layers
 
-    struct ForwardWorkspace
+    struct NeuralNetworkForwardWorkspace
     {
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h;
         fixed_size_vector<rlmm_float, EmbeddingDimension> h_last;
-        explicit ForwardWorkspace(PositionIndex seq_len) : h(seq_len) {}
+        explicit NeuralNetworkForwardWorkspace(PositionIndex seq_len) : h(seq_len) {}
     };
 
     void NeuralNetwork::propagate_forward(const InputLine& input)
@@ -78,7 +78,7 @@ namespace rllm
         m_last_input = input;
         m_seq_len = input.size();
 
-        auto ws = std::make_unique<ForwardWorkspace>(m_seq_len);
+        auto ws = std::make_unique<NeuralNetworkForwardWorkspace>(m_seq_len);
 
         // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
         m_input_layer.propagate_forward(input, ws->h);
@@ -109,8 +109,9 @@ namespace rllm
                 return a.activation > b.activation;
             });
         }
-        else if (!top_k.empty() && value > top_k.back().activation)
+        else if (!top_k.empty() && value >= top_k.back().activation)
         {
+            // Use >= so ties don't always leave the initial token IDs (0,1,2,...) in place.
             top_k.back() = {id, value};
             std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
                 return a.activation > b.activation;
@@ -143,7 +144,7 @@ namespace rllm
         if (top_k == 0)
             return {};
 
-        // First, keep only top-K logits.
+        // First, keep only top-K by raw logit (preserves correct rank order).
         std::vector<OutputToken> top_k_pairs;
         for (const auto i : enum_iterator<TokenID>())
         {
@@ -154,15 +155,26 @@ namespace rllm
         if (top_k_pairs.empty())
             return top_k_pairs;
 
-        // Then normalize only over top-K using a numerically stable softmax.
-        const double max_logit = static_cast<double>(top_k_pairs.front().activation);
+        // Clamp the logit gap so no token in top-K is numerically invisible.
+        // Without capping, a collapsed model produces 100% / 0.000e-25% which is
+        // useless for display and prevents diverse sampling.
+        // A gap cap of 5 nats allows at most a ~148:1 ratio between any two entries.
+        static constexpr double MAX_LOGIT_GAP = 5.0;
+        const double best_logit = static_cast<double>(top_k_pairs.front().activation);
+        for (auto& entry : top_k_pairs)
+        {
+            const double capped = std::max(static_cast<double>(entry.activation), best_logit - MAX_LOGIT_GAP);
+            entry.activation = static_cast<float>(capped);
+        }
+
+        // Stable softmax over the gap-capped logits.
         double sum_exp = 0.0;
         for (const auto& entry : top_k_pairs)
-            sum_exp += std::exp(static_cast<double>(entry.activation) - max_logit);
+            sum_exp += std::exp(static_cast<double>(entry.activation) - best_logit);
 
         for (auto& entry : top_k_pairs)
         {
-            const double p = std::exp(static_cast<double>(entry.activation) - max_logit) / sum_exp;
+            const double p = std::exp(static_cast<double>(entry.activation) - best_logit) / sum_exp;
             entry.activation = static_cast<float>(p);
         }
 
@@ -182,7 +194,7 @@ namespace rllm
 
     void NeuralNetwork::propagate_backward(const Score& score)
     {
-        static constexpr float LEARNING_RATE = 0.01f;
+        static constexpr float LEARNING_RATE = 0.003f;
 
         auto ws = std::make_unique<BackwardPropWorkspace>(m_seq_len);
 

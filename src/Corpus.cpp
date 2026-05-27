@@ -228,11 +228,16 @@ namespace rllm
 
         assert(!m_token_list.empty());
         this->visit_lines([&](const InputLine& line) {
-            if (static_cast<int>(line.size()) < 2)
-            {
-                return; // skip too-short lines that can't be used for training
-            }
-            training_lines.push_back(line);
+            // Strip the trailing TOK_NEWLINE that the corpus appends to every line.
+            // Keeping it would make \n the dominant training target (it ends every line),
+            // causing the model to collapse to always predicting \n.
+            InputLine stripped = line;
+            if (!stripped.empty() && stripped.back() == TokenID::TOK_NEWLINE)
+                stripped.pop_back();
+
+            if (static_cast<int>(stripped.size()) < 2)
+                return; // too short to produce a valid (input, target) pair
+            training_lines.push_back(stripped);
         });
         return training_lines;
     }

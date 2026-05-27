@@ -29,7 +29,7 @@ int main(int argc, char* argv[])
     size_t num_epochs = 1000;
     auto method = rllm::TrainingMethod::TWO_TOK;
     int window_size = 2;
-    std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{1};
+    std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
 
     for (int i = 1; i < argc; ++i)
     {

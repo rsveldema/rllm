@@ -51,6 +51,15 @@ namespace rllm
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
 
+        // Public RMS norm: used by NeuralNetwork to apply the final pre-LM-head norm.
+        static void apply_rms_norm(
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y
+        )
+        {
+            rms_norm(x, y);
+        }
+
         // Test helper: expose causal softmax without exposing internals broadly.
         static void causal_softmax_for_test(
             flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x,
@@ -79,14 +88,14 @@ namespace rllm
         static constexpr float WEIGHT_CLAMP = 2.0f;
 
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
-        fixed_size_matrix<rlmm_float16, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
+        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
         fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
 
         // SwiGLU FFN:
         //   gate, up:  [FFDimension::MAX    × D_MODEL]  (out × in)
         //   down:      [D_MODEL × FFDimension::MAX   ]  (out × in)
-        fixed_size_matrix<rlmm_float16, FFDimension, EmbeddingDimension> W_gate, W_up;
-        fixed_size_matrix<rlmm_float16, EmbeddingDimension, FFDimension> W_down;
+        fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension> W_gate, W_up;
+        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension> W_down;
         fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> V_gate, V_up;
         fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> V_down;
 

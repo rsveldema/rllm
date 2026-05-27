@@ -87,6 +87,12 @@ namespace rllm
 
     void OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
+        // Label smoothing (ε=0.1): instead of a one-hot target, each non-target
+        // token gets a small positive gradient of ε/V. This prevents the model
+        // from driving non-target logits to -∞ and collapsing to one token.
+        static constexpr float LABEL_SMOOTHING = 0.1f;
+        const float smooth = LABEL_SMOOTHING / static_cast<float>(static_cast<int>(TokenID::MAX));
+
         float max_val = m_inputs[TokenID::START];
         for (const auto i : enum_iterator<TokenID>())
             max_val = math::max(max_val, m_inputs[i]);
@@ -98,10 +104,12 @@ namespace rllm
             sum_exp += score.values[i];
         }
 
+        // delta[i] = smooth - softmax[i]  (small positive floor for all non-targets)
         for (const auto i : enum_iterator<TokenID>())
-            score.values[i] = -score.values[i] / sum_exp;
+            score.values[i] = smooth - score.values[i] / sum_exp;
 
-        score.values[expected_output_token] += RLMM_ONE;
+        // delta[expected] += (1 - LABEL_SMOOTHING)
+        score.values[expected_output_token] += (RLMM_ONE - LABEL_SMOOTHING);
     }
 
     void OutputLayer::compute_deltas(const Score& score, fixed_size_vector<rlmm_float, TokenID>& deltas) const

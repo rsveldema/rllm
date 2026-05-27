@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <format>
+#include <chrono>
 #include <nlohmann/json.hpp>
 #include <print>
 #include <stdexcept>
@@ -161,6 +162,8 @@ namespace rllm
 
     void NeuralNetwork::save(const std::string& filename) const
     {
+        const auto save_start = std::chrono::steady_clock::now();
+
         nlohmann::json j;
         j["version"] = 1;
         j["tokenizer_vocab_size"] = static_cast<size_t>(TokenID::MAX);
@@ -177,5 +180,8 @@ namespace rllm
 
         std::ofstream file{filename};
         file << j.dump(2) << '\n';
+
+        const auto save_elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - save_start).count();
+        std::println("Saved model '{}' in {:.3f} seconds", filename, save_elapsed);
     }
 } // namespace rllm

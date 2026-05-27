@@ -48,8 +48,8 @@ mob-of-expert support:
             // SwiGLU FFN:
             //   gate, up:  [FFDimension::MAX    × D_MODEL]  (out × in)
             //   down:      [D_MODEL × FFDimension::MAX   ]  (out × in)
-            fixed_size_matrix<rlmm_float16, FFDimension, EmbeddingDimension> W_gate, W_up;
-            fixed_size_matrix<rlmm_float16, EmbeddingDimension, FFDimension> W_down;
+            fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension> W_gate, W_up;
+            fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension> W_down;
             fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> V_gate, V_up;
             fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> V_down;
         }

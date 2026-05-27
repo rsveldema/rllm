@@ -5,9 +5,20 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(CheckIPOSupported)
+
 # Build type default
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+# Enable link-time optimization for Release builds when supported.
+check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+if(IPO_SUPPORTED)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    message(STATUS "LTO/IPO enabled for Release builds")
+else()
+    message(WARNING "LTO/IPO not supported: ${IPO_ERROR}")
 endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
