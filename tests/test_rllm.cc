@@ -74,6 +74,138 @@ TEST(TransformerBlockTest, BackwardOutputShape)
         << "backward() must return a gradient of the same size as the input";
 }
 
+TEST(TransformerBlockTest, CausalSoftmaxMasksFutureTokensAndNormalizesRows)
+{
+    using namespace rllm;
+
+    const auto T = static_cast<PositionIndex>(4);
+    flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> scores(T, T);
+
+    // Distinct values per row; future positions (j > i) should be ignored then zeroed.
+    scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)] = 1.0f;
+    scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(1)] = 999.0f;
+    scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(2)] = 999.0f;
+    scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(3)] = 999.0f;
+
+    scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)] = 1.0f;
+    scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)] = 2.0f;
+    scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(2)] = 999.0f;
+    scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(3)] = 999.0f;
+
+    scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)] = 0.0f;
+    scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)] = 1.0f;
+    scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)] = 2.0f;
+    scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(3)] = 999.0f;
+
+    scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)] = -1.0f;
+    scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)] = 0.0f;
+    scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)] = 1.0f;
+    scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)] = 2.0f;
+
+    TransformerBlock::causal_softmax_for_test(scores, T);
+
+    // Row 0: only self is allowed.
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)), 1.0f, 1e-6f);
+
+    // Row 1 expected softmax([1,2]).
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)), 0.26894143f, 1e-6f);
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)), 0.73105860f, 1e-6f);
+
+    // Row 2 expected softmax([0,1,2]).
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)), 0.09003057f, 1e-6f);
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)), 0.24472848f, 1e-6f);
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)), 0.66524094f, 1e-6f);
+
+    // Row 3 expected softmax([-1,0,1,2]).
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)), 0.03205860f, 1e-6f);
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)), 0.08714432f, 1e-6f);
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)), 0.23688284f, 1e-6f);
+    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)), 0.64391428f, 1e-6f);
+
+    // Row-wise normalization over active (causal) region and strict masking for j > i.
+    for (int i = 0; i < 4; ++i)
+    {
+        float row_sum = 0.0f;
+        for (int j = 0; j <= i; ++j)
+            row_sum += scores.get(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j));
+        EXPECT_NEAR(row_sum, 1.0f, 1e-6f);
+
+        for (int j = i + 1; j < 4; ++j)
+            EXPECT_FLOAT_EQ(scores.get(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)), 0.0f);
+    }
+}
+
+TEST(TransformerBlockTest, SoftmaxBackwardMatchesJacobianAndAccumulates)
+{
+    using namespace rllm;
+
+    const auto T = static_cast<PositionIndex>(4);
+    flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> dp(T, T);
+    flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> p(T, T);
+    flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> dscores(T, T);
+
+    dp.fill(0.0f);
+    p.fill(0.0f);
+    dscores.fill(0.1f); // Verify accumulation semantics: dscores += ...
+
+    // Row 0 (single active element)
+    p.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 1.0f);
+    dp.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 3.0f);
+
+    // Row 1: active j in [0,1], p sums to 1
+    p.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 0.2f);
+    p.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), 0.8f);
+    dp.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 1.0f);
+    dp.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), -2.0f);
+
+    // Row 2: active j in [0,2], p sums to 1
+    p.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 0.1f);
+    p.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), 0.3f);
+    p.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.6f);
+    dp.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 2.0f);
+    dp.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), -1.0f);
+    dp.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.5f);
+
+    // Row 3: active j in [0,3], p sums to 1
+    p.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), 0.25f);
+    p.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.25f);
+    p.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 0.25f);
+    p.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 0.25f);
+    dp.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), -1.0f);
+    dp.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.0f);
+    dp.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 1.0f);
+    dp.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 2.0f);
+
+    TransformerBlock::softmax_backward_for_test(dp, p, dscores, T);
+
+    // Expected updates per row: p_j * (dp_j - dot), where dot = sum_k dp_k * p_k.
+    // Row 0: dot=3, update=[0]
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)), 0.1f, 1e-6f);
+
+    // Row 1: dot = 1*0.2 + (-2)*0.8 = -1.4
+    // updates: j0=0.2*(1+1.4)=0.48, j1=0.8*(-2+1.4)=-0.48
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)), 0.58f, 1e-6f);
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)), -0.38f, 1e-6f);
+
+    // Row 2: dot = 2*0.1 + (-1)*0.3 + 0.5*0.6 = 0.2
+    // updates: [0.18, -0.36, 0.18]
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)), 0.28f, 1e-6f);
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)), -0.26f, 1e-6f);
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)), 0.28f, 1e-6f);
+
+    // Row 3: dot = (-1 + 0 + 1 + 2) * 0.25 = 0.5
+    // updates: [-0.375, -0.125, 0.125, 0.375]
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)), -0.275f, 1e-6f);
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)), -0.025f, 1e-6f);
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)), 0.225f, 1e-6f);
+    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)), 0.475f, 1e-6f);
+
+    // Entries outside the causal region are untouched (remain baseline 0.1f).
+    for (int i = 0; i < 4; ++i)
+        for (int j = i + 1; j < 4; ++j)
+            EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)), 0.1f, 1e-6f);
+}
+
 // ---------------------------------------------------------------------------
 // TransformerBlock test: parallel forward faster than serial
 // ---------------------------------------------------------------------------
@@ -249,6 +381,28 @@ TEST(EnumIterator2DTest, ZeroBoundProducesNoIterations)
     for (const auto [h, d] : enum_iterator2D<HeadsIndex, HeadDimension>(HeadsIndex::START))
         ++count;
     EXPECT_EQ(count, 0);
+}
+
+// block_range should iterate a rectangular tile in strict row-major order.
+TEST(EnumIterator2DTest, BlockRangeRowMajorAndBounds)
+{
+    using namespace rllm;
+
+    const auto it = enum_iterator2D<HeadsIndex, HeadDimension>();
+
+    // Rectangle: outer in [2,4), inner in [3,6)
+    // Expected pairs:
+    // (2,3) (2,4) (2,5) (3,3) (3,4) (3,5)
+    std::vector<std::pair<int, int>> got;
+    for (const auto [h, d] : it.block_range(/*outer_begin=*/2, /*outer_end=*/4, /*inner_begin=*/3, /*inner_end=*/6))
+        got.emplace_back(static_cast<int>(h), static_cast<int>(d));
+
+    const std::vector<std::pair<int, int>> expected = {
+        {2, 3}, {2, 4}, {2, 5},
+        {3, 3}, {3, 4}, {3, 5},
+    };
+
+    EXPECT_EQ(got, expected);
 }
 
 // ---------------------------------------------------------------------------

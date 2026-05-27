@@ -51,6 +51,26 @@ namespace rllm
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
 
+        // Test helper: expose causal softmax without exposing internals broadly.
+        static void causal_softmax_for_test(
+            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x,
+            PositionIndex T
+        )
+        {
+            causal_softmax(x, T);
+        }
+
+        // Test helper: expose softmax backward Jacobian application.
+        static void softmax_backward_for_test(
+            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dp,
+            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& p,
+            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dscores,
+            PositionIndex T
+        )
+        {
+            softmax_backward(dp, p, dscores, T);
+        }
+
       private:
         // Optimizer hyper-parameters
         static constexpr float MOMENTUM_BETA = 0.9f;

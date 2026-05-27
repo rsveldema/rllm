@@ -9,12 +9,14 @@ namespace rllm
     {
       public:
         enum_iterator(Enum end = Enum::MAX)
-            : m_current(Enum::START)
+                        : m_start(Enum::START)
+                        , m_current(Enum::START)
             , m_end(end)
         {}
 
         enum_iterator(Enum start, Enum end)
-            : m_current(start)
+                        : m_start(start)
+                        , m_current(start)
             , m_end(end)
         {}
 
@@ -45,7 +47,7 @@ namespace rllm
 
         enum_iterator begin() const
         {
-            return enum_iterator{Enum::START, m_end};
+            return enum_iterator{m_start, m_end};
         }
 
         enum_iterator end() const
@@ -54,6 +56,7 @@ namespace rllm
         }
 
       private:
+                Enum m_start;
         Enum m_current;
         Enum m_end;
     };

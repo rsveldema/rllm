@@ -94,8 +94,12 @@ namespace rllm
 
     // ── attention helpers ──────────────────────────────────────────────────────
 
-    // In-place causal softmax over a [T × T] score matrix (row i only attends
-    // to positions j ≤ i).  stride is the distance between rows in floats.
+    /** In-place causal softmax over a [T × T] score matrix (row i only attends
+    * to positions j ≤ i).  stride is the distance between rows in floats.
+    * 
+    * @param x The [T × T] matrix of scores to softmax in-place.  Only the top-left [T × T] block is accessed and modified; the rest of the matrix is left as-is to avoid unnecessary writes.
+    * @param T The sequence length (the active size of the [T × T] block).
+    */
     void
     TransformerBlock::causal_softmax(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T)
     {
@@ -123,8 +127,9 @@ namespace rllm
         ENDFOR
     }
 
-    // dscores[T×T] += ∂L/∂scores  via the softmax Jacobian.
-    // dp/dscores use stride T; p uses p_stride (the cached matrix's row stride).
+    /** dscores[T×T] += ∂L/∂scores  via the softmax Jacobian.
+     * dp/dscores use stride T; p uses p_stride (the cached matrix's row stride).
+     */
     void TransformerBlock::softmax_backward(
         const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dp,
         const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& p,

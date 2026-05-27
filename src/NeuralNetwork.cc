@@ -115,29 +115,38 @@ namespace rllm
         }
     }
 
-    // Returns the top-K tokens by softmax probability over the full vocabulary.
-    // Logit sign is not a validity criterion: a negative logit can still have
-    // a meaningful probability relative to the rest of the distribution.
+    // Returns top-K tokens selected by logit, with probabilities normalized
+    // over the returned top-K set. This keeps prompt-time probabilities stable
+    // and informative even when the full-vocabulary softmax is extremely sharp.
     std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k) const
     {
         assert(!m_transformer_blocks.empty());
+        if (top_k == 0)
+            return {};
 
-        // Compute softmax over all logits for numerically stable probabilities.
-        float max_logit = -std::numeric_limits<float>::infinity();
-        for (const auto i : enum_iterator<TokenID>())
-            max_logit = math::max(max_logit, m_output_layer.m_inputs[i]);
-
-        float sum_exp = 0.0f;
-        for (const auto i : enum_iterator<TokenID>())
-            sum_exp += std::exp(m_output_layer.m_inputs[i] - max_logit);
-
+        // First, keep only top-K logits.
         std::vector<OutputToken> top_k_pairs;
         for (const auto i : enum_iterator<TokenID>())
         {
             const auto logit = m_output_layer.m_inputs[i];
-            const float prob = std::exp(logit - max_logit) / sum_exp;
-            try_add_to_top_k(top_k_pairs, i, prob, top_k);
+            try_add_to_top_k(top_k_pairs, i, logit, top_k);
         }
+
+        if (top_k_pairs.empty())
+            return top_k_pairs;
+
+        // Then normalize only over top-K using a numerically stable softmax.
+        const double max_logit = static_cast<double>(top_k_pairs.front().activation);
+        double sum_exp = 0.0;
+        for (const auto& entry : top_k_pairs)
+            sum_exp += std::exp(static_cast<double>(entry.activation) - max_logit);
+
+        for (auto& entry : top_k_pairs)
+        {
+            const double p = std::exp(static_cast<double>(entry.activation) - max_logit) / sum_exp;
+            entry.activation = static_cast<float>(p);
+        }
+
         return top_k_pairs;
     }
 

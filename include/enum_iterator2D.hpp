@@ -4,6 +4,9 @@
 
 namespace rllm
 {
+    /** iterates from Enum1::START to Enum1::MAX and Enum2::START to Enum2::MAX 
+     * Conventiently assumes that Enum1 and Enum2 have contiguous values starting from START and that MAX is one past the last valid value.
+    */
     template <typename Enum1, typename Enum2>
     class enum_iterator2D
     {

@@ -207,18 +207,42 @@ namespace rllm
 
             int ix = 0;
             int num_valid_tokens = 0;
+            float top_k_probability_sum = 0.0f;
+            for (const auto& entry : output_token_id_lists)
+                top_k_probability_sum += entry.activation;
+
             for (const auto& entry : output_token_id_lists)
             {
                 auto tok = nn.get_corpus().get_token_from_id(entry.token_id);
                 if (tok == "\n")
                     tok = "\\n";
-                std::println(
-                    "\t     prediction[{}]: '{}' (id: '{}'), {:.2f}%",
-                    ix,
-                    tok,
-                    static_cast<int>(entry.token_id),
-                    entry.activation * 100.0f
-                );
+                const float global_percent = entry.activation * 100.0f;
+                const float top_k_percent = (top_k_probability_sum > 0.0f)
+                    ? (entry.activation / top_k_probability_sum) * 100.0f
+                    : 0.0f;
+
+                if (global_percent >= 0.01f)
+                {
+                    std::println(
+                        "\t     prediction[{}]: '{}' (id: '{}'), {:.6f}% (top-5 {:.2f}%)",
+                        ix,
+                        tok,
+                        static_cast<int>(entry.token_id),
+                        global_percent,
+                        top_k_percent
+                    );
+                }
+                else
+                {
+                    std::println(
+                        "\t     prediction[{}]: '{}' (id: '{}'), {:.3e}% (top-5 {:.2f}%)",
+                        ix,
+                        tok,
+                        static_cast<int>(entry.token_id),
+                        global_percent,
+                        top_k_percent
+                    );
+                }
                 ix++;
                 if (entry.activation > VALID_PREDICTION_THRESHOLD)
                     num_valid_tokens++;
