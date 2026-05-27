@@ -11,6 +11,11 @@
 
 namespace rllm
 {
+    /** We assume that the ElementType supports default construction, copy assignment, and arithmetic operations.
+     * Should be sth like float/float16/int8, not a complex struct.  The X and Y template parameters are the enum 
+     * types for the row and column indices, respectively, and are only used to determine the matrix dimensions 
+     * and provide type safety for indexing.
+     */
     template <typename ElementType, typename X, typename Y>
     class fixed_size_matrix
     {
@@ -24,56 +29,56 @@ namespace rllm
         }
         ~fixed_size_matrix() = default;
 
-        void set(const X x, const Y y, ElementType value)
+        inline void set(const X x, const Y y, ElementType value)
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
             m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] = value;
         }
 
-        void set(const std::pair<const X, const Y>& indices, ElementType value)
+        inline void set(const std::pair<const X, const Y>& indices, ElementType value)
         {
             set(indices.first, indices.second, value);
         }
 
-        const ElementType& get(const X x, const Y y) const
+        inline const ElementType& get(const X x, const Y y) const
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
             return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
-        const ElementType& get(const std::pair<const X, const Y>& indices) const
+        inline const ElementType& get(const std::pair<const X, const Y>& indices) const
         {
             return get(indices.first, indices.second);
         }
 
-        ElementType& operator[](X x, Y y)
+        inline ElementType& operator[](X x, Y y)
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
             return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
-        const ElementType& operator[](X x, Y y) const
+        inline const ElementType& operator[](X x, Y y) const
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
             return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
-        void fill(ElementType value)
+        inline void fill(ElementType value)
         {
             m_data.fill(value);
         }
 
-        void fill_rand(ElementType lo, ElementType hi)
+        inline void fill_rand(ElementType lo, ElementType hi)
         {
             for (auto& v : m_data)
                 v = static_cast<ElementType>(get_random_value(lo, hi));
         }
 
-        void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
+        inline void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
@@ -81,12 +86,12 @@ namespace rllm
             cell = math::clamp(cell + delta, range.lo, range.hi);
         }
 
-        void add_with_clamp(const std::pair<const X, const Y>& indices, ElementType delta, Range<ElementType> range)
+        inline void add_with_clamp(const std::pair<const X, const Y>& indices, ElementType delta, Range<ElementType> range)
         {
             add_with_clamp(indices.first, indices.second, delta, range);
         }
 
-        void add_no_clamp(const X x, const Y y, ElementType delta)
+        inline void add_no_clamp(const X x, const Y y, ElementType delta)
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);

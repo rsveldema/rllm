@@ -271,7 +271,7 @@ namespace rllm
             token_id_list.push_back(entry.token_id);
         }
 
-        auto reply_id_list = token_id_list.substr(question_size);
+        auto reply_id_list = token_id_list.sub_array(question_size);
         const auto full_answer_string_opt = corpus.get_line(token_id_list);
         if (!full_answer_string_opt.has_value())
         {
@@ -287,7 +287,7 @@ namespace rllm
         size_t num_layers,
         bool verbose,
         TrainingMethod method,
-        std::optional<size_t> checkpointing_interval,
+        std::optional<std::chrono::seconds> checkpointing_interval,
         int window_size,
         size_t num_epochs,
         const std::string& train_corpus_dir

@@ -2,6 +2,7 @@
 
 #include <NeuralNetwork.hpp>
 
+#include <chrono>
 #include <string>
 
 namespace rllm
@@ -20,7 +21,7 @@ namespace rllm
             size_t num_layers,
             bool verbose,
             TrainingMethod method,
-            std::optional<size_t> checkpointing_interval,
+            std::optional<std::chrono::seconds> checkpointing_interval,
             int window_size,
             size_t num_epochs,
             const std::string& train_corpus_dir

@@ -11,6 +11,8 @@ enable_testing()
 
 add_executable(test_rllm
     test_rllm.cc
+    test_enum_iterator.cc
+    test_enum_iterator2D.cc
 )
 target_link_libraries(test_rllm PRIVATE rllm_lib GTest::gtest_main -fopenmp)
 target_compile_options(test_rllm PRIVATE -fopenmp -march=native -O3)

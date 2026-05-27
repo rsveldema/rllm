@@ -1,10 +1,5 @@
 __pycache__
-build_clang_prof
-build_prof_clang
-build_omp
-build_dbg
-build_prof
-build_clang
+build_*
 perf_fwd.data
 build
 *.o

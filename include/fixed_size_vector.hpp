@@ -59,7 +59,7 @@ namespace rllm
             }
         }
 
-        fixed_size_vector substr(LengthType length) const
+        fixed_size_vector sub_array(LengthType length) const
         {
             assert(length <= len);
             fixed_size_vector result;

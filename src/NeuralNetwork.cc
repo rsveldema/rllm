@@ -2,6 +2,7 @@
 #include <TokenIDFormatter.hpp>
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <fstream>
@@ -23,6 +24,8 @@ namespace rllm
             return "three_tok";
         case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
             return "increasingly_longer";
+        case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
+            return "random_line_random_len";
         case TrainingMethod::WINDOW:
             return "window";
         }
@@ -113,6 +116,22 @@ namespace rllm
                 return a.activation > b.activation;
             });
         }
+    }
+
+    static bool timed_checkpoint_due(
+        const std::optional<std::chrono::seconds>& checkpointing_interval,
+        std::chrono::steady_clock::time_point& last_checkpoint_at
+    )
+    {
+        if (!checkpointing_interval.has_value())
+            return false;
+
+        const auto now = std::chrono::steady_clock::now();
+        if ((now - last_checkpoint_at) < checkpointing_interval.value())
+            return false;
+
+        last_checkpoint_at = now;
+        return true;
     }
 
     // Returns top-K tokens selected by logit, with probabilities normalized
@@ -252,7 +271,7 @@ namespace rllm
     {
         for (const auto& line_substring_length : enum_iterator<PositionIndex>(line_of_file.size()))
         {
-            const auto line = line_of_file.substr(line_substring_length);
+            const auto line = line_of_file.sub_array(line_substring_length);
             if (line.empty())
                 continue; // skip empty lines that can't be used for training
 
@@ -289,7 +308,7 @@ namespace rllm
             return;
         }
 
-        const auto train_input = line_of_file.substr(static_cast<PositionIndex>(num_tokens));
+        const auto train_input = line_of_file.sub_array(static_cast<PositionIndex>(num_tokens));
 
         const auto full_string_opt = m_corpus.get_line(train_input);
         assert(full_string_opt.has_value());
@@ -300,8 +319,83 @@ namespace rllm
         do_training(train_input, verbose, max_iterations);
     }
 
+    void NeuralNetwork::train_with_random_len_from_start(
+        const InputLine& line_of_file,
+        bool verbose,
+        size_t max_iterations,
+        std::mt19937& rng
+    )
+    {
+        const int line_len = static_cast<int>(line_of_file.size());
+        if (line_len < 2)
+            return;
 
-    void NeuralNetwork::do_line_based_training(bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval)
+        std::uniform_int_distribution<int> len_dist(2, line_len);
+        const int random_len = len_dist(rng);
+
+        const auto train_input = line_of_file.sub_array(static_cast<PositionIndex>(random_len));
+        const auto full_string_opt = m_corpus.get_line(train_input);
+        assert(full_string_opt.has_value());
+
+        LOG_INFO("Training on random line prefix ({} toks): '{}'", random_len, *full_string_opt);
+
+        do_training(train_input, verbose, max_iterations);
+    }
+
+    void NeuralNetwork::train_random_line_random_len_epoch(
+        size_t epoch,
+        const std::vector<InputLine>& training_lines,
+        bool verbose,
+        size_t num_epochs,
+        const std::optional<std::chrono::seconds>& checkpointing_interval,
+        std::chrono::steady_clock::time_point& last_checkpoint_at,
+        std::mt19937& rng
+    )
+    {
+        const auto total_lines = training_lines.size();
+        if (total_lines == 0)
+            return;
+
+        std::uniform_int_distribution<size_t> line_dist(0, total_lines - 1);
+
+        for (size_t lines_visited = 1; lines_visited <= total_lines; ++lines_visited)
+        {
+            const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
+
+            if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
+            {
+                std::println(
+                    "creating timed checkpoint at epoch {}, line {}, total lines visited {}",
+                    epoch,
+                    lines_visited,
+                    total_lines
+                );
+                save(std::format("models/checkpoint-{}.json", epoch * total_lines + lines_visited));
+            }
+
+            LOG_INFO(
+                "Epoch[{}%] random-line[{}]: {:0.2f}% done",
+                epoch / static_cast<float>(num_epochs) * 100.0f,
+                lines_visited,
+                progress * 100.0f
+            );
+
+            const auto& random_line = training_lines[line_dist(rng)];
+            train_with_random_len_from_start(
+                random_line,
+                verbose,
+                NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(),
+                rng
+            );
+        }
+    }
+
+
+    void NeuralNetwork::do_line_based_training(
+        bool verbose,
+        size_t num_epochs,
+        const std::optional<std::chrono::seconds>& checkpointing_interval
+    )
     {
         std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
 
@@ -310,9 +404,27 @@ namespace rllm
         // pass, so no single example can overwrite all the others.
         std::mt19937 rng{42};
         const auto total_lines = training_lines.size();
+        auto last_checkpoint_at = std::chrono::steady_clock::now();
 
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
+            if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN)
+            {
+                train_random_line_random_len_epoch(
+                    epoch,
+                    training_lines,
+                    verbose,
+                    num_epochs,
+                    checkpointing_interval,
+                    last_checkpoint_at,
+                    rng
+                );
+
+                std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+                save(std::format("models/checkpoint-epoch-{}.json", epoch));
+                continue;
+            }
+
             std::shuffle(training_lines.begin(), training_lines.end(), rng);
 
             size_t lines_visited = 0;
@@ -321,13 +433,15 @@ namespace rllm
                 lines_visited++;
                 const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
 
-                if (checkpointing_interval.has_value())
+                if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
                 {
-                    if ((lines_visited % checkpointing_interval.value()) == 0)
-                    {
-                        std::println("creating checkpoint at epoch {}, line {}, total lines visited {}", epoch, lines_visited, total_lines);
-                        save(std::format("models/checkpoint-{}.json", epoch * total_lines + lines_visited));
-                    }
+                    std::println(
+                        "creating timed checkpoint at epoch {}, line {}, total lines visited {}",
+                        epoch,
+                        lines_visited,
+                        total_lines
+                    );
+                    save(std::format("models/checkpoint-{}.json", epoch * total_lines + lines_visited));
                 }
 
                 LOG_INFO(
@@ -357,16 +471,29 @@ namespace rllm
                     );
                     break;
 
+                case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
+                    // Handled in the random-line loop above.
+                    assert(false);
+                    break;
+
                 case TrainingMethod::WINDOW:
                     // window methods don't use the line-based loop; handled separately below
                     assert(false);
                     break;
                 }
             }
+
+            std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+            save(std::format("models/checkpoint-epoch-{}.json", epoch));
         }
     }
 
-    void NeuralNetwork::train_with_window(int window_size, bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval)
+    void NeuralNetwork::train_with_window(
+        int window_size,
+        bool verbose,
+        size_t num_epochs,
+        const std::optional<std::chrono::seconds>& checkpointing_interval
+    )
     {
         assert(window_size >= 2);
 
@@ -386,6 +513,7 @@ namespace rllm
 
         std::mt19937 rng{42};
         size_t total_windows_trained = 0;
+        auto last_checkpoint_at = std::chrono::steady_clock::now();
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
             LOG_INFO("Epoch[{}%]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, 0.0f);
@@ -406,13 +534,15 @@ namespace rllm
 
                 total_windows_trained++;
 
-                if (checkpointing_interval.has_value())
+                if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
                 {
-                    if ((total_windows_trained % checkpointing_interval.value()) == 0)
-                    {
-                        std::println("creating checkpoint at epoch {}, window {}, total windows trained {}", epoch, j, total_windows_trained);
-                        save(std::format("models/checkpoint-{}.json", total_windows_trained));
-                    }
+                    std::println(
+                        "creating timed checkpoint at epoch {}, window {}, total windows trained {}",
+                        epoch,
+                        j,
+                        total_windows_trained
+                    );
+                    save(std::format("models/checkpoint-{}.json", total_windows_trained));
                 }
 
 
@@ -432,10 +562,17 @@ namespace rllm
 
                 do_training(window, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size());
             }
+
+            std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+            save(std::format("models/checkpoint-epoch-{}.json", epoch));
         }
     }
 
-    void NeuralNetwork::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval)
+    void NeuralNetwork::do_whole_corpus_window_based_training(
+        bool verbose,
+        size_t num_epochs,
+        const std::optional<std::chrono::seconds>& checkpointing_interval
+    )
     {
         // Window methods operate on the flat token stream rather than per-line.
         assert(m_training_method == TrainingMethod::WINDOW);
@@ -443,7 +580,12 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::train(bool verbose, size_t num_epochs, const std::optional<std::string>& input_filename, const std::optional<size_t>& checkpointing_interval)
+    void NeuralNetwork::train(
+        bool verbose,
+        size_t num_epochs,
+        const std::optional<std::string>& input_filename,
+        const std::optional<std::chrono::seconds>& checkpointing_interval
+    )
     {
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
@@ -496,11 +638,11 @@ namespace rllm
 
         if (training_method_is_line_based())
         {
-            do_line_based_training(verbose, num_epochs,  checkpointing_interval);
+            do_line_based_training(verbose, num_epochs, checkpointing_interval);
         }
         else
         {
-            do_whole_corpus_window_based_training(verbose, num_epochs,  checkpointing_interval);
+            do_whole_corpus_window_based_training(verbose, num_epochs, checkpointing_interval);
         }
     }
 

@@ -8,6 +8,8 @@
 #include <Statistics.hpp>
 
 #include <nlohmann/json_fwd.hpp>
+#include <chrono>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -20,6 +22,7 @@ namespace rllm
         TWO_TOK,
         THREE_TOK,
         INCREASINGLY_LONGER_SEQUENCES,
+        RANDOM_LINE_RANDOM_LEN,
         WINDOW, // sliding window of N tokens over flat corpus ((N-1) inputs → predict next)
     };
 
@@ -64,8 +67,12 @@ namespace rllm
         // Returns the top-K output tokens with the highest activation.
         std::vector<OutputToken> get_best_output_token_ids(size_t top_k) const;
 
-        void train(bool verbose, size_t num_epochs,
-            const std::optional<std::string>& input_filename, const std::optional<size_t>& checkpointing_interval = std::nullopt);
+        void train(
+            bool verbose,
+            size_t num_epochs,
+            const std::optional<std::string>& input_filename,
+            const std::optional<std::chrono::seconds>& checkpointing_interval = std::nullopt
+        );
         float compute_loss(TokenID expected_output_token) const;
         void set_random_weights_and_connections();
 
@@ -116,10 +123,38 @@ namespace rllm
 
         void train_with_up_to_N(const InputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
-        void train_with_window(int window_size, bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval);
+        void train_with_random_len_from_start(
+            const InputLine& line_of_file,
+            bool verbose,
+            size_t max_iterations,
+            std::mt19937& rng
+        );
+        void train_with_window(
+            int window_size,
+            bool verbose,
+            size_t num_epochs,
+            const std::optional<std::chrono::seconds>& checkpointing_interval
+        );
+        void train_random_line_random_len_epoch(
+            size_t epoch,
+            const std::vector<InputLine>& training_lines,
+            bool verbose,
+            size_t num_epochs,
+            const std::optional<std::chrono::seconds>& checkpointing_interval,
+            std::chrono::steady_clock::time_point& last_checkpoint_at,
+            std::mt19937& rng
+        );
 
-        void do_whole_corpus_window_based_training(bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval);
-        void do_line_based_training(bool verbose, size_t num_epochs, const std::optional<size_t>& checkpointing_interval);
+        void do_whole_corpus_window_based_training(
+            bool verbose,
+            size_t num_epochs,
+            const std::optional<std::chrono::seconds>& checkpointing_interval
+        );
+        void do_line_based_training(
+            bool verbose,
+            size_t num_epochs,
+            const std::optional<std::chrono::seconds>& checkpointing_interval
+        );
 
         bool training_method_is_line_based() const
         {
@@ -128,6 +163,7 @@ namespace rllm
             case TrainingMethod::TWO_TOK:
             case TrainingMethod::THREE_TOK:
             case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
+            case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
                 return true;
             case TrainingMethod::WINDOW:
                 return false;

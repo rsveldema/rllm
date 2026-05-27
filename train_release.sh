@@ -9,12 +9,21 @@ else
     input_arg=""
 fi
 
-./build/rllm --train $input_arg \
+./build_release/rllm --train $input_arg \
     -o models/after_training.json \
      --filter simple \
      --filter preprocessor \
      --filter iuring \
-     --method window:32 --epochs 20
+     --filter simple \
+     --method random_line_random_len \
+     --epochs 50
+
+
+
+
+#     --method window:32 --epochs 20
+#     --filter simple --method increasingly_longer --epochs 50
+#     --method increasingly_longer 
 
 # ./build/rllm --train -i models/start.json \
 #     -o models/after_training.json \
