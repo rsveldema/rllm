@@ -11,10 +11,7 @@ fi
 
 ./build_release/rllm --train $input_arg \
     -o models/after_training.json \
-     --filter simple \
-     --filter preprocessor \
-     --filter iuring \
-     --filter simple \
+     --filter guaranteed \
      --method random_line_random_len \
      --epochs 50 \
      --checkpoint-interval 30
