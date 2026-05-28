@@ -1,11 +1,16 @@
 #include <gtest/gtest.h>
 
+#include <Corpus.hpp>
+#include <NeuralNetwork.hpp>
+#include <Statistics.hpp>
 #include <TransformerBlock.hpp>
 #include <parallel.hpp>
 
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
+#include <print>
 #include <vector>
 
 using rllm::rlmm_float;
@@ -27,7 +32,76 @@ namespace
     constexpr int BENCH_FORWARD_ITERS  = 200; // forward is fast; needs more iters for stable timing
     constexpr int TEST_SEQ_LEN         = 8;   // smoke tests
     constexpr int BENCH_SEQ_LEN        = 64;  // speedup benchmark needs more work
+
+    std::unique_ptr<rllm::NeuralNetwork> load_guaranteed_model_or_skip(
+        rllm::Corpus& corpus,
+        rllm::Statistics& stats
+    )
+    {
+        const char* model_path = "models/guaranteed_fresh.json";
+        if (!std::filesystem::exists(model_path))
+            return nullptr;
+
+        auto nn = std::make_unique<rllm::NeuralNetwork>(4, corpus, stats);
+        if (!nn->load(model_path))
+            return nullptr;
+
+        return nn;
+    }
+
+    std::vector<rllm::OutputToken> top5_for_prompt(
+        rllm::NeuralNetwork& nn,
+        rllm::Corpus& corpus,
+        const std::string& prompt
+    )
+    {
+        const auto token_ids = corpus.get_token_ids(prompt);
+        nn.propagate_forward(token_ids);
+        const auto top5 = nn.get_best_output_token_ids(5);
+
+        std::println("Prompt '{}', top-5:", prompt);
+        for (size_t i = 0; i < top5.size(); ++i)
+        {
+            const auto tok = corpus.get_token_from_id(top5[i].token_id);
+            std::println(
+                "  [{}] token='{}' id={} p={:.6f}",
+                i,
+                tok,
+                static_cast<int>(top5[i].token_id),
+                top5[i].activation
+            );
+        }
+        return top5;
+    }
 } // namespace
+
+TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
+{
+    std::vector<std::string> filters = {"guaranteed"};
+    rllm::Corpus corpus(filters);
+    rllm::Statistics stats;
+    auto nn = load_guaranteed_model_or_skip(corpus, stats);
+    if (!nn)
+        GTEST_SKIP() << "Missing or unloadable model fixture: models/guaranteed_fresh.json";
+
+    const auto top5 = top5_for_prompt(*nn, corpus, "#");
+    ASSERT_FALSE(top5.empty());
+    EXPECT_EQ(corpus.get_token_from_id(top5.front().token_id), "include");
+}
+
+TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
+{
+    std::vector<std::string> filters = {"guaranteed"};
+    rllm::Corpus corpus(filters);
+    rllm::Statistics stats;
+    auto nn = load_guaranteed_model_or_skip(corpus, stats);
+    if (!nn)
+        GTEST_SKIP() << "Missing or unloadable model fixture: models/guaranteed_fresh.json";
+
+    const auto top5 = top5_for_prompt(*nn, corpus, "#include");
+    ASSERT_FALSE(top5.empty());
+    EXPECT_EQ(corpus.get_token_from_id(top5.front().token_id), "A");
+}
 
 // ---------------------------------------------------------------------------
 // TransformerBlock smoke test: forward produces output of correct shape

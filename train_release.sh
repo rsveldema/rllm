@@ -1,4 +1,11 @@
 
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Configuring and building release before training..."
+cmake -B build_release -DCMAKE_BUILD_TYPE=Release
+cmake --build build_release --parallel
+
 # Resume from an explicit model path, then after_training.json, then latest checkpoint.
 # Use RESUME_MODEL=/path/to/model.json to override.
 if [ -n "${RESUME_MODEL:-}" ] && [ -f "${RESUME_MODEL}" ]; then
@@ -20,17 +27,20 @@ fi
 
 ./build_release/rllm --train $input_arg \
     -o models/after_training.json \
-     --filter guaranteed \
+     --filter iuring \
+     --filter simple \
+     --filter self \
+     --filter preprocessing \
      --method random_line_random_len \
-     --epochs 100 \
-     --checkpoint-interval 10
+     --epochs 20 \
+     --checkpoint-interval 30
 
 
 
 
 #     --method window:32 --epochs 20
 #     --filter simple --method increasingly_longer --epochs 50
-#     --method increasingly_longer 
+#     --method increasingly_longer
 
 # ./build/rllm --train -i models/start.json \
 #     -o models/after_training.json \

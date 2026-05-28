@@ -4,6 +4,7 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <format>
 #include <fstream>
 #include <limits>
@@ -344,7 +345,12 @@ namespace rllm
         if (line_len < 2)
             return;
 
-        std::uniform_int_distribution<int> len_dist(2, line_len);
+        // Avoid over-training the shortest prefix for lines that have richer context.
+        // Example: for "# include A", sampling length 2 trains only "# -> include"
+        // and can drown out "# include -> A". For line_len >= 3, keep randomization
+        // but require at least 3 tokens so the continuation target is learned.
+        const int min_len = (line_len >= 3) ? 3 : 2;
+        std::uniform_int_distribution<int> len_dist(min_len, line_len);
         const int random_len = len_dist(rng);
 
         const auto train_input = line_of_file.sub_array(static_cast<PositionIndex>(random_len));
@@ -353,7 +359,14 @@ namespace rllm
 
         LOG_INFO("Training on random line prefix ({} toks): '{}'", random_len, *full_string_opt);
 
-        do_training(train_input, verbose, max_iterations);
+        // Reward longer correct sequences with a larger optimization budget.
+        // len=2 keeps the base budget; longer prefixes scale up proportionally
+        // (capped to avoid runaway per-example compute on large corpora).
+        const size_t length_factor = std::max<size_t>(1, static_cast<size_t>(random_len) - 1);
+        const size_t capped_factor = std::min<size_t>(length_factor, 4);
+        const size_t effective_max_iterations = max_iterations * capped_factor;
+
+        do_training(train_input, verbose, effective_max_iterations);
     }
 
     void NeuralNetwork::train_random_line_random_len_epoch(
@@ -679,6 +692,64 @@ namespace rllm
         assert(full_string_opt.has_value());
         const auto& full_string = *full_string_opt;
 
+        const bool trace_enabled = []() {
+            const char* v = std::getenv("RLLM_TRACE_INCLUDE");
+            return v != nullptr && std::string(v) != "0";
+        }();
+        const bool trace_this_example = trace_enabled && (full_string.find("#include") != std::string::npos);
+
+        auto trace_probes = [&](const char* phase, size_t iter, float loss_value) {
+            if (!trace_this_example)
+                return;
+
+            static const std::array<std::string, 2> probes = {"#", "#include"};
+            for (const auto& probe : probes)
+            {
+                const auto probe_ids = m_corpus.get_token_ids(probe);
+                if (probe_ids.empty())
+                    continue;
+
+                propagate_forward(probe_ids);
+                const auto top5 = get_best_output_token_ids(5);
+
+                if (top5.empty())
+                {
+                    LOG_INFO(
+                        "[TRACE] phase='{}' iter={} train='{}' probe='{}' top1='<none>' loss={:.6f}",
+                        phase,
+                        iter,
+                        full_string,
+                        probe,
+                        loss_value
+                    );
+                    continue;
+                }
+
+                const auto top1_tok = m_corpus.get_token_from_id(top5.front().token_id);
+                LOG_INFO(
+                    "[TRACE] phase='{}' iter={} train='{}' probe='{}' top1='{}' p={:.6f} loss={:.6f}",
+                    phase,
+                    iter,
+                    full_string,
+                    probe,
+                    top1_tok,
+                    top5.front().activation,
+                    loss_value
+                );
+
+                for (size_t k = 0; k < top5.size(); ++k)
+                {
+                    LOG_INFO(
+                        "[TRACE]   top{} token='{}' id={} p={:.6f}",
+                        k,
+                        m_corpus.get_token_from_id(top5[k].token_id),
+                        top5[k].token_id,
+                        top5[k].activation
+                    );
+                }
+            }
+        };
+
         // In multi-epoch training each call gets a small fixed budget (max_iterations).
         // We run all steps unconditionally; convergence emerges across epochs.
         float loss = 0.0f;
@@ -689,6 +760,9 @@ namespace rllm
             m_output_layer.compute_score(score, expected_output_token);
             propagate_backward(score);
             loss = compute_loss(expected_output_token);
+
+            if (trace_this_example && i < 4)
+                trace_probes("post_step", i + 1, loss);
 
             if (loss < m_convergence_threshold)
             {
