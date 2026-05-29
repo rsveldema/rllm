@@ -139,8 +139,7 @@ namespace rllm
     }
 
     // Returns top-K tokens selected by logit, with probabilities normalized
-    // over the returned top-K set. This keeps prompt-time probabilities stable
-    // and informative even when the full-vocabulary softmax is extremely sharp.
+    // over the returned top-K set.
     std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k) const
     {
         assert(!m_transformer_blocks.empty());
@@ -158,19 +157,9 @@ namespace rllm
         if (top_k_pairs.empty())
             return top_k_pairs;
 
-        // Clamp the logit gap so no token in top-K is numerically invisible.
-        // Without capping, a collapsed model produces 100% / 0.000e-25% which is
-        // useless for display and prevents diverse sampling.
-        // A gap cap of 5 nats allows at most a ~148:1 ratio between any two entries.
-        static constexpr double MAX_LOGIT_GAP = 5.0;
         const double best_logit = static_cast<double>(top_k_pairs.front().activation);
-        for (auto& entry : top_k_pairs)
-        {
-            const double capped = std::max(static_cast<double>(entry.activation), best_logit - MAX_LOGIT_GAP);
-            entry.activation = static_cast<float>(capped);
-        }
 
-        // Stable softmax over the gap-capped logits.
+        // Stable softmax over the raw top-K logits.
         double sum_exp = 0.0;
         for (const auto& entry : top_k_pairs)
             sum_exp += std::exp(static_cast<double>(entry.activation) - best_logit);
@@ -752,12 +741,13 @@ namespace rllm
         const size_t params_ffn      = 3 * d_model * d_ff;        // W_gate, W_up, W_down per block (2*d_ff*d_model + d_model*d_ff)
         const size_t params_per_block = params_attn + params_ffn;
         const size_t total_params    = params_embed + params_lm_head + n_layers * params_per_block;
+        const float  total_params_mib = static_cast<float>(total_params * sizeof(rlmm_float)) / (1024.0f * 1024.0f);
 
         LOG_INFO(
             "Training the neural network...\n"
             "\t $num_layers: {}\n"
             "\t $corpus_size: {}\n"
-            "\t $total_params: {} ({:.2f}M)  [embed:{} lm_head:{} blocks:{}x{}]\n"
+            "\t $total_params: {} ({:.2f}M, {:.2f} MiB)  [embed:{} lm_head:{} blocks:{}x{}]\n"
             "\t convergence threshold: {:.6f}\n"
             "\t fires nothing CE loss:  {:.6f}\n"
             "\t steps per example per epoch: {}\n"
@@ -765,7 +755,7 @@ namespace rllm
             "\t training method: {}\n",
             n_layers,
             vocab,
-            total_params, static_cast<float>(total_params) / 1e6f,
+            total_params, static_cast<float>(total_params) / 1e6f, total_params_mib,
             params_embed, params_lm_head, n_layers, params_per_block,
             m_convergence_threshold,
             m_fires_nothing_ce_loss,

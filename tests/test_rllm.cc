@@ -103,6 +103,49 @@ TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
     EXPECT_EQ(corpus.get_token_from_id(top5.front().token_id), "A");
 }
 
+TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFloor)
+{
+    // Keep this training deterministic inside the test process.
+    std::srand(0);
+
+    std::vector<std::string> filters = {"guaranteed_to_learn"};
+    rllm::Corpus corpus(filters);
+    corpus.load_files_from_dir("training_data");
+    rllm::Statistics stats;
+    rllm::NeuralNetwork nn(1, corpus, stats);
+    nn.set_training_method(rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN);
+
+    // 3 epochs is the smallest fast setting that consistently pushes
+    // '# -> defin' above the old ~0.6% floor on this tiny corpus.
+    nn.train(false, 3, std::nullopt, std::nullopt);
+
+    const auto prompt = corpus.get_token_ids("#");
+    nn.propagate_forward(prompt);
+    const auto top5 = nn.get_best_output_token_ids(5);
+    ASSERT_EQ(top5.size(), 5u);
+
+    bool include_seen = false;
+    bool defin_seen = false;
+    float defin_probability = 0.0f;
+
+    for (const auto& out : top5)
+    {
+        const auto token = corpus.get_token_from_id(out.token_id);
+        if (token == "inclu")
+            include_seen = true;
+        if (token == "defin")
+        {
+            defin_seen = true;
+            defin_probability = out.activation;
+        }
+    }
+
+    EXPECT_TRUE(include_seen) << "Expected 'inclu' in top-5 for prompt '#'";
+    EXPECT_TRUE(defin_seen) << "Expected 'defin' in top-5 for prompt '#'";
+    EXPECT_GT(defin_probability, 0.006f)
+        << "Expected 'defin' probability > 0.6%, got " << (defin_probability * 100.0f) << "%";
+}
+
 // ---------------------------------------------------------------------------
 // TransformerBlock smoke test: forward produces output of correct shape
 // ---------------------------------------------------------------------------

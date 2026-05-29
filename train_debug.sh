@@ -1,5 +1,12 @@
 ./build_debug.sh
 
+echo "Formatting training_data/*.cpp with maximum line length..."
+if compgen -G "training_data/*.cpp" > /dev/null; then
+    clang-format -i --style='{BasedOnStyle: LLVM, ColumnLimit: 0}' training_data/*.cpp
+else
+    echo "No .cpp files found in training_data"
+fi
+
 # Resume from the latest checkpoint if one exists, otherwise start fresh.
 latest_checkpoint=$(ls -t models/checkpoint-*.json 2>/dev/null | head -1)
 if [ -n "$latest_checkpoint" ]; then

@@ -7,6 +7,13 @@ sh ./build_release.sh
 
 echo "Locating checkpoint to resume from..."
 
+echo "Formatting training_data/*.cpp with maximum line length..."
+if compgen -G "training_data/*.cpp" > /dev/null; then
+    clang-format -i --style='{BasedOnStyle: LLVM, ColumnLimit: 0}' training_data/*.cpp
+else
+    echo "No .cpp files found in training_data"
+fi
+
 # Resume from an explicit model path, then after_training.json, then latest checkpoint.
 # Use RESUME_MODEL=/path/to/model.json to override.
 if [ -n "${RESUME_MODEL:-}" ] && [ -f "${RESUME_MODEL}" ]; then
@@ -44,6 +51,7 @@ echo "--- Starting training ---"
      --filter preprocessing \
      --method random_line_random_len \
      --epochs 20 \
+     --layers 4 \
      --checkpoint-interval 30
 
 
