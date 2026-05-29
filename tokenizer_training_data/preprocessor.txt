@@ -1,0 +1,16 @@
+#define
+#if
+#ifdef
+#elif
+#elifdef
+#elifndef
+#else
+#error
+#warning
+#line
+#ifndef
+#endif
+#pragma
+
+
+

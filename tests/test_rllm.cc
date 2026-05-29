@@ -520,3 +520,209 @@ TEST(ParFor2DTest, SpeedupFasterThanSerial)
         << " (serial=" << serial_us << "us, parallel=" << parallel_us
         << "us, speedup=" << speedup << ").";
 }
+
+// ── PARFOR_2D_TRIANGULAR tests ────────────────────────────────────────────────
+
+// Verifies that PARFOR_2D_TRIANGULAR visits every (i,j) pair with j <= i
+// exactly once and never touches pairs above the diagonal.
+// Parallelism is over the outer i; j iterates sequentially within each task,
+// so writing to count[i][...] from different tasks (different i) is race-free.
+TEST(Parfor2DTriangularTest, VisitsAllLowerTriangularPairsExactlyOnce)
+{
+    using namespace rllm;
+    constexpr int N = 8;
+    const auto N_pos = static_cast<PositionIndex>(N);
+
+    int count[N][N] = {};
+
+    PARFOR_2D_TRIANGULAR(i, j, N_pos)
+        ++count[static_cast<int>(i)][static_cast<int>(j)];
+    ENDFOR
+
+    int total = 0;
+    for (int ii = 0; ii < N; ++ii)
+    {
+        for (int jj = 0; jj < N; ++jj)
+        {
+            const int expected = (jj <= ii) ? 1 : 0;
+            EXPECT_EQ(count[ii][jj], expected)
+                << "Wrong visit count at (" << ii << "," << jj << ")";
+            total += count[ii][jj];
+        }
+    }
+    EXPECT_EQ(total, N * (N + 1) / 2);
+}
+
+// Verifies that PARFOR_2D_TRIANGULAR produces a parallel speedup over serial
+// execution on a compute-bound workload.
+TEST(Parfor2DTriangularTest, SpeedupFasterThanSerial)
+{
+    if (parallel::get_max_threads() < 2)
+        GTEST_SKIP() << "thread count < 2 - no parallelism available";
+
+    const int max_threads = parallel::get_max_threads();
+
+    constexpr int N             = BENCH_SEQ_LEN; // 64 rows → 2080 triangular cells
+    constexpr int WORK_PER_CELL = 256;            // float multiply-adds per cell
+    constexpr int ITERS         = 100;
+
+    const auto N_pos = static_cast<rllm::PositionIndex>(N);
+    std::vector<float> buf(static_cast<size_t>(N) * static_cast<size_t>(N), 0.0f);
+
+    // --- serial baseline (1 thread) ---
+    parallel::set_num_threads(1);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int it = 0; it < ITERS; ++it)
+    {
+        for (int ii = 0; ii < N; ++ii)
+            for (int jj = 0; jj <= ii; ++jj)
+            {
+                float v = static_cast<float>(ii * N + jj + it);
+                for (int k = 0; k < WORK_PER_CELL; ++k)
+                    v = v * 1.00001f + 0.00001f;
+                buf[static_cast<size_t>(ii) * N + static_cast<size_t>(jj)] = v;
+            }
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+
+    // --- parallel (PARFOR_2D_TRIANGULAR) ---
+    parallel::set_num_threads(max_threads);
+    std::fill(buf.begin(), buf.end(), 0.0f);
+    const auto t2 = std::chrono::steady_clock::now();
+    for (int it = 0; it < ITERS; ++it)
+    {
+        PARFOR_2D_TRIANGULAR(i, j, N_pos)
+            const int ii = static_cast<int>(i);
+            const int jj = static_cast<int>(j);
+            float v = static_cast<float>(ii * N + jj + it);
+            for (int k = 0; k < WORK_PER_CELL; ++k)
+                v = v * 1.00001f + 0.00001f;
+            buf[static_cast<size_t>(ii) * N + static_cast<size_t>(jj)] = v;
+        ENDFOR
+    }
+    const auto t3 = std::chrono::steady_clock::now();
+
+    const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const auto parallel_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
+    const double speedup   = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
+
+    RecordProperty("serial_us",   serial_us);
+    RecordProperty("parallel_us", parallel_us);
+    RecordProperty("speedup",     speedup);
+
+    fprintf(stderr,
+            "PARFOR_2D_TRIANGULAR (%d rows, %d triangular cells, work=%d, iters=%d, threads=%d)"
+            " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+            N, N * (N + 1) / 2, WORK_PER_CELL, ITERS, max_threads,
+            static_cast<long long>(serial_us),
+            static_cast<long long>(parallel_us),
+            speedup);
+
+    EXPECT_GT(speedup, 1.0)
+        << "PARFOR_2D_TRIANGULAR was not faster than serial"
+        << " (serial=" << serial_us << "us, parallel=" << parallel_us
+        << "us, speedup=" << speedup << ").";
+}
+
+// ── PARFOR_2D_UPPER_TRIANGULAR tests ─────────────────────────────────────────
+
+// Verifies that PARFOR_2D_UPPER_TRIANGULAR visits every (i,j) pair with j >= i
+// exactly once and never touches pairs below the diagonal.
+// Parallelism is over the outer i; j iterates sequentially within each task,
+// so writing to count[i][...] from different tasks (different i) is race-free.
+TEST(Parfor2DUpperTriangularTest, VisitsAllUpperTriangularPairsExactlyOnce)
+{
+    using namespace rllm;
+    constexpr int N = 8;
+    const auto N_pos = static_cast<PositionIndex>(N);
+
+    int count[N][N] = {};
+
+    PARFOR_2D_UPPER_TRIANGULAR(i, j, N_pos)
+        ++count[static_cast<int>(i)][static_cast<int>(j)];
+    ENDFOR
+
+    int total = 0;
+    for (int ii = 0; ii < N; ++ii)
+    {
+        for (int jj = 0; jj < N; ++jj)
+        {
+            const int expected = (jj >= ii) ? 1 : 0;
+            EXPECT_EQ(count[ii][jj], expected)
+                << "Wrong visit count at (" << ii << "," << jj << ")";
+            total += count[ii][jj];
+        }
+    }
+    EXPECT_EQ(total, N * (N + 1) / 2);
+}
+
+// Verifies that PARFOR_2D_UPPER_TRIANGULAR produces a parallel speedup over
+// serial execution on a compute-bound workload.
+TEST(Parfor2DUpperTriangularTest, SpeedupFasterThanSerial)
+{
+    if (parallel::get_max_threads() < 2)
+        GTEST_SKIP() << "thread count < 2 - no parallelism available";
+
+    const int max_threads = parallel::get_max_threads();
+
+    constexpr int N             = BENCH_SEQ_LEN; // 64 rows → 2080 upper-triangular cells
+    constexpr int WORK_PER_CELL = 256;
+    constexpr int ITERS         = 100;
+
+    const auto N_pos = static_cast<rllm::PositionIndex>(N);
+    std::vector<float> buf(static_cast<size_t>(N) * static_cast<size_t>(N), 0.0f);
+
+    // --- serial baseline (1 thread) ---
+    parallel::set_num_threads(1);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int it = 0; it < ITERS; ++it)
+    {
+        for (int ii = 0; ii < N; ++ii)
+            for (int jj = ii; jj < N; ++jj)
+            {
+                float v = static_cast<float>(ii * N + jj + it);
+                for (int k = 0; k < WORK_PER_CELL; ++k)
+                    v = v * 1.00001f + 0.00001f;
+                buf[static_cast<size_t>(ii) * N + static_cast<size_t>(jj)] = v;
+            }
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+
+    // --- parallel (PARFOR_2D_UPPER_TRIANGULAR) ---
+    parallel::set_num_threads(max_threads);
+    std::fill(buf.begin(), buf.end(), 0.0f);
+    const auto t2 = std::chrono::steady_clock::now();
+    for (int it = 0; it < ITERS; ++it)
+    {
+        PARFOR_2D_UPPER_TRIANGULAR(i, j, N_pos)
+            const int ii = static_cast<int>(i);
+            const int jj = static_cast<int>(j);
+            float v = static_cast<float>(ii * N + jj + it);
+            for (int k = 0; k < WORK_PER_CELL; ++k)
+                v = v * 1.00001f + 0.00001f;
+            buf[static_cast<size_t>(ii) * N + static_cast<size_t>(jj)] = v;
+        ENDFOR
+    }
+    const auto t3 = std::chrono::steady_clock::now();
+
+    const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const auto parallel_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
+    const double speedup   = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
+
+    RecordProperty("serial_us",   serial_us);
+    RecordProperty("parallel_us", parallel_us);
+    RecordProperty("speedup",     speedup);
+
+    fprintf(stderr,
+            "PARFOR_2D_UPPER_TRIANGULAR (%d rows, %d upper-triangular cells, work=%d, iters=%d, threads=%d)"
+            " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+            N, N * (N + 1) / 2, WORK_PER_CELL, ITERS, max_threads,
+            static_cast<long long>(serial_us),
+            static_cast<long long>(parallel_us),
+            speedup);
+
+    EXPECT_GT(speedup, 1.0)
+        << "PARFOR_2D_UPPER_TRIANGULAR was not faster than serial"
+        << " (serial=" << serial_us << "us, parallel=" << parallel_us
+        << "us, speedup=" << speedup << ").";
+}

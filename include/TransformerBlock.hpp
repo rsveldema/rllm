@@ -2,9 +2,9 @@
 
 #include <LayerPrimitives.hpp>
 #include <matmul.hpp>
-#include <parallel.hpp>
-#include <nlohmann/json_fwd.hpp>
 #include <memory>
+#include <nlohmann/json_fwd.hpp>
+#include <parallel.hpp>
 #include <vector>
 
 namespace rllm
@@ -27,9 +27,9 @@ namespace rllm
     class TransformerBlock
     {
       public:
-        TransformerBlock();            // defined in .cc after ForwardWorkspace is complete
-        ~TransformerBlock();           // defined in .cc after ForwardWorkspace is complete
-        TransformerBlock(TransformerBlock&&) noexcept;            // defined in .cc
+        TransformerBlock(); // defined in .cc after ForwardWorkspace is complete
+        ~TransformerBlock(); // defined in .cc after ForwardWorkspace is complete
+        TransformerBlock(TransformerBlock&&) noexcept; // defined in .cc
         TransformerBlock& operator=(TransformerBlock&&) noexcept; // defined in .cc
         TransformerBlock(const TransformerBlock&) = delete;
         TransformerBlock& operator=(const TransformerBlock&) = delete;
@@ -61,10 +61,8 @@ namespace rllm
         }
 
         // Test helper: expose causal softmax without exposing internals broadly.
-        static void causal_softmax_for_test(
-            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x,
-            PositionIndex T
-        )
+        static void
+        causal_softmax_for_test(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T)
         {
             causal_softmax(x, T);
         }
@@ -119,8 +117,8 @@ namespace rllm
         );
 
         // In-place causal softmax over the active [T × T] block of x.
-        static void causal_softmax(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x,
-          PositionIndex T);
+        static void
+        causal_softmax(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T);
 
         // Accumulates softmax backward into dscores (stride T).
         // dp is the per-head d_scores matrix; p is the cached per-head softmax matrix.
@@ -151,21 +149,9 @@ namespace rllm
         )
         {
             PARFOR_2D(r, c, enum_iterator2D<R_enum, C_enum>())
-                const float g = math::clamp(
-                    grad[r, c],
-                    -GRAD_CLIP,
-                    GRAD_CLIP
-                );
-                vel[r, c] = math::clamp(
-                    MOMENTUM_BETA * vel[r, c] + lr * g,
-                    -VEL_CLIP,
-                    VEL_CLIP
-                );
-                W[r, c] = math::clamp(
-                    W[r, c] + vel[r, c],
-                    -WEIGHT_CLAMP,
-                    WEIGHT_CLAMP
-                );
+            const float g = math::clamp(grad[r, c], -GRAD_CLIP, GRAD_CLIP);
+            vel[r, c] = math::clamp(MOMENTUM_BETA * vel[r, c] + lr * g, -VEL_CLIP, VEL_CLIP);
+            W[r, c] = math::clamp(W[r, c] + vel[r, c], -WEIGHT_CLAMP, WEIGHT_CLAMP);
             ENDFOR
         }
     };

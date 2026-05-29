@@ -11,6 +11,12 @@ cmake ..
 cmake --build .
 ```
 
+Installation
+==============
+
+```bash
+    sudo dnf install hwloc-devel
+```
 
 How to use
 =============

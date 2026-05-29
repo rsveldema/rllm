@@ -20,6 +20,26 @@ namespace parallel {
                                 for (auto v : (__VA_ARGS__)) {
 #define PARFOR_2D(v1, v2, ...)  _Pragma("omp parallel for schedule(static)") \
                                 for (auto [v1, v2] : (__VA_ARGS__)) {
+// Parallelises the lower-triangular iteration space { (v1,v2) | 0 ≤ v2 ≤ v1 < N }.
+// Parallelism is over the outer (v1) dimension; v2 iterates sequentially inside
+// each parallel task, so accumulations into [v1,...] are race-free.
+// Use schedule(dynamic) because row lengths are unequal (row v1 has v1+1 iterations).
+#define PARFOR_2D_TRIANGULAR(v1, v2, N) \
+    _Pragma("omp parallel for schedule(dynamic)") \
+    for (long long _tri_i_ = 0; _tri_i_ < static_cast<long long>(N); ++_tri_i_) \
+        for (long long _tri_j_ = 0; _tri_j_ <= _tri_i_; ++_tri_j_) { \
+            const auto v1 = static_cast<decltype(N)>(_tri_i_); \
+            const auto v2 = static_cast<decltype(N)>(_tri_j_);
+// Parallelises the upper-triangular iteration space { (v1,v2) | 0 ≤ v1 ≤ v2 < N }.
+// Parallelism is over the outer (v1) dimension; v2 iterates sequentially inside
+// each parallel task, so accumulations into [v1,...] are race-free.
+// Use schedule(dynamic) because row lengths are unequal (row v1 has N-v1 iterations).
+#define PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N) \
+    _Pragma("omp parallel for schedule(dynamic)") \
+    for (long long _utri_i_ = 0; _utri_i_ < static_cast<long long>(N); ++_utri_i_) \
+        for (long long _utri_j_ = _utri_i_; _utri_j_ < static_cast<long long>(N); ++_utri_j_) { \
+            const auto v1 = static_cast<decltype(N)>(_utri_i_); \
+            const auto v2 = static_cast<decltype(N)>(_utri_j_);
 #define ENDFOR }
 
 // Parallel sections: each PARSECTION body runs concurrently.
@@ -101,6 +121,28 @@ namespace parallel {
 #define ENDFOR \
           }}); \
       }
+// Parallelises the lower-triangular iteration space { (v1,v2) | 0 ≤ v2 ≤ v1 < N }.
+// One fastfork task per outer row v1; v2 iterates sequentially inside each task,
+// so accumulations into [v1,...] are race-free.
+#define PARFOR_2D_TRIANGULAR(v1, v2, N) \
+    { const size_t _tri_n_ = static_cast<size_t>(N); \
+      fastfork::Context _tri_ctx_; \
+      for (size_t _tri_i_ = 0; _tri_i_ < _tri_n_; ++_tri_i_) \
+          fastfork::fork_task(_tri_ctx_, [&, _tri_i_]() { \
+              for (size_t _tri_j_ = 0; _tri_j_ <= _tri_i_; ++_tri_j_) { \
+                  const auto v1 = static_cast<decltype(N)>(_tri_i_); \
+                  const auto v2 = static_cast<decltype(N)>(_tri_j_);
+// Parallelises the upper-triangular iteration space { (v1,v2) | 0 ≤ v1 ≤ v2 < N }.
+// One fastfork task per outer row v1; v2 iterates sequentially inside each task,
+// so accumulations into [v1,...] are race-free.
+#define PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N) \
+    { const size_t _utri_n_ = static_cast<size_t>(N); \
+      fastfork::Context _utri_ctx_; \
+      for (size_t _utri_i_ = 0; _utri_i_ < _utri_n_; ++_utri_i_) \
+          fastfork::fork_task(_utri_ctx_, [&, _utri_i_, _utri_n_]() { \
+              for (size_t _utri_j_ = _utri_i_; _utri_j_ < _utri_n_; ++_utri_j_) { \
+                  const auto v1 = static_cast<decltype(N)>(_utri_i_); \
+                  const auto v2 = static_cast<decltype(N)>(_utri_j_);
 
 #define PARSECTIONS_BEGIN  { fastfork::Context _ff_ctx_; fastfork::fork_task(_ff_ctx_, [&]() {
 #define PARSECTION         }); fastfork::fork_task(_ff_ctx_, [&]() {
@@ -135,6 +177,20 @@ namespace parallel {
 
 #define PARFOR(v, ...)          for (auto v : (__VA_ARGS__)) {
 #define PARFOR_2D(v1, v2, ...)  for (auto [v1, v2] : (__VA_ARGS__)) {
+// Parallelises the lower-triangular iteration space { (v1,v2) | 0 ≤ v2 ≤ v1 < N }.
+// Sequential fallback: plain nested loops.
+#define PARFOR_2D_TRIANGULAR(v1, v2, N) \
+    for (size_t _tri_i_ = 0; _tri_i_ < static_cast<size_t>(N); ++_tri_i_) \
+        for (size_t _tri_j_ = 0; _tri_j_ <= _tri_i_; ++_tri_j_) { \
+            const auto v1 = static_cast<decltype(N)>(_tri_i_); \
+            const auto v2 = static_cast<decltype(N)>(_tri_j_);
+// Parallelises the upper-triangular iteration space { (v1,v2) | 0 ≤ v1 ≤ v2 < N }.
+// Sequential fallback: plain nested loops.
+#define PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N) \
+    for (size_t _utri_i_ = 0, _utri_n_ = static_cast<size_t>(N); _utri_i_ < _utri_n_; ++_utri_i_) \
+        for (size_t _utri_j_ = _utri_i_; _utri_j_ < _utri_n_; ++_utri_j_) { \
+            const auto v1 = static_cast<decltype(N)>(_utri_i_); \
+            const auto v2 = static_cast<decltype(N)>(_utri_j_);
 #define ENDFOR }
 
 #define PARSECTIONS_BEGIN  {

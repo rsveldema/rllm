@@ -96,7 +96,7 @@ namespace rllm
 
     /** In-place causal softmax over a [T × T] score matrix (row i only attends
     * to positions j ≤ i).  stride is the distance between rows in floats.
-    * 
+    *
     * @param x The [T × T] matrix of scores to softmax in-place.  Only the top-left [T × T] block is accessed and modified; the rest of the matrix is left as-is to avoid unnecessary writes.
     * @param T The sequence length (the active size of the [T × T] block).
     */
@@ -256,29 +256,22 @@ namespace rllm
             const auto hEnd = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
 
             // scores_mat[i, j] = Q[i, hi*Dh..] · K[j, hi*Dh..] * scale
-            for (const auto i : enum_iterator<PositionIndex>(seq_len))
-            {
-                for (const auto j : enum_iterator<PositionIndex>(seq_len))
-                {
-                    float dot = 0.f;
-                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-                        dot += ws.Q[i, d] * ws.K[j, d];
-                    scores_mat[i, j] = dot * scale;
-                }
-            }
+            PARFOR_2D(i, j, enum_iterator2D<PositionIndex, PositionIndex>(seq_len, seq_len))
+                float dot = 0.f;
+                //#pragma omp simd reduction(+:dot)
+                for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                    dot += ws.Q[i, d] * ws.K[j, d];
+                scores_mat[i, j] = dot * scale;
+            ENDFOR
 
             causal_softmax(scores_mat, seq_len);
 
             // attn_concat[i, d] = sum_j scores_mat[i,j] * V[j, d]  (causal: j ≤ i)
-            for (const auto i : enum_iterator<PositionIndex>(seq_len))
-            {
-                for (const auto j : enum_iterator<PositionIndex>(inc(i)))
-                {
-                    const float w = scores_mat[i, j];
-                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-                        ws.attn_concat[i, d] += w * ws.V[j, d];
-                }
-            }
+            PARFOR_2D_TRIANGULAR(i, j, seq_len)
+                const float w = scores_mat[i, j];
+                for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                    ws.attn_concat[i, d] += w * ws.V[j, d];
+            ENDFOR
         ENDFOR
 
         // ── 4. Output projection + residual ──────────────────────────────────
@@ -441,50 +434,35 @@ namespace rllm
             const auto hEnd = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
 
             // d_V_h[j, d] += sum_i scores_mat[i,j] * d_attn_concat[i, d]
-            for (const auto j : enum_iterator<PositionIndex>(fwd.seq_len))
-            {
-                for (const auto i : enum_iterator<PositionIndex>(j, fwd.seq_len)) // only non-masked rows
-                {
-                    const float w = scores_mat[i, j];
-                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-                        ws->d_V[j, d] += w * ws->d_attn_concat[i, d];
-                }
-            }
+            PARFOR_2D_UPPER_TRIANGULAR(j, i, fwd.seq_len)
+                const float w = scores_mat[i, j];
+                for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                    ws->d_V[j, d] += w * ws->d_attn_concat[i, d];
+            ENDFOR
 
             // d_scores[i,j] = d_attn_concat[i, d] · V[j, d]
-            for (const auto i : enum_iterator<PositionIndex>(fwd.seq_len))
-            {
-                for (const auto j : enum_iterator<PositionIndex>(inc(i)))
-                {
-                    float dot = 0.f;
-                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-                        dot += ws->d_attn_concat[i, d] * fwd.V[j, d];
-                    ws->d_scores[i, j] = dot;
-                }
-            }
+            PARFOR_2D_TRIANGULAR(i, j, fwd.seq_len)
+                float dot = 0.f;
+                for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                    dot += ws->d_attn_concat[i, d] * fwd.V[j, d];
+                ws->d_scores[i, j] = dot;
+            ENDFOR
 
             // Backward through causal softmax
             softmax_backward(ws->d_scores, scores_mat, ws->d_raw, fwd.seq_len);
 
             // d_Q and d_K
-            for (const auto i : enum_iterator<PositionIndex>(fwd.seq_len))
-            {
-                for (const auto j : enum_iterator<PositionIndex>(inc(i)))
-                {
-                    const float ds = ws->d_raw[i, j] * scale;
-                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-                        ws->d_Q[i, d] += ds * fwd.K[j, d];
-                }
-            }
-            for (const auto j : enum_iterator<PositionIndex>(fwd.seq_len))
-            {
-                for (const auto i : enum_iterator<PositionIndex>(j, fwd.seq_len))
-                {
-                    const float ds = ws->d_raw[i, j] * scale;
-                    for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+            PARFOR_2D_TRIANGULAR(i, j, fwd.seq_len)
+                const float ds = ws->d_raw[i, j] * scale;
+                for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+                    ws->d_Q[i, d] += ds * fwd.K[j, d];
+            ENDFOR
+
+            PARFOR_2D_UPPER_TRIANGULAR(j, i, fwd.seq_len)
+                const float ds = ws->d_raw[i, j] * scale;
+                for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
                         ws->d_K[j, d] += ds * fwd.Q[i, d];
-                }
-            }
+            ENDFOR
         }
 
         // Weight gradients for W_q, W_k, W_v
@@ -504,18 +482,27 @@ namespace rllm
         matmul_AB(ws->d_V, W_v, ws->tmp);
         ws->d_h_norm_attn.element_wise_add(ws->tmp);
 
-        // d_h_in: residual from d_h_mid + RMSNorm backward
-        din = ws->d_h_mid;
-        rms_norm_backward(ws->d_h_norm_attn, fwd.h_in, din);
-
-        // ── Weight updates ─────────────────────────────────────────────────────
-        sgd_update(W_q, V_q, ws->dW_q, learning_rate);
-        sgd_update(W_k, V_k, ws->dW_k, learning_rate);
-        sgd_update(W_v, V_v, ws->dW_v, learning_rate);
-        sgd_update(W_o, V_o, ws->dW_o, learning_rate);
-        sgd_update(W_gate, V_gate, ws->dW_gate, learning_rate);
-        sgd_update(W_up, V_up, ws->dW_up, learning_rate);
-        sgd_update(W_down, V_down, ws->dW_down, learning_rate);
+        // ── d_h_in + weight updates ───────────────────────────────────────────
+        // d_h_in (residual + RMSNorm backward) and all seven weight updates are
+        // fully independent; run them all concurrently.
+        PARSECTIONS_BEGIN
+            din = ws->d_h_mid;
+            rms_norm_backward(ws->d_h_norm_attn, fwd.h_in, din);
+        PARSECTION
+            sgd_update(W_q, V_q, ws->dW_q, learning_rate);
+        PARSECTION
+            sgd_update(W_k, V_k, ws->dW_k, learning_rate);
+        PARSECTION
+            sgd_update(W_v, V_v, ws->dW_v, learning_rate);
+        PARSECTION
+            sgd_update(W_o, V_o, ws->dW_o, learning_rate);
+        PARSECTION
+            sgd_update(W_gate, V_gate, ws->dW_gate, learning_rate);
+        PARSECTION
+            sgd_update(W_up, V_up, ws->dW_up, learning_rate);
+        PARSECTION
+            sgd_update(W_down, V_down, ws->dW_down, learning_rate);
+        PARSECTIONS_END
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────
