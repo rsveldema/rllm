@@ -31,7 +31,9 @@ namespace rllm
     {
         h.set_rows(static_cast<PositionIndex>(input.size()));
 
-        const float D = static_cast<float>(EmbeddingDimension::MAX);
+        constexpr float D = static_cast<float>(EmbeddingDimension::MAX);
+
+        // TODO: use a PARFOR_2D here
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {
             const TokenID tok = input[pos];
@@ -57,6 +59,7 @@ namespace rllm
         float learning_rate
     )
     {
+        // TODO: use a PARFOR_2D here
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {
             const auto tok = input[pos];

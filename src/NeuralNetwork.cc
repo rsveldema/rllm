@@ -27,6 +27,8 @@ namespace rllm
             return "increasingly_longer";
         case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
             return "random_line_random_len";
+        case TrainingMethod::RANDOM_LINE_FULL:
+            return "random_line_full";
         case TrainingMethod::WINDOW:
             return "window";
         }
@@ -112,24 +114,7 @@ namespace rllm
 
     // NeuralNetwork
 
-    static void try_add_to_top_k(std::vector<OutputToken>& top_k, TokenID id, float value, size_t k)
-    {
-        if (top_k.size() < k)
-        {
-            top_k.emplace_back(id, value);
-            std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
-                return a.activation > b.activation;
-            });
-        }
-        else if (!top_k.empty() && value >= top_k.back().activation)
-        {
-            // Use >= so ties don't always leave the initial token IDs (0,1,2,...) in place.
-            top_k.back() = {id, value};
-            std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
-                return a.activation > b.activation;
-            });
-        }
-    }
+    static constexpr std::chrono::seconds MIN_TIME_BETWEEN_CHECKPOINTS{30};
 
     static bool timed_checkpoint_due(
         const std::optional<std::chrono::seconds>& checkpointing_interval,
@@ -147,6 +132,24 @@ namespace rllm
         return true;
     }
 
+    // Save a checkpoint, but skip it if less than MIN_TIME_BETWEEN_CHECKPOINTS
+    // has elapsed since the last one (avoids rapid-fire saves at epoch boundaries).
+    static void epoch_checkpoint(
+        std::chrono::steady_clock::time_point& last_checkpoint_at,
+        size_t epoch,
+        const std::function<void()>& do_checkpoint
+    )
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if ((now - last_checkpoint_at) < MIN_TIME_BETWEEN_CHECKPOINTS)
+        {
+            LOG_INFO("Skipping end-of-epoch checkpoint at epoch {} (too soon since last checkpoint)", epoch);
+            return;
+        }
+        last_checkpoint_at = now;
+        do_checkpoint();
+    }
+
     // Returns top-K tokens selected by logit, with probabilities normalized
     // over the returned top-K set.
     std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k) const
@@ -156,12 +159,7 @@ namespace rllm
             return {};
 
         // First, keep only top-K by raw logit (preserves correct rank order).
-        std::vector<OutputToken> top_k_pairs;
-        for (const auto i : enum_iterator<TokenID>())
-        {
-            const auto logit = m_output_layer.m_inputs[i];
-            try_add_to_top_k(top_k_pairs, i, logit, top_k);
-        }
+        std::vector<OutputToken> top_k_pairs = m_output_layer.get_top_k_by_logit(top_k);
 
         if (top_k_pairs.empty())
             return top_k_pairs;
@@ -264,28 +262,6 @@ namespace rllm
         }
     }
 
-    // Compute cross-entropy loss: -log(softmax(logits)[target])
-    // Only considers the active corpus tokens, not the full TokenID::MAX space.
-    float NeuralNetwork::compute_loss(TokenID expected_output_token) const
-    {
-        const int n_tok = static_cast<int>(TokenID::MAX);
-        float max_val = m_output_layer.m_inputs[TokenID::START];
-#pragma omp simd reduction(max : max_val)
-        for (int i = 0; i < n_tok; ++i)
-            max_val = math::max(max_val, m_output_layer.m_inputs[static_cast<TokenID>(i)]);
-
-        float sum_exp = 0.0f;
-#pragma omp simd reduction(+ : sum_exp)
-        for (int i = 0; i < n_tok; ++i)
-        {
-            const float term = std::exp(m_output_layer.m_inputs[static_cast<TokenID>(i)] - max_val);
-            OVERFLOW_CHECK_ADD(sum_exp, term);
-            sum_exp += term;
-        }
-
-        const float log_prob = m_output_layer.m_inputs[expected_output_token] - max_val - std::log(sum_exp);
-        return -log_prob;
-    }
 
     float NeuralNetwork::evaluate_average_loss(const std::vector<InputLine>& evaluation_lines)
     {
@@ -301,7 +277,8 @@ namespace rllm
             train_input.pop_back();
 
             propagate_forward(train_input);
-            total_loss += static_cast<double>(compute_loss(expected_output_token));
+            Score score;
+            total_loss += static_cast<double>(m_output_layer.compute_score(score, expected_output_token));
         }
 
         return static_cast<float>(total_loss / static_cast<double>(evaluation_lines.size()));
@@ -440,12 +417,21 @@ namespace rllm
             );
 
             const auto& random_line = training_lines[line_indices[lines_visited - 1]];
-            train_with_random_len_from_start(
-                random_line,
-                verbose,
+            if (m_training_method == TrainingMethod::RANDOM_LINE_FULL)
+            {
+                // Train on the full line — all tokens are visible, last token is target.
+                if (static_cast<int>(random_line.size()) >= 2)
+                    do_training(random_line, verbose, training_steps_per_example(m_transformer_blocks.size()));
+            }
+            else
+            {
+                train_with_random_len_from_start(
+                    random_line,
+                    verbose,
                 training_steps_per_example(m_transformer_blocks.size()),
-                rng
-            );
+                    rng
+                );
+            }
         }
     }
 
@@ -496,7 +482,8 @@ namespace rllm
 
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
-            if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN)
+            if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN
+                || m_training_method == TrainingMethod::RANDOM_LINE_FULL)
             {
                 train_random_line_random_len_epoch(
                     epoch,
@@ -508,8 +495,10 @@ namespace rllm
                     rng
                 );
 
-                std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
-                checkpoint();
+                epoch_checkpoint(last_checkpoint_at, epoch, [&] {
+                    std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+                    checkpoint();
+                });
             }
             else
             {
@@ -564,6 +553,11 @@ namespace rllm
                         assert(false);
                         break;
 
+                    case TrainingMethod::RANDOM_LINE_FULL:
+                        // Handled in the random-line loop above.
+                        assert(false);
+                        break;
+
                     case TrainingMethod::WINDOW:
                         // window methods don't use the line-based loop; handled separately below
                         assert(false);
@@ -571,8 +565,10 @@ namespace rllm
                     }
                 }
 
-                std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
-                checkpoint();
+                epoch_checkpoint(last_checkpoint_at, epoch, [&] {
+                    std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+                    checkpoint();
+                });
             }
 
             if (!validation_lines.empty())
@@ -885,9 +881,8 @@ namespace rllm
         {
             Score score;
             propagate_forward(train_input);
-            m_output_layer.compute_score(score, expected_output_token);
+            loss = m_output_layer.compute_score(score, expected_output_token);
             propagate_backward(score);
-            loss = compute_loss(expected_output_token);
 
             if (trace_this_example && i < 4)
                 trace_probes("post_step", i + 1, loss);

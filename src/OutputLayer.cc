@@ -73,6 +73,7 @@ namespace rllm
 
     // ── scoring (unchanged from previous architecture) ─────────────────────────
 
+
     void OutputLayer::rms_normalize_inputs()
     {
         constexpr float eps = 1e-6f;
@@ -85,7 +86,38 @@ namespace rllm
             m_inputs[i] /= rms;
     }
 
-    void OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
+
+    std::vector<OutputToken> OutputLayer::get_top_k_by_logit(size_t k) const
+    {
+        if (k == 0)
+            return {};
+
+        std::vector<OutputToken> top_k;
+        for (const auto i : enum_iterator<TokenID>())
+        {
+            const float logit = m_inputs[i];
+            if (top_k.size() < k)
+            {
+                top_k.push_back({i, logit});
+                std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
+                    return a.activation > b.activation;
+                });
+            }
+            else if (logit >= top_k.back().activation)
+            {
+                top_k.back() = {i, logit};
+                std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
+                    return a.activation > b.activation;
+                });
+            }
+        }
+        return top_k;
+    }
+
+
+    // Compute softmax deltas (with label smoothing) for backprop and return the
+    // cross-entropy loss -log(softmax[target]) in a single pass over the logits.
+    float OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
         // Label smoothing (ε=0.1): instead of a one-hot target, each non-target
         // token gets a small positive gradient of ε/V. This prevents the model
@@ -104,12 +136,16 @@ namespace rllm
             sum_exp += score.values[i];
         }
 
+        const float log_prob = m_inputs[expected_output_token] - max_val - std::log(sum_exp);
+
         // delta[i] = smooth - softmax[i]  (small positive floor for all non-targets)
         for (const auto i : enum_iterator<TokenID>())
             score.values[i] = smooth - score.values[i] / sum_exp;
 
         // delta[expected] += (1 - LABEL_SMOOTHING)
         score.values[expected_output_token] += (RLMM_ONE - LABEL_SMOOTHING);
+
+        return -log_prob;
     }
 
     void OutputLayer::compute_deltas(const Score& score, fixed_size_vector<rlmm_float, TokenID>& deltas) const

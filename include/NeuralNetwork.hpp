@@ -23,6 +23,7 @@ namespace rllm
         THREE_TOK,
         INCREASINGLY_LONGER_SEQUENCES,
         RANDOM_LINE_RANDOM_LEN,
+        RANDOM_LINE_FULL, // pick a random line, train on the full line (last token is target)
         WINDOW, // sliding window of N tokens over flat corpus ((N-1) inputs → predict next)
     };
 
@@ -74,7 +75,7 @@ namespace rllm
             const std::optional<std::string>& input_filename,
             const std::optional<std::chrono::seconds>& checkpointing_interval = std::nullopt
         );
-        float compute_loss(TokenID expected_output_token) const;
+
         void set_random_weights_and_connections();
 
         // returns true on success, false on failure (e.g. file not found or parse error)
@@ -171,6 +172,7 @@ namespace rllm
             case TrainingMethod::THREE_TOK:
             case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
             case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
+            case TrainingMethod::RANDOM_LINE_FULL:
                 return true;
             case TrainingMethod::WINDOW:
                 return false;

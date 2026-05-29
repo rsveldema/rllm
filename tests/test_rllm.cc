@@ -15,28 +15,41 @@
 
 using rllm::rlmm_float;
 
+namespace
+{
+    // Deletes all files in models/ before each individual test case.
+    class CleanModelsListener : public ::testing::EmptyTestEventListener
+    {
+        void OnTestStart(const ::testing::TestInfo&) override
+        {
+            if (std::filesystem::exists("models"))
+                for (const auto& entry : std::filesystem::directory_iterator("models"))
+                    std::filesystem::remove(entry.path());
+        }
+    };
+} // namespace
+
 int main(int argc, char** argv)
 {
     parallel::init_parallel();
     ::testing::InitGoogleTest(&argc, argv);
+    ::testing::UnitTest::GetInstance()->listeners().Append(new CleanModelsListener());
     return RUN_ALL_TESTS();
 }
 
-TEST(PredictorTest, Placeholder) {
+TEST(PredictorTest, Placeholder)
+{
     SUCCEED();
 }
 
 namespace
 {
-    constexpr int BENCH_ITERS          = 20;
-    constexpr int BENCH_FORWARD_ITERS  = 20; // forward is fast; needs more iters for stable timing
-    constexpr int TEST_SEQ_LEN         = 8;   // smoke tests
-    constexpr int BENCH_SEQ_LEN        = 64;  // speedup benchmark needs more work
+    constexpr int BENCH_ITERS = 20;
+    constexpr int BENCH_FORWARD_ITERS = 20; // forward is fast; needs more iters for stable timing
+    constexpr int TEST_SEQ_LEN = 8; // smoke tests
+    constexpr int BENCH_SEQ_LEN = 64; // speedup benchmark needs more work
 
-    std::unique_ptr<rllm::NeuralNetwork> train_guaranteed_model(
-        rllm::Corpus& corpus,
-        rllm::Statistics& stats
-    )
+    std::unique_ptr<rllm::NeuralNetwork> train_guaranteed_model(rllm::Corpus& corpus, rllm::Statistics& stats)
     {
         std::srand(0);
         corpus.load_files_from_dir("training_data");
@@ -46,11 +59,8 @@ namespace
         return nn;
     }
 
-    std::vector<rllm::OutputToken> top5_for_prompt(
-        rllm::NeuralNetwork& nn,
-        rllm::Corpus& corpus,
-        const std::string& prompt
-    )
+    std::vector<rllm::OutputToken>
+    top5_for_prompt(rllm::NeuralNetwork& nn, rllm::Corpus& corpus, const std::string& prompt)
     {
         const auto token_ids = corpus.get_token_ids(prompt);
         nn.propagate_forward(token_ids);
@@ -61,11 +71,7 @@ namespace
         {
             const auto tok = corpus.get_token_from_id(top5[i].token_id);
             std::println(
-                "  [{}] token='{}' id={} p={:.6f}",
-                i,
-                tok,
-                static_cast<int>(top5[i].token_id),
-                top5[i].activation
+                "  [{}] token='{}' id={} p={:.6f}", i, tok, static_cast<int>(top5[i].token_id), top5[i].activation
             );
         }
         return top5;
@@ -74,33 +80,65 @@ namespace
 
 TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
 {
-    std::vector<std::string> filters = {"guaranteed_to_learn"};
+    std::srand(0);
+    // Dedicated corpus: 4 #include lines vs 1 #define line, all sharing the same
+    // #include token sequence. Small enough (5 lines) that the validation split
+    // stays below 2 lines, disabling early stopping and checkpoint restoration.
+    std::vector<std::string> filters = {"include_sequence"};
     rllm::Corpus corpus(filters);
+    corpus.load_files_from_dir("training_data");
     rllm::Statistics stats;
-    auto nn = train_guaranteed_model(corpus, stats);
+    rllm::NeuralNetwork nn(2, corpus, stats);
+    nn.set_training_method(rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
+    nn.train(false, 10, std::nullopt, std::nullopt);
 
-    const auto top5 = top5_for_prompt(*nn, corpus, "#");
+    const auto top5 = top5_for_prompt(nn, corpus, "#");
     ASSERT_FALSE(top5.empty());
     EXPECT_EQ(corpus.get_token_from_id(top5.front().token_id), "in");
+
+    // [#, in] → "clu"
+    // Note: the string "#in" tokenizes with in(263) (word-boundary variant), not
+    // in(394) (continuation variant) used inside "#include". Take the first 2 tokens
+    // of "#inclu" to get the correct [#(522), in(394)] context.
+    {
+        const auto inclu_toks = corpus.get_token_ids("#inclu");
+        ASSERT_GE(static_cast<int>(inclu_toks.size()), 2);
+        nn.propagate_forward(inclu_toks.sub_array(static_cast<rllm::PositionIndex>(2)));
+        const auto top5_in = nn.get_best_output_token_ids(5);
+        ASSERT_FALSE(top5_in.empty());
+        std::println("Prompt '[#, in] (2-token prefix of '#inclu')', top-5:");
+        for (size_t i = 0; i < top5_in.size(); ++i)
+        {
+            const auto tok = corpus.get_token_from_id(top5_in[i].token_id);
+            std::println(
+                "  [{}] token='{}' id={} p={:.6f}", i, tok, static_cast<int>(top5_in[i].token_id), top5_in[i].activation
+            );
+        }
+        EXPECT_EQ(corpus.get_token_from_id(top5_in.front().token_id), "clu");
+    }
+
+    const auto top5_inclu = top5_for_prompt(nn, corpus, "#inclu");
+    ASSERT_FALSE(top5_inclu.empty());
+    EXPECT_EQ(corpus.get_token_from_id(top5_inclu.front().token_id), "de");
 }
 
 TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
 {
-    std::vector<std::string> filters = {"guaranteed_to_learn"};
+    std::srand(0);
+    // Dedicated file: only "#include A" and "#define B", so the model
+    // sees exactly one target for the full "#include" context and converges to A.
+    std::vector<std::string> filters = {"include_a_training"};
     rllm::Corpus corpus(filters);
+    corpus.load_files_from_dir("training_data");
     rllm::Statistics stats;
-    auto nn = train_guaranteed_model(corpus, stats);
+    rllm::NeuralNetwork nn(1, corpus, stats);
+    nn.set_training_method(rllm::TrainingMethod::RANDOM_LINE_FULL);
+    nn.train(false, 10, std::nullopt, std::nullopt);
 
-    const auto top5 = top5_for_prompt(*nn, corpus, "#include");
+    const auto top5 = top5_for_prompt(nn, corpus, "#include");
     ASSERT_FALSE(top5.empty());
-
-    // "A" is one of six #include arguments in the training data, so it won't
-    // be top-1, but it should appear within the top-5 predictions.
-    bool a_seen = false;
-    for (const auto& out : top5)
-        if (corpus.get_token_from_id(out.token_id) == "A")
-            a_seen = true;
-    EXPECT_TRUE(a_seen) << "Expected 'A' in top-5 predictions for prompt '#include'";
+    EXPECT_EQ(corpus.get_token_from_id(top5.front().token_id), "A")
+        << "Expected 'A' as top-1 prediction for prompt '#include'";
 }
 
 TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFloor)
@@ -147,8 +185,8 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
 
     EXPECT_TRUE(include_seen) << "Expected 'inclu' in top-5 for prompt '#'";
     EXPECT_TRUE(defin_seen) << "Expected 'defin' in top-5 for prompt '#'";
-    EXPECT_GT(defin_probability, 0.006f)
-        << "Expected 'defin' probability > 0.6%, got " << (defin_probability * 100.0f) << "%";
+    EXPECT_GT(defin_probability, 0.006f) << "Expected 'defin' probability > 0.6%, got " << (defin_probability * 100.0f)
+                                         << "%";
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +200,8 @@ TEST(TransformerBlockTest, ForwardOutputShape)
     const int T = TEST_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
-        static_cast<rllm::PositionIndex>(T));
+        static_cast<rllm::PositionIndex>(T)
+    );
     h.fill(0.1f);
 
     block->forward(h, static_cast<rllm::PositionIndex>(T));
@@ -181,15 +220,18 @@ TEST(TransformerBlockTest, BackwardOutputShape)
     const int T = TEST_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
-        static_cast<rllm::PositionIndex>(T));
+        static_cast<rllm::PositionIndex>(T)
+    );
     h.fill(0.05f);
     block->forward(h, static_cast<rllm::PositionIndex>(T));
 
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
-        static_cast<rllm::PositionIndex>(T));
+        static_cast<rllm::PositionIndex>(T)
+    );
     dout.fill(0.01f);
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
-        static_cast<rllm::PositionIndex>(T));
+        static_cast<rllm::PositionIndex>(T)
+    );
     block->backward(dout, din, 0.01f);
 
     ASSERT_EQ(static_cast<int>(din.num_rows()) * static_cast<int>(din.num_cols()), T * D)
@@ -344,7 +386,8 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     const int T = BENCH_SEQ_LEN;
     const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
-        static_cast<rllm::PositionIndex>(T));
+        static_cast<rllm::PositionIndex>(T)
+    );
     h_template.fill(0.1f);
 
     // --- serial baseline (1 thread) ---
@@ -369,21 +412,25 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     }
     const auto t3 = std::chrono::steady_clock::now();
 
-    const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const auto serial_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
     const auto parallel_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
-    const double speedup   = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
+    const double speedup = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
 
-    RecordProperty("serial_us",   serial_us);
+    RecordProperty("serial_us", serial_us);
     RecordProperty("parallel_us", parallel_us);
-    RecordProperty("speedup",     speedup);
+    RecordProperty("speedup", speedup);
 
-    fprintf(stdout, "TransformerBlock Forward - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
-            static_cast<long long>(serial_us), static_cast<long long>(parallel_us), speedup);
+    fprintf(
+        stdout,
+        "TransformerBlock Forward - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+        static_cast<long long>(serial_us),
+        static_cast<long long>(parallel_us),
+        speedup
+    );
 
-    EXPECT_GT(speedup, 1.0)
-        << "parallelisation of TransformerBlock::forward is slower than serial "
-        << "(serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup << ")."
-;
+    EXPECT_GT(speedup, 1.0) << "parallelisation of TransformerBlock::forward is slower than serial "
+                            << "(serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup
+                            << ").";
     PARALLEL_DUMP_STATS();
 }
 
@@ -402,10 +449,12 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
 
     const int T = BENCH_SEQ_LEN;
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
-        static_cast<rllm::PositionIndex>(T));
+        static_cast<rllm::PositionIndex>(T)
+    );
     h_template.fill(0.1f);
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout_template(
-        static_cast<rllm::PositionIndex>(T));
+        static_cast<rllm::PositionIndex>(T)
+    );
     dout_template.fill(0.01f);
 
     // Prime the block with a forward pass so backward has valid cached state.
@@ -421,7 +470,8 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     {
         std::print("Backward iter {}/{}\n", iter + 1, BENCH_ITERS);
         rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
-            static_cast<rllm::PositionIndex>(T));
+            static_cast<rllm::PositionIndex>(T)
+        );
         block->backward(dout_template, din, 0.01f);
     }
     const auto t1 = std::chrono::steady_clock::now();
@@ -433,26 +483,32 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     {
         std::println("Backward par iter {}/{}", iter + 1, BENCH_ITERS);
         rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
-            static_cast<rllm::PositionIndex>(T));
+            static_cast<rllm::PositionIndex>(T)
+        );
         block->backward(dout_template, din, 0.01f);
     }
     const auto t3 = std::chrono::steady_clock::now();
 
-    const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const auto serial_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
     const auto parallel_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
-    const double speedup   = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
+    const double speedup = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
 
-    RecordProperty("serial_us",   serial_us);
+    RecordProperty("serial_us", serial_us);
     RecordProperty("parallel_us", parallel_us);
-    RecordProperty("speedup",     speedup);
+    RecordProperty("speedup", speedup);
 
-    fprintf(stdout, "TransformerBlock Backward - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
-            static_cast<long long>(serial_us), static_cast<long long>(parallel_us), speedup);
+    fprintf(
+        stdout,
+        "TransformerBlock Backward - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+        static_cast<long long>(serial_us),
+        static_cast<long long>(parallel_us),
+        speedup
+    );
     PARALLEL_DUMP_STATS();
 
-    EXPECT_GT(speedup, 1.0)
-        << "parallelisation of TransformerBlock::backward is slower than serial "
-        << "(serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup << ").";
+    EXPECT_GT(speedup, 1.0) << "parallelisation of TransformerBlock::backward is slower than serial "
+                            << "(serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup
+                            << ").";
 }
 
 // ---------------------------------------------------------------------------
@@ -469,10 +525,10 @@ TEST(ParFor2DTest, SpeedupFasterThanSerial)
 
     const int max_threads = parallel::get_max_threads();
 
-    constexpr int ROWS          = BENCH_SEQ_LEN;                                   // 64
-    constexpr int COLS          = static_cast<int>(rllm::EmbeddingDimension::MAX); // 512
+    constexpr int ROWS = BENCH_SEQ_LEN; // 64
+    constexpr int COLS = static_cast<int>(rllm::EmbeddingDimension::MAX); // 512
     constexpr int WORK_PER_CELL = 128; // float multiply-adds per cell
-    constexpr int ITERS         = 100;
+    constexpr int ITERS = 100;
 
     const auto seq = static_cast<rllm::PositionIndex>(ROWS);
     std::vector<float> buf(ROWS * COLS, 0.0f);
@@ -482,8 +538,7 @@ TEST(ParFor2DTest, SpeedupFasterThanSerial)
     const auto t0 = std::chrono::steady_clock::now();
     for (int it = 0; it < ITERS; ++it)
     {
-        for (const auto [t, d] :
-             rllm::enum_iterator2D<rllm::PositionIndex, rllm::EmbeddingDimension>(seq))
+        for (const auto [t, d] : rllm::enum_iterator2D<rllm::PositionIndex, rllm::EmbeddingDimension>(seq))
         {
             float v = static_cast<float>(static_cast<int>(t) * COLS + static_cast<int>(d) + it);
             for (int k = 0; k < WORK_PER_CELL; ++k)
@@ -500,34 +555,39 @@ TEST(ParFor2DTest, SpeedupFasterThanSerial)
     for (int it = 0; it < ITERS; ++it)
     {
         PARFOR_2D(t, d, rllm::enum_iterator2D<rllm::PositionIndex, rllm::EmbeddingDimension>(seq))
-            float v = static_cast<float>(static_cast<int>(t) * COLS + static_cast<int>(d) + it);
-            for (int k = 0; k < WORK_PER_CELL; ++k)
-                v = v * 1.00001f + 0.00001f;
-            buf[static_cast<int>(t) * COLS + static_cast<int>(d)] = v;
+        float v = static_cast<float>(static_cast<int>(t) * COLS + static_cast<int>(d) + it);
+        for (int k = 0; k < WORK_PER_CELL; ++k)
+            v = v * 1.00001f + 0.00001f;
+        buf[static_cast<int>(t) * COLS + static_cast<int>(d)] = v;
         ENDFOR
     }
     const auto t3 = std::chrono::steady_clock::now();
 
-    const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const auto serial_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
     const auto parallel_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
-    const double speedup   = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
+    const double speedup = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
 
-    RecordProperty("serial_us",   serial_us);
+    RecordProperty("serial_us", serial_us);
     RecordProperty("parallel_us", parallel_us);
-    RecordProperty("speedup",     speedup);
+    RecordProperty("speedup", speedup);
 
-    fprintf(stderr,
-            "PARFOR_2D (%d outer x %d inner, work=%d, iters=%d, threads=%d)"
-            " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
-            ROWS, COLS, WORK_PER_CELL, ITERS, max_threads,
-            static_cast<long long>(serial_us),
-            static_cast<long long>(parallel_us),
-            speedup);
+    fprintf(
+        stderr,
+        "PARFOR_2D (%d outer x %d inner, work=%d, iters=%d, threads=%d)"
+        " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+        ROWS,
+        COLS,
+        WORK_PER_CELL,
+        ITERS,
+        max_threads,
+        static_cast<long long>(serial_us),
+        static_cast<long long>(parallel_us),
+        speedup
+    );
 
-    EXPECT_GT(speedup, 1.0)
-        << "PARFOR_2D was not faster than serial"
-        << " (serial=" << serial_us << "us, parallel=" << parallel_us
-        << "us, speedup=" << speedup << ").";
+    EXPECT_GT(speedup, 1.0) << "PARFOR_2D was not faster than serial"
+                            << " (serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup
+                            << ").";
 }
 
 // ── PARFOR_2D_TRIANGULAR tests ────────────────────────────────────────────────
@@ -545,7 +605,7 @@ TEST(Parfor2DTriangularTest, VisitsAllLowerTriangularPairsExactlyOnce)
     int count[N][N] = {};
 
     PARFOR_2D_TRIANGULAR(i, j, N_pos)
-        ++count[static_cast<int>(i)][static_cast<int>(j)];
+    ++count[static_cast<int>(i)][static_cast<int>(j)];
     ENDFOR
 
     int total = 0;
@@ -554,8 +614,7 @@ TEST(Parfor2DTriangularTest, VisitsAllLowerTriangularPairsExactlyOnce)
         for (int jj = 0; jj < N; ++jj)
         {
             const int expected = (jj <= ii) ? 1 : 0;
-            EXPECT_EQ(count[ii][jj], expected)
-                << "Wrong visit count at (" << ii << "," << jj << ")";
+            EXPECT_EQ(count[ii][jj], expected) << "Wrong visit count at (" << ii << "," << jj << ")";
             total += count[ii][jj];
         }
     }
@@ -571,9 +630,9 @@ TEST(Parfor2DTriangularTest, SpeedupFasterThanSerial)
 
     const int max_threads = parallel::get_max_threads();
 
-    constexpr int N             = BENCH_SEQ_LEN; // 64 rows → 2080 triangular cells
-    constexpr int WORK_PER_CELL = 256;            // float multiply-adds per cell
-    constexpr int ITERS         = 100;
+    constexpr int N = BENCH_SEQ_LEN; // 64 rows → 2080 triangular cells
+    constexpr int WORK_PER_CELL = 256; // float multiply-adds per cell
+    constexpr int ITERS = 100;
 
     const auto N_pos = static_cast<rllm::PositionIndex>(N);
     std::vector<float> buf(static_cast<size_t>(N) * static_cast<size_t>(N), 0.0f);
@@ -601,36 +660,41 @@ TEST(Parfor2DTriangularTest, SpeedupFasterThanSerial)
     for (int it = 0; it < ITERS; ++it)
     {
         PARFOR_2D_TRIANGULAR(i, j, N_pos)
-            const int ii = static_cast<int>(i);
-            const int jj = static_cast<int>(j);
-            float v = static_cast<float>(ii * N + jj + it);
-            for (int k = 0; k < WORK_PER_CELL; ++k)
-                v = v * 1.00001f + 0.00001f;
-            buf[static_cast<size_t>(ii) * N + static_cast<size_t>(jj)] = v;
+        const int ii = static_cast<int>(i);
+        const int jj = static_cast<int>(j);
+        float v = static_cast<float>(ii * N + jj + it);
+        for (int k = 0; k < WORK_PER_CELL; ++k)
+            v = v * 1.00001f + 0.00001f;
+        buf[static_cast<size_t>(ii) * N + static_cast<size_t>(jj)] = v;
         ENDFOR
     }
     const auto t3 = std::chrono::steady_clock::now();
 
-    const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const auto serial_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
     const auto parallel_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
-    const double speedup   = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
+    const double speedup = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
 
-    RecordProperty("serial_us",   serial_us);
+    RecordProperty("serial_us", serial_us);
     RecordProperty("parallel_us", parallel_us);
-    RecordProperty("speedup",     speedup);
+    RecordProperty("speedup", speedup);
 
-    fprintf(stderr,
-            "PARFOR_2D_TRIANGULAR (%d rows, %d triangular cells, work=%d, iters=%d, threads=%d)"
-            " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
-            N, N * (N + 1) / 2, WORK_PER_CELL, ITERS, max_threads,
-            static_cast<long long>(serial_us),
-            static_cast<long long>(parallel_us),
-            speedup);
+    fprintf(
+        stderr,
+        "PARFOR_2D_TRIANGULAR (%d rows, %d triangular cells, work=%d, iters=%d, threads=%d)"
+        " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+        N,
+        N * (N + 1) / 2,
+        WORK_PER_CELL,
+        ITERS,
+        max_threads,
+        static_cast<long long>(serial_us),
+        static_cast<long long>(parallel_us),
+        speedup
+    );
 
-    EXPECT_GT(speedup, 1.0)
-        << "PARFOR_2D_TRIANGULAR was not faster than serial"
-        << " (serial=" << serial_us << "us, parallel=" << parallel_us
-        << "us, speedup=" << speedup << ").";
+    EXPECT_GT(speedup, 1.0) << "PARFOR_2D_TRIANGULAR was not faster than serial"
+                            << " (serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup
+                            << ").";
 }
 
 // ── PARFOR_2D_UPPER_TRIANGULAR tests ─────────────────────────────────────────
@@ -648,7 +712,7 @@ TEST(Parfor2DUpperTriangularTest, VisitsAllUpperTriangularPairsExactlyOnce)
     int count[N][N] = {};
 
     PARFOR_2D_UPPER_TRIANGULAR(i, j, N_pos)
-        ++count[static_cast<int>(i)][static_cast<int>(j)];
+    ++count[static_cast<int>(i)][static_cast<int>(j)];
     ENDFOR
 
     int total = 0;
@@ -657,8 +721,7 @@ TEST(Parfor2DUpperTriangularTest, VisitsAllUpperTriangularPairsExactlyOnce)
         for (int jj = 0; jj < N; ++jj)
         {
             const int expected = (jj >= ii) ? 1 : 0;
-            EXPECT_EQ(count[ii][jj], expected)
-                << "Wrong visit count at (" << ii << "," << jj << ")";
+            EXPECT_EQ(count[ii][jj], expected) << "Wrong visit count at (" << ii << "," << jj << ")";
             total += count[ii][jj];
         }
     }
@@ -674,9 +737,9 @@ TEST(Parfor2DUpperTriangularTest, SpeedupFasterThanSerial)
 
     const int max_threads = parallel::get_max_threads();
 
-    constexpr int N             = BENCH_SEQ_LEN; // 64 rows → 2080 upper-triangular cells
+    constexpr int N = BENCH_SEQ_LEN; // 64 rows → 2080 upper-triangular cells
     constexpr int WORK_PER_CELL = 256;
-    constexpr int ITERS         = 100;
+    constexpr int ITERS = 100;
 
     const auto N_pos = static_cast<rllm::PositionIndex>(N);
     std::vector<float> buf(static_cast<size_t>(N) * static_cast<size_t>(N), 0.0f);
@@ -704,34 +767,39 @@ TEST(Parfor2DUpperTriangularTest, SpeedupFasterThanSerial)
     for (int it = 0; it < ITERS; ++it)
     {
         PARFOR_2D_UPPER_TRIANGULAR(i, j, N_pos)
-            const int ii = static_cast<int>(i);
-            const int jj = static_cast<int>(j);
-            float v = static_cast<float>(ii * N + jj + it);
-            for (int k = 0; k < WORK_PER_CELL; ++k)
-                v = v * 1.00001f + 0.00001f;
-            buf[static_cast<size_t>(ii) * N + static_cast<size_t>(jj)] = v;
+        const int ii = static_cast<int>(i);
+        const int jj = static_cast<int>(j);
+        float v = static_cast<float>(ii * N + jj + it);
+        for (int k = 0; k < WORK_PER_CELL; ++k)
+            v = v * 1.00001f + 0.00001f;
+        buf[static_cast<size_t>(ii) * N + static_cast<size_t>(jj)] = v;
         ENDFOR
     }
     const auto t3 = std::chrono::steady_clock::now();
 
-    const auto serial_us   = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    const auto serial_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
     const auto parallel_us = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
-    const double speedup   = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
+    const double speedup = static_cast<double>(serial_us) / static_cast<double>(parallel_us);
 
-    RecordProperty("serial_us",   serial_us);
+    RecordProperty("serial_us", serial_us);
     RecordProperty("parallel_us", parallel_us);
-    RecordProperty("speedup",     speedup);
+    RecordProperty("speedup", speedup);
 
-    fprintf(stderr,
-            "PARFOR_2D_UPPER_TRIANGULAR (%d rows, %d upper-triangular cells, work=%d, iters=%d, threads=%d)"
-            " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
-            N, N * (N + 1) / 2, WORK_PER_CELL, ITERS, max_threads,
-            static_cast<long long>(serial_us),
-            static_cast<long long>(parallel_us),
-            speedup);
+    fprintf(
+        stderr,
+        "PARFOR_2D_UPPER_TRIANGULAR (%d rows, %d upper-triangular cells, work=%d, iters=%d, threads=%d)"
+        " - Serial: %lldus, Parallel: %lldus, Speedup: %.2fx\n",
+        N,
+        N * (N + 1) / 2,
+        WORK_PER_CELL,
+        ITERS,
+        max_threads,
+        static_cast<long long>(serial_us),
+        static_cast<long long>(parallel_us),
+        speedup
+    );
 
-    EXPECT_GT(speedup, 1.0)
-        << "PARFOR_2D_UPPER_TRIANGULAR was not faster than serial"
-        << " (serial=" << serial_us << "us, parallel=" << parallel_us
-        << "us, speedup=" << speedup << ").";
+    EXPECT_GT(speedup, 1.0) << "PARFOR_2D_UPPER_TRIANGULAR was not faster than serial"
+                            << " (serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup
+                            << ").";
 }

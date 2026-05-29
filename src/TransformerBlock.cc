@@ -332,8 +332,9 @@ namespace rllm
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
         // Scratch buffer shared by both matmul accumulation loops
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> tmp;
-        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> d_scores;
-        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> d_raw;
+        // Per-head scratch: each head writes its own d_scores/d_raw so the hi loop is parallel.
+        fixed_size_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
+        fixed_size_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
 
         explicit BackwardWorkspace(PositionIndex seq)
             : d_h_mid(seq)
@@ -347,8 +348,6 @@ namespace rllm
             , d_V(seq)
             , d_h_norm_attn(seq)
             , tmp(seq)
-            , d_scores(seq, seq)
-            , d_raw(seq, seq)
         {}
 
         // Zero only the fields that accumulate across the backward pass.
@@ -425,9 +424,13 @@ namespace rllm
 
         // Per-head backward
         const float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
-        for (const auto hi : enum_iterator<HeadsIndex>())
-        {
-            ws->d_raw.fill(RLMM_ZERO); // d_raw accumulates per head; reset each iteration
+        PARFOR(hi, enum_iterator<HeadsIndex>())
+            // Each head owns its own d_scores_h / d_raw_h so parallel heads never conflict.
+            auto& d_scores_h = ws->d_scores[hi];
+            auto& d_raw_h    = ws->d_raw[hi];
+            d_scores_h.set_size(fwd.seq_len, fwd.seq_len);
+            d_raw_h.set_size(fwd.seq_len, fwd.seq_len);
+            d_raw_h.fill(RLMM_ZERO);
 
             const auto& scores_mat = fwd.attn_w[hi];
             const auto hi_int = static_cast<size_t>(hi);
@@ -435,36 +438,37 @@ namespace rllm
             const auto hEnd = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
 
             // d_V_h[j, d] += sum_i scores_mat[i,j] * d_attn_concat[i, d]
+            // Safe across heads: each head writes its own [hStart, hEnd) columns of d_V.
             PARFOR_2D_UPPER_TRIANGULAR(j, i, fwd.seq_len)
                 const float w = scores_mat[i, j];
                 for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
                     ws->d_V[j, d] += w * ws->d_attn_concat[i, d];
             ENDFOR
 
-            // d_scores[i,j] = d_attn_concat[i, d] · V[j, d]
+            // d_scores_h[i,j] = d_attn_concat[i, d] · V[j, d]
             PARFOR_2D_TRIANGULAR(i, j, fwd.seq_len)
                 float dot = 0.f;
                 for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
                     dot += ws->d_attn_concat[i, d] * fwd.V[j, d];
-                ws->d_scores[i, j] = dot;
+                d_scores_h[i, j] = dot;
             ENDFOR
 
             // Backward through causal softmax
-            softmax_backward(ws->d_scores, scores_mat, ws->d_raw, fwd.seq_len);
+            softmax_backward(d_scores_h, scores_mat, d_raw_h, fwd.seq_len);
 
-            // d_Q and d_K
+            // d_Q and d_K — each head writes its own [hStart, hEnd) columns.
             PARFOR_2D_TRIANGULAR(i, j, fwd.seq_len)
-                const float ds = ws->d_raw[i, j] * scale;
+                const float ds = d_raw_h[i, j] * scale;
                 for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
                     ws->d_Q[i, d] += ds * fwd.K[j, d];
             ENDFOR
 
             PARFOR_2D_UPPER_TRIANGULAR(j, i, fwd.seq_len)
-                const float ds = ws->d_raw[i, j] * scale;
+                const float ds = d_raw_h[i, j] * scale;
                 for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-                        ws->d_K[j, d] += ds * fwd.Q[i, d];
+                    ws->d_K[j, d] += ds * fwd.Q[i, d];
             ENDFOR
-        }
+        ENDFOR
 
         // Weight gradients for W_q, W_k, W_v
         PARSECTIONS_BEGIN
