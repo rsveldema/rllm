@@ -365,11 +365,10 @@ namespace rllm
         if (line_len < 2)
             return;
 
-        // Avoid over-training the shortest prefix for lines that have richer context.
-        // Example: for "# include A", sampling length 2 trains only "# -> include"
-        // and can drown out "# include -> A". For line_len >= 3, keep randomization
-        // but require at least 3 tokens so the continuation target is learned.
-        const int min_len = (line_len >= 3) ? 3 : 2;
+        // Include short prefixes (len=2) so one-token contexts can learn their next token
+        // (e.g. "# -> define/include"). Longer prefixes are still emphasized by the
+        // effective_max_iterations scaling below.
+        const int min_len = 2;
         std::uniform_int_distribution<int> len_dist(min_len, line_len);
         const int random_len = len_dist(rng);
 
@@ -450,7 +449,21 @@ namespace rllm
     {
         auto split = m_corpus.get_deterministic_training_split(VALIDATION_PERCENT);
         std::vector<InputLine> training_lines = std::move(split.training_lines);
-        const std::vector<InputLine>& validation_lines = split.validation_lines;
+        std::vector<InputLine> validation_lines = std::move(split.validation_lines);
+
+        // With tiny corpora, a 20% split can leave only one held-out line.
+        // That makes early stopping and best-checkpoint restoration extremely noisy
+        // and can collapse the final model to whichever single line is validated.
+        if (validation_lines.size() < 2)
+        {
+            training_lines.insert(
+                training_lines.end(),
+                std::make_move_iterator(validation_lines.begin()),
+                std::make_move_iterator(validation_lines.end())
+            );
+            validation_lines.clear();
+            LOG_INFO("Validation disabled for tiny corpus (fewer than 2 held-out lines)");
+        }
 
         LOG_INFO(
             "Using {} training lines and {} validation lines ({}% target validation split)",
@@ -844,7 +857,7 @@ namespace rllm
         };
 
         // In multi-epoch training each call gets a small fixed budget (max_iterations).
-        // We run all steps unconditionally; convergence emerges across epochs.
+        // We allow an early return once this example reaches a reasonable confidence target.
         float loss = 0.0f;
         for (size_t i = 0; i < max_iterations; ++i)
         {
@@ -869,7 +882,6 @@ namespace rllm
                 m_stats.record_learning_success();
                 return;
             }
-
 
             if (verbose && i % 25 == 0)
             {

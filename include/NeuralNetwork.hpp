@@ -33,7 +33,8 @@ namespace rllm
       public:
         // Denominator for convergence threshold: fires_nothing_ce_loss / k.
         // Higher k = tighter threshold = more gradient steps per example.
-        static constexpr float k_convergence_divisor = 16.0f;
+        // NOTE: if set too high, we drive a specific example to high confidence but fail to learn from other examples, harming generalization.
+        static constexpr float k_convergence_divisor = 2.0f;
 
         NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats)
             : m_corpus(corpus)
