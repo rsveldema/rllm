@@ -78,6 +78,7 @@ namespace rllm
 
         // returns true on success, false on failure (e.g. file not found or parse error)
         bool load(const std::string& filename);
+        void checkpoint() const;
         void save(const std::string& filename) const;
 
         // Mean-pool the last transformer block's hidden state over the sequence dimension.
@@ -100,6 +101,10 @@ namespace rllm
         }
 
       private:
+                static constexpr size_t VALIDATION_PERCENT = 20;
+                static constexpr size_t EARLY_STOPPING_PATIENCE = 3;
+                static constexpr float  VALIDATION_IMPROVEMENT_EPSILON = 1e-4f;
+
         Corpus&    m_corpus;
         Statistics& m_stats;
         InputLayer  m_input_layer;
@@ -117,6 +122,7 @@ namespace rllm
 
         void dump_top_predictions();
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
+        float evaluate_average_loss(const std::vector<InputLine>& evaluation_lines);
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
         int m_window_size = 2;

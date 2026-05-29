@@ -16,6 +16,12 @@ namespace rllm
     class Corpus
     {
       public:
+                struct TrainingSplit
+                {
+                        std::vector<InputLine> training_lines;
+                        std::vector<InputLine> validation_lines;
+                };
+
         Corpus(const std::vector<std::string>& filters);
         void load_files_from_dir(const std::string& train_corpus_dir);
 
@@ -27,6 +33,7 @@ namespace rllm
         std::optional<std::string> get_line(const InputLine& line) const;
 
         std::vector<InputLine> get_suitable_training_lines() const;
+        TrainingSplit get_deterministic_training_split(size_t validation_percent = 20) const;
 
         void visit_lines(const visitor_fn_t& visitor) const
         {

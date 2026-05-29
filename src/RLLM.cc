@@ -192,8 +192,6 @@ namespace rllm
         }
         std::println("Input tokens: {}", *full_string_opt);
 
-        const auto question_size = token_id_list.size();
-
         for (size_t iter = 0; iter < MAX_NUM_ANSWER_TOKENS; ++iter)
         {
             nn.propagate_forward(token_id_list);
@@ -271,7 +269,6 @@ namespace rllm
             token_id_list.push_back(entry.token_id);
         }
 
-        auto reply_id_list = token_id_list.sub_array(question_size);
         const auto full_answer_string_opt = corpus.get_line(token_id_list);
         if (!full_answer_string_opt.has_value())
         {

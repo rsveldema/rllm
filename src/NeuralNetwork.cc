@@ -278,6 +278,26 @@ namespace rllm
         return -log_prob;
     }
 
+    float NeuralNetwork::evaluate_average_loss(const std::vector<InputLine>& evaluation_lines)
+    {
+        if (evaluation_lines.empty())
+            return std::numeric_limits<float>::quiet_NaN();
+
+        double total_loss = 0.0;
+        for (const auto& example : evaluation_lines)
+        {
+            assert(static_cast<int>(example.size()) >= 2);
+            auto train_input = example;
+            const auto expected_output_token = train_input.back();
+            train_input.pop_back();
+
+            propagate_forward(train_input);
+            total_loss += static_cast<double>(compute_loss(expected_output_token));
+        }
+
+        return static_cast<float>(total_loss / static_cast<double>(evaluation_lines.size()));
+    }
+
     void NeuralNetwork::train_with_increasingly_longer_sequences(
         const InputLine& line_of_file,
         bool verbose,
@@ -380,8 +400,7 @@ namespace rllm
     )
     {
         const auto total_lines = training_lines.size();
-        if (total_lines == 0)
-            return;
+        assert(total_lines > 0);
 
         // Visit each line exactly once per epoch (in random order).
         // Sampling with replacement over-emphasizes some lines while skipping others,
@@ -396,13 +415,13 @@ namespace rllm
 
             if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
             {
-                std::println(
-                    "creating timed checkpoint at epoch {}, line {}, total lines visited {}",
+                LOG_INFO(
+                    "Creating timed checkpoint at epoch {}, line {}, total lines visited {}",
                     epoch,
                     lines_visited,
                     total_lines
                 );
-                save(std::format("models/checkpoint-{}.json", epoch * total_lines + lines_visited));
+                checkpoint();
             }
 
             LOG_INFO(
@@ -429,7 +448,18 @@ namespace rllm
         const std::optional<std::chrono::seconds>& checkpointing_interval
     )
     {
-        std::vector<InputLine> training_lines = m_corpus.get_suitable_training_lines();
+        auto split = m_corpus.get_deterministic_training_split(VALIDATION_PERCENT);
+        std::vector<InputLine> training_lines = std::move(split.training_lines);
+        const std::vector<InputLine>& validation_lines = split.validation_lines;
+
+        LOG_INFO(
+            "Using {} training lines and {} validation lines ({}% target validation split)",
+            training_lines.size(),
+            validation_lines.size(),
+            VALIDATION_PERCENT
+        );
+
+        assert(!training_lines.empty());
 
         // Multi-epoch training with shuffling prevents catastrophic forgetting:
         // each example only gets 8*num_layers gradient updates per
@@ -437,6 +467,10 @@ namespace rllm
         std::mt19937 rng{42};
         const auto total_lines = training_lines.size();
         auto last_checkpoint_at = std::chrono::steady_clock::now();
+        float best_validation_loss = std::numeric_limits<float>::infinity();
+        size_t epochs_without_improvement = 0;
+        bool has_best_checkpoint = false;
+        static constexpr const char* BEST_CHECKPOINT_FILENAME = "models/checkpoint-best.json";
 
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
@@ -453,70 +487,129 @@ namespace rllm
                 );
 
                 std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
-                save(std::format("models/checkpoint-epoch-{}.json", epoch));
-                continue;
+                checkpoint();
             }
-
-            std::shuffle(training_lines.begin(), training_lines.end(), rng);
-
-            size_t lines_visited = 0;
-            for (const auto& line_of_file : training_lines)
+            else
             {
-                lines_visited++;
-                const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
+                std::shuffle(training_lines.begin(), training_lines.end(), rng);
 
-                if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
+                size_t lines_visited = 0;
+                for (const auto& line_of_file : training_lines)
                 {
-                    std::println(
-                        "creating timed checkpoint at epoch {}, line {}, total lines visited {}",
-                        epoch,
+                    lines_visited++;
+                    const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
+
+                    if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
+                    {
+                        std::println(
+                            "creating timed checkpoint at epoch {}, line {}, total lines visited {}",
+                            epoch,
+                            lines_visited,
+                            total_lines
+                        );
+                        checkpoint();
+                    }
+
+                    LOG_INFO(
+                        "Epoch[{}%] line[{}]: {:0.2f}% done",
+                        epoch / static_cast<float>(num_epochs) * 100.0f,
                         lines_visited,
-                        total_lines
+                        progress * 100.0f
                     );
-                    save(std::format("models/checkpoint-{}.json", epoch * total_lines + lines_visited));
+
+                    switch (m_training_method)
+                    {
+                    case TrainingMethod::TWO_TOK:
+                        train_with_up_to_N(
+                            line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(), 2
+                        );
+                        break;
+
+                    case TrainingMethod::THREE_TOK:
+                        train_with_up_to_N(
+                            line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(), 3
+                        );
+                        break;
+
+                    case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
+                        train_with_increasingly_longer_sequences(
+                            line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size()
+                        );
+                        break;
+
+                    case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
+                        // Handled in the random-line loop above.
+                        assert(false);
+                        break;
+
+                    case TrainingMethod::WINDOW:
+                        // window methods don't use the line-based loop; handled separately below
+                        assert(false);
+                        break;
+                    }
                 }
 
+                std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+                checkpoint();
+            }
+
+            if (!validation_lines.empty())
+            {
+                const float validation_loss = evaluate_average_loss(validation_lines);
                 LOG_INFO(
-                    "Epoch[{}%] line[{}]: {:0.2f}% done",
-                    epoch / static_cast<float>(num_epochs) * 100.0f,
-                    lines_visited,
-                    progress * 100.0f
+                    "epoch {} validation loss: {:.6f} across {} held-out lines",
+                    epoch,
+                    validation_loss,
+                    validation_lines.size()
                 );
 
-                switch (m_training_method)
+                if ((validation_loss + VALIDATION_IMPROVEMENT_EPSILON) < best_validation_loss)
                 {
-                case TrainingMethod::TWO_TOK:
-                    train_with_up_to_N(
-                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(), 2
+                    best_validation_loss = validation_loss;
+                    epochs_without_improvement = 0;
+                    save(BEST_CHECKPOINT_FILENAME);
+                    has_best_checkpoint = true;
+                    LOG_INFO(
+                        "Saved new best checkpoint '{}' with validation loss {:.6f}",
+                        BEST_CHECKPOINT_FILENAME,
+                        validation_loss
                     );
-                    break;
-
-                case TrainingMethod::THREE_TOK:
-                    train_with_up_to_N(
-                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(), 3
+                }
+                else
+                {
+                    epochs_without_improvement++;
+                    LOG_INFO(
+                        "Validation loss did not improve for {} epoch(s); best remains {:.6f}",
+                        epochs_without_improvement,
+                        best_validation_loss
                     );
-                    break;
-
-                case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
-                    train_with_increasingly_longer_sequences(
-                        line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size()
-                    );
-                    break;
-
-                case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
-                    // Handled in the random-line loop above.
-                    assert(false);
-                    break;
-
-                case TrainingMethod::WINDOW:
-                    // window methods don't use the line-based loop; handled separately below
-                    assert(false);
-                    break;
+                    if (epochs_without_improvement >= EARLY_STOPPING_PATIENCE)
+                    {
+                        LOG_INFO(
+                            "early stopping at epoch {} after {} epoch(s) without validation improvement",
+                            epoch,
+                            epochs_without_improvement
+                        );
+                        break;
+                    }
                 }
             }
+        }
 
-            std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
-            save(std::format("models/checkpoint-epoch-{}.json", epoch));
+        if (has_best_checkpoint)
+        {
+            if (load(BEST_CHECKPOINT_FILENAME))
+            {
+                LOG_INFO(
+                    "restored best checkpoint '{}' with validation loss {:.6f}",
+                    BEST_CHECKPOINT_FILENAME,
+                    best_validation_loss
+                );
+            }
+            else
+            {
+                LOG_INFO("failed to restore best checkpoint '{}'", BEST_CHECKPOINT_FILENAME);
+            }
         }
     }
 
@@ -568,13 +661,13 @@ namespace rllm
 
                 if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
                 {
-                    std::println(
+                    LOG_INFO(
                         "creating timed checkpoint at epoch {}, window {}, total windows trained {}",
                         epoch,
                         j,
                         total_windows_trained
                     );
-                    save(std::format("models/checkpoint-{}.json", total_windows_trained));
+                    checkpoint();
                 }
 
 
@@ -596,7 +689,7 @@ namespace rllm
             }
 
             std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
-            save(std::format("models/checkpoint-epoch-{}.json", epoch));
+            checkpoint();
         }
     }
 
@@ -632,7 +725,7 @@ namespace rllm
         }
         else
         {
-            std::println("No input model specified, starting with random weights.");
+            LOG_INFO("No input model specified, starting with random weights.");
             set_random_weights_and_connections();
         }
 

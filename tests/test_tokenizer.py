@@ -6,6 +6,8 @@ import pytest
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
+TEST_TRAINING_TEXT = 'Neural Network hpp Neural Network hpp'
+
 import create_tokenizer_map as ctm
 
 
@@ -31,14 +33,8 @@ def _greedy_tokenize(text: str, sorted_tokens: list[str]) -> tuple[list[str], li
 
 @pytest.fixture(scope="session")
 def token_vocab():
-    """Build the sorted token list once per session (longest tokens first)."""
-    old_cwd = os.getcwd()
-    os.chdir(PROJECT_ROOT)
-    try:
-        text = ctm.read_all_files_in_directory("corpus")
-        tm = ctm.create_tokenizer_map(text)
-    finally:
-        os.chdir(old_cwd)
+    """Build a deterministic sorted token list once per session."""
+    tm = ctm.create_tokenizer_map(TEST_TRAINING_TEXT)
     return sorted(tm.keys(), key=lambda t: -len(t))
 
 
@@ -56,3 +52,14 @@ def test_neural_network_hpp_token_sequence(token_vocab):
     """'"NeuralNetwork.hpp"' must tokenize to the expected sequence."""
     matched, _ = _greedy_tokenize('"NeuralNetwork.hpp"', token_vocab)
     assert matched == ['"', 'Neural', 'Network', '.', 'hpp', '"']
+
+
+def test_hash_prefixed_word_is_learned_as_single_token():
+    """Repeated hash-prefixed words should survive preprocessing as one token."""
+    tokenizer_map = ctm.create_tokenizer_map("#xxxx #xxxx")
+    assert "#xxxx" in tokenizer_map
+
+    token_vocab = sorted(tokenizer_map.keys(), key=lambda t: -len(t))
+    matched, skipped = _greedy_tokenize("#xxxx", token_vocab)
+    assert skipped == []
+    assert matched == ["#xxxx"]

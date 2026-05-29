@@ -150,7 +150,47 @@ namespace rllm
         return static_cast<NeuronConnectionIndex>(static_cast<size_t>(id) + 1);
     }
 
-    using InputLine = fixed_size_vector<TokenID, PositionIndex>;
+    class InputLine : public fixed_size_vector<TokenID, PositionIndex>
+    {
+      public:
+        using Base = fixed_size_vector<TokenID, PositionIndex>;
+        using Base::Base;
+
+        InputLine() = default;
+        InputLine(const Base& other)
+            : Base(other)
+        {}
+
+        InputLine& operator=(const Base& other)
+        {
+            Base::operator=(other);
+            return *this;
+        }
+
+        InputLine sub_array(PositionIndex length) const
+        {
+            return InputLine{Base::sub_array(length)};
+        }
+
+        uint64_t hash() const
+        {
+            constexpr uint64_t FNV_OFFSET_BASIS = 14695981039346656037ull;
+            constexpr uint64_t FNV_PRIME = 1099511628211ull;
+
+            uint64_t hash = FNV_OFFSET_BASIS;
+            for (const auto i : enum_iterator<PositionIndex>(size()))
+            {
+                uint64_t value = static_cast<uint64_t>(static_cast<int>(operator[](i))) + 1ull;
+                for (int byte = 0; byte < 8; ++byte)
+                {
+                    hash ^= (value & 0xffull);
+                    hash *= FNV_PRIME;
+                    value >>= 8;
+                }
+            }
+            return hash;
+        }
+    };
 
 
     struct Score

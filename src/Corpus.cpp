@@ -17,6 +17,27 @@
 
 namespace rllm
 {
+    namespace
+    {
+        void rebalance_training_split(Corpus::TrainingSplit& split)
+        {
+            const size_t total = split.training_lines.size() + split.validation_lines.size();
+            if (total < 2)
+                return;
+
+            if (split.validation_lines.empty() && split.training_lines.size() > 1)
+            {
+                split.validation_lines.push_back(split.training_lines.back());
+                split.training_lines.pop_back();
+            }
+            else if (split.training_lines.empty() && split.validation_lines.size() > 1)
+            {
+                split.training_lines.push_back(split.validation_lines.back());
+                split.validation_lines.pop_back();
+            }
+        }
+    }
+
     bool log_info_enabled = true;
     bool log_debug_enabled = true;
 
@@ -170,7 +191,7 @@ namespace rllm
             {
                 // If no token matched, skip this character
                 const auto ch = text[ix];
-                if (ch != ' ')
+                if (! isspace(ch))
                 {
                     // spaces have no explicit token, we just skip them without logging,
                     // but log other unmatched characters as warnings since they may
@@ -258,6 +279,34 @@ namespace rllm
             training_lines.push_back(stripped);
         });
         return training_lines;
+    }
+
+    Corpus::TrainingSplit Corpus::get_deterministic_training_split(size_t validation_percent) const
+    {
+        assert(validation_percent <= 100);
+
+        TrainingSplit split;
+        auto training_lines = get_suitable_training_lines();
+        if (training_lines.empty())
+            return split;
+
+        if (validation_percent == 0)
+        {
+            split.training_lines = std::move(training_lines);
+            return split;
+        }
+
+        for (auto& line : training_lines)
+        {
+            const size_t bucket = static_cast<size_t>(line.hash() % 100ull);
+            if (bucket < validation_percent)
+                split.validation_lines.push_back(std::move(line));
+            else
+                split.training_lines.push_back(std::move(line));
+        }
+
+        rebalance_training_split(split);
+        return split;
     }
 
 

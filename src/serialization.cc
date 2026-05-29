@@ -184,4 +184,12 @@ namespace rllm
         const auto save_elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - save_start).count();
         std::println("Saved model '{}' in {:.3f} seconds", filename, save_elapsed);
     }
+
+    void NeuralNetwork::checkpoint() const
+    {
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count();
+        save(std::format("models/checkpoint-{}.json", now_ms));
+    }
 } // namespace rllm

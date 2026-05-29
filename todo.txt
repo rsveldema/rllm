@@ -1,8 +1,12 @@
-For your repo, I would use a hash-based split by line key instead of random shuffle each run. That keeps the validation set stable across reruns and makes comparisons meaningful. Also, because your corpus is small and repetitive, use at least 15 to 20 percent validation so the signal is not too noisy.
+For your repo, I would use a hash-based split by line key instead
+of random shuffle each run. That keeps the validation set stable
+across reruns and makes comparisons meaningful. Also, because
+your corpus is small and repetitive, use at least 15 to 20
+percent validation so the signal is not too noisy.
 
 If you want, I can implement this directly next with:
 
-deterministic split helper,
-epoch-end validation loss evaluation,
-best-checkpoint saving plus early stopping.
+- deterministic split helper,
+- epoch-end validation loss evaluation,
+- best-checkpoint saving plus early stopping.
 
