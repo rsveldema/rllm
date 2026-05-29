@@ -63,6 +63,15 @@ namespace rllm
     // Number of gradient-update passes over all layers per training example per epoch.
     constexpr size_t NUMBER_OF_LAYER_VISITS_PER_EXAMPLE = 8;
 
+    static size_t training_steps_per_example(size_t num_layers)
+    {
+        (void)num_layers;
+        // Keep a stable update budget across model depth. Scaling linearly with
+        // layer count made deeper models (e.g. 4 layers) overfit tiny corpora
+        // and collapse to near one-hot predictions in just a few epochs.
+        return NUMBER_OF_LAYER_VISITS_PER_EXAMPLE;
+    }
+
     // Layers
 
     struct NeuralNetworkForwardWorkspace
@@ -186,7 +195,8 @@ namespace rllm
 
     void NeuralNetwork::propagate_backward(const Score& score)
     {
-        static constexpr float LEARNING_RATE = 0.003f;
+        static constexpr float BASE_LEARNING_RATE = 0.003f;
+        const float learning_rate = BASE_LEARNING_RATE / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
 
         auto ws = std::make_unique<BackwardPropWorkspace>(m_seq_len);
 
@@ -196,7 +206,7 @@ namespace rllm
         const auto last_pos = dec(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
             ws->h_last_vec[d] = m_last_hidden[last_pos, d];
-        ws->dh_last = m_output_layer.backward_and_update(ws->output_layer_delta, ws->h_last_vec, LEARNING_RATE);
+        ws->dh_last = m_output_layer.backward_and_update(ws->output_layer_delta, ws->h_last_vec, learning_rate);
 
         // Initialise full-sequence gradient: zero everywhere except the last position
         ws->dh.fill(RLMM_ZERO);
@@ -207,12 +217,12 @@ namespace rllm
         // Backward through transformer blocks in reverse order
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
-            m_transformer_blocks[i].backward(ws->dh, ws->din, LEARNING_RATE);
+            m_transformer_blocks[i].backward(ws->dh, ws->din, learning_rate);
             ws->dh = ws->din;
         }
 
         // Update token embeddings
-        m_input_layer.propagate_backward(m_last_input, ws->dh, LEARNING_RATE);
+        m_input_layer.propagate_backward(m_last_input, ws->dh, learning_rate);
     }
 
 
@@ -423,7 +433,7 @@ namespace rllm
             train_with_random_len_from_start(
                 random_line,
                 verbose,
-                NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(),
+                training_steps_per_example(m_transformer_blocks.size()),
                 rng
             );
         }
@@ -523,19 +533,19 @@ namespace rllm
                     {
                     case TrainingMethod::TWO_TOK:
                         train_with_up_to_N(
-                            line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(), 2
+                            line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size()), 2
                         );
                         break;
 
                     case TrainingMethod::THREE_TOK:
                         train_with_up_to_N(
-                            line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size(), 3
+                            line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size()), 3
                         );
                         break;
 
                     case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
                         train_with_increasingly_longer_sequences(
-                            line_of_file, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size()
+                            line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size())
                         );
                         break;
 
@@ -687,7 +697,7 @@ namespace rllm
                     );
                 }
 
-                do_training(window, verbose, NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * m_transformer_blocks.size());
+                do_training(window, verbose, training_steps_per_example(m_transformer_blocks.size()));
             }
 
             std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
@@ -732,6 +742,7 @@ namespace rllm
         }
 
         const size_t vocab       = static_cast<size_t>(TokenID::MAX);
+        const size_t corpus_size = m_corpus.count_num_lines();
         const size_t d_model     = static_cast<size_t>(EmbeddingDimension::MAX);
         const size_t d_ff        = static_cast<size_t>(FFDimension::MAX);
         const size_t n_layers    = m_transformer_blocks.size();
@@ -742,6 +753,17 @@ namespace rllm
         const size_t params_per_block = params_attn + params_ffn;
         const size_t total_params    = params_embed + params_lm_head + n_layers * params_per_block;
         const float  total_params_mib = static_cast<float>(total_params * sizeof(rlmm_float)) / (1024.0f * 1024.0f);
+
+        static constexpr size_t CORPUS_SIZE_WARNING_THRESHOLD = 100000;
+        if (corpus_size > CORPUS_SIZE_WARNING_THRESHOLD)
+        {
+            LOG_INFO(
+                "WARNING: corpus is large ({} lines > {} threshold). Training may take significantly longer; "
+                "consider narrower --filter values, fewer --epochs, or window training.",
+                corpus_size,
+                CORPUS_SIZE_WARNING_THRESHOLD
+            );
+        }
 
         LOG_INFO(
             "Training the neural network...\n"
@@ -754,12 +776,12 @@ namespace rllm
             "\t num epochs: {}\n"
             "\t training method: {}\n",
             n_layers,
-            vocab,
+            corpus_size,
             total_params, static_cast<float>(total_params) / 1e6f, total_params_mib,
             params_embed, params_lm_head, n_layers, params_per_block,
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
-            NUMBER_OF_LAYER_VISITS_PER_EXAMPLE * n_layers,
+            training_steps_per_example(n_layers),
             num_epochs,
             training_method_to_string(m_training_method)
         );
