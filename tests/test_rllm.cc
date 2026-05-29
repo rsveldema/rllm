@@ -102,7 +102,9 @@ TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
     // of "#inclu" to get the correct [#(522), in(394)] context.
     {
         const auto inclu_toks = corpus.get_token_ids("#inclu");
-        ASSERT_GE(static_cast<int>(inclu_toks.size()), 2);
+        ASSERT_EQ(static_cast<int>(inclu_toks.size()), 3);
+
+        // strip the last token to get the correct [#, in] context, which should predict "clu" with high confidence after training on the include_sequence corpus.
         nn.propagate_forward(inclu_toks.sub_array(static_cast<rllm::PositionIndex>(2)));
         const auto top5_in = nn.get_best_output_token_ids(5);
         ASSERT_FALSE(top5_in.empty());
