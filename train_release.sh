@@ -3,8 +3,7 @@
 set -euo pipefail
 
 echo "Configuring and building release before training..."
-cmake -B build_release -DCMAKE_BUILD_TYPE=Release
-cmake --build build_release --parallel
+sh ./build_release.sh
 
 echo "Locating checkpoint to resume from..."
 

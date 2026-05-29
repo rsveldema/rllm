@@ -1,13 +1,225 @@
 #include <print>
 #include <string>
 
-#include <parallel.hpp>
 #include <RLLM.hpp>
+#include <parallel.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <functional>
+#include <optional>
+#include <ranges>
+#include <vector>
+
+
+struct CommandLineOption
+{
+    // if the command line has one of these:
+    std::vector<std::string> options;
+    std::string description;
+    size_t required_args = 0;
+
+    // then call the associated action with the remaining command line arguments
+    std::function<void(const std::vector<std::string>&)> action;
+};
+
+
+struct CommandLineParser
+{
+
+    std::string train_corpus_dir = "training_data";
+    std::vector<std::string> filters;
+    bool train_mode = false;
+    std::string output_filename = "model.json";
+    std::optional<std::string> input_filename;
+    std::optional<std::string> one_shot_prompt;
+    int num_layers = 4;
+    bool verbose = false;
+    size_t num_epochs = 1000;
+    rllm::TrainingMethod method = rllm::TrainingMethod::TWO_TOK;
+    int window_size = 2;
+    std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
+    std::string executable_name = "./rllm";
+
+    static bool option_matches(const std::string& arg, const CommandLineOption& option)
+    {
+        return std::ranges::any_of(option.options, [&](const auto& name) {
+            return name == arg;
+        });
+    }
+
+    [[noreturn]] void print_usage_and_exit(const std::string& executable, int exit_code) const
+    {
+        std::println("Usage: {} ", executable);
+
+        for (const auto& option : command_line_options)
+        {
+            std::string option_names;
+            for (size_t i = 0; i < option.options.size(); ++i)
+            {
+                if (i > 0)
+                    option_names += ", ";
+                option_names += option.options[i];
+            }
+
+            std::println("  {:<28} {}", option_names, option.description);
+        }
+
+        std::exit(exit_code);
+    }
+
+    std::vector<CommandLineOption> command_line_options = {
+        {.options = {"--filter"},
+         .description = "Specify a filter to apply (can be used multiple times for multiple filters)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 filters.push_back(args[0]);
+             }},
+        {.options = {"--layers"},
+         .description = std::format("Specify the number of layers in the model (default: {})", num_layers),
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 num_layers = std::atoi(args[0].c_str());
+             }},
+        {.options = {"--checkpoint-interval"},
+         .description = "Extra timed checkpoint cadence; <=0 disables",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int seconds = std::atoi(args[0].c_str());
+                 if (seconds <= 0)
+                     checkpointing_interval = std::nullopt;
+                 else
+                     checkpointing_interval = std::chrono::seconds{seconds};
+             }},
+        {.options = {"--train-dir"},
+         .description = "Directory containing training text files",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 train_corpus_dir = args[0];
+             }},
+        {.options = {"--epochs"},
+         .description = "Number of training epochs",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 num_epochs = static_cast<size_t>(std::atoi(args[0].c_str()));
+             }},
+        {.options = {"-o"},
+         .description = "Specify the model file to save",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 output_filename = args[0];
+             }},
+        {.options = {"-i"},
+         .description = "Specify the model file to load",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 input_filename = args[0];
+             }},
+        {.options = {"-c"},
+         .description = "Run prompt mode with this string, print predictions, then exit",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 one_shot_prompt = args[0];
+             }},
+        {.options = {"--method"},
+         .description = std::format("Training method. Valid values: two_tok, three_tok, increasingly_longer, random_line_random_len, window:<N> Sliding window of N tokens (N >= 2)"),
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const std::string m = args[0];
+                 if (m == "two_tok")
+                     method = rllm::TrainingMethod::TWO_TOK;
+                 else if (m == "three_tok")
+                     method = rllm::TrainingMethod::THREE_TOK;
+                 else if (m == "increasingly_longer")
+                     method = rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
+                 else if (m == "random_line_random_len")
+                     method = rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN;
+                 else if (m.starts_with("window:"))
+                 {
+                     const int n = std::atoi(m.c_str() + 7);
+                     if (n < 2)
+                     {
+                         std::println("window:<N> requires N >= 2, got '{}'", m);
+                         std::exit(1);
+                     }
+                     method = rllm::TrainingMethod::WINDOW;
+                     window_size = n;
+                 }
+                 else
+                 {
+                     std::println(
+                         "Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, "
+                         "random_line_random_len, window:<N>",
+                         m
+                     );
+                     std::exit(1);
+                 }
+             }},
+        {.options = {"--train"},
+         .description = "Run in training mode",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 train_mode = true;
+             }},
+        {.options = {"--verbose"},
+         .description = "Enable verbose output",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 verbose = true;
+             }},
+        {.options = {"--help", "-h"}, .description = "Show this help", .action = [&](const std::vector<std::string>&) {
+             print_usage_and_exit(executable_name, 0);
+         }}
+
+    };
+
+    void parse(int argc, char* argv[])
+    {
+        executable_name = argv[0];
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string arg = argv[i];
+
+            const auto option_it = std::ranges::find_if(command_line_options, [&](const auto& option) {
+                return option_matches(arg, option);
+            });
+
+            if (option_it == command_line_options.end())
+            {
+                std::println("Unknown option: {}", arg);
+                print_usage_and_exit(argv[0], 1);
+            }
+
+            if ((i + static_cast<int>(option_it->required_args)) >= argc)
+            {
+                std::println("Error: {} requires {} argument(s)", arg, option_it->required_args);
+                print_usage_and_exit(argv[0], 1);
+            }
+
+            std::vector<std::string> args;
+            args.reserve(option_it->required_args);
+            for (size_t n = 0; n < option_it->required_args; ++n)
+            {
+                args.emplace_back(argv[i + 1 + static_cast<int>(n)]);
+            }
+
+            option_it->action(args);
+            i += static_cast<int>(option_it->required_args);
+        }
+    }
+};
 
 int main(int argc, char* argv[])
 {
@@ -18,139 +230,30 @@ int main(int argc, char* argv[])
 #else
     std::println("Build type: Debug (NDEBUG not defined)");
 #endif
-    std::string train_corpus_dir = "training_data";
-    std::vector<std::string> filters;
-    bool train_mode = false;
-    std::string output_filename = "model.json";
-    std::optional<std::string> input_filename;
-    std::optional<std::string> one_shot_prompt;
-    int num_layers = 4;
-    bool verbose = false;
-    size_t num_epochs = 1000;
-    auto method = rllm::TrainingMethod::TWO_TOK;
-    int window_size = 2;
-    std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
 
-    for (int i = 1; i < argc; ++i)
-    {
-        if (std::strcmp(argv[i], "--filter") == 0 && ((i + 1) < argc))
-        {
-            filters.push_back(argv[++i]);
-        }
-        else if (std::strcmp(argv[i], "--layers") == 0 && ((i + 1) < argc))
-        {
-            num_layers = std::atoi(argv[++i]);
-        }
-        else if (std::strcmp(argv[i], "--checkpoint-interval") == 0 && ((i + 1) < argc))
-        {
-            const int seconds = std::atoi(argv[++i]);
-            if (seconds <= 0)
-                checkpointing_interval = std::nullopt;
-            else
-                checkpointing_interval = std::chrono::seconds{seconds};
-        }
-        else if (std::strcmp(argv[i], "--train-dir") == 0 && ((i + 1) < argc))
-        {
-            train_corpus_dir = argv[++i];
-        }
-        else if (std::strcmp(argv[i], "--epochs") == 0 && ((i + 1) < argc))
-        {
-            num_epochs = static_cast<size_t>(std::atoi(argv[++i]));
-        }
-        else if (std::strcmp(argv[i], "-o") == 0 && ((i + 1) < argc))
-        {
-            output_filename = argv[++i];
-        }
-        else if (std::strcmp(argv[i], "-i") == 0 && ((i + 1) < argc))
-        {
-            input_filename = argv[++i];
-        }        else if (std::strcmp(argv[i], "-c") == 0 && ((i + 1) < argc))
-        {
-            one_shot_prompt = argv[++i];
-        }        else if (std::strcmp(argv[i], "--method") == 0 && ((i + 1) < argc))
-        {
-            const std::string m = argv[++i];
-            if (m == "two_tok")
-                method = rllm::TrainingMethod::TWO_TOK;
-            else if (m == "three_tok")
-                method = rllm::TrainingMethod::THREE_TOK;
-            else if (m == "increasingly_longer")
-                method = rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
-            else if (m == "random_line_random_len")
-                method = rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN;
-            else if (m.starts_with("window:"))
-            {
-                const int n = std::atoi(m.c_str() + 7);
-                if (n < 2)
-                {
-                    std::println("window:<N> requires N >= 2, got '{}'", m);
-                    return 1;
-                }
-                method = rllm::TrainingMethod::WINDOW;
-                window_size = n;
-            }
-            else
-            {
-                std::println(
-                    "Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, random_line_random_len, window:<N>", m
-                );
-                return 1;
-            }
-        }
-        else if (std::strcmp(argv[i], "--train") == 0)
-        {
-            train_mode = true;
-        }
-        else if (std::strcmp(argv[i], "--verbose") == 0)
-        {
-            verbose = true;
-        }
-        else
-        {
-            std::println(
-                "Usage: {} [--train] [--file <filename>] [--verbose] [--filter <filter>]\n"
-                "          [--train-dir <directory>]\n"
-                "          [--method <two_tok|three_tok|increasingly_longer|random_line_random_len|window:<N>>]\n"
-                "  --train         Run in training mode (default is prompt mode)\n"
-                "  --train-dir <directory>  Directory containing training text files (default is '{}')\n"
-                "  -i <filename>  Specify the model file to load (trainer will init the model if not provided)\n"
-                "  -c <string>    Run prompt mode with this string, print predictions, then exit\n"
-                "  -o <filename>  Specify the model file to save (default is '{}')\n"
-                "  --verbose       Enable verbose output\n"
-                "  --filter <filter>  Specify a filter to apply\n"
-                "  --epochs <n>    Number of training epochs (default: {})\n"
-                "  --method        Training method (default: {})\n"
-                "  --checkpoint-interval <seconds>  Extra timed checkpoint cadence; <=0 disables (default: {}s)\n"
-                "  window:<N>      Sliding window of N tokens (N >= 2)",
-                argv[0],
-                train_corpus_dir,
-                output_filename,
-                num_epochs,
-                rllm::training_method_to_string(method),
-                checkpointing_interval.has_value() ? std::to_string(checkpointing_interval->count()) : "disabled"
-            );
-            return 1;
-        }
-    }
+    CommandLineParser parser;
+    parser.parse(argc, argv);
 
-    rllm::RLLM llm(filters);
-    if (train_mode)
+    rllm::RLLM llm(parser.filters);
+    if (parser.train_mode)
     {
         llm.train_mode(
-            input_filename,
-            output_filename,
-            num_layers,
-            verbose,
-            method,
-            checkpointing_interval,
-            window_size,
-            num_epochs,
-            train_corpus_dir
+            parser.input_filename,
+            parser.output_filename,
+            parser.num_layers,
+            parser.verbose,
+            parser.method,
+            parser.checkpointing_interval,
+            parser.window_size,
+            parser.num_epochs,
+            parser.train_corpus_dir
         );
     }
     else
     {
-        llm.prompt_mode(input_filename ? *input_filename : output_filename, one_shot_prompt);
+        llm.prompt_mode(
+            parser.input_filename ? *parser.input_filename : parser.output_filename, parser.one_shot_prompt
+        );
     }
 
     return 0;

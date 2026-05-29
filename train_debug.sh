@@ -1,3 +1,4 @@
+./build_debug.sh
 
 # Resume from the latest checkpoint if one exists, otherwise start fresh.
 latest_checkpoint=$(ls -t models/checkpoint-*.json 2>/dev/null | head -1)
