@@ -121,25 +121,43 @@ namespace parallel {
 #define ENDFOR \
           }}); \
       }
+// Minimum triangular cells each task must process.  Prevents spawning so many
+// tasks that O(n²) CAS contention on the work-stealing deque top dominates.
+// Tune with -DFF_PARFOR_TRIANGULAR_MIN_CELLS=N; default 256.
+#ifndef FF_PARFOR_TRIANGULAR_MIN_CELLS
+#  define FF_PARFOR_TRIANGULAR_MIN_CELLS 256
+#endif
 // Parallelises the lower-triangular iteration space { (v1,v2) | 0 ≤ v2 ≤ v1 < N }.
-// One fastfork task per outer row v1; v2 iterates sequentially inside each task,
-// so accumulations into [v1,...] are race-free.
+// Interleaved-striping: task t handles rows t, t+n_tasks, t+2*n_tasks, … giving
+// good load balance (each task gets a mix of short and long rows).  The task
+// count is capped at max(1, total_cells / MIN_CELLS) to avoid spawning so many
+// tasks that work-stealing CAS contention exceeds the benefit of parallelism.
 #define PARFOR_2D_TRIANGULAR(v1, v2, N) \
-    { const size_t _tri_n_ = static_cast<size_t>(N); \
+    { const size_t _tri_n_  = static_cast<size_t>(N); \
+      const size_t _tri_tot_ = _tri_n_ * (_tri_n_ + 1) / 2; \
+      const size_t _tri_nt_ = std::min( \
+          static_cast<size_t>(fastfork::get_max_threads()), \
+          std::max(size_t{1}, _tri_tot_ / size_t{FF_PARFOR_TRIANGULAR_MIN_CELLS})); \
       fastfork::Context _tri_ctx_; \
-      for (size_t _tri_i_ = 0; _tri_i_ < _tri_n_; ++_tri_i_) \
-          fastfork::fork_task(_tri_ctx_, [&, _tri_i_]() { \
+      for (size_t _tri_t_ = 0; _tri_t_ < _tri_nt_; ++_tri_t_) \
+          fastfork::fork_task(_tri_ctx_, [&, _tri_t_, _tri_nt_]() { \
+              for (size_t _tri_i_ = _tri_t_; _tri_i_ < _tri_n_; _tri_i_ += _tri_nt_) \
               for (size_t _tri_j_ = 0; _tri_j_ <= _tri_i_; ++_tri_j_) { \
                   const auto v1 = static_cast<decltype(N)>(_tri_i_); \
                   const auto v2 = static_cast<decltype(N)>(_tri_j_);
 // Parallelises the upper-triangular iteration space { (v1,v2) | 0 ≤ v1 ≤ v2 < N }.
-// One fastfork task per outer row v1; v2 iterates sequentially inside each task,
-// so accumulations into [v1,...] are race-free.
+// Same interleaved-striping strategy and cell-count-based task cap as the lower
+// triangular variant above.
 #define PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N) \
-    { const size_t _utri_n_ = static_cast<size_t>(N); \
+    { const size_t _utri_n_  = static_cast<size_t>(N); \
+      const size_t _utri_tot_ = _utri_n_ * (_utri_n_ + 1) / 2; \
+      const size_t _utri_nt_ = std::min( \
+          static_cast<size_t>(fastfork::get_max_threads()), \
+          std::max(size_t{1}, _utri_tot_ / size_t{FF_PARFOR_TRIANGULAR_MIN_CELLS})); \
       fastfork::Context _utri_ctx_; \
-      for (size_t _utri_i_ = 0; _utri_i_ < _utri_n_; ++_utri_i_) \
-          fastfork::fork_task(_utri_ctx_, [&, _utri_i_, _utri_n_]() { \
+      for (size_t _utri_t_ = 0; _utri_t_ < _utri_nt_; ++_utri_t_) \
+          fastfork::fork_task(_utri_ctx_, [&, _utri_t_, _utri_nt_]() { \
+              for (size_t _utri_i_ = _utri_t_; _utri_i_ < _utri_n_; _utri_i_ += _utri_nt_) \
               for (size_t _utri_j_ = _utri_i_; _utri_j_ < _utri_n_; ++_utri_j_) { \
                   const auto v1 = static_cast<decltype(N)>(_utri_i_); \
                   const auto v2 = static_cast<decltype(N)>(_utri_j_);

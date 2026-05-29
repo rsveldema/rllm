@@ -53,6 +53,7 @@ namespace rllm
 
         PARFOR(t, enum_iterator<PositionIndex>(x.num_rows()))
             float sq = 0.f;
+            //#pragma omp simd reduction(+:sq)
             for (const auto i : enum_iterator<EmbeddingDimension>())
             {
                 const auto val = x[t, i];

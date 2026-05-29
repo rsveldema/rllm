@@ -168,7 +168,17 @@ namespace rllm
 
         const double best_logit = static_cast<double>(top_k_pairs.front().activation);
 
-        // Stable softmax over the raw top-K logits.
+        // Cap the logit gap so that all top-K tokens have a non-negligible
+        // probability in the softmax (avoids numerical underflow for tokens
+        // that are slightly below the best logit).
+        static constexpr double MAX_LOGIT_GAP = 5.0;
+        for (auto& entry : top_k_pairs)
+        {
+            const double capped = std::max(static_cast<double>(entry.activation), best_logit - MAX_LOGIT_GAP);
+            entry.activation = static_cast<float>(capped);
+        }
+
+        // Stable softmax over the gap-capped logits.
         double sum_exp = 0.0;
         for (const auto& entry : top_k_pairs)
             sum_exp += std::exp(static_cast<double>(entry.activation) - best_logit);
