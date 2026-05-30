@@ -160,12 +160,6 @@ namespace rllm
                 for (size_t i = 0; i < output_layer_count; ++i)
                     m_output_layers[static_cast<MultiTokenPredictionIndex>(i)].load(output_layers_j.at(i));
             }
-            else
-            {
-                const auto& output_layer_j = j.at("output_layer");
-                for (const auto output_index : enum_iterator<MultiTokenPredictionIndex>())
-                    m_output_layers[output_index].load(output_layer_j);
-            }
         }
         catch (const std::exception& e)
         {
@@ -194,8 +188,6 @@ namespace rllm
         auto output_layers = nlohmann::json::array();
         for (const auto output_index : enum_iterator<MultiTokenPredictionIndex>())
             output_layers.push_back(m_output_layers[output_index].save());
-
-        j["output_layer"] = m_output_layers[MultiTokenPredictionIndex::START].save();
         j["output_layers"] = std::move(output_layers);
 
         std::ofstream file{filename};

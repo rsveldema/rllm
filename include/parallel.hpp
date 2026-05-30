@@ -51,6 +51,13 @@ namespace parallel {
 // No per-worker stats available under OpenMP; emit a no-op.
 #define PARALLEL_DUMP_STATS() ((void)0)
 
+// ── OFFLOADABLE_PARFOR* ───────────────────────────────────────────────────────
+// Top-level (non-nested) parallel loops that are candidates for future GPU /
+// accelerator offload.  Currently they expand identically to the CPU PARFOR*
+// macros; the distinct name marks the intent without changing behaviour.
+#define OFFLOADABLE_PARFOR(v, ...)              PARFOR(v, __VA_ARGS__)
+#define OFFLOADABLE_PARFOR_2D(v1, v2, ...)      PARFOR_2D(v1, v2, __VA_ARGS__)
+
 // ── fastfork backend ──────────────────────────────────────────────────────────
 #elif defined(USE_FASTFORK)
 
@@ -183,6 +190,13 @@ namespace parallel {
         fastfork::reset_worker_stats(); \
     } while (false)
 
+    // ── OFFLOADABLE_PARFOR* ───────────────────────────────────────────────────────
+// Top-level (non-nested) parallel loops that are candidates for future GPU /
+// accelerator offload.  Currently they expand identically to the CPU PARFOR*
+// macros; the distinct name marks the intent without changing behaviour.
+#define OFFLOADABLE_PARFOR(v, ...)              PARFOR(v, __VA_ARGS__)
+#define OFFLOADABLE_PARFOR_2D(v1, v2, ...)      PARFOR_2D(v1, v2, __VA_ARGS__)
+
 // ── Sequential fallback ───────────────────────────────────────────────────────
 #else
 
@@ -217,12 +231,12 @@ namespace parallel {
 
 #define PARALLEL_DUMP_STATS() ((void)0)
 
-#endif
-
 // ── OFFLOADABLE_PARFOR* ───────────────────────────────────────────────────────
 // Top-level (non-nested) parallel loops that are candidates for future GPU /
 // accelerator offload.  Currently they expand identically to the CPU PARFOR*
 // macros; the distinct name marks the intent without changing behaviour.
 #define OFFLOADABLE_PARFOR(v, ...)              PARFOR(v, __VA_ARGS__)
 #define OFFLOADABLE_PARFOR_2D(v1, v2, ...)      PARFOR_2D(v1, v2, __VA_ARGS__)
+#endif
+
 

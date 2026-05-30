@@ -188,81 +188,101 @@ namespace rllm
         }
         std::println("Input tokens: {}", *full_string_opt);
 
-        for (size_t iter = 0; iter < MAX_NUM_ANSWER_TOKENS; ++iter)
+        // MTP-aware generation: each forward pass can yield up to MAX_HEADS tokens,
+        // one per head (head k predicts the token k+1 positions ahead).
+        size_t total_tokens_generated = 0;
+        bool stop = false;
+        while (!stop && total_tokens_generated < MAX_NUM_ANSWER_TOKENS)
         {
             nn.propagate_forward(token_id_list);
 
-            const auto output_token_id_lists = nn.get_best_output_token_ids(5, rllm::MultiTokenPredictionIndex::START);
-            if (output_token_id_lists.empty())
+            size_t tokens_this_pass = 0;
+            for (const auto head : enum_iterator<MultiTokenPredictionIndex>())
             {
-                std::println("No output tokens predicted.");
-                break;
-            }
+                if (stop || total_tokens_generated >= MAX_NUM_ANSWER_TOKENS)
+                    break;
 
-            int ix = 0;
-            int num_valid_tokens = 0;
-            float top_k_probability_sum = 0.0f;
-            for (const auto& entry : output_token_id_lists)
-                top_k_probability_sum += entry.activation;
-
-            for (const auto& entry : output_token_id_lists)
-            {
-                auto tok = nn.get_corpus().get_token_from_id(entry.token_id);
-                if (tok == "\n")
-                    tok = "\\n";
-                const float global_percent = entry.activation * 100.0f;
-                const float top_k_percent = (top_k_probability_sum > 0.0f)
-                    ? (entry.activation / top_k_probability_sum) * 100.0f
-                    : 0.0f;
-
-                if (global_percent >= 0.01f)
+                const auto output_token_id_lists = nn.get_best_output_token_ids(5, head);
+                if (output_token_id_lists.empty())
                 {
-                    std::println(
-                        "\t     prediction[{}]: '{}' (id: '{}'), {:.6f}% (top-5 {:.2f}%)",
-                        ix,
-                        tok,
-                        static_cast<int>(entry.token_id),
-                        global_percent,
-                        top_k_percent
-                    );
+                    std::println("No output tokens predicted.");
+                    stop = true;
+                    break;
                 }
-                else
+
+                int ix = 0;
+                int num_valid_tokens = 0;
+                float top_k_probability_sum = 0.0f;
+                for (const auto& entry : output_token_id_lists)
+                    top_k_probability_sum += entry.activation;
+
+                std::println("  [head {}]", static_cast<int>(head));
+                for (const auto& entry : output_token_id_lists)
                 {
-                    std::println(
-                        "\t     prediction[{}]: '{}' (id: '{}'), {:.3e}% (top-5 {:.2f}%)",
-                        ix,
-                        tok,
-                        static_cast<int>(entry.token_id),
-                        global_percent,
-                        top_k_percent
-                    );
+                    auto tok = nn.get_corpus().get_token_from_id(entry.token_id);
+                    if (tok == "\n")
+                        tok = "\\n";
+                    const float global_percent = entry.activation * 100.0f;
+                    const float top_k_percent = (top_k_probability_sum > 0.0f)
+                        ? (entry.activation / top_k_probability_sum) * 100.0f
+                        : 0.0f;
+
+                    if (global_percent >= 0.01f)
+                    {
+                        std::println(
+                            "\t     prediction[{}]: '{}' (id: '{}'), {:.6f}% (top-5 {:.2f}%)",
+                            ix,
+                            tok,
+                            static_cast<int>(entry.token_id),
+                            global_percent,
+                            top_k_percent
+                        );
+                    }
+                    else
+                    {
+                        std::println(
+                            "\t     prediction[{}]: '{}' (id: '{}'), {:.3e}% (top-5 {:.2f}%)",
+                            ix,
+                            tok,
+                            static_cast<int>(entry.token_id),
+                            global_percent,
+                            top_k_percent
+                        );
+                    }
+                    ix++;
+                    if (entry.activation > VALID_PREDICTION_THRESHOLD)
+                        num_valid_tokens++;
                 }
-                ix++;
-                if (entry.activation > VALID_PREDICTION_THRESHOLD)
-                    num_valid_tokens++;
+
+                if (num_valid_tokens == 0)
+                {
+                    std::println("No valid output tokens predicted.");
+                    stop = true;
+                    break;
+                }
+
+                size_t random_index = 0;
+                if (!options.highest_prio_only)
+                    random_index = static_cast<size_t>(rand()) % num_valid_tokens;
+
+                const auto& entry = output_token_id_lists[random_index];
+                auto output_token = nn.get_corpus().get_token_from_id(entry.token_id);
+                if (output_token == "<UNK>")
+                {
+                    std::println("Predicted next token is unknown. Stopping generation.");
+                    stop = true;
+                    break;
+                }
+                if (output_token == "\n")  output_token = "\\n";
+                if (output_token == "\t")  output_token = "\\t";
+                std::println("Predicted next token (head {}): {}", static_cast<int>(head), output_token);
+                token_id_list.push_back(entry.token_id);
+                ++tokens_this_pass;
+                ++total_tokens_generated;
             }
 
-            if (num_valid_tokens == 0)
-            {
-                std::println("No output tokens predicted.");
+            if (tokens_this_pass == 0)
                 break;
-            }
-
-            size_t random_index = 0;
-            if (!options.highest_prio_only)
-                random_index = static_cast<size_t>(rand()) % num_valid_tokens;
-
-            const auto& entry = output_token_id_lists[random_index];
-            auto output_token = nn.get_corpus().get_token_from_id(entry.token_id);
-            if (output_token == "<UNK>")
-            {
-                std::println("Predicted next token is unknown. Stopping generation.");
-                break;
-            }
-            if (output_token == "\n")  output_token = "\\n";
-            if (output_token == "\t")  output_token = "\\t";
-            std::println("Predicted next token: {}", output_token);
-            token_id_list.push_back(entry.token_id);
         }
 
         const auto full_answer_string_opt = corpus.get_line(token_id_list);
