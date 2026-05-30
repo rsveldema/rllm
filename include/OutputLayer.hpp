@@ -15,6 +15,7 @@ namespace rllm
     class OutputLayer
     {
       public:
+        OutputLayer() = default;
         OutputLayer(const Corpus& corpus);
         ~OutputLayer() = default;
         OutputLayer(const OutputLayer&) = delete;
@@ -47,8 +48,6 @@ namespace rllm
         std::vector<OutputToken> get_top_k_by_logit(size_t k) const;
 
       private:
-        const Corpus& m_corpus;
-
         // Vocabulary logits computed by forward_from_hidden().
         fixed_size_vector<rlmm_float, TokenID> m_inputs;
 

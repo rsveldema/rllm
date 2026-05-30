@@ -150,7 +150,22 @@ namespace rllm
                 }
             }
 
-            m_output_layer.load(j.at("output_layer"));
+            if (j.contains("output_layers"))
+            {
+                const auto& output_layers_j = j.at("output_layers");
+                const size_t output_layer_count = std::min(
+                    output_layers_j.size(),
+                    static_cast<size_t>(MultiTokenPredictionIndex::MAX)
+                );
+                for (size_t i = 0; i < output_layer_count; ++i)
+                    m_output_layers[static_cast<MultiTokenPredictionIndex>(i)].load(output_layers_j.at(i));
+            }
+            else
+            {
+                const auto& output_layer_j = j.at("output_layer");
+                for (const auto output_index : enum_iterator<MultiTokenPredictionIndex>())
+                    m_output_layers[output_index].load(output_layer_j);
+            }
         }
         catch (const std::exception& e)
         {
@@ -176,7 +191,12 @@ namespace rllm
             blocks.push_back(block.save());
         j["transformer_blocks"] = std::move(blocks);
 
-        j["output_layer"] = m_output_layer.save();
+        auto output_layers = nlohmann::json::array();
+        for (const auto output_index : enum_iterator<MultiTokenPredictionIndex>())
+            output_layers.push_back(m_output_layers[output_index].save());
+
+        j["output_layer"] = primary_output_layer().save();
+        j["output_layers"] = std::move(output_layers);
 
         std::ofstream file{filename};
         file << j.dump(2) << '\n';

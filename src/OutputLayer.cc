@@ -14,8 +14,9 @@ namespace rllm
     static constexpr float WEIGHT_CLAMP = 2.0f;
 
     OutputLayer::OutputLayer(const Corpus& corpus)
-        : m_corpus(corpus)
-    {}
+    {
+        (void)corpus;
+    }
 
     void OutputLayer::set_random_weights()
     {

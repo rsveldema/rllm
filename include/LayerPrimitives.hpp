@@ -70,12 +70,30 @@ namespace rllm
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
-    // Index of an attention head (0..NUM_HEADS-1).
+    // Index of an attention head (0..HeadsIndex::MAX-1).
     enum class HeadsIndex : size_t
     {
         START = 0,
         MAX = 8
     };
+
+    // we are predicting N next tokens in parallel,
+    // so we have N parallel sets of attention heads and N parallel output tokens.
+    enum class MultiTokenPredictionIndex : size_t
+    {
+        START = 0,
+        ONE   = 1,
+        TWO   = 2,
+        THREE = 3,
+        FOUR  = 4,
+        MAX   = 4
+    };
+
+    static inline MultiTokenPredictionIndex inc(MultiTokenPredictionIndex id)
+    {
+        assert(id < MultiTokenPredictionIndex::MAX);
+        return static_cast<MultiTokenPredictionIndex>(static_cast<size_t>(id) + 1);
+    }
 
     // Per-head embedding dimension: EmbeddingDimension::MAX / HeadsIndex::MAX = 64.
     enum class HeadDimension : size_t

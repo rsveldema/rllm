@@ -196,7 +196,7 @@ namespace rllm
         {
             nn.propagate_forward(token_id_list);
 
-            const auto output_token_id_lists = nn.get_best_output_token_ids(5);
+            const auto output_token_id_lists = nn.get_best_output_token_ids(5, rllm::MultiTokenPredictionIndex::START);
             if (output_token_id_lists.empty())
             {
                 std::println("No output tokens predicted.");

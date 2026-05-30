@@ -52,7 +52,7 @@ namespace
     std::unique_ptr<rllm::NeuralNetwork> train_guaranteed_model(rllm::Corpus& corpus, rllm::Statistics& stats)
     {
         std::srand(0);
-        corpus.load_files_from_dir("training_data");
+        corpus.load_files_from_dir("training_data0");
         auto nn = std::make_unique<rllm::NeuralNetwork>(1, corpus, stats);
         nn->set_training_method(rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN);
         nn->train(false, 3, std::nullopt, std::nullopt);
@@ -64,7 +64,7 @@ namespace
     {
         const auto token_ids = corpus.get_token_ids(prompt);
         nn.propagate_forward(token_ids);
-        const auto top5 = nn.get_best_output_token_ids(5);
+        const auto top5 = nn.get_best_output_token_ids(5, rllm::MultiTokenPredictionIndex::START);
 
         std::println("Prompt '{}', top-5:", prompt);
         for (size_t i = 0; i < top5.size(); ++i)
@@ -86,43 +86,82 @@ TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
     // stays below 2 lines, disabling early stopping and checkpoint restoration.
     std::vector<std::string> filters = {"include_sequence"};
     rllm::Corpus corpus(filters);
-    corpus.load_files_from_dir("training_data");
+    corpus.load_files_from_dir("training_data0");
     rllm::Statistics stats;
-    rllm::NeuralNetwork nn(2, corpus, stats);
-    nn.set_training_method(rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
-    nn.train(false, 10, std::nullopt, std::nullopt);
+    auto nn = std::make_unique<rllm::NeuralNetwork>(2, corpus, stats);
+    nn->set_training_method(rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
+    nn->train(false, 10, std::nullopt, std::nullopt);
 
-    const auto top5 = top5_for_prompt(nn, corpus, "#");
+    const auto top5 = top5_for_prompt(*nn, corpus, "#");
     ASSERT_FALSE(top5.empty());
     EXPECT_EQ(corpus.get_token_from_id(top5.front().token_id), "in");
 
-    // [#, in] → "clu"
-    // Note: the string "#in" tokenizes with in(263) (word-boundary variant), not
-    // in(394) (continuation variant) used inside "#include". Take the first 2 tokens
-    // of "#inclu" to get the correct [#(522), in(394)] context.
+    // MTP head 1: all output heads were already computed by the top5_for_prompt call above.
+    // Head 1 should predict 'clu' — the 2nd token of '#include' — in parallel with head 0.
     {
-        const auto inclu_toks = corpus.get_token_ids("#inclu");
-        ASSERT_EQ(static_cast<int>(inclu_toks.size()), 3);
-
-        // strip the last token to get the correct [#, in] context, which should predict "clu" with high confidence after training on the include_sequence corpus.
-        nn.propagate_forward(inclu_toks.sub_array(static_cast<rllm::PositionIndex>(2)));
-        const auto top5_in = nn.get_best_output_token_ids(5);
-        ASSERT_FALSE(top5_in.empty());
-        std::println("Prompt '[#, in] (2-token prefix of '#inclu')', top-5:");
-        for (size_t i = 0; i < top5_in.size(); ++i)
+        const auto& head1 = nn->get_output_layer(rllm::MultiTokenPredictionIndex::ONE);
+        const auto head1_top = head1.get_top_k_by_logit(5);
+        ASSERT_FALSE(head1_top.empty());
+        std::println("Prompt '#', MTP head-1 top-5:");
+        for (size_t i = 0; i < head1_top.size(); ++i)
         {
-            const auto tok = corpus.get_token_from_id(top5_in[i].token_id);
+            const auto tok = corpus.get_token_from_id(head1_top[i].token_id);
             std::println(
-                "  [{}] token='{}' id={} p={:.6f}", i, tok, static_cast<int>(top5_in[i].token_id), top5_in[i].activation
+                "  [{}] token='{}' id={} logit={:.6f}", i, tok, static_cast<int>(head1_top[i].token_id), head1_top[i].activation
             );
         }
-        EXPECT_EQ(corpus.get_token_from_id(top5_in.front().token_id), "clu");
+        EXPECT_EQ(corpus.get_token_from_id(head1_top.front().token_id), "clu");
     }
 
-    const auto top5_inclu = top5_for_prompt(nn, corpus, "#inclu");
-    ASSERT_FALSE(top5_inclu.empty());
-    EXPECT_EQ(corpus.get_token_from_id(top5_inclu.front().token_id), "de");
+    // MTP head 2: predict 'de' (3rd token of '#include') from context '#'.
+    {
+        const auto& head2 = nn->get_output_layer(rllm::MultiTokenPredictionIndex::TWO);
+        const auto head2_top = head2.get_top_k_by_logit(5);
+        ASSERT_FALSE(head2_top.empty());
+        std::println("Prompt '#', MTP head-2 top-5:");
+        for (size_t i = 0; i < head2_top.size(); ++i)
+        {
+            const auto tok = corpus.get_token_from_id(head2_top[i].token_id);
+            std::println(
+                "  [{}] token='{}' id={} logit={:.6f}", i, tok, static_cast<int>(head2_top[i].token_id), head2_top[i].activation
+            );
+        }
+        EXPECT_EQ(corpus.get_token_from_id(head2_top.front().token_id), "de");
+    }
 }
+
+// Focused MTP test: a single forward pass from '#' should predict 'in' on head 0
+// and 'clu' on head 1 simultaneously — without any additional context tokens.
+TEST(PredictorRegressionTest, MTP_HashPredictsInThenCluInParallel)
+{
+    std::srand(0);
+    std::vector<std::string> filters = {"include_sequence"};
+    rllm::Corpus corpus(filters);
+    corpus.load_files_from_dir("training_data0");
+    rllm::Statistics stats;
+    auto nn = std::make_unique<rllm::NeuralNetwork>(2, corpus, stats);
+    nn->set_training_method(rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
+    nn->train(false, 10, std::nullopt, std::nullopt);
+
+    // Single forward pass with '#' activates all MTP heads simultaneously.
+    const auto hash_toks = corpus.get_token_ids("#");
+    ASSERT_FALSE(hash_toks.empty());
+    nn->propagate_forward(hash_toks);
+
+    // Head 0 (primary): predicts the next token after '#'.
+    const auto head0_top = nn->get_best_output_token_ids(1, rllm::MultiTokenPredictionIndex::START);
+    ASSERT_FALSE(head0_top.empty());
+    EXPECT_EQ(corpus.get_token_from_id(head0_top.front().token_id), "in")
+        << "Head 0 should predict 'in' (next token after '#') from context '#'";
+
+    // Head 1: predicts the 2nd-next token from '#' in parallel with head 0.
+    const auto& head1 = nn->get_output_layer(rllm::MultiTokenPredictionIndex::ONE);
+    const auto head1_top = head1.get_top_k_by_logit(1);
+    ASSERT_FALSE(head1_top.empty());
+    EXPECT_EQ(corpus.get_token_from_id(head1_top.front().token_id), "clu")
+        << "Head 1 should predict 'clu' (2nd token of '#include') in parallel with head 0";
+}
+
 
 TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
 {
@@ -131,13 +170,13 @@ TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
     // sees exactly one target for the full "#include" context and converges to A.
     std::vector<std::string> filters = {"include_a_training"};
     rllm::Corpus corpus(filters);
-    corpus.load_files_from_dir("training_data");
+    corpus.load_files_from_dir("training_data0");
     rllm::Statistics stats;
-    rllm::NeuralNetwork nn(1, corpus, stats);
-    nn.set_training_method(rllm::TrainingMethod::RANDOM_LINE_FULL);
-    nn.train(false, 10, std::nullopt, std::nullopt);
+    auto nn = std::make_unique<rllm::NeuralNetwork>(1, corpus, stats);
+    nn->set_training_method(rllm::TrainingMethod::RANDOM_LINE_FULL);
+    nn->train(false, 10, std::nullopt, std::nullopt);
 
-    const auto top5 = top5_for_prompt(nn, corpus, "#include");
+    const auto top5 = top5_for_prompt(*nn, corpus, "#include");
     ASSERT_FALSE(top5.empty());
     EXPECT_EQ(corpus.get_token_from_id(top5.front().token_id), "A")
         << "Expected 'A' as top-1 prediction for prompt '#include'";
@@ -150,18 +189,18 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
 
     std::vector<std::string> filters = {"guaranteed_to_learn"};
     rllm::Corpus corpus(filters);
-    corpus.load_files_from_dir("training_data");
+    corpus.load_files_from_dir("training_data0");
     rllm::Statistics stats;
-    rllm::NeuralNetwork nn(1, corpus, stats);
-    nn.set_training_method(rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN);
+    auto nn = std::make_unique<rllm::NeuralNetwork>(1, corpus, stats);
+    nn->set_training_method(rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN);
 
     // 3 epochs is the smallest fast setting that consistently pushes
     // '# -> defin' above the old ~0.6% floor on this tiny corpus.
-    nn.train(false, 3, std::nullopt, std::nullopt);
+    nn->train(false, 3, std::nullopt, std::nullopt);
 
     const auto prompt = corpus.get_token_ids("#");
-    nn.propagate_forward(prompt);
-    const auto top5 = nn.get_best_output_token_ids(5);
+    nn->propagate_forward(prompt);
+    const auto top5 = nn->get_best_output_token_ids(5, rllm::MultiTokenPredictionIndex::START);
     ASSERT_EQ(top5.size(), 5u);
 
     bool include_seen = false;

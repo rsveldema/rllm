@@ -3999,7 +3999,7 @@ namespace rllm
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
-    // Index of an attention head (0..NUM_HEADS-1).
+    // Index of an attention head (0..HeadsIndex::MAX-1).
     enum class HeadsIndex : size_t
     {
         START = 0,
@@ -4811,8 +4811,8 @@ namespace rllm
     //
     // Hyperparameters (compile-time):
     //   D_MODEL   = EmbeddingDimension::MAX  = 512
-    //   NUM_HEADS = static_cast<int>(HeadsIndex::MAX) = 8      HeadDimension::MAX = 64
-    //   static_cast<int>(FFDimension::MAX)      = D_MODEL * 4              = 2048
+    //   HeadsIndex::MAX = 8   →   HeadDimension::MAX = 64
+    //   FFDimension::MAX      = D_MODEL * 4              = 2048
     //
     // All weight matrices are stored [out  in] row-major on the heap.
     // Optimizer: SGD + momentum (   =0.9), gradient clip    1, vel clip    0.1, weight clamp    2.

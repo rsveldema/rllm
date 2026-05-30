@@ -41,7 +41,6 @@ namespace rllm
             : m_corpus(corpus)
             , m_stats(stats)
             , m_input_layer()
-            , m_output_layer(corpus)
             // Compute CE-based constants from the actual corpus size.
             , m_fires_nothing_ce_loss(std::log(static_cast<float>(TokenID::MAX)))
             , m_convergence_threshold(m_fires_nothing_ce_loss / k_convergence_divisor)
@@ -56,18 +55,19 @@ namespace rllm
 
         const Corpus& get_corpus() const { return m_corpus; }
         Statistics&   get_statistics() const { return m_stats; }
-        const OutputLayer& get_output_layer() const { return m_output_layer; }
+        const fixed_size_vector<OutputLayer, MultiTokenPredictionIndex>& get_output_layers() const { return m_output_layers; }
+        const OutputLayer& get_output_layer() const { return m_output_layers[MultiTokenPredictionIndex::START]; }
+        const OutputLayer& get_output_layer(MultiTokenPredictionIndex idx) const { return m_output_layers[idx]; }
         const InputLayer& get_input_layer() const { return m_input_layer; }
         size_t get_transformer_block_count() const { return m_transformer_blocks.size(); }
 
         void set_training_method(TrainingMethod m) { m_training_method = m; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
 
-        void propagate_backward(const Score& score);
         void propagate_forward(const InputLine& input);
 
         // Returns the top-K output tokens with the highest activation.
-        std::vector<OutputToken> get_best_output_token_ids(size_t top_k) const;
+        std::vector<OutputToken> get_best_output_token_ids(size_t top_k, MultiTokenPredictionIndex head) const;
 
         void train(
             bool verbose,
@@ -112,7 +112,10 @@ namespace rllm
         InputLayer  m_input_layer;
         InputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
         std::vector<TransformerBlock> m_transformer_blocks;
-        OutputLayer m_output_layer;
+        fixed_size_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
+
+        OutputLayer& primary_output_layer() { return m_output_layers[MultiTokenPredictionIndex::START]; }
+        const OutputLayer& primary_output_layer() const { return m_output_layers[MultiTokenPredictionIndex::START]; }
 
         // Hidden state at the final position after the last transformer block.
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> m_last_hidden;
@@ -124,6 +127,11 @@ namespace rllm
 
         void dump_top_predictions();
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
+        // Accumulates gradients from all valid MTP heads and backpropagates once.
+        void propagate_backward_mtp(
+            const fixed_size_vector<Score, MultiTokenPredictionIndex>& scores,
+            MultiTokenPredictionIndex num_valid
+        );
         float evaluate_average_loss(const std::vector<InputLine>& evaluation_lines);
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
