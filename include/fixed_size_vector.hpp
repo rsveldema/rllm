@@ -24,6 +24,12 @@ namespace rllm
 
         ~fixed_size_vector() = default;
 
+        void set_size(LengthType new_size)
+        {
+            assert(new_size <= LengthType::MAX);
+            len = new_size;
+        }
+
         float get_highest_value(const LengthType length) const
         {
             float max_value = std::numeric_limits<float>::lowest();

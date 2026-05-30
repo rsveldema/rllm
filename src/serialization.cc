@@ -1,4 +1,4 @@
-#include <RLLM.hpp>
+#include <Trainer.hpp>
 #include <JsonTensorHelpers.hpp>
 
 #include <fstream>
@@ -195,7 +195,7 @@ namespace rllm
         for (const auto output_index : enum_iterator<MultiTokenPredictionIndex>())
             output_layers.push_back(m_output_layers[output_index].save());
 
-        j["output_layer"] = primary_output_layer().save();
+        j["output_layer"] = m_output_layers[MultiTokenPredictionIndex::START].save();
         j["output_layers"] = std::move(output_layers);
 
         std::ofstream file{filename};

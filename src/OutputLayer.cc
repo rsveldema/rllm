@@ -31,7 +31,6 @@ namespace rllm
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
     void OutputLayer::forward_from_hidden(const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last)
     {
-        m_inputs.fill(RLMM_ZERO);
         for (const auto v : enum_iterator<TokenID>())
         {
             float sum = 0.f;

@@ -67,7 +67,7 @@ namespace rllm
 
     static size_t training_steps_per_example(size_t num_layers)
     {
-        (void)num_layers;
+        (void) num_layers;
         // Keep a stable update budget across model depth. Scaling linearly with
         // layer count made deeper models (e.g. 4 layers) overfit tiny corpora
         // and collapse to near one-hot predictions in just a few epochs.
@@ -80,7 +80,9 @@ namespace rllm
     {
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h;
         fixed_size_vector<rlmm_float, EmbeddingDimension> h_last;
-        explicit NeuralNetworkForwardWorkspace(PositionIndex seq_len) : h(seq_len) {}
+        explicit NeuralNetworkForwardWorkspace(PositionIndex seq_len)
+            : h(seq_len)
+        {}
     };
 
     void NeuralNetwork::propagate_forward(const InputLine& input)
@@ -108,11 +110,10 @@ namespace rllm
         const auto last_pos = dec(m_seq_len);
         for (const auto d : enum_iterator<EmbeddingDimension>())
             ws->h_last[d] = ws->h[last_pos, d];
-        for (auto output_index = MultiTokenPredictionIndex::START; output_index < MultiTokenPredictionIndex::MAX;
-             output_index = inc(output_index))
-        {
+
+        PARFOR(output_index, enum_iterator<MultiTokenPredictionIndex>())
             m_output_layers[output_index].forward_from_hidden(ws->h_last);
-        }
+        ENDFOR
     }
 
 
@@ -156,7 +157,8 @@ namespace rllm
 
     // Returns top-K tokens selected by logit, with probabilities normalized
     // over the returned top-K set.
-    std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k, MultiTokenPredictionIndex head) const
+    std::vector<OutputToken>
+    NeuralNetwork::get_best_output_token_ids(size_t top_k, MultiTokenPredictionIndex head) const
     {
         assert(!m_transformer_blocks.empty());
         assert(top_k > 0);
@@ -196,20 +198,25 @@ namespace rllm
 
     struct BackwardPropWorkspace
     {
-        fixed_size_vector<rlmm_float, TokenID>                                   output_layer_delta;
-        fixed_size_vector<rlmm_float, EmbeddingDimension>                        h_last_vec;
-        fixed_size_vector<rlmm_float, EmbeddingDimension>                        dh_last;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>    dh;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>    din;
-        explicit BackwardPropWorkspace(PositionIndex seq_len) : dh(seq_len), din(seq_len) {}
+        fixed_size_vector<rlmm_float, TokenID> output_layer_delta;
+        fixed_size_vector<rlmm_float, EmbeddingDimension> h_last_vec;
+        fixed_size_vector<rlmm_float, EmbeddingDimension> dh_last;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dh;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din;
+        explicit BackwardPropWorkspace(PositionIndex seq_len)
+            : dh(seq_len)
+            , din(seq_len)
+        {}
     };
 
     void NeuralNetwork::propagate_backward_mtp(
         const fixed_size_vector<Score, MultiTokenPredictionIndex>& scores,
-        MultiTokenPredictionIndex num_valid)
+        MultiTokenPredictionIndex num_valid
+    )
     {
         static constexpr float BASE_LEARNING_RATE = 0.003f;
-        const float learning_rate = BASE_LEARNING_RATE / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
+        const float learning_rate =
+            BASE_LEARNING_RATE / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
 
         auto ws = std::make_unique<BackwardPropWorkspace>(m_seq_len);
 
@@ -222,7 +229,8 @@ namespace rllm
         for (auto oi = MultiTokenPredictionIndex::START; oi < num_valid; oi = inc(oi))
         {
             m_output_layers[oi].compute_deltas(scores[oi], ws->output_layer_delta);
-            const auto dh_k = m_output_layers[oi].backward_and_update(ws->output_layer_delta, ws->h_last_vec, learning_rate);
+            const auto dh_k =
+                m_output_layers[oi].backward_and_update(ws->output_layer_delta, ws->h_last_vec, learning_rate);
             for (const auto d : enum_iterator<EmbeddingDimension>())
                 ws->dh_last[d] += dh_k[d];
         }
@@ -246,13 +254,12 @@ namespace rllm
     void NeuralNetwork::set_random_weights_and_connections()
     {
         m_input_layer.set_random_embeddings();
+
         for (auto& block : m_transformer_blocks)
             block.randomize();
-        for (auto output_index = MultiTokenPredictionIndex::START; output_index < MultiTokenPredictionIndex::MAX;
-             output_index = inc(output_index))
-        {
+
+        for (const auto output_index : enum_iterator<MultiTokenPredictionIndex>())
             m_output_layers[output_index].set_random_weights();
-        }
     }
 
 
@@ -284,14 +291,23 @@ namespace rllm
         double total_loss = 0.0;
         for (const auto& example : evaluation_lines)
         {
-            assert(static_cast<int>(example.size()) >= 2);
-            auto train_input = example;
-            const auto expected_output_token = train_input.back();
-            train_input.pop_back();
+            const int seq_len = static_cast<int>(example.size());
+            assert(seq_len >= 2);
+            const int num_valid = std::min(seq_len - 1, static_cast<int>(MultiTokenPredictionIndex::MAX));
+            const int input_len = seq_len - num_valid;
+            const auto train_input = example.sub_array(static_cast<PositionIndex>(input_len));
 
             propagate_forward(train_input);
-            Score score;
-            total_loss += static_cast<double>(primary_output_layer().compute_score(score, expected_output_token));
+
+            double example_loss = 0.0;
+            for (int k = 0; k < num_valid; ++k)
+            {
+                const auto head = static_cast<MultiTokenPredictionIndex>(k);
+                const auto target = example[static_cast<PositionIndex>(input_len + k)];
+                Score score;
+                example_loss += static_cast<double>(m_output_layers[head].compute_score(score, target));
+            }
+            total_loss += example_loss / static_cast<double>(num_valid);
         }
 
         return static_cast<float>(total_loss / static_cast<double>(evaluation_lines.size()));
@@ -439,10 +455,7 @@ namespace rllm
             else
             {
                 train_with_random_len_from_start(
-                    random_line,
-                    verbose,
-                training_steps_per_example(m_transformer_blocks.size()),
-                    rng
+                    random_line, verbose, training_steps_per_example(m_transformer_blocks.size()), rng
                 );
             }
         }
@@ -495,17 +508,11 @@ namespace rllm
 
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
-            if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN
-                || m_training_method == TrainingMethod::RANDOM_LINE_FULL)
+            if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN ||
+                m_training_method == TrainingMethod::RANDOM_LINE_FULL)
             {
                 train_random_line_random_len_epoch(
-                    epoch,
-                    training_lines,
-                    verbose,
-                    num_epochs,
-                    checkpointing_interval,
-                    last_checkpoint_at,
-                    rng
+                    epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng
                 );
 
                 epoch_checkpoint(last_checkpoint_at, epoch, [&] {
@@ -760,18 +767,18 @@ namespace rllm
             set_random_weights_and_connections();
         }
 
-        const size_t vocab       = static_cast<size_t>(TokenID::MAX);
+        const size_t vocab = static_cast<size_t>(TokenID::MAX);
         const size_t corpus_size = m_corpus.count_num_lines();
-        const size_t d_model     = static_cast<size_t>(EmbeddingDimension::MAX);
-        const size_t d_ff        = static_cast<size_t>(FFDimension::MAX);
-        const size_t n_layers    = m_transformer_blocks.size();
-        const size_t params_embed    = vocab * d_model;           // token embeddings
-        const size_t params_lm_head  = static_cast<size_t>(MultiTokenPredictionIndex::MAX) * vocab * d_model;
-        const size_t params_attn     = 4 * d_model * d_model;     // W_q, W_k, W_v, W_o per block
-        const size_t params_ffn      = 3 * d_model * d_ff;        // W_gate, W_up, W_down per block (2*d_ff*d_model + d_model*d_ff)
+        const size_t d_model = static_cast<size_t>(EmbeddingDimension::MAX);
+        const size_t d_ff = static_cast<size_t>(FFDimension::MAX);
+        const size_t n_layers = m_transformer_blocks.size();
+        const size_t params_embed = vocab * d_model; // token embeddings
+        const size_t params_lm_head = static_cast<size_t>(MultiTokenPredictionIndex::MAX) * vocab * d_model;
+        const size_t params_attn = 4 * d_model * d_model; // W_q, W_k, W_v, W_o per block
+        const size_t params_ffn = 3 * d_model * d_ff; // W_gate, W_up, W_down per block (2*d_ff*d_model + d_model*d_ff)
         const size_t params_per_block = params_attn + params_ffn;
-        const size_t total_params    = params_embed + params_lm_head + n_layers * params_per_block;
-        const float  total_params_mib = static_cast<float>(total_params * sizeof(rlmm_float)) / (1024.0f * 1024.0f);
+        const size_t total_params = params_embed + params_lm_head + n_layers * params_per_block;
+        const float total_params_mib = static_cast<float>(total_params * sizeof(rlmm_float)) / (1024.0f * 1024.0f);
 
         static constexpr size_t CORPUS_SIZE_WARNING_THRESHOLD = 100000;
         if (corpus_size > CORPUS_SIZE_WARNING_THRESHOLD)
@@ -796,8 +803,13 @@ namespace rllm
             "\t training method: {}\n",
             n_layers,
             corpus_size,
-            total_params, static_cast<float>(total_params) / 1e6f, total_params_mib,
-            params_embed, params_lm_head, n_layers, params_per_block,
+            total_params,
+            static_cast<float>(total_params) / 1e6f,
+            total_params_mib,
+            params_embed,
+            params_lm_head,
+            n_layers,
+            params_per_block,
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
             training_steps_per_example(n_layers),
@@ -822,7 +834,7 @@ namespace rllm
         // use the first (N - num_valid_heads) tokens as context and train each
         // head k to predict the token at position (context_len + k).
         assert(static_cast<int>(train_output.size()) >= 2);
-        const int _seq_len   = static_cast<int>(train_output.size());
+        const int _seq_len = static_cast<int>(train_output.size());
         const int _max_heads = static_cast<int>(MultiTokenPredictionIndex::MAX);
         const int _num_valid = std::min(_seq_len - 1, _max_heads);
         const int _input_len = _seq_len - _num_valid;
@@ -901,20 +913,17 @@ namespace rllm
         for (size_t i = 0; i < max_iterations; ++i)
         {
             propagate_forward(train_input);
+
+            scores_storage->set_size(num_valid_heads);
+            for (const auto _k : enum_iterator<MultiTokenPredictionIndex>(num_valid_heads))
             {
-                auto& scores = *scores_storage;
-                scores.clear();
-                for (int _k = 0; _k < _num_valid; ++_k)
-                {
-                    Score s;
-                    const auto _head_idx = static_cast<MultiTokenPredictionIndex>(_k);
-                    const auto _target   = train_output[static_cast<PositionIndex>(_input_len + _k)];
-                    const float _k_loss  = m_output_layers[_head_idx].compute_score(s, _target);
-                    scores.push_back(s);
-                    if (_k == 0)
-                        loss = _k_loss;
-                }
+                Score& s = (*scores_storage)[_k];
+                const auto _target = train_output[static_cast<PositionIndex>(_input_len + static_cast<int>(_k))];
+                const float _k_loss = m_output_layers[_k].compute_score(s, _target);
+                if (_k == MultiTokenPredictionIndex::START)
+                    loss = _k_loss;
             }
+
             propagate_backward_mtp(*scores_storage, num_valid_heads);
 
             if (trace_this_example && i < 4)

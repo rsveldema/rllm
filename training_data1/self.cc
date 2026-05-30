@@ -22,7 +22,7 @@ function(rllm_define_lib target_name)
     add_library(${target_name} STATIC)
 
     target_sources(${target_name} PRIVATE
-        RLLM.cc
+        Trainer.cc
         Corpus.cpp
         InputLayer.cc
         TransformerBlock.cc
@@ -531,7 +531,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    rllm::RLLM llm(filters);
+    rllm::Trainer llm(filters);
     if (train_mode)
     {
         llm.train_mode(
@@ -1507,7 +1507,7 @@ namespace parallel {
         std::println("Using sequential execution");
     }
 }
-#endif #include <RLLM.hpp>
+#endif #include <Trainer.hpp>
 
 #include <algorithm>
 #include <iostream>
@@ -1523,7 +1523,7 @@ namespace rllm
     // This is a tunable hyperparameter.
     static constexpr float VALID_PREDICTION_THRESHOLD = 0.5f / 100.0f;
 
-    void process_command(const std::string& _command, RLLM::PromptOptions& options, NeuralNetwork& nn)
+    void process_command(const std::string& _command, Trainer::PromptOptions& options, NeuralNetwork& nn)
     {
         const auto command = _command.empty() ? "/help" : _command;
 
@@ -1637,13 +1637,13 @@ namespace rllm
     }
 
 
-    RLLM::RLLM(const std::vector<std::string>& filters)
+    Trainer::Trainer(const std::vector<std::string>& filters)
         : m_filters(filters)
     {
         // Constructor implementation
     }
 
-    void RLLM::prompt_mode(const std::string& filename, const std::optional<std::string>& one_shot_prompt)
+    void Trainer::prompt_mode(const std::string& filename, const std::optional<std::string>& one_shot_prompt)
     {
         set_nn_log_file("prompt.log");
         Corpus corpus{m_filters};
@@ -1684,7 +1684,7 @@ namespace rllm
         }
     }
 
-    void RLLM::process_line(const std::string& line, Corpus& corpus, NeuralNetwork& nn, PromptOptions& options)
+    void Trainer::process_line(const std::string& line, Corpus& corpus, NeuralNetwork& nn, PromptOptions& options)
     {
         if (line.starts_with("/") || line.empty())
         {
@@ -1790,7 +1790,7 @@ namespace rllm
         std::println("Full answer string: {}", *full_answer_string_opt);
     }
 
-    void RLLM::train_mode(
+    void Trainer::train_mode(
         const std::optional<std::string>& input_filename,
         const std::string& output_filename,
         size_t num_layers,
@@ -1819,7 +1819,7 @@ namespace rllm
 
         nn->save(output_filename);
     }
-} // namespace rllm#include <RLLM.hpp>
+} // namespace rllm#include <Trainer.hpp>
 #include <JsonTensorHelpers.hpp>
 
 #include <fstream>
@@ -4679,13 +4679,13 @@ namespace rllm
 
 namespace rllm
 {
-    class RLLM
+    class Trainer
     {
       public:
-        RLLM(const std::vector<std::string>& filters);
-        ~RLLM() = default;
-        RLLM(const RLLM&) = delete;
-        RLLM& operator=(const RLLM&) = delete;
+        Trainer(const std::vector<std::string>& filters);
+        ~Trainer() = default;
+        Trainer(const Trainer&) = delete;
+        Trainer& operator=(const Trainer&) = delete;
 
         void train_mode(
             const std::optional<std::string>& input_filename,

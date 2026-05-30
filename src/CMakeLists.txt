@@ -22,7 +22,8 @@ function(rllm_define_lib target_name)
     add_library(${target_name} STATIC)
 
     target_sources(${target_name} PRIVATE
-        RLLM.cc
+        Trainer.cc
+        Prompter.cc
         Corpus.cpp
         InputLayer.cc
         TransformerBlock.cc

@@ -166,8 +166,11 @@ TEST(PredictorRegressionTest, MTP_HashPredictsInThenCluInParallel)
 TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
 {
     std::srand(0);
-    // Dedicated file: only "#include A" and "#define B", so the model
-    // sees exactly one target for the full "#include" context and converges to A.
+    // Dedicated file: only "#include A" and "#define B".
+    // With MTP (4 heads), "#include A" (5 tokens) trains from context "[#]":
+    //   head 0→"in", head 1→"clu", head 2→"de", head 3→"A".
+    // "#define B" (4 tokens) only activates 3 heads, so head 3 is exclusively
+    // trained to predict "A" from "[#]" — no conflicting signal.
     std::vector<std::string> filters = {"include_a_training"};
     rllm::Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
@@ -176,10 +179,14 @@ TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
     nn->set_training_method(rllm::TrainingMethod::RANDOM_LINE_FULL);
     nn->train(false, 10, std::nullopt, std::nullopt);
 
-    const auto top5 = top5_for_prompt(*nn, corpus, "#include");
-    ASSERT_FALSE(top5.empty());
-    EXPECT_EQ(corpus.get_token_from_id(top5.front().token_id), "A")
-        << "Expected 'A' as top-1 prediction for prompt '#include'";
+    // Head 3 (THREE) should predict "A" — the 4th token after "#".
+    const auto hash_toks = corpus.get_token_ids("#");
+    ASSERT_FALSE(hash_toks.empty());
+    nn->propagate_forward(hash_toks);
+    const auto top1 = nn->get_best_output_token_ids(1, rllm::MultiTokenPredictionIndex::THREE);
+    ASSERT_FALSE(top1.empty());
+    EXPECT_EQ(corpus.get_token_from_id(top1.front().token_id), "A")
+        << "Expected MTP head 3 to predict 'A' (4th token of '#include A') from context '#'";
 }
 
 TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFloor)

@@ -1,4 +1,4 @@
-#include <RLLM.hpp>
+#include <Prompter.hpp>
 
 #include <algorithm>
 #include <iostream>
@@ -14,7 +14,7 @@ namespace rllm
     // This is a tunable hyperparameter.
     static constexpr float VALID_PREDICTION_THRESHOLD = 0.5f / 100.0f;
 
-    void process_command(const std::string& _command, RLLM::PromptOptions& options, NeuralNetwork& nn)
+    static void process_command(const std::string& _command, Prompter::PromptOptions& options, NeuralNetwork& nn)
     {
         const auto command = _command.empty() ? "/help" : _command;
 
@@ -112,7 +112,6 @@ namespace rllm
 
         for (const auto& cmd : commands)
         {
-            // Match either the exact command or the command followed by a space (for argument-taking commands).
             const bool exact = std::find(cmd.name.begin(), cmd.name.end(), command) != cmd.name.end();
             const bool prefix = std::any_of(cmd.name.begin(), cmd.name.end(), [&](std::string_view name) {
                 return command.starts_with(std::string(name) + " ");
@@ -128,24 +127,21 @@ namespace rllm
     }
 
 
-    RLLM::RLLM(const std::vector<std::string>& filters)
+    Prompter::Prompter(const std::vector<std::string>& filters)
         : m_filters(filters)
-    {
-        // Constructor implementation
-    }
+    {}
 
-    void RLLM::prompt_mode(const std::string& filename, const std::optional<std::string>& one_shot_prompt)
+    void Prompter::prompt_mode(const std::string& filename, const std::optional<std::string>& one_shot_prompt)
     {
         set_nn_log_file("prompt.log");
         Corpus corpus{m_filters};
-        size_t _num_layers = 2; // overriden when loaded from file
+        size_t _num_layers = 2; // overridden when loaded from file
         Statistics stats;
 
         auto nn = std::make_unique<NeuralNetwork>(_num_layers, corpus, stats);
 
-
         std::println("Loading '{}'...", filename);
-        if (! nn->load(filename))
+        if (!nn->load(filename))
         {
             std::println("Failed to load model from file: '{}'", filename);
             return;
@@ -175,7 +171,7 @@ namespace rllm
         }
     }
 
-    void RLLM::process_line(const std::string& line, Corpus& corpus, NeuralNetwork& nn, PromptOptions& options)
+    void Prompter::process_line(const std::string& line, Corpus& corpus, NeuralNetwork& nn, PromptOptions& options)
     {
         if (line.starts_with("/") || line.empty())
         {
@@ -278,33 +274,4 @@ namespace rllm
         std::println("Full answer string: {}", *full_answer_string_opt);
     }
 
-    void RLLM::train_mode(
-        const std::optional<std::string>& input_filename,
-        const std::string& output_filename,
-        size_t num_layers,
-        bool verbose,
-        TrainingMethod method,
-        std::optional<std::chrono::seconds> checkpointing_interval,
-        int window_size,
-        size_t num_epochs,
-        const std::string& train_corpus_dir
-    )
-    {
-        std::println("Training mode");
-        set_nn_log_file("train.log");
-
-        Corpus corpus{m_filters};
-        corpus.load_files_from_dir(train_corpus_dir);
-        Statistics stats;
-
-        auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus, stats);
-        nn->set_training_method(method);
-        nn->set_window_size(window_size);
-
-        nn->train(verbose, num_epochs, input_filename, checkpointing_interval);
-
-        stats.print_statistics();
-
-        nn->save(output_filename);
-    }
 } // namespace rllm

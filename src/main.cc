@@ -1,7 +1,8 @@
 #include <print>
 #include <string>
 
-#include <RLLM.hpp>
+#include <Prompter.hpp>
+#include <Trainer.hpp>
 #include <parallel.hpp>
 
 #include <algorithm>
@@ -234,7 +235,7 @@ int main(int argc, char* argv[])
     CommandLineParser parser;
     parser.parse(argc, argv);
 
-    rllm::RLLM llm(parser.filters);
+    rllm::Trainer llm(parser.filters);
     if (parser.train_mode)
     {
         llm.train_mode(
@@ -251,7 +252,8 @@ int main(int argc, char* argv[])
     }
     else
     {
-        llm.prompt_mode(
+        rllm::Prompter prompter(parser.filters);
+        prompter.prompt_mode(
             parser.input_filename ? *parser.input_filename : parser.output_filename, parser.one_shot_prompt
         );
     }
