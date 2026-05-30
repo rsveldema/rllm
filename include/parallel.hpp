@@ -218,3 +218,11 @@ namespace parallel {
 #define PARALLEL_DUMP_STATS() ((void)0)
 
 #endif
+
+// ── OFFLOADABLE_PARFOR* ───────────────────────────────────────────────────────
+// Top-level (non-nested) parallel loops that are candidates for future GPU /
+// accelerator offload.  Currently they expand identically to the CPU PARFOR*
+// macros; the distinct name marks the intent without changing behaviour.
+#define OFFLOADABLE_PARFOR(v, ...)              PARFOR(v, __VA_ARGS__)
+#define OFFLOADABLE_PARFOR_2D(v1, v2, ...)      PARFOR_2D(v1, v2, __VA_ARGS__)
+

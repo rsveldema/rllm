@@ -111,7 +111,7 @@ namespace rllm
         for (const auto d : enum_iterator<EmbeddingDimension>())
             ws->h_last[d] = ws->h[last_pos, d];
 
-        PARFOR(output_index, enum_iterator<MultiTokenPredictionIndex>())
+        OFFLOADABLE_PARFOR(output_index, enum_iterator<MultiTokenPredictionIndex>())
             m_output_layers[output_index].forward_from_hidden(ws->h_last);
         ENDFOR
     }

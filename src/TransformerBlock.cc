@@ -51,7 +51,7 @@ namespace rllm
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
 
-        PARFOR(t, enum_iterator<PositionIndex>(x.num_rows()))
+        OFFLOADABLE_PARFOR(t, enum_iterator<PositionIndex>(x.num_rows()))
             float sq = 0.f;
             //#pragma omp simd reduction(+:sq)
             for (const auto i : enum_iterator<EmbeddingDimension>())
@@ -76,7 +76,7 @@ namespace rllm
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
 
-        PARFOR(t, enum_iterator<PositionIndex>(x.num_rows()))
+        OFFLOADABLE_PARFOR(t, enum_iterator<PositionIndex>(x.num_rows()))
             float sq = 0.f;
             for (const auto i : enum_iterator<EmbeddingDimension>())
                 sq += x[t, i] * x[t, i];
@@ -104,7 +104,7 @@ namespace rllm
     void
     TransformerBlock::causal_softmax(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T)
     {
-        PARFOR(i, enum_iterator<PositionIndex>(T))
+        OFFLOADABLE_PARFOR(i, enum_iterator<PositionIndex>(T))
             float max_val = x[i, PositionIndex::START];
             for (const auto j : enum_iterator<PositionIndex>(inc(PositionIndex::START), inc(i)))
                 max_val = math::max(max_val, x[i, j]);
@@ -138,7 +138,7 @@ namespace rllm
         PositionIndex T
     )
     {
-        PARFOR(i, enum_iterator<PositionIndex>(T))
+        OFFLOADABLE_PARFOR(i, enum_iterator<PositionIndex>(T))
             float dot = 0.f;
             for (const auto j : enum_iterator<PositionIndex>(inc(i)))
                 dot += dp[i, j] * p[i, j];
@@ -158,7 +158,7 @@ namespace rllm
         flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_up_pre
     )
     {
-        PARFOR_2D(t, f, enum_iterator2D<PositionIndex, FFDimension>(seq))
+        OFFLOADABLE_PARFOR_2D(t, f, enum_iterator2D<PositionIndex, FFDimension>(seq))
             const float g = gate_pre[t, f];
             const float sg = 1.0f / (1.0f + std::exp(-g)); // sigma(g)
             const float silu = g * sg;
@@ -278,7 +278,7 @@ namespace rllm
         // ── 4. Output projection + residual ──────────────────────────────────
         matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
 
-        PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
+        OFFLOADABLE_PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
             ws.h_mid[t, d] = h[t, d] + ws.attn_proj[t, d];
         ENDFOR
 
@@ -292,7 +292,7 @@ namespace rllm
             matmul_ABt(ws.h_norm_ff, W_up, ws.up_pre);
         PARSECTIONS_END
 
-        PARFOR_2D(t, f, enum_iterator2D<PositionIndex, FFDimension>(seq_len))
+        OFFLOADABLE_PARFOR_2D(t, f, enum_iterator2D<PositionIndex, FFDimension>(seq_len))
             const float g = ws.gate_pre[t, f];
             const float silu = g / (1.0f + std::exp(-g));
             ws.ffn_act[t, f] = silu * ws.up_pre[t, f];
@@ -301,7 +301,7 @@ namespace rllm
         matmul_ABt(ws.ffn_act, W_down, ws.ffn_out);
 
         // ── 7. Residual ───────────────────────────────────────────────────────
-        PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
+        OFFLOADABLE_PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
             h[t, d] = ws.h_mid[t, d] + ws.ffn_out[t, d];
         ENDFOR
     }
