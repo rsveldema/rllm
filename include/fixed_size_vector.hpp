@@ -21,7 +21,7 @@ namespace rllm
                 m_data.fill(T{});
             // else: T's own default constructor already initialises each element.
         }
-        
+
         ~fixed_size_vector() = default;
 
         float get_highest_value(const LengthType length) const
@@ -114,6 +114,15 @@ namespace rllm
         void fill(T value)
         {
             m_data.fill(value);
+        }
+
+        void fill(T value, LengthType length)
+        {
+            assert(length <= LengthType::MAX);
+            for (const auto i : enum_iterator<LengthType>(length))
+            {
+                m_data[static_cast<size_t>(i)] = value;
+            }
         }
 
         /** add a value to an element at index with clamping */

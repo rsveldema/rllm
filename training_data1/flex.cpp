@@ -13063,9 +13063,9 @@ struct std::formatter<GUID> {
 
 #include "Fraction.hpp"
 
-    namespace model {
-  using GrainRate = Fraction;
-} // namespace domainmodel#pragma once
+namespace model {
+using GrainRate = Fraction;
+} // namespace model
 
 #include <memory>
 #include <string>
@@ -14320,144 +14320,144 @@ private:
 
 #include <Configuration.hpp>
 
-    namespace NMOS {
-  class NMOS_Service : public service::Service, public mdns::INMOS_Service {
+namespace NMOS {
+class NMOS_Service : public service::Service, public mdns::INMOS_Service {
+public:
+  NMOS_Service(const std::shared_ptr<realtime::RealtimeKernel> &rt_kernel,
+               const std::shared_ptr<iuring::IOUringInterface> &network,
+               logging::ILogger &logger, http::HttpServer &http_server,
+               const std::shared_ptr<model::Node> &model,
+               const std::shared_ptr<mdns::MDNS_Service> &mdns_server,
+               iuring::NetworkAdapter &adapter, const settings::Configuration &config,
+               http::HttpClientManager &http_client_manager);
+
+  [[nodiscard]] error::Error init();
+  [[nodiscard]] error::Error finish() override {
+    return error::Error::OK;
+  }
+
+  void start_registration(
+      const iuring::IPAddress &ip, std::optional<uint16_t> port);
+
+  size_t num_self() const {
+    return 1;
+  }
+  size_t num_source() const {
+    return 1;
+  }
+  size_t num_flows() const {
+    return 1;
+  }
+  size_t num_devices() const {
+    return 1;
+  }
+  size_t num_senders() const {
+    return m_model->num_senders();
+  }
+  size_t num_receivers() const {
+    return m_model->num_receivers();
+  }
+
+private:
+  std::shared_ptr<realtime::RealtimeKernel> m_rt_kernel;
+  http::HttpServer &m_http_server;
+
+  // generated code:
+  NodeAPI::AllEndpoints m_node_api_endpoints;
+  ConnectionAPI::AllEndpoints m_connection_api_endpoints;
+  ChannelMappingAPI::AllEndpoints m_channel_mapping_api_endpoints;
+  EventsAPI::AllEndpoints m_events_api_endpoints;
+
+  std::shared_ptr<mdns::MDNS_Service> m_mdns_server;
+
+  std::shared_ptr<model::Node> m_model;
+  std::shared_ptr<iuring::IOUringInterface> m_io;
+  iuring::NetworkAdapter &m_adapter;
+  const settings::Configuration &m_config;
+  http::HttpClientManager &m_http_client_manager;
+
+  class Registration {
   public:
-    NMOS_Service(const std::shared_ptr<realtime::RealtimeKernel> &rt_kernel,
-                 const std::shared_ptr<iuring::IOUringInterface> &network,
-                 logging::ILogger &logger, http::HttpServer &http_server,
-                 const std::shared_ptr<model::Node> &model,
-                 const std::shared_ptr<mdns::MDNS_Service> &mdns_server,
-                 iuring::NetworkAdapter &adapter, const settings::Configuration &config,
-                 http::HttpClientManager &http_client_manager);
-
-    [[nodiscard]] error::Error init();
-    [[nodiscard]] error::Error finish() override {
-      return error::Error::OK;
-    }
-
-    void start_registration(
-        const iuring::IPAddress &ip, std::optional<uint16_t> port);
-
-    size_t num_self() const {
-      return 1;
-    }
-    size_t num_source() const {
-      return 1;
-    }
-    size_t num_flows() const {
-      return 1;
-    }
-    size_t num_devices() const {
-      return 1;
-    }
-    size_t num_senders() const {
-      return m_model->num_senders();
-    }
-    size_t num_receivers() const {
-      return m_model->num_receivers();
-    }
-
-  private:
-    std::shared_ptr<realtime::RealtimeKernel> m_rt_kernel;
-    http::HttpServer &m_http_server;
-
-    // generated code:
-    NodeAPI::AllEndpoints m_node_api_endpoints;
-    ConnectionAPI::AllEndpoints m_connection_api_endpoints;
-    ChannelMappingAPI::AllEndpoints m_channel_mapping_api_endpoints;
-    EventsAPI::AllEndpoints m_events_api_endpoints;
-
-    std::shared_ptr<mdns::MDNS_Service> m_mdns_server;
-
-    std::shared_ptr<model::Node> m_model;
-    std::shared_ptr<iuring::IOUringInterface> m_io;
-    iuring::NetworkAdapter &m_adapter;
-    const settings::Configuration &m_config;
-    http::HttpClientManager &m_http_client_manager;
-
-    class Registration {
-    public:
-      enum class Status {
-        IN_PROGRESS,
-        ACTIVE
-      };
-
-      Registration(const iuring::IPAddress &addr, Status status)
-          : m_registration_service_addr(addr), m_status(status) {
-      }
-
-      void set_periodic(const std::shared_ptr<realtime::PeriodicTask> &periodic) {
-        m_periodic = periodic;
-        m_status = Status::ACTIVE;
-      }
-
-      void reset_timestamp() {
-        m_last_failure_timestamp = std::nullopt;
-      }
-
-      bool timer_is_running() const { return m_last_failure_timestamp.has_value(); }
-
-      void start_timer(time_utils::ITimer &timer, const std::chrono::microseconds &timeout) {
-        m_last_failure_timestamp.emplace(timer, timeout);
-      }
-
-      bool elapsed() const {
-        if (m_last_failure_timestamp.has_value()) {
-          return m_last_failure_timestamp.value().elapsed();
-        }
-        return false;
-      }
-
-      Status get_status() const { return m_status; }
-      bool is_active() const { return m_status == Status::ACTIVE; }
-      bool is_in_progress() const { return m_status == Status::IN_PROGRESS; }
-
-      std::shared_ptr<realtime::PeriodicTask> get_periodic() { return m_periodic; }
-
-    private:
-      std::optional<time_utils::Timeout> m_last_failure_timestamp;
-      iuring::IPAddress m_registration_service_addr;
-      std::shared_ptr<realtime::PeriodicTask> m_periodic;
-      Status m_status;
+    enum class Status {
+      IN_PROGRESS,
+      ACTIVE
     };
 
-    std::map<iuring::IPAddress, Registration> m_registrations;
-
-    iuring::NetworkAdapter &get_adapter() {
-      return m_adapter;
+    Registration(const iuring::IPAddress &addr, Status status)
+        : m_registration_service_addr(addr), m_status(status) {
     }
 
-    std::shared_ptr<iuring::IOUringInterface> get_io() {
-      return m_io;
+    void set_periodic(const std::shared_ptr<realtime::PeriodicTask> &periodic) {
+      m_periodic = periodic;
+      m_status = Status::ACTIVE;
     }
 
-    void handle_registration(const iuring::IPAddress &dest);
-    void register_node(const iuring::IPAddress &dest);
-    void register_devices(const iuring::IPAddress &dest);
-    void register_senders(const iuring::IPAddress &dest);
-    void register_sources(const iuring::IPAddress &dest);
-    void register_flows(const iuring::IPAddress &dest);
-    void register_receivers(const iuring::IPAddress &dest);
+    void reset_timestamp() {
+      m_last_failure_timestamp = std::nullopt;
+    }
 
-    void handle_get_file(const std::string &endpoint,
-                         const std::string &payload, const http::URLParameters &params,
-                         http::reply_handler_t reply_handler);
+    bool timer_is_running() const { return m_last_failure_timestamp.has_value(); }
 
-    void start_keep_alive(const iuring::IPAddress &ip);
-    void send_keep_alive_msg(const iuring::IPAddress &ip);
-    void check_needs_keep_alive_removal(
-        const iuring::IPAddress &ip, bool saw_error);
+    void start_timer(time_utils::ITimer &timer, const std::chrono::microseconds &timeout) {
+      m_last_failure_timestamp.emplace(timer, timeout);
+    }
 
-    bool have_already_registered(const iuring::IPAddress &ip);
+    bool elapsed() const {
+      if (m_last_failure_timestamp.has_value()) {
+        return m_last_failure_timestamp.value().elapsed();
+      }
+      return false;
+    }
 
-    /** register the Nth device and only then start registering the sources */
-    void do_register_device(const iuring::IPAddress &dest, int ix);
-    void do_register_source(const iuring::IPAddress &dest, int ix);
-    void do_register_flow(const iuring::IPAddress &dest, int ix);
-    void do_register_sender(const iuring::IPAddress &dest, int ix);
-    void do_register_receiver(const iuring::IPAddress &dest, int ix);
+    Status get_status() const { return m_status; }
+    bool is_active() const { return m_status == Status::ACTIVE; }
+    bool is_in_progress() const { return m_status == Status::IN_PROGRESS; }
+
+    std::shared_ptr<realtime::PeriodicTask> get_periodic() { return m_periodic; }
+
+  private:
+    std::optional<time_utils::Timeout> m_last_failure_timestamp;
+    iuring::IPAddress m_registration_service_addr;
+    std::shared_ptr<realtime::PeriodicTask> m_periodic;
+    Status m_status;
   };
+
+  std::map<iuring::IPAddress, Registration> m_registrations;
+
+  iuring::NetworkAdapter &get_adapter() {
+    return m_adapter;
+  }
+
+  std::shared_ptr<iuring::IOUringInterface> get_io() {
+    return m_io;
+  }
+
+  void handle_registration(const iuring::IPAddress &dest);
+  void register_node(const iuring::IPAddress &dest);
+  void register_devices(const iuring::IPAddress &dest);
+  void register_senders(const iuring::IPAddress &dest);
+  void register_sources(const iuring::IPAddress &dest);
+  void register_flows(const iuring::IPAddress &dest);
+  void register_receivers(const iuring::IPAddress &dest);
+
+  void handle_get_file(const std::string &endpoint,
+                       const std::string &payload, const http::URLParameters &params,
+                       http::reply_handler_t reply_handler);
+
+  void start_keep_alive(const iuring::IPAddress &ip);
+  void send_keep_alive_msg(const iuring::IPAddress &ip);
+  void check_needs_keep_alive_removal(
+      const iuring::IPAddress &ip, bool saw_error);
+
+  bool have_already_registered(const iuring::IPAddress &ip);
+
+  /** register the Nth device and only then start registering the sources */
+  void do_register_device(const iuring::IPAddress &dest, int ix);
+  void do_register_source(const iuring::IPAddress &dest, int ix);
+  void do_register_flow(const iuring::IPAddress &dest, int ix);
+  void do_register_sender(const iuring::IPAddress &dest, int ix);
+  void do_register_receiver(const iuring::IPAddress &dest, int ix);
+};
 
 } // namespace NMOS
 #pragma once
@@ -18162,7 +18162,7 @@ extern "C" {
    void local_bind(SocketPortID port_id);
  };
 
- } // namespace iuring#pragma once
+ } // namespace iuring
 
 #include <arpa/inet.h>
 #include <cassert>
@@ -18701,7 +18701,7 @@ extern "C" {
        : BaseTask(TaskType::SOFT_REALTIME, name, t, callback, logger, kernel) {
    }
  };
- } // namespace realtime#pragma once
+ } // namespace realtime
 
 #include <memory>
 #include <vector>
@@ -18763,7 +18763,7 @@ extern "C" {
    bool overlaps_with(const PeriodicTask &other) const;
  };
 
- } // namespace realtime#pragma once
+ } // namespace realtime
 
 #include <chrono>
 #include <functional>

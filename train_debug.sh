@@ -1,10 +1,10 @@
 ./build_debug.sh
 
-echo "Formatting training_data/*.cpp with maximum line length..."
-if compgen -G "training_data/*.cpp" > /dev/null; then
-    clang-format -i --style='{BasedOnStyle: LLVM, ColumnLimit: 0}' training_data/*.cpp
+echo "Formatting training_data0/*.cpp with maximum line length..."
+if compgen -G "training_data0/*.cpp" > /dev/null; then
+    clang-format -i --style='{BasedOnStyle: LLVM, ColumnLimit: 0}' training_data0/*.cpp
 else
-    echo "No .cpp files found in training_data"
+    echo "No .cpp files found in training_data0"
 fi
 
 # Resume from the latest checkpoint if one exists, otherwise start fresh.

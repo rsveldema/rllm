@@ -1,5 +1,7 @@
 #include <InputLayer.hpp>
 #include <RandomHelpers.hpp>
+#include <enum_iterator2D.hpp>
+#include <parallel.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -33,23 +35,36 @@ namespace rllm
 
         constexpr float D = static_cast<float>(EmbeddingDimension::MAX);
 
-        // TODO: use a PARFOR_2D here
-        for (const auto pos : enum_iterator<PositionIndex>(input.size()))
-        {
-            const TokenID tok = input[pos];
-            const auto& embed = m_embeddings[tok];
-
-            for (const auto di : enum_iterator<EmbeddingDimension>())
-            {
-                const int di_int = static_cast<int>(di);
-                const float emb_val = embed[di];
-                const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / D);
-                const float pe = (di_int % 2 == 0) ? std::sin(static_cast<float>(pos) * freq)
-                                                   : std::cos(static_cast<float>(pos) * freq);
-                h[pos, di] = static_cast<rlmm_float>(emb_val + pe);
-            }
-        }
+        PARFOR_2D(pos, di, enum_iterator2D<PositionIndex, EmbeddingDimension>(input.size()))
+        const TokenID tok = input[pos];
+        const auto& embed = m_embeddings[tok];
+        const int di_int = static_cast<int>(di);
+        const float emb_val = embed[di];
+        const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / D);
+        const float pe =
+            (di_int % 2 == 0) ? std::sin(static_cast<float>(pos) * freq) : std::cos(static_cast<float>(pos) * freq);
+        h.set(pos, di, static_cast<rlmm_float>(emb_val + pe));
+        ENDFOR
     }
+
+
+        struct ConflicingToken
+        {
+            TokenID tok;
+            PositionIndex pos;
+        };
+
+        enum class ConflictIndex : size_t
+        {
+            START = 0,
+            MAX = 256
+        };
+
+        ConflictIndex inc(ConflictIndex c)
+        {
+            assert(c < ConflictIndex::MAX);
+            return static_cast<ConflictIndex>(static_cast<size_t>(c) + 1);
+        }
 
     // Update token embeddings.  dh[T × D_MODEL] = ∂L/∂h.
     // Positional encodings are fixed, so only the embedding contribution is updated.
@@ -59,17 +74,63 @@ namespace rllm
         float learning_rate
     )
     {
-        // TODO: use a PARFOR_2D here
+        static fixed_size_vector<uint16_t, TokenID> updated_tokens;
+        static fixed_size_vector<ConflicingToken, ConflictIndex> conflicts; // count how many times each token appears in the input
+
+        // count how many tokens appear more than once in the input
+        updated_tokens.fill(0);
+        ConflictIndex duplicate_count = ConflictIndex::START;
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {
             const auto tok = input[pos];
-            auto& embed = m_embeddings[tok];
+            updated_tokens[tok]++;
+
+            if (updated_tokens[tok] > 1)
+            {
+                assert(duplicate_count < ConflictIndex::MAX); // sanity check: we should never have this many duplicates in a single input
+                conflicts[duplicate_count] = {tok, pos};
+                duplicate_count = inc(duplicate_count);
+            }
+        }
+
+        // each duplicate we'll handle sequentially to avoid race conditions on the same embedding vector
+        for (const auto i : enum_iterator<ConflictIndex>(duplicate_count))
+        {
+            auto& conflict = conflicts[i];
+            auto& embed = m_embeddings[conflict.tok];
 
             for (const auto di : enum_iterator<EmbeddingDimension>())
             {
                 auto& e = embed[di];
-                e = math::clamp(e + learning_rate * static_cast<rlmm_float>(dh[pos, di]), RLMM_NEG_ONE, RLMM_ONE);
+                // if the same token appears multiple times, we average the gradient across those positions
+                const auto rate = learning_rate / float(updated_tokens[conflict.tok]);
+                e = math::clamp(e + rate * dh[conflict.pos, di], RLMM_NEG_ONE, RLMM_ONE);
             }
         }
+
+        // the bulk of the tokens can be updated in parallel since they don't have
+        // conflicting updates. We skip any token that appears more than once since
+        // those were handled in the sequential loop above.
+        PARFOR_2D(pos, di, enum_iterator2D<PositionIndex, EmbeddingDimension>(input.size()))
+        // the same token can appear at multiple positions,
+        // but we update its embedding using the gradient from
+        // each position where it appears.  This is a bit of a hack
+        // since it means the same embedding can be updated multiple times
+        // per training step, but it should be fine as long as the
+        // learning rate is small enough.
+
+        const auto tok = input[pos];
+        const auto count = updated_tokens[tok];
+        assert(count > 0); // sanity check: this token should have been marked as updated
+        if (count > 1)
+            // cannot do this in parallel
+            continue;
+
+        assert(count == 1); // sanity check: this token should only appear once in the input, otherwise it would have been handled in the sequential loop above
+
+        auto& embed = m_embeddings[tok];
+        auto& e = embed[di];
+        e = math::clamp(e + learning_rate * dh[pos, di], RLMM_NEG_ONE, RLMM_ONE);
+        ENDFOR
     }
 } // namespace rllm
