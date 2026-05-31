@@ -18,6 +18,7 @@ namespace rllm::vulkan
 			m_spirv_path = std::filesystem::path(RLLM_VULKAN_KERNEL_ROOT) / m_spirv_path;
 		}
 		m_spirv_words = detail::load_spirv_words(m_spirv_path, m_name.c_str());
+		m_parsed_ssbo_binding_count = detail::count_ssbo_bindings_in_glsl(m_spirv_path);
 	}
 
 	ComputeKernel::~ComputeKernel()
@@ -248,7 +249,7 @@ namespace rllm::vulkan
 		m_ssbo_binding_count = ssbo_binding_count;
 	}
 
-	void ComputeKernel::dispatch_kernel(uint32_t groups_x, uint32_t groups_y, const std::vector<detail::HostBufferView>& buffers)
+	void ComputeKernel::dispatch_kernel(uint32_t groups_x, uint32_t groups_y, std::span<const detail::HostBufferView> buffers)
 	{
 		if (groups_x == 0 || groups_y == 0)
 		{
@@ -256,9 +257,8 @@ namespace rllm::vulkan
 		}
 
 		detail::RuntimeContext& ctx = detail::runtime_context();
-		const uint32_t parsed_binding_count = detail::count_ssbo_bindings_in_glsl(m_spirv_path);
 		const uint32_t ssbo_binding_count =
-			std::max<uint32_t>(parsed_binding_count, static_cast<uint32_t>(buffers.size()));
+			std::max<uint32_t>(m_parsed_ssbo_binding_count, static_cast<uint32_t>(buffers.size()));
 		if (buffers.size() != ssbo_binding_count)
 		{
 			LOG_ERROR(
@@ -272,19 +272,11 @@ namespace rllm::vulkan
 
 		ensure_pipeline(ctx.device, ssbo_binding_count);
 
-		struct RuntimeBuffer
-		{
-			VkBuffer buffer = VK_NULL_HANDLE;
-			VkDeviceMemory memory = VK_NULL_HANDLE;
-			void* mapped = nullptr;
-			detail::HostBufferView view{};
-		};
-
-		std::vector<RuntimeBuffer> runtime_buffers;
-		runtime_buffers.reserve(buffers.size());
+		m_runtime_buffers.clear();
+		m_runtime_buffers.reserve(buffers.size());
 
 		auto cleanup_runtime_buffers = [&]() {
-			for (RuntimeBuffer& rb : runtime_buffers)
+			for (RuntimeBuffer& rb : m_runtime_buffers)
 			{
 				if (rb.mapped != nullptr)
 				{
@@ -306,6 +298,7 @@ namespace rllm::vulkan
 					rb.memory = VK_NULL_HANDLE;
 				}
 			}
+			m_runtime_buffers.clear();
 		};
 
 		auto find_memory_type_index = [&](uint32_t type_filter, VkMemoryPropertyFlags properties) -> uint32_t {
@@ -375,7 +368,7 @@ namespace rllm::vulkan
 			}
 
 			std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
-			runtime_buffers.push_back(rb);
+			m_runtime_buffers.push_back(rb);
 		}
 
 		if (m_command_buffer == VK_NULL_HANDLE)
@@ -461,16 +454,16 @@ namespace rllm::vulkan
 
 		vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline());
 
-		if (!runtime_buffers.empty())
+		if (!m_runtime_buffers.empty())
 		{
-			std::vector<VkDescriptorBufferInfo> buffer_infos(runtime_buffers.size());
-			std::vector<VkWriteDescriptorSet> writes(runtime_buffers.size());
+			std::vector<VkDescriptorBufferInfo> buffer_infos(m_runtime_buffers.size());
+			std::vector<VkWriteDescriptorSet> writes(m_runtime_buffers.size());
 
-			for (size_t i = 0; i < runtime_buffers.size(); ++i)
+			for (size_t i = 0; i < m_runtime_buffers.size(); ++i)
 			{
-				buffer_infos[i].buffer = runtime_buffers[i].buffer;
+				buffer_infos[i].buffer = m_runtime_buffers[i].buffer;
 				buffer_infos[i].offset = 0;
-				buffer_infos[i].range = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
+				buffer_infos[i].range = static_cast<VkDeviceSize>(m_runtime_buffers[i].view.size_bytes);
 
 				writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				writes[i].dstSet = m_descriptor_set;

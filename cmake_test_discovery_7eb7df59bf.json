@@ -3,6 +3,68 @@
   "name": "AllTests",
   "testsuites": [
     {
+      "name": "EnumIterator2DTest",
+      "tests": 5,
+      "testsuite": [
+        {
+          "name": "TotalCount",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 9
+        },
+        {
+          "name": "RowMajorOrder",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 20
+        },
+        {
+          "name": "RuntimeBound",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 38
+        },
+        {
+          "name": "ZeroBoundProducesNoIterations",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 49
+        },
+        {
+          "name": "BlockRangeRowMajorAndBounds",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 59
+        }
+      ]
+    },
+    {
+      "name": "EnumIteratorTest",
+      "tests": 5,
+      "testsuite": [
+        {
+          "name": "TotalCount",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 8
+        },
+        {
+          "name": "DefaultStartsAtStartAndIsIncreasing",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 17
+        },
+        {
+          "name": "RuntimeUpperBound",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 31
+        },
+        {
+          "name": "StartEndRangeHonorsStart",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 41
+        },
+        {
+          "name": "ZeroLengthRangeProducesNoIterations",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 55
+        }
+      ]
+    },
+    {
       "name": "PredictorTest",
       "tests": 1,
       "testsuite": [
@@ -115,68 +177,6 @@
           "name": "SpeedupFasterThanSerial",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
           "line": 781
-        }
-      ]
-    },
-    {
-      "name": "EnumIteratorTest",
-      "tests": 5,
-      "testsuite": [
-        {
-          "name": "TotalCount",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
-          "line": 8
-        },
-        {
-          "name": "DefaultStartsAtStartAndIsIncreasing",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
-          "line": 17
-        },
-        {
-          "name": "RuntimeUpperBound",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
-          "line": 31
-        },
-        {
-          "name": "StartEndRangeHonorsStart",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
-          "line": 41
-        },
-        {
-          "name": "ZeroLengthRangeProducesNoIterations",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
-          "line": 55
-        }
-      ]
-    },
-    {
-      "name": "EnumIterator2DTest",
-      "tests": 5,
-      "testsuite": [
-        {
-          "name": "TotalCount",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
-          "line": 9
-        },
-        {
-          "name": "RowMajorOrder",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
-          "line": 20
-        },
-        {
-          "name": "RuntimeBound",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
-          "line": 38
-        },
-        {
-          "name": "ZeroBoundProducesNoIterations",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
-          "line": 49
-        },
-        {
-          "name": "BlockRangeRowMajorAndBounds",
-          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
-          "line": 59
         }
       ]
     }

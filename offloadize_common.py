@@ -57,13 +57,23 @@ def parse_extra_param_names(raw: str | None) -> list[str]:
 
 
 def parse_offload_param_types_from_declaration_line(line: str, names: list[str]) -> dict[str, str]:
-    # Matches function parameter declaration lines inside OFFLOAD_PARAMETERS ... END_OFFLOAD_PARAMETERS,
-    # for example: `const flexible_rows_matrix<...>& x,`
+    # Matches both function-parameter style lines and local declarations inside
+    # OFFLOAD_PARAMETERS ... END_OFFLOAD_PARAMETERS.
+    # Examples:
+    #   const flexible_rows_matrix<...>& x,
+    #   std::vector<std::atomic<int>> visits(N);
     found: dict[str, str] = {}
     for name in names:
-        pattern = re.compile(rf"^\s*(?P<type>.+?)\s+{re.escape(name)}\s*(?:,|$)")
-        match = pattern.match(line.strip())
-        if match:
+        stripped = line.strip()
+        param_pattern = re.compile(rf"^\s*(?P<type>.+?)\s+{re.escape(name)}\s*(?:,|$)")
+        local_pattern = re.compile(
+            rf"^\s*(?P<type>.+?)\s+{re.escape(name)}\s*(?:\([^;]*\)|\{{[^;]*\}}|=[^;]*)?\s*;\s*$"
+        )
+
+        match = param_pattern.match(stripped)
+        if match is None:
+            match = local_pattern.match(stripped)
+        if match is not None:
             found[name] = match.group("type").strip()
     return found
 
@@ -92,20 +102,6 @@ def default_symbol_values() -> dict[str, str]:
         "NeuronConnectionIndex::START": "0",
         "NeuronConnectionIndex::MAX": "128",
     }
-
-    # Casts to enum types are invalid in generated shader code.
-    enum_cast_targets = [
-        "EmbeddingDimension",
-        "PositionIndex",
-        "HeadsIndex",
-        "MultiTokenPredictionIndex",
-        "HeadDimension",
-        "FFDimension",
-        "NeuronConnectionIndex",
-    ]
-    for target in enum_cast_targets:
-        values[f"static_cast<{target}>"] = "(int)"
-        values[f"static_cast<rllm::{target}>"] = "(int)"
 
     return values
 
@@ -162,6 +158,51 @@ def parse_macro_invocation(line: str) -> tuple[str, list[str], str] | None:
         return macro, args, indent
 
     return None
+
+
+def _defined_macros_for_backend(backend_namespace: str) -> set[str]:
+    defined: set[str] = set()
+    if backend_namespace == "vulkan":
+        defined.add("USE_VULKAN_OFFLOAD")
+    elif backend_namespace == "hip":
+        defined.add("USE_HIP_OFFLOAD")
+    return defined
+
+
+def _eval_preprocessor_expr(expr: str, defined_macros: set[str]) -> bool:
+    text = expr.strip()
+    if not text:
+        return False
+
+    text = re.sub(
+        r"defined\s*\(\s*([A-Za-z_]\w*)\s*\)",
+        lambda m: "True" if m.group(1) in defined_macros else "False",
+        text,
+    )
+    text = re.sub(
+        r"defined\s+([A-Za-z_]\w*)",
+        lambda m: "True" if m.group(1) in defined_macros else "False",
+        text,
+    )
+
+    text = text.replace("&&", " and ").replace("||", " or ")
+    text = re.sub(r"!(?!=)", " not ", text)
+
+    def _replace_ident(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if token in {"True", "False", "and", "or", "not"}:
+            return token
+        return "True" if token in defined_macros else "False"
+
+    text = re.sub(r"\b[A-Za-z_]\w*\b", _replace_ident, text)
+
+    if re.search(r"[^()\sA-Za-z]", text):
+        return False
+
+    try:
+        return bool(eval(text, {"__builtins__": {}}, {}))
+    except Exception:
+        return False
 
 
 def inject_kernel_include(lines: list[str], include_line: str) -> list[str]:
@@ -258,6 +299,11 @@ def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
                 f"entry index: {idx}\n"
                 f"entry value: {item!r}"
             )
+
+        # Keep C++ enum casts intact in transformed sources; Vulkan GLSL
+        # conversion handles casts separately in vulkanize.py sanitization.
+        if search.startswith("static_cast<"):
+            continue
 
         replacements[search] = replace
 
@@ -424,6 +470,9 @@ def transform_source(
     out_lines: list[str] = []
     loop_stack: list[LoopContext] = []
     changed = False
+    defined_macros = _defined_macros_for_backend(backend_namespace)
+    conditional_stack: list[tuple[bool, bool]] = []
+    active_code = True
     active_offload_param_types: dict[str, str] = {}
     collecting_offload_params = False
     collecting_param_names: list[str] = []
@@ -441,7 +490,76 @@ def transform_source(
         else:
             out_lines.extend(lines)
 
+    def append_directive(line: str) -> None:
+        # Keep preprocessor control lines out of captured kernel bodies.
+        if loop_stack:
+            out_lines.append(line)
+        else:
+            out_lines.append(line)
+
     for lineno, line in enumerate(in_lines, start=1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if_match = re.match(r"^#\s*if\s+(.*)$", stripped)
+            ifdef_match = re.match(r"^#\s*ifdef\s+([A-Za-z_]\w*)\s*$", stripped)
+            ifndef_match = re.match(r"^#\s*ifndef\s+([A-Za-z_]\w*)\s*$", stripped)
+            elif_match = re.match(r"^#\s*elif\s+(.*)$", stripped)
+            else_match = re.match(r"^#\s*else\s*$", stripped)
+            endif_match = re.match(r"^#\s*endif\s*$", stripped)
+
+            if if_match:
+                parent_active = active_code
+                branch_active = parent_active and _eval_preprocessor_expr(if_match.group(1), defined_macros)
+                conditional_stack.append((parent_active, branch_active))
+                active_code = branch_active
+                append_directive(line)
+                continue
+
+            if ifdef_match:
+                parent_active = active_code
+                branch_active = parent_active and (ifdef_match.group(1) in defined_macros)
+                conditional_stack.append((parent_active, branch_active))
+                active_code = branch_active
+                append_directive(line)
+                continue
+
+            if ifndef_match:
+                parent_active = active_code
+                branch_active = parent_active and (ifndef_match.group(1) not in defined_macros)
+                conditional_stack.append((parent_active, branch_active))
+                active_code = branch_active
+                append_directive(line)
+                continue
+
+            if elif_match and conditional_stack:
+                parent_active, any_taken = conditional_stack[-1]
+                branch_active = parent_active and (not any_taken) and _eval_preprocessor_expr(elif_match.group(1), defined_macros)
+                conditional_stack[-1] = (parent_active, any_taken or branch_active)
+                active_code = branch_active
+                append_directive(line)
+                continue
+
+            if else_match and conditional_stack:
+                parent_active, any_taken = conditional_stack[-1]
+                branch_active = parent_active and (not any_taken)
+                conditional_stack[-1] = (parent_active, True)
+                active_code = branch_active
+                append_directive(line)
+                continue
+
+            if endif_match and conditional_stack:
+                parent_active, _ = conditional_stack.pop()
+                active_code = parent_active
+                append_directive(line)
+                continue
+
+        if not active_code:
+            if loop_stack:
+                out_lines.append(line)
+            else:
+                out_lines.append(line)
+            continue
+
         if collecting_offload_params:
             if _OFFLOAD_PARAMETERS_END_RE.match(line.strip()):
                 collecting_offload_params = False
@@ -466,7 +584,6 @@ def transform_source(
             continue
 
         parsed = parse_macro_invocation(line)
-        stripped = line.strip()
         if stripped == "ENDFOR" and loop_stack:
             ctx = loop_stack.pop()
             ctx.range_expr = apply_symbol_values(ctx.range_expr, symbol_values)

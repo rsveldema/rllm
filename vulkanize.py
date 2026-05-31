@@ -6,7 +6,6 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 import re
-import shutil
 import subprocess
 
 from offloadize_common import LoopContext, resolve_symbol_values, transform_tree, write_manifest
@@ -22,6 +21,8 @@ _STD_EXP_RE = re.compile(r"\bstd\s*::\s*exp\s*\(")
 _MATH_MAX_RE = re.compile(r"\bmath\s*::\s*max\s*\(")
 _CONSTEXPR_WORD_RE = re.compile(r"\bconstexpr\b")
 _CSTYLE_FLOAT_CAST_RE = re.compile(r"\(\s*float\s*\)\s*\(")
+_CSTYLE_INT_CAST_RE = re.compile(r"\(\s*int\s*\)\s*\(")
+_ATOMIC_INC_CALL_RE = re.compile(r"\bATOMIC_INC\s*\((.+)\)\s*;\s*$")
 _COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
 
 
@@ -41,6 +42,13 @@ def _sanitize_kernel_line_for_glsl(line: str) -> str:
     line = _CONSTEXPR_WORD_RE.sub("const", line)
     # Prefer GLSL constructor-style casts over C-style casts.
     line = _CSTYLE_FLOAT_CAST_RE.sub("float(", line)
+    line = _CSTYLE_INT_CAST_RE.sub("int(", line)
+    # Kernel extraction happens before C preprocessor expansion, so map
+    # test-side ATOMIC_INC(expr) directly to GLSL increment form.
+    atomic_inc = _ATOMIC_INC_CALL_RE.search(line)
+    if atomic_inc:
+        target = atomic_inc.group(1).strip()
+        line = _ATOMIC_INC_CALL_RE.sub(f"{target}++;", line)
     # GLSL array indexing is nested: a[i][j], not a[i, j].
     while _COMMA_INDEX_RE.search(line):
         line = _COMMA_INDEX_RE.sub(r"[\1][\2]", line)
@@ -68,8 +76,21 @@ class MatrixViewSpec:
     flat_len: int
 
 
+@dataclass
+class BufferViewSpec:
+    name: str
+    glsl_scalar: str
+    is_const: bool
+
+
 _FLEX_ROWS_MATRIX_TYPE_RE = re.compile(
     r"^(?P<const>const\s+)?flexible_rows(?:_cols)?_matrix\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
+)
+_STD_VECTOR_ATOMIC_INT_RE = re.compile(
+    r"^(?P<const>const\s+)?std::vector\s*<\s*std::atomic\s*<\s*int\s*>\s*>\s*(?P<ref>[&*])?\s*$"
+)
+_STD_VECTOR_INT_RE = re.compile(
+    r"^(?P<const>const\s+)?std::vector\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
 )
 
 
@@ -96,7 +117,7 @@ def _map_cpp_extra_param_to_vulkan(
     name: str,
     cpp_type: str,
     symbol_values: dict[str, str],
-) -> tuple[str, str, MatrixViewSpec | None]:
+) -> tuple[str, str, MatrixViewSpec | None, BufferViewSpec | None]:
     # Returns: (kernel_param_declaration, main_local_setup_declaration, optional_matrix_view_spec)
     t = cpp_type.strip()
     flex_match = _FLEX_ROWS_MATRIX_TYPE_RE.match(t)
@@ -113,10 +134,20 @@ def _map_cpp_extra_param_to_vulkan(
                 cols=cols_max,
                 is_const=is_const,
                 flat_len=flat_len,
-            )
+            ), None
+
+    vector_atomic_match = _STD_VECTOR_ATOMIC_INT_RE.match(t)
+    if vector_atomic_match:
+        is_const = vector_atomic_match.group("const") is not None
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
+
+    vector_int_match = _STD_VECTOR_INT_RE.match(t)
+    if vector_int_match:
+        is_const = vector_int_match.group("const") is not None
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
 
     # Fallback to scalar int plumbing for unknown/unhandled types.
-    return f"int {name}", f"int {name} = 0;", None
+    return f"int {name}", f"int {name} = 0;", None, None
 
 
 def _rewrite_matrix_view_indexing(line: str, specs: dict[str, MatrixViewSpec]) -> str:
@@ -181,6 +212,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
     filtered_body_lines = [line for line in spec.body_lines if not _SIMD_REDUCTION_PLUS_RE.match(line)]
     filtered_body_lines = [_sanitize_kernel_line_for_glsl(line) for line in filtered_body_lines]
     matrix_view_specs: dict[str, MatrixViewSpec] = {}
+    buffer_view_specs: dict[str, BufferViewSpec] = {}
     body_text = "\n".join(
         f"    {_rewrite_matrix_view_indexing(line.lstrip(), matrix_view_specs)}" if line.strip() else ""
         for line in filtered_body_lines
@@ -196,7 +228,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
     ssbo_binding = 0
     for name in extra_param_names:
         if spec.extra_param_types and name in spec.extra_param_types:
-            mapped_param, mapped_setup, matrix_view_spec = _map_cpp_extra_param_to_vulkan(
+            mapped_param, mapped_setup, matrix_view_spec, buffer_view_spec = _map_cpp_extra_param_to_vulkan(
                 name,
                 spec.extra_param_types[name],
                 symbol_values,
@@ -207,6 +239,14 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
                 block_name = f"RllmBuffer_{name}"
                 ssbo_decls.append(
                     f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ float {name}[{matrix_view_spec.flat_len}]; }};"
+                )
+                ssbo_binding += 1
+            elif buffer_view_spec is not None:
+                buffer_view_specs[name] = buffer_view_spec
+                readonly = "readonly " if buffer_view_spec.is_const else ""
+                block_name = f"RllmBuffer_{name}"
+                ssbo_decls.append(
+                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ {buffer_view_spec.glsl_scalar} {name}[]; }};"
                 )
                 ssbo_binding += 1
             else:
@@ -241,7 +281,9 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
             arg_setup = arg_setup + "\n" + "\n".join(extra_arg_setup_lines)
         else:
             arg_setup = "\n".join(extra_arg_setup_lines)
-    call_arg_names.extend(name for name in extra_param_names if name not in matrix_view_specs)
+    call_arg_names.extend(
+        name for name in extra_param_names if name not in matrix_view_specs and name not in buffer_view_specs
+    )
     call_args = ", ".join(call_arg_names)
     ssbo_block = "\n".join(ssbo_decls)
     if ssbo_block:
@@ -335,9 +377,9 @@ def main() -> int:
     kernel_specs: list[VulkanKernelSpec] = []
     symbol_values = resolve_symbol_values(args.enum_value_tool)
 
-    # Avoid stale kernel files when source edits shift loop line numbers.
-    if kernel_root.exists():
-        shutil.rmtree(kernel_root)
+    # Do not clear kernel_root here: src/ and tests/ vulkanize targets run in
+    # parallel and share this directory. Deleting it introduces a race where one
+    # invocation removes files the other is about to compile.
 
     def collect_kernel(ctx: LoopContext) -> None:
         kernel_specs.append(

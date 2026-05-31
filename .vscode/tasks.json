@@ -26,6 +26,21 @@
             },
             "problemMatcher": "$gcc",
             "dependsOn": "cmake configure"
+        },
+        {
+            "label": "cmake release build",
+            "type": "shell",
+            "command": "cmake --build build_release --parallel",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": "$gcc",
+            "dependsOn": "cmake configure"
         }
     ]
 }
