@@ -130,17 +130,26 @@ namespace parallel {
         fastfork::reset_worker_stats(); \
     } while (false)
 
-// Top-level (non-nested) parallel loops that are candidates for future GPU /
-// accelerator offload. Currently they expand identically to the CPU PARFOR*
-// macros; the distinct name marks the intent without changing behaviour.
-#define OFFLOADABLE_PARFOR(v, ...)              PARFOR(v, __VA_ARGS__)
-#define OFFLOADABLE_PARFOR_2D(v1, v2, ...)      PARFOR_2D(v1, v2, __VA_ARGS__)
+#if defined(USE_VULKAN_OFFLOAD) or defined(USE_HIP_OFFLOAD) or defined(USE_CUDA_OFFLOAD)
+// Source offload macros are rewritten by vulkanize/hipify, but headers are not rewritten.
+// Keep header-time uses valid by falling back to the CPU PARFOR forms.
+#define OFFLOAD_PARFOR(v, N) PARFOR(v, N)
+#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) PARFOR_2D(v1, v2, N1, N2)
+#define OFFLOAD_PARFOR_PARAM(v, n, PARAMS) PARFOR(v, n)
+#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+#else
 
 // Index-space OFFLOAD_PARFOR* fallback for fastfork builds.
-// In USE_VULKAN_OFFLOAD mode these remain CPU loops until Vulkan kernels land.
-#define OFFLOAD_PARFOR(v, N) \
-    for (std::size_t v = 0, _off_n_ = static_cast<std::size_t>(N); v < _off_n_; ++v) {
+// With Vulkan/HIP these are located and replaced by the
+// vulkanizer/hipify scripts with target-specific offload pragmas and APIs,
+// but for CPU builds they just map to the regular PARFOR* macros.
+#define OFFLOAD_PARFOR(v, N) PARFOR(v, N)
 
-#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) \
-    for (std::size_t v1 = 0, _off_n1_ = static_cast<std::size_t>(N1); v1 < _off_n1_; ++v1) \
-        for (std::size_t v2 = 0, _off_n2_ = static_cast<std::size_t>(N2); v2 < _off_n2_; ++v2) {
+#define OFFLOAD_PARFOR_PARAM(v, n, PARAMS) \
+    PARFOR(v, n)
+
+#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) PARFOR_2D(v1, v2, N1, N2)
+
+#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+
+#endif

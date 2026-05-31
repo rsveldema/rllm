@@ -6,6 +6,7 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 from offloadize_common import LoopContext, resolve_symbol_values, transform_tree, write_manifest
@@ -13,13 +14,36 @@ from offloadize_common import LoopContext, resolve_symbol_values, transform_tree
 
 _SIMD_REDUCTION_PLUS_RE = re.compile(r"^\s*RLLM_OMP_SIMD_REDUCTION_PLUS\s*\([^)]*\)\s*;?\s*$")
 _STATIC_CAST_SIZE_T_RE = re.compile(r"static_cast\s*<\s*size_t\s*>\s*\(([^()]*)\)")
+_STATIC_CAST_GENERIC_RE = re.compile(r"static_cast\s*<\s*([^>]+?)\s*>\s*\(")
 _SIZE_T_WORD_RE = re.compile(r"\bsize_t\b")
+_RLMM_FLOAT_WORD_RE = re.compile(r"\brlmm_float(?:_small)?\b")
+_STD_SQRT_RE = re.compile(r"\bstd\s*::\s*sqrt\s*\(")
+_STD_EXP_RE = re.compile(r"\bstd\s*::\s*exp\s*\(")
+_MATH_MAX_RE = re.compile(r"\bmath\s*::\s*max\s*\(")
+_CONSTEXPR_WORD_RE = re.compile(r"\bconstexpr\b")
+_CSTYLE_FLOAT_CAST_RE = re.compile(r"\(\s*float\s*\)\s*\(")
+_COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
 
 
 def _sanitize_kernel_line_for_glsl(line: str) -> str:
+    # Replace C++ static_cast<T>(...) with C-style casts before further cleanup.
+    line = _STATIC_CAST_GENERIC_RE.sub(r"(\1)(", line)
     # GLSL has no size_t; map common generated C++ forms to int.
     line = _STATIC_CAST_SIZE_T_RE.sub(r"int(\1)", line)
     line = _SIZE_T_WORD_RE.sub("int", line)
+    # Map project scalar aliases to GLSL scalar type.
+    line = _RLMM_FLOAT_WORD_RE.sub("float", line)
+    # GLSL builtins are unqualified (no std:: namespace).
+    line = _STD_SQRT_RE.sub("sqrt(", line)
+    line = _STD_EXP_RE.sub("exp(", line)
+    line = _MATH_MAX_RE.sub("max(", line)
+    # GLSL does not support constexpr declarations.
+    line = _CONSTEXPR_WORD_RE.sub("const", line)
+    # Prefer GLSL constructor-style casts over C-style casts.
+    line = _CSTYLE_FLOAT_CAST_RE.sub("float(", line)
+    # GLSL array indexing is nested: a[i][j], not a[i, j].
+    while _COMMA_INDEX_RE.search(line):
+        line = _COMMA_INDEX_RE.sub(r"[\1][\2]", line)
     return line
 
 
@@ -29,8 +53,98 @@ class VulkanKernelSpec:
     lineno: int
     is_2d: bool
     vars: list[str]
+    extra_params: str | None
+    extra_param_types: dict[str, str] | None
     range_expr: str
     body_lines: list[str]
+
+
+@dataclass
+class MatrixViewSpec:
+    name: str
+    rows: int
+    cols: int
+    is_const: bool
+
+
+_FLEX_ROWS_MATRIX_TYPE_RE = re.compile(
+    r"^(?P<const>const\s+)?flexible_rows(?:_cols)?_matrix\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
+)
+
+
+def _normalize_enum_type_name(raw: str) -> str:
+    token = raw.strip()
+    if "::" in token:
+        token = token.split("::")[-1]
+    return token
+
+
+def _resolve_enum_max(raw_enum_type: str, symbol_values: dict[str, str]) -> int | None:
+    enum_type = _normalize_enum_type_name(raw_enum_type)
+    key = f"{enum_type}::MAX"
+    raw = symbol_values.get(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _map_cpp_extra_param_to_vulkan(
+    name: str,
+    cpp_type: str,
+    symbol_values: dict[str, str],
+) -> tuple[str, str, MatrixViewSpec | None]:
+    # Returns: (kernel_param_declaration, main_local_setup_declaration, optional_matrix_view_spec)
+    t = cpp_type.strip()
+    flex_match = _FLEX_ROWS_MATRIX_TYPE_RE.match(t)
+    if flex_match:
+        rows_max = _resolve_enum_max(flex_match.group("rows"), symbol_values)
+        cols_max = _resolve_enum_max(flex_match.group("cols"), symbol_values)
+        if rows_max is not None and cols_max is not None:
+            is_const = flex_match.group("const") is not None
+            # Matrix-like tensors are exposed as SSBO bindings, not copied into function-local arrays.
+            return "", "", MatrixViewSpec(name=name, rows=rows_max, cols=cols_max, is_const=is_const)
+
+    # Fallback to scalar int plumbing for unknown/unhandled types.
+    return f"int {name}", f"int {name} = 0;", None
+
+
+def _rewrite_matrix_view_indexing(line: str, specs: dict[str, MatrixViewSpec]) -> str:
+    out = line
+    for name, spec in specs.items():
+        pattern = re.compile(
+            rf"\b{re.escape(name)}\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]"
+        )
+
+        def repl(match: re.Match[str]) -> str:
+            row = match.group(1).strip()
+            col = match.group(2).strip()
+            return f"{name}[(({row}) * {spec.cols}) + ({col})]"
+
+        out = pattern.sub(repl, out)
+    return out
+
+
+def _parse_extra_param_names(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    text = raw.strip()
+    if len(text) >= 2 and text[0] in "[{(" and text[-1] in "]})":
+        text = text[1:-1].strip()
+    if not text:
+        return []
+
+    names: list[str] = []
+    for part in text.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        m = re.search(r"([A-Za-z_]\w*)\s*$", token)
+        if m:
+            names.append(m.group(1))
+    return names
 
 
 def _sanitize_name_component(text: str) -> str:
@@ -55,31 +169,104 @@ def _spirv_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
     return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.spv"
 
 
-def _render_kernel_stub(spec: VulkanKernelSpec) -> str:
+def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -> str:
     filtered_body_lines = [line for line in spec.body_lines if not _SIMD_REDUCTION_PLUS_RE.match(line)]
     filtered_body_lines = [_sanitize_kernel_line_for_glsl(line) for line in filtered_body_lines]
+    matrix_view_specs: dict[str, MatrixViewSpec] = {}
     body_text = "\n".join(
-        f"    {line.lstrip()}" if line.strip() else ""
+        f"    {_rewrite_matrix_view_indexing(line.lstrip(), matrix_view_specs)}" if line.strip() else ""
         for line in filtered_body_lines
     )
+    extra_param_names = _parse_extra_param_names(spec.extra_params)
+    param_names = list(spec.vars) + extra_param_names
+
+    typed_params: list[str] = []
+    for var in spec.vars:
+        typed_params.append(f"int {var}")
+    extra_setup_decls: list[str] = []
+    ssbo_decls: list[str] = []
+    ssbo_binding = 0
+    for name in extra_param_names:
+        if spec.extra_param_types and name in spec.extra_param_types:
+            mapped_param, mapped_setup, matrix_view_spec = _map_cpp_extra_param_to_vulkan(
+                name,
+                spec.extra_param_types[name],
+                symbol_values,
+            )
+            if matrix_view_spec is not None:
+                matrix_view_specs[name] = matrix_view_spec
+                readonly = "readonly " if matrix_view_spec.is_const else ""
+                block_name = f"RllmBuffer_{name}"
+                ssbo_decls.append(
+                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ float {name}[]; }};"
+                )
+                ssbo_binding += 1
+            else:
+                typed_params.append(mapped_param)
+                extra_setup_decls.append(mapped_setup)
+        else:
+            typed_params.append(f"int {name}")
+            extra_setup_decls.append(f"int {name} = 0;")
+    param_list = ", ".join(typed_params)
+
+    # Re-render body once matrix view specs are known.
+    body_text = "\n".join(
+        f"    {_rewrite_matrix_view_indexing(line.lstrip(), matrix_view_specs)}" if line.strip() else ""
+        for line in filtered_body_lines
+    )
+    if spec.is_2d and len(spec.vars) >= 2:
+        arg_setup = (
+            f"    int {spec.vars[0]} = int(gl_GlobalInvocationID.x);\n"
+            f"    int {spec.vars[1]} = int(gl_GlobalInvocationID.y);"
+        )
+        call_arg_names = [spec.vars[0], spec.vars[1]]
+    elif spec.vars:
+        arg_setup = f"    int {spec.vars[0]} = int(gl_GlobalInvocationID.x);"
+        call_arg_names = [spec.vars[0]]
+    else:
+        arg_setup = ""
+        call_arg_names = []
+
+    extra_arg_setup_lines = [f"    {decl}" for decl in extra_setup_decls]
+    if extra_arg_setup_lines:
+        if arg_setup:
+            arg_setup = arg_setup + "\n" + "\n".join(extra_arg_setup_lines)
+        else:
+            arg_setup = "\n".join(extra_arg_setup_lines)
+    call_arg_names.extend(name for name in extra_param_names if name not in matrix_view_specs)
+    call_args = ", ".join(call_arg_names)
+    ssbo_block = "\n".join(ssbo_decls)
+    if ssbo_block:
+        ssbo_block = ssbo_block + "\n\n"
     return (
         "#version 450\n"
         "\n"
         "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;\n"
         "\n"
-        "void main()\n"
+        f"{ssbo_block}"
+        f"void rllm_kernel_body({param_list})\n"
         "{\n"
         f"{body_text}\n"
+        "}\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        f"{arg_setup}\n"
+        f"    rllm_kernel_body({call_args});\n"
         "}\n"
     )
 
 
-def _write_kernel_stubs(kernel_specs: list[VulkanKernelSpec], kernel_root: Path) -> list[Path]:
+def _write_kernel_stubs(
+    kernel_specs: list[VulkanKernelSpec],
+    kernel_root: Path,
+    symbol_values: dict[str, str],
+) -> list[Path]:
     generated_kernel_files: list[Path] = []
     for spec in kernel_specs:
         kernel_path = _kernel_file_path(kernel_root, spec)
         kernel_path.parent.mkdir(parents=True, exist_ok=True)
-        kernel_path.write_text(_render_kernel_stub(spec), encoding="utf-8")
+        kernel_path.write_text(_render_kernel_stub(spec, symbol_values), encoding="utf-8")
         generated_kernel_files.append(kernel_path)
     return generated_kernel_files
 
@@ -140,6 +327,10 @@ def main() -> int:
     kernel_specs: list[VulkanKernelSpec] = []
     symbol_values = resolve_symbol_values(args.enum_value_tool)
 
+    # Avoid stale kernel files when source edits shift loop line numbers.
+    if kernel_root.exists():
+        shutil.rmtree(kernel_root)
+
     def collect_kernel(ctx: LoopContext) -> None:
         kernel_specs.append(
             VulkanKernelSpec(
@@ -147,6 +338,8 @@ def main() -> int:
                 lineno=ctx.lineno,
                 is_2d=ctx.is_2d,
                 vars=list(ctx.vars),
+                extra_params=ctx.extra_params,
+                extra_param_types=ctx.extra_param_types,
                 range_expr=ctx.range_expr,
                 body_lines=list(ctx.body_lines),
             )
@@ -161,7 +354,7 @@ def main() -> int:
         on_emit_loop=collect_kernel,
         symbol_values=symbol_values,
     )
-    generated_kernels = _write_kernel_stubs(kernel_specs, kernel_root)
+    generated_kernels = _write_kernel_stubs(kernel_specs, kernel_root, symbol_values)
     generated_spirv: list[Path] = []
 
     if args.shader_compiler:

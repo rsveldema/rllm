@@ -114,7 +114,7 @@ int main(int argc, char** argv)
 {
     if (argc != 2)
     {
-        std::cerr << "usage: print_enum_value --print-json\n";
+        std::cerr << "usage: generate_domain_replace_json --print-json\n";
         return 1;
     }
 

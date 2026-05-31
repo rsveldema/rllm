@@ -63,12 +63,17 @@ FetchContent_Declare(
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
 
+add_executable(generate_domain_replace_json src/generate_domain_replace_json.cc)
+target_include_directories(generate_domain_replace_json PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/generated
+)
+target_link_libraries(generate_domain_replace_json PRIVATE nlohmann_json::nlohmann_json)
+add_dependencies(generate_domain_replace_json generate_tokenizer_map)
+set_target_properties(generate_domain_replace_json PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
 add_subdirectory(src)
 add_subdirectory(tests)
-
-add_executable(rllm_print_enum_value src/print_enum_value.cc)
-target_link_libraries(rllm_print_enum_value PRIVATE rllm_lib_opt)
-set_target_properties(rllm_print_enum_value PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 add_executable(rllm src/main.cc
   include/LayerPrimitives.hpp

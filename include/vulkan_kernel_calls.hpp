@@ -40,10 +40,10 @@ namespace rllm::vulkan
                 const std::filesystem::path& spirv_path() const { return m_spirv_path; }
                 const std::vector<uint32_t>& spirv_words() const { return m_spirv_words; }
                 VkPipeline pipeline() const { return m_pipeline; }
-                template <typename Range>
-                void launch_1d(Range&& range);
-                template <typename Range2D>
-                void launch_2d(Range2D&& range);
+                template <typename Range, typename... Args>
+                void launch_1d(Range&& range, Args&&... args);
+                template <typename Range2D, typename... Args>
+                void launch_2d(Range2D&& range, Args&&... args);
                 void dispatch_kernel(uint32_t groups_x, uint32_t groups_y);
                 void ensure_pipeline(VkDevice device);
 
@@ -151,9 +151,10 @@ namespace rllm::vulkan
 
     } // namespace detail
 
-    template <typename Range>
-    inline void ComputeKernel::launch_1d(Range&& range)
+    template <typename Range, typename... Args>
+    inline void ComputeKernel::launch_1d(Range&& range, Args&&... args)
     {
+        (static_cast<void>(args), ...);
         if (!std::filesystem::exists(spirv_path()))
         {
             LOG_ERROR(
@@ -170,9 +171,10 @@ namespace rllm::vulkan
         dispatch_kernel(groups_x, 1);
     }
 
-    template <typename Range2D>
-    inline void ComputeKernel::launch_2d(Range2D&& range)
+    template <typename Range2D, typename... Args>
+    inline void ComputeKernel::launch_2d(Range2D&& range, Args&&... args)
     {
+        (static_cast<void>(args), ...);
         if (!std::filesystem::exists(spirv_path()))
         {
             LOG_ERROR(

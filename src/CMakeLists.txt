@@ -26,9 +26,6 @@ else()
 endif()
 
 if(OFFLOAD_BACKEND STREQUAL "hip")
-    if(NOT PARALLEL_BACKEND STREQUAL "openmp")
-        message(FATAL_ERROR "OFFLOAD_BACKEND=hip requires PARALLEL_BACKEND=openmp")
-    endif()
     if(NOT EXISTS "${HIP_ROOT}/include")
         message(FATAL_ERROR "OFFLOAD_BACKEND=hip requires HIP_ROOT/include (set HIP_ROOT, current: '${HIP_ROOT}')")
     endif()
@@ -74,37 +71,34 @@ endif()
 
 set(RLLM_COMPILE_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
-set(RLLM_ENUM_VALUE_TOOL_ARGS)
-set(RLLM_ENUM_VALUE_TOOL_CANDIDATE "${RLLM_ENUM_VALUE_TOOL}")
-if(NOT RLLM_ENUM_VALUE_TOOL_CANDIDATE)
-    set(RLLM_ENUM_VALUE_TOOL_CANDIDATE "${CMAKE_BINARY_DIR}/rllm_print_enum_value")
-endif()
-
-if(EXISTS "${RLLM_ENUM_VALUE_TOOL_CANDIDATE}")
-    message(STATUS "Using enum value tool: ${RLLM_ENUM_VALUE_TOOL_CANDIDATE}")
-    list(APPEND RLLM_ENUM_VALUE_TOOL_ARGS --enum-value-tool "${RLLM_ENUM_VALUE_TOOL_CANDIDATE}")
-elseif(RLLM_ENUM_VALUE_TOOL)
-    message(WARNING "RLLM_ENUM_VALUE_TOOL is set but was not found at: ${RLLM_ENUM_VALUE_TOOL}")
-endif()
+set(RLLM_OFFLOAD_PREPROCESS_TARGET "")
+file(
+    GLOB_RECURSE RLLM_OFFLOAD_INPUT_SOURCES
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+)
 
 if(OFFLOAD_BACKEND STREQUAL "hip")
     set(RLLM_HIPIFIED_SRC_DIR "${CMAKE_BINARY_DIR}/generated/hipified/src")
     set(RLLM_HIPIFY_MANIFEST "${CMAKE_BINARY_DIR}/generated/hipified/hipified_sources.cmake")
-    file(MAKE_DIRECTORY "${RLLM_HIPIFIED_SRC_DIR}")
+    set(RLLM_OFFLOAD_PREPROCESS_TARGET rllm_generate_hipified_sources)
 
-    execute_process(
+    add_custom_target(${RLLM_OFFLOAD_PREPROCESS_TARGET}
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${RLLM_HIPIFIED_SRC_DIR}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/hipify.py"
                 --src-dir "${CMAKE_CURRENT_SOURCE_DIR}"
                 --out-dir "${RLLM_HIPIFIED_SRC_DIR}"
-            ${RLLM_ENUM_VALUE_TOOL_ARGS}
+                --enum-value-tool "$<TARGET_FILE:generate_domain_replace_json>"
                 --manifest "${RLLM_HIPIFY_MANIFEST}"
-        RESULT_VARIABLE RLLM_HIPIFY_RESULT
-        COMMAND_ECHO STDOUT
+        DEPENDS
+            generate_domain_replace_json
+            ${RLLM_OFFLOAD_INPUT_SOURCES}
+            "${CMAKE_SOURCE_DIR}/hipify.py"
+            "${CMAKE_SOURCE_DIR}/offloadize_common.py"
+        COMMENT "Generating HIP-offload source tree from src/"
+        VERBATIM
     )
-
-    if(NOT RLLM_HIPIFY_RESULT EQUAL 0)
-        message(FATAL_ERROR "hipify.py failed with exit code ${RLLM_HIPIFY_RESULT}")
-    endif()
 
     set(RLLM_COMPILE_SRC_DIR "${RLLM_HIPIFIED_SRC_DIR}")
 endif()
@@ -113,23 +107,25 @@ if(OFFLOAD_BACKEND STREQUAL "vulkan")
     set(RLLM_VULKANIZED_SRC_DIR "${CMAKE_BINARY_DIR}/generated/vulkanized/src")
     set(RLLM_VULKAN_KERNEL_DIR "${CMAKE_BINARY_DIR}/generated/vulkanized/kernels")
     set(RLLM_VULKANIZE_MANIFEST "${CMAKE_BINARY_DIR}/generated/vulkanized/vulkanized_sources.cmake")
-    file(MAKE_DIRECTORY "${RLLM_VULKANIZED_SRC_DIR}")
-    file(MAKE_DIRECTORY "${RLLM_VULKAN_KERNEL_DIR}")
+    set(RLLM_OFFLOAD_PREPROCESS_TARGET rllm_generate_vulkanized_sources)
 
-    execute_process(
+    add_custom_target(${RLLM_OFFLOAD_PREPROCESS_TARGET}
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${RLLM_VULKANIZED_SRC_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${RLLM_VULKAN_KERNEL_DIR}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/vulkanize.py"
                 --src-dir "${CMAKE_CURRENT_SOURCE_DIR}"
                 --out-dir "${RLLM_VULKANIZED_SRC_DIR}"
                 --shader-compiler "${RLLM_VULKAN_SHADER_COMPILER}"
-            ${RLLM_ENUM_VALUE_TOOL_ARGS}
+                --enum-value-tool "$<TARGET_FILE:generate_domain_replace_json>"
                 --manifest "${RLLM_VULKANIZE_MANIFEST}"
-        RESULT_VARIABLE RLLM_VULKANIZE_RESULT
-        COMMAND_ECHO STDOUT
+        DEPENDS
+            generate_domain_replace_json
+            ${RLLM_OFFLOAD_INPUT_SOURCES}
+            "${CMAKE_SOURCE_DIR}/vulkanize.py"
+            "${CMAKE_SOURCE_DIR}/offloadize_common.py"
+        COMMENT "Generating Vulkan-offload source tree from src/ and compiling shaders"
+        VERBATIM
     )
-
-    if(NOT RLLM_VULKANIZE_RESULT EQUAL 0)
-        message(FATAL_ERROR "vulkanize.py failed with exit code ${RLLM_VULKANIZE_RESULT}")
-    endif()
 
     set(RLLM_COMPILE_SRC_DIR "${RLLM_VULKANIZED_SRC_DIR}")
 endif()
@@ -138,6 +134,10 @@ endif()
 # Usage: rllm_define_lib(<target> <extra compile flags…>)
 function(rllm_define_lib target_name)
     add_library(${target_name} STATIC)
+
+    if(RLLM_OFFLOAD_PREPROCESS_TARGET)
+        add_dependencies(${target_name} ${RLLM_OFFLOAD_PREPROCESS_TARGET})
+    endif()
 
     target_sources(${target_name} PRIVATE
         "${RLLM_COMPILE_SRC_DIR}/Trainer.cc"

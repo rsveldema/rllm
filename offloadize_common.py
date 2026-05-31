@@ -10,9 +10,16 @@ import subprocess
 from typing import Callable
 
 
-OFFLOAD_1D_MACROS = {"OFFLOADABLE_PARFOR", "OFFLOAD_PARFOR"}
-OFFLOAD_2D_MACROS = {"OFFLOADABLE_PARFOR_2D", "OFFLOAD_PARFOR_2D"}
-OFFLOAD_ALL_MACROS = OFFLOAD_1D_MACROS | OFFLOAD_2D_MACROS
+OFFLOAD_1D_MACROS = {"OFFLOAD_PARFOR"}
+OFFLOAD_1D_PARAM_MACROS = {"OFFLOAD_PARFOR_PARAM"}
+OFFLOAD_2D_MACROS = {"OFFLOAD_PARFOR_2D"}
+OFFLOAD_2D_PARAM_MACROS = {"OFFLOAD_PARFOR_2D_PARAM"}
+OFFLOAD_ALL_MACROS = (
+    OFFLOAD_1D_MACROS
+    | OFFLOAD_1D_PARAM_MACROS
+    | OFFLOAD_2D_MACROS
+    | OFFLOAD_2D_PARAM_MACROS
+)
 
 
 @dataclass
@@ -24,8 +31,83 @@ class LoopContext:
     is_2d: bool
     vars: list[str]
     range_expr: str
+    extra_params: str | None
+    extra_param_types: dict[str, str] | None
     body_lines: list[str]
     emit_named_kernel: bool
+
+
+_OFFLOAD_PARAMETERS_START_RE = re.compile(
+    r"^\s*(?://\s*)?OFFLOAD_PARAMETERS\s*\((?P<names>[^)]*)\)\s*$"
+)
+_OFFLOAD_PARAMETERS_END_RE = re.compile(r"^\s*(?://\s*)?END_OFFLOAD_PARAMETERS\s*$")
+
+
+def parse_identifier_list(raw: str) -> list[str]:
+    return [token.strip() for token in raw.split(",") if token.strip()]
+
+
+def parse_extra_param_names(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    text = raw.strip()
+    if len(text) >= 2 and text[0] in "[{(" and text[-1] in "]})":
+        text = text[1:-1].strip()
+    return parse_identifier_list(text)
+
+
+def parse_offload_param_types_from_declaration_line(line: str, names: list[str]) -> dict[str, str]:
+    # Matches function parameter declaration lines inside OFFLOAD_PARAMETERS ... END_OFFLOAD_PARAMETERS,
+    # for example: `const flexible_rows_matrix<...>& x,`
+    found: dict[str, str] = {}
+    for name in names:
+        pattern = re.compile(rf"^\s*(?P<type>.+?)\s+{re.escape(name)}\s*(?:,|$)")
+        match = pattern.match(line.strip())
+        if match:
+            found[name] = match.group("type").strip()
+    return found
+
+
+def default_symbol_values() -> dict[str, str]:
+    # Fallback substitutions used when the enum-value helper executable is unavailable
+    # at configure time (common for fresh build trees).
+    values: dict[str, str] = {
+        "EmbeddingDimension::START": "0",
+        "EmbeddingDimension::MAX": "512",
+        "PositionIndex::START": "0",
+        "PositionIndex::MAX": "128",
+        "PositionIndex::UNKNOWN_POSITION_INDEX": str((1 << 64) - 1),
+        "HeadsIndex::START": "0",
+        "HeadsIndex::MAX": "8",
+        "MultiTokenPredictionIndex::START": "0",
+        "MultiTokenPredictionIndex::ONE": "1",
+        "MultiTokenPredictionIndex::TWO": "2",
+        "MultiTokenPredictionIndex::THREE": "3",
+        "MultiTokenPredictionIndex::FOUR": "4",
+        "MultiTokenPredictionIndex::MAX": "4",
+        "HeadDimension::START": "0",
+        "HeadDimension::MAX": "64",
+        "FFDimension::START": "0",
+        "FFDimension::MAX": "2048",
+        "NeuronConnectionIndex::START": "0",
+        "NeuronConnectionIndex::MAX": "128",
+    }
+
+    # Casts to enum types are invalid in generated shader code.
+    enum_cast_targets = [
+        "EmbeddingDimension",
+        "PositionIndex",
+        "HeadsIndex",
+        "MultiTokenPredictionIndex",
+        "HeadDimension",
+        "FFDimension",
+        "NeuronConnectionIndex",
+    ]
+    for target in enum_cast_targets:
+        values[f"static_cast<{target}>"] = "(int)"
+        values[f"static_cast<rllm::{target}>"] = "(int)"
+
+    return values
 
 
 def split_top_level_args(raw: str) -> list[str]:
@@ -128,7 +210,7 @@ def apply_symbol_values(text: str, symbol_values: dict[str, str] | None) -> str:
 
 def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
     if not enum_value_tool:
-        return {}
+        return default_symbol_values()
 
     cmd = [enum_value_tool, "--print-json"]
     proc = subprocess.run(cmd, text=True, capture_output=True)
@@ -188,12 +270,16 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
     if ctx.backend_namespace == "vulkan":
         kernel_symbol, rel_spv = _vulkan_kernel_symbol_and_rel_spv(ctx.rel_path, ctx.lineno)
         launch_name = "launch_2d" if ctx.is_2d else "launch_1d"
+        extra_param_names = parse_extra_param_names(ctx.extra_params)
         lines.append(f"{ctx.indent}static rllm::vulkan::ComputeKernel {kernel_symbol}(")
         lines.append(f"{ctx.indent}    \"{ctx.rel_path}:{ctx.lineno}\",")
         lines.append(f"{ctx.indent}    \"{rel_spv}\"")
         lines.append(f"{ctx.indent});")
         lines.append(f"{ctx.indent}{kernel_symbol}.{launch_name}(")
-        lines.append(f"{ctx.indent}    {ctx.range_expr}")
+        lines.append(f"{ctx.indent}    {ctx.range_expr}{',' if extra_param_names else ''}")
+        for idx, name in enumerate(extra_param_names):
+            suffix = "," if idx + 1 < len(extra_param_names) else ""
+            lines.append(f"{ctx.indent}    {name}{suffix}")
         lines.append(f"{ctx.indent});")
         return lines
 
@@ -243,8 +329,18 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
 
 _ENUM_ITERATOR_FOR_RE = re.compile(
     r"^(?P<indent>\s*)for\s*\(\s*const\s+auto\s+(?P<var>[A-Za-z_]\w*)\s*:\s*"
-    r"enum_iterator\s*<\s*(?P<type>[^>]+?)\s*>\s*\(\s*(?P<arg>[^)]*)\s*\)\s*\)\s*(?P<brace>\{)?\s*$"
+    r"enum_iterator\s*<\s*(?P<type>[^>]+?)\s*>\s*\(\s*(?P<arg>.*)\s*\)\s*\)\s*(?P<brace>\{)?\s*$"
 )
+_INC_CALL_RE = re.compile(r"^inc\s*\(\s*(?P<expr>.+)\s*\)$")
+
+
+def _normalize_enum_iterator_bound(expr: str, symbol_values: dict[str, str] | None = None) -> str:
+    e = apply_symbol_values(expr.strip(), symbol_values)
+    m = _INC_CALL_RE.match(e)
+    if m is not None:
+        inner = m.group("expr").strip()
+        return f"(int({inner}) + 1)"
+    return f"int({e})"
 
 
 def rewrite_enum_iterator_loops(
@@ -265,25 +361,28 @@ def rewrite_enum_iterator_loops(
         indent = match.group("indent")
         var = match.group("var")
         enum_type = match.group("type").strip()
-        range_arg = apply_symbol_values(match.group("arg").strip(), symbol_values)
+        range_args = [arg for arg in split_top_level_args(match.group("arg").strip()) if arg.strip()]
         has_brace = match.group("brace") is not None
 
-        idx_name = f"__rllm_idx_{var}"
-        if range_arg:
-            limit_expr = f"static_cast<size_t>({range_arg})"
-        else:
+        # Avoid reserved double-underscore identifiers in generated C++/GLSL.
+        idx_name = f"rllm_idx_{var}"
+        if len(range_args) == 0:
             max_symbol = f"{enum_type}::MAX"
-            limit_expr = f"static_cast<size_t>({apply_symbol_values(max_symbol, symbol_values)})"
+            start_expr = "0"
+            limit_expr = f"int({apply_symbol_values(max_symbol, symbol_values)})"
+        elif len(range_args) == 1:
+            start_expr = "0"
+            limit_expr = _normalize_enum_iterator_bound(range_args[0], symbol_values)
+        else:
+            start_expr = _normalize_enum_iterator_bound(range_args[0], symbol_values)
+            limit_expr = _normalize_enum_iterator_bound(range_args[1], symbol_values)
 
-        for_header = (
-            f"{indent}for (size_t {idx_name} = 0; {idx_name} < {limit_expr}; ++{idx_name})"
-        )
+        for_header = f"{indent}for (int {idx_name} = {start_expr}; {idx_name} < {limit_expr}; ++{idx_name})"
 
         if has_brace:
             rewritten.append(f"{for_header} {{")
-            rewritten.append(
-                f"{indent}    const auto {var} = static_cast<{enum_type}>({idx_name});"
-            )
+            alias_line = f"{indent}    const int {var} = int({idx_name});"
+            rewritten.append(apply_symbol_values(alias_line, symbol_values))
             i += 1
             continue
 
@@ -292,9 +391,8 @@ def rewrite_enum_iterator_loops(
             i += 1
 
         rewritten.append(f"{for_header} {{")
-        rewritten.append(
-            f"{indent}    const auto {var} = static_cast<{enum_type}>({idx_name});"
-        )
+        alias_line = f"{indent}    const int {var} = int({idx_name});"
+        rewritten.append(apply_symbol_values(alias_line, symbol_values))
 
         if i >= len(lines):
             rewritten.append(f"{indent}}}")
@@ -326,6 +424,10 @@ def transform_source(
     out_lines: list[str] = []
     loop_stack: list[LoopContext] = []
     changed = False
+    active_offload_param_types: dict[str, str] = {}
+    collecting_offload_params = False
+    collecting_param_names: list[str] = []
+    collecting_param_types: dict[str, str] = {}
 
     def append_to_current(line: str) -> None:
         if loop_stack:
@@ -340,11 +442,41 @@ def transform_source(
             out_lines.extend(lines)
 
     for lineno, line in enumerate(in_lines, start=1):
+        if collecting_offload_params:
+            if _OFFLOAD_PARAMETERS_END_RE.match(line.strip()):
+                collecting_offload_params = False
+                active_offload_param_types = dict(collecting_param_types)
+                collecting_param_names = []
+                collecting_param_types = {}
+                append_to_current(line)
+                continue
+
+            collecting_param_types.update(
+                parse_offload_param_types_from_declaration_line(line, collecting_param_names)
+            )
+            append_to_current(line)
+            continue
+
+        offload_params_start = _OFFLOAD_PARAMETERS_START_RE.match(line.strip())
+        if offload_params_start:
+            collecting_offload_params = True
+            collecting_param_names = parse_identifier_list(offload_params_start.group("names"))
+            collecting_param_types = {}
+            append_to_current(line)
+            continue
+
         parsed = parse_macro_invocation(line)
         stripped = line.strip()
         if stripped == "ENDFOR" and loop_stack:
             ctx = loop_stack.pop()
             ctx.range_expr = apply_symbol_values(ctx.range_expr, symbol_values)
+            if ctx.extra_params is not None:
+                ctx.extra_params = apply_symbol_values(ctx.extra_params, symbol_values)
+            if ctx.extra_param_types:
+                ctx.extra_param_types = {
+                    name: apply_symbol_values(type_name, symbol_values)
+                    for name, type_name in ctx.extra_param_types.items()
+                }
             ctx.body_lines = [apply_symbol_values(body_line, symbol_values) for body_line in ctx.body_lines]
             ctx.body_lines = rewrite_enum_iterator_loops(ctx.body_lines, symbol_values)
             if on_emit_loop is not None:
@@ -368,6 +500,33 @@ def transform_source(
                     is_2d=False,
                     vars=[args[0]],
                     range_expr=apply_symbol_values(args[1], symbol_values),
+                    extra_params=None,
+                    extra_param_types=None,
+                    body_lines=[],
+                    emit_named_kernel=emit_named_kernels,
+                )
+            )
+            changed = True
+            continue
+
+        if macro in OFFLOAD_1D_PARAM_MACROS and len(args) >= 3:
+            extra_param_names = parse_extra_param_names(", ".join(args[2:]))
+            extra_param_types = {
+                name: active_offload_param_types[name]
+                for name in extra_param_names
+                if name in active_offload_param_types
+            }
+            loop_stack.append(
+                LoopContext(
+                    indent=indent,
+                    backend_namespace=backend_namespace,
+                    rel_path=rel_path,
+                    lineno=lineno,
+                    is_2d=False,
+                    vars=[args[0]],
+                    range_expr=apply_symbol_values(args[1], symbol_values),
+                    extra_params=", ".join(args[2:]),
+                    extra_param_types=extra_param_types,
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
                 )
@@ -385,6 +544,33 @@ def transform_source(
                     is_2d=True,
                     vars=[args[0], args[1]],
                     range_expr=apply_symbol_values(", ".join(args[2:]), symbol_values),
+                    extra_params=None,
+                    extra_param_types=None,
+                    body_lines=[],
+                    emit_named_kernel=emit_named_kernels,
+                )
+            )
+            changed = True
+            continue
+
+        if macro in OFFLOAD_2D_PARAM_MACROS and len(args) >= 4:
+            extra_param_names = parse_extra_param_names(", ".join(args[3:]))
+            extra_param_types = {
+                name: active_offload_param_types[name]
+                for name in extra_param_names
+                if name in active_offload_param_types
+            }
+            loop_stack.append(
+                LoopContext(
+                    indent=indent,
+                    backend_namespace=backend_namespace,
+                    rel_path=rel_path,
+                    lineno=lineno,
+                    is_2d=True,
+                    vars=[args[0], args[1]],
+                    range_expr=apply_symbol_values(args[2], symbol_values),
+                    extra_params=", ".join(args[3:]),
+                    extra_param_types=extra_param_types,
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
                 )
