@@ -1,22 +1,23 @@
 #pragma once
 
+#include <cstdlib>
 #include <utility>
+
+#include <logging.hpp>
 
 namespace rllm::hip
 {
     template <typename Range, typename KernelFn>
-    inline void launch_kernel_1d([[maybe_unused]] const char* kernel_id, Range&& range, KernelFn&& fn)
+    inline void launch_kernel_1d(const char* kernel_id, [[maybe_unused]] Range&& range, [[maybe_unused]] KernelFn&& fn)
     {
-        // Placeholder dispatch path until real HIP kernels are wired in.
-        for (auto idx : range)
-            fn(idx);
+        LOG_ERROR("HIP kernel '{}' has no backend dispatch implementation yet.", kernel_id);
+        std::abort();
     }
 
     template <typename Range2D, typename KernelFn>
-    inline void launch_kernel_2d([[maybe_unused]] const char* kernel_id, Range2D&& range, KernelFn&& fn)
+    inline void launch_kernel_2d(const char* kernel_id, [[maybe_unused]] Range2D&& range, [[maybe_unused]] KernelFn&& fn)
     {
-        // Placeholder dispatch path until real HIP kernels are wired in.
-        for (const auto [i, j] : range)
-            fn(i, j);
+        LOG_ERROR("HIP kernel '{}' has no backend dispatch implementation yet.", kernel_id);
+        std::abort();
     }
 } // namespace rllm::hip

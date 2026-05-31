@@ -91,7 +91,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(m_rows) == static_cast<size_t>(other.m_rows) && static_cast<size_t>(m_cols) == static_cast<size_t>(other.m_cols));
             const size_t n = static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols);
-#pragma omp simd
+            RLLM_OMP_SIMD
             for (size_t i = 0; i < n; ++i)
                 m_data.get()[i] += other.m_data.get()[i];
         }

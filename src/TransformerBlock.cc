@@ -53,7 +53,7 @@ namespace rllm
 
         OFFLOADABLE_PARFOR(t, enum_iterator<PositionIndex>(x.num_rows()))
             float sq = 0.f;
-            //#pragma omp simd reduction(+:sq)
+            RLLM_OMP_SIMD_REDUCTION_PLUS(sq)
             for (const auto i : enum_iterator<EmbeddingDimension>())
             {
                 const auto val = x[t, i];
@@ -259,7 +259,7 @@ namespace rllm
             // scores_mat[i, j] = Q[i, hi*Dh..] · K[j, hi*Dh..] * scale
             PARFOR_2D(i, j, enum_iterator2D<PositionIndex, PositionIndex>(seq_len, seq_len))
                 float dot = 0.f;
-                //#pragma omp simd reduction(+:dot)
+                RLLM_OMP_SIMD_REDUCTION_PLUS(dot)
                 for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
                     dot += ws.Q[i, d] * ws.K[j, d];
                 scores_mat[i, j] = dot * scale;

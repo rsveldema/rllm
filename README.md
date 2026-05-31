@@ -27,7 +27,11 @@ Offload modes:
 
 - none
 - hip (requires openmp backend)
-- vulkan (macro mode currently uses CPU fallback loops)
+- vulkan
+
+Offload dispatch note:
+
+- In `hip`/`vulkan` offload modes, kernel launch helpers fail fast if no real backend dispatch is implemented.
 
 Compatibility matrix:
 

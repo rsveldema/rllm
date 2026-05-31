@@ -23,6 +23,12 @@ endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+set(
+    RLLM_ENUM_VALUE_TOOL ""
+    CACHE FILEPATH
+    "Optional path to a prebuilt enum-value tool used by hipify/vulkanize"
+)
+
 # --- tokenizer_map codegen ---------------------------------------------------
 # Glob the input files so CMake re-runs if any of them change.
 file(GLOB TOKENIZER_TRAINING_FILES "${CMAKE_SOURCE_DIR}/tokenizer_training_data/*")
@@ -59,6 +65,10 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 add_subdirectory(src)
 add_subdirectory(tests)
+
+add_executable(rllm_print_enum_value src/print_enum_value.cc)
+target_link_libraries(rllm_print_enum_value PRIVATE rllm_lib_opt)
+set_target_properties(rllm_print_enum_value PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 add_executable(rllm src/main.cc
   include/LayerPrimitives.hpp

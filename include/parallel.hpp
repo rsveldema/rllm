@@ -44,3 +44,15 @@ inline Allocator& get_offload_allocator()
 #else
 #include <parallel_sequential.hpp>
 #endif
+
+#define RLLM_STRINGIZE_IMPL(x) #x
+#define RLLM_STRINGIZE(x) RLLM_STRINGIZE_IMPL(x)
+#define RLLM_DO_PRAGMA(x) _Pragma(RLLM_STRINGIZE(x))
+
+#if defined(USE_OPENMP) && !defined(USE_HIP_OFFLOAD) && !defined(USE_VULKAN_OFFLOAD)
+#define RLLM_OMP_SIMD RLLM_DO_PRAGMA(omp simd)
+#define RLLM_OMP_SIMD_REDUCTION_PLUS(var) RLLM_DO_PRAGMA(omp simd reduction(+:var))
+#else
+#define RLLM_OMP_SIMD
+#define RLLM_OMP_SIMD_REDUCTION_PLUS(var)
+#endif

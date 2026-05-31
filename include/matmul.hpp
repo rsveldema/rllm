@@ -24,7 +24,7 @@ namespace rllm
         const PositionIndex m = A.num_rows();
         PARFOR_2D(i, j, enum_iterator2D<PositionIndex, N_enum>(m))
             float sum = 0.f;
-#pragma omp simd reduction(+:sum)
+            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(K_enum::MAX); ++l_idx)
             {
                 const float term = A[i, static_cast<K_enum>(l_idx)] * B[j, static_cast<K_enum>(l_idx)];
@@ -46,7 +46,7 @@ namespace rllm
         const PositionIndex m = A.num_rows();
         PARFOR_2D(i, j, enum_iterator2D<PositionIndex, N_enum>(m))
             float sum = 0.f;
-#pragma omp simd reduction(+:sum)
+            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(K_enum::MAX); ++l_idx)
             {
                 const float term = A[i, static_cast<K_enum>(l_idx)] * B[static_cast<K_enum>(l_idx), j];
@@ -69,7 +69,7 @@ namespace rllm
         PARFOR_2D(i, j, enum_iterator2D<M_enum, N_enum>())
             float sum = 0.f;
             const size_t k_count = static_cast<size_t>(k);
-#pragma omp simd reduction(+:sum)
+            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < k_count; ++l_idx)
             {
                 const float term = A[static_cast<PositionIndex>(l_idx), i] * B[static_cast<PositionIndex>(l_idx), j];
