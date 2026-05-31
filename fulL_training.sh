@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STAGE0_MODEL="models/stage0_model.json"
-STAGE1_MODEL="models/state1_model.json"
+STAGE0_MODEL="staged/stage0_model.json"
+STAGE1_MODEL="staged/state1_model.json"
 
 echo "Configuring and building release before staged training..."
 sh ./build_release.sh
 
 mkdir -p models
+mkdir -p staged
 
 echo "--- Stage 0: training on training_data0 ---"
 ./build_release/rllm --train \
@@ -16,6 +17,9 @@ echo "--- Stage 0: training on training_data0 ---"
     --method random_line_random_len \
     --epochs 50 \
     --checkpoint-interval 30
+
+echo "Normalizing training_data1 with training_postprocessor.py..."
+python3 ./training_postprocessor.py --dir training_data1
 
 echo "--- Stage 1: training on training_data1 from $STAGE0_MODEL ---"
 ./build_release/rllm --train \

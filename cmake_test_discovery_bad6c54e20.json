@@ -1,0 +1,67 @@
+{
+  "tests": 11,
+  "name": "AllTests",
+  "testsuites": [
+    {
+      "name": "FastforkTest",
+      "tests": 11,
+      "testsuite": [
+        {
+          "name": "GetMaxThreadsPositive",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 25
+        },
+        {
+          "name": "WaitWithNoTasks",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 31
+        },
+        {
+          "name": "SingleTask",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 39
+        },
+        {
+          "name": "AllTasksRun",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 49
+        },
+        {
+          "name": "RepeatedCycles",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 58
+        },
+        {
+          "name": "NestedFork",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 71
+        },
+        {
+          "name": "ThreadIdInRange",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 95
+        },
+        {
+          "name": "TasksRunOnMultipleThreads",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 116
+        },
+        {
+          "name": "SetNumThreadsRespawns",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 142
+        },
+        {
+          "name": "SpeedupEmbarrassinglyParallel",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 174
+        },
+        {
+          "name": "OverheadPerTaskBounded",
+          "file": "\/projects\/rllm\/tests\/test_fastfork.cc",
+          "line": 241
+        }
+      ]
+    }
+  ]
+}

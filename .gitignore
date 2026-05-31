@@ -6,6 +6,7 @@ build
 *.a
 ?
 *.dat
-*.json
+models/*.json
+staged/*.json
 *.log
 *.bin

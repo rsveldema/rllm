@@ -196,7 +196,7 @@ namespace rllm
                     // spaces have no explicit token, we just skip them without logging,
                     // but log other unmatched characters as warnings since they may
                     // indicate a problem with the tokenizer map.
-                    LOG_ERROR("Warning: No token matched for character '{}', skipping it", ch);
+                    LOG_ERROR("ERROR: No token matched for character '{}', skipping it", ch);
                     ++m_tokenization_errors;
                 }
                 ix++;

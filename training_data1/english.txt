@@ -1,0 +1,5 @@
+This is just an example text for training. We do this because even
+normal c++/pascal/etc. code has some english text in it.
+We can extend it to german/dutch/etc. later.
+Some acronyms are ok.
+Exclation marks should end a sentence! Just like a question? should.

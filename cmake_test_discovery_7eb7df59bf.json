@@ -1,0 +1,184 @@
+{
+  "tests": 26,
+  "name": "AllTests",
+  "testsuites": [
+    {
+      "name": "EnumIterator2DTest",
+      "tests": 5,
+      "testsuite": [
+        {
+          "name": "TotalCount",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 9
+        },
+        {
+          "name": "RowMajorOrder",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 20
+        },
+        {
+          "name": "RuntimeBound",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 38
+        },
+        {
+          "name": "ZeroBoundProducesNoIterations",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 49
+        },
+        {
+          "name": "BlockRangeRowMajorAndBounds",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator2D.cc",
+          "line": 59
+        }
+      ]
+    },
+    {
+      "name": "EnumIteratorTest",
+      "tests": 5,
+      "testsuite": [
+        {
+          "name": "TotalCount",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 8
+        },
+        {
+          "name": "DefaultStartsAtStartAndIsIncreasing",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 17
+        },
+        {
+          "name": "RuntimeUpperBound",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 31
+        },
+        {
+          "name": "StartEndRangeHonorsStart",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 41
+        },
+        {
+          "name": "ZeroLengthRangeProducesNoIterations",
+          "file": "\/projects\/rllm\/tests\/test_enum_iterator.cc",
+          "line": 55
+        }
+      ]
+    },
+    {
+      "name": "PredictorTest",
+      "tests": 1,
+      "testsuite": [
+        {
+          "name": "Placeholder",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 40
+        }
+      ]
+    },
+    {
+      "name": "PredictorRegressionTest",
+      "tests": 4,
+      "testsuite": [
+        {
+          "name": "GuaranteedModel_HashPredictsInclude",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 81
+        },
+        {
+          "name": "MTP_HashPredictsInThenCluInParallel",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 135
+        },
+        {
+          "name": "GuaranteedModel_IncludePredictsA",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 166
+        },
+        {
+          "name": "SimplestGuaranteedTraining_HashKeepsDefineAboveFloor",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 192
+        }
+      ]
+    },
+    {
+      "name": "TransformerBlockTest",
+      "tests": 6,
+      "testsuite": [
+        {
+          "name": "ForwardOutputShape",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 243
+        },
+        {
+          "name": "BackwardOutputShape",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 263
+        },
+        {
+          "name": "CausalSoftmaxMasksFutureTokensAndNormalizesRows",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 289
+        },
+        {
+          "name": "SoftmaxBackwardMatchesJacobianAndAccumulates",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 350
+        },
+        {
+          "name": "ForwardParallelFasterThanSerial",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 424
+        },
+        {
+          "name": "BackwardParallelFasterThanSerial",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 488
+        }
+      ]
+    },
+    {
+      "name": "ParFor2DTest",
+      "tests": 1,
+      "testsuite": [
+        {
+          "name": "SpeedupFasterThanSerial",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 569
+        }
+      ]
+    },
+    {
+      "name": "Parfor2DTriangularTest",
+      "tests": 2,
+      "testsuite": [
+        {
+          "name": "VisitsAllLowerTriangularPairsExactlyOnce",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 647
+        },
+        {
+          "name": "SpeedupFasterThanSerial",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 674
+        }
+      ]
+    },
+    {
+      "name": "Parfor2DUpperTriangularTest",
+      "tests": 2,
+      "testsuite": [
+        {
+          "name": "VisitsAllUpperTriangularPairsExactlyOnce",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 754
+        },
+        {
+          "name": "SpeedupFasterThanSerial",
+          "file": "\/projects\/rllm\/tests\/test_rllm.cc",
+          "line": 781
+        }
+      ]
+    }
+  ]
+}

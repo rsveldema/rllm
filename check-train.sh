@@ -9,6 +9,9 @@ else
     input_arg=""
 fi
 
+echo "Normalizing training_data1 with training_postprocessor.py..."
+python3 ./training_postprocessor.py --dir training_data1
+
 ./build_release/rllm --train $input_arg \
     -o models/after_training.json \
      --filter guaranteed \
@@ -21,7 +24,7 @@ fi
 
 #     --method window:32 --epochs 20
 #     --filter simple --method increasingly_longer --epochs 50
-#     --method increasingly_longer 
+#     --method increasingly_longer
 
 # ./build/rllm --train -i models/start.json \
 #     -o models/after_training.json \

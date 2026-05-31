@@ -131,7 +131,8 @@ namespace rllm
         : m_filters(filters)
     {}
 
-    void Prompter::prompt_mode(const std::string& filename, const std::optional<std::string>& one_shot_prompt)
+    void Prompter::prompt_mode(const std::string& filename, const std::optional<std::string>& one_shot_prompt,
+                               size_t mtp_heads)
     {
         set_nn_log_file("prompt.log");
         Corpus corpus{m_filters};
@@ -149,6 +150,7 @@ namespace rllm
         std::println("Loaded.");
 
         PromptOptions options;
+        options.mtp_heads = mtp_heads;
 
         if (one_shot_prompt.has_value())
         {
@@ -188,18 +190,20 @@ namespace rllm
         }
         std::println("Input tokens: {}", *full_string_opt);
 
-        // MTP-aware generation: each forward pass can yield up to MAX_HEADS tokens,
-        // one per head (head k predicts the token k+1 positions ahead).
+        // For autoregressive text generation we should append exactly one token
+        // per forward pass (head 0 = immediate next-token prediction). Higher
+        // heads are useful diagnostics, but stitching them into the output stream
+        // creates incoherent text.
         size_t total_tokens_generated = 0;
         bool stop = false;
         while (!stop && total_tokens_generated < MAX_NUM_ANSWER_TOKENS)
         {
             nn.propagate_forward(token_id_list);
 
-            size_t tokens_this_pass = 0;
+            bool appended_token = false;
             for (const auto head : enum_iterator<MultiTokenPredictionIndex>())
             {
-                if (stop || total_tokens_generated >= MAX_NUM_ANSWER_TOKENS)
+                if (stop)
                     break;
 
                 const auto output_token_id_lists = nn.get_best_output_token_ids(5, head);
@@ -261,6 +265,10 @@ namespace rllm
                     break;
                 }
 
+                // Only append tokens from heads 0 .. (mtp_heads-1); others are diagnostic.
+                if (static_cast<size_t>(head) >= options.mtp_heads)
+                    continue;
+
                 size_t random_index = 0;
                 if (!options.highest_prio_only)
                     random_index = static_cast<size_t>(rand()) % num_valid_tokens;
@@ -277,11 +285,11 @@ namespace rllm
                 if (output_token == "\t")  output_token = "\\t";
                 std::println("Predicted next token (head {}): {}", static_cast<int>(head), output_token);
                 token_id_list.push_back(entry.token_id);
-                ++tokens_this_pass;
                 ++total_tokens_generated;
+                appended_token = true;
             }
 
-            if (tokens_this_pass == 0)
+            if (!appended_token)
                 break;
         }
 

@@ -1,5 +1,8 @@
 ./build_debug.sh
 
+echo "Normalizing training_data1 with training_postprocessor.py..."
+python3 ./training_postprocessor.py --dir training_data1
+
 echo "Formatting training_data0/*.cpp with maximum line length..."
 if compgen -G "training_data0/*.cpp" > /dev/null; then
     clang-format -i --style='{BasedOnStyle: LLVM, ColumnLimit: 0}' training_data0/*.cpp

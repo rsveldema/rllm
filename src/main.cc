@@ -44,6 +44,7 @@ struct CommandLineParser
     int window_size = 2;
     std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
     std::string executable_name = "./rllm";
+    size_t mtp_heads = 1;
 
     static bool option_matches(const std::string& arg, const CommandLineOption& option)
     {
@@ -134,7 +135,10 @@ struct CommandLineParser
                  one_shot_prompt = args[0];
              }},
         {.options = {"--method"},
-         .description = std::format("Training method. Valid values: two_tok, three_tok, increasingly_longer, random_line_random_len, window:<N> Sliding window of N tokens (N >= 2)"),
+         .description = std::format(
+             "Training method. Valid values: two_tok, three_tok, increasingly_longer, random_line_random_len, "
+             "window:<N> Sliding window of N tokens (N >= 2)"
+         ),
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
@@ -167,6 +171,19 @@ struct CommandLineParser
                      );
                      std::exit(1);
                  }
+             }},
+        {.options = {"--mtp-heads"},
+         .description = "Number of MTP heads to use for token generation during prompting (default: 1, max: 4)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int n = std::atoi(args[0].c_str());
+                 if (n < 1 || n > 4)
+                 {
+                     std::println("--mtp-heads requires a value between 1 and 4, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 mtp_heads = static_cast<size_t>(n);
              }},
         {.options = {"--train"},
          .description = "Run in training mode",
@@ -235,10 +252,10 @@ int main(int argc, char* argv[])
     CommandLineParser parser;
     parser.parse(argc, argv);
 
-    rllm::Trainer llm(parser.filters);
     if (parser.train_mode)
     {
-        llm.train_mode(
+        rllm::Trainer trainer(parser.filters);
+        trainer.train_mode(
             parser.input_filename,
             parser.output_filename,
             parser.num_layers,
@@ -254,7 +271,9 @@ int main(int argc, char* argv[])
     {
         rllm::Prompter prompter(parser.filters);
         prompter.prompt_mode(
-            parser.input_filename ? *parser.input_filename : parser.output_filename, parser.one_shot_prompt
+            parser.input_filename ? *parser.input_filename : parser.output_filename,
+            parser.one_shot_prompt,
+            parser.mtp_heads
         );
     }
 

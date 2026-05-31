@@ -1,0 +1,67 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "default-fastfork",
+      "displayName": "Default FastFork",
+      "description": "FastFork backend with no offload",
+      "inherits": "base",
+      "cacheVariables": {
+        "PARALLEL_BACKEND": "fastfork",
+        "OFFLOAD_BACKEND": "none"
+      }
+    },
+    {
+      "name": "fastfork-vulkan",
+      "displayName": "FastFork + Vulkan Offload",
+      "description": "FastFork backend with Vulkan offload mode enabled",
+      "inherits": "base",
+      "cacheVariables": {
+        "PARALLEL_BACKEND": "fastfork",
+        "OFFLOAD_BACKEND": "vulkan"
+      }
+    },
+    {
+      "name": "openmp-rocm",
+      "displayName": "OpenMP + ROCm Offload",
+      "description": "OpenMP backend with ROCm offload mode and explicit ROCm root",
+      "inherits": "base",
+      "cacheVariables": {
+        "PARALLEL_BACKEND": "openmp",
+        "OFFLOAD_BACKEND": "rocm",
+        "ROCM_ROOT": "/opt/rocm"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-default-fastfork",
+      "displayName": "Build Default FastFork",
+      "configurePreset": "default-fastfork"
+    },
+    {
+      "name": "build-fastfork-vulkan",
+      "displayName": "Build FastFork + Vulkan",
+      "configurePreset": "fastfork-vulkan"
+    },
+    {
+      "name": "build-openmp-rocm",
+      "displayName": "Build OpenMP + ROCm",
+      "configurePreset": "openmp-rocm"
+    }
+  ]
+}

@@ -67,9 +67,12 @@ add_executable(rllm src/main.cc
   include/fixed_size_vector.hpp
   include/fixed_size_matrix.hpp
   include/matmul.hpp
-  src/fastfork/fastfork.cc
   include/fastfork/circular_queue.hpp
   include/Prompter.hpp)
+
+if(PARALLEL_BACKEND STREQUAL "fastfork")
+    target_sources(rllm PRIVATE src/fastfork/fastfork.cc)
+endif()
 target_link_libraries(rllm PRIVATE rllm_lib)
 target_include_directories(rllm PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(rllm PRIVATE -O3 -march=native)
