@@ -83,20 +83,20 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     );
 
     // Casts to enum types are not valid in generated shader code; force int casts.
-    pairs.emplace_back("static_cast<EmbeddingDimension>", "int");
-    pairs.emplace_back("static_cast<PositionIndex>", "int");
-    pairs.emplace_back("static_cast<HeadsIndex>", "int");
-    pairs.emplace_back("static_cast<MultiTokenPredictionIndex>", "int");
-    pairs.emplace_back("static_cast<HeadDimension>", "int");
-    pairs.emplace_back("static_cast<FFDimension>", "int");
-    pairs.emplace_back("static_cast<NeuronConnectionIndex>", "int");
-    pairs.emplace_back("static_cast<rllm::EmbeddingDimension>", "int");
-    pairs.emplace_back("static_cast<rllm::PositionIndex>", "int");
-    pairs.emplace_back("static_cast<rllm::HeadsIndex>", "int");
-    pairs.emplace_back("static_cast<rllm::MultiTokenPredictionIndex>", "int");
-    pairs.emplace_back("static_cast<rllm::HeadDimension>", "int");
-    pairs.emplace_back("static_cast<rllm::FFDimension>", "int");
-    pairs.emplace_back("static_cast<rllm::NeuronConnectionIndex>", "int");
+    pairs.emplace_back("static_cast<EmbeddingDimension>", "(int)");
+    pairs.emplace_back("static_cast<PositionIndex>", "(int)");
+    pairs.emplace_back("static_cast<HeadsIndex>", "(int)");
+    pairs.emplace_back("static_cast<MultiTokenPredictionIndex>", "(int)");
+    pairs.emplace_back("static_cast<HeadDimension>", "(int)");
+    pairs.emplace_back("static_cast<FFDimension>", "(int)");
+    pairs.emplace_back("static_cast<NeuronConnectionIndex>", "(int)");
+    pairs.emplace_back("static_cast<rllm::EmbeddingDimension>", "(int)");
+    pairs.emplace_back("static_cast<rllm::PositionIndex>", "(int)");
+    pairs.emplace_back("static_cast<rllm::HeadsIndex>", "(int)");
+    pairs.emplace_back("static_cast<rllm::MultiTokenPredictionIndex>", "(int)");
+    pairs.emplace_back("static_cast<rllm::HeadDimension>", "(int)");
+    pairs.emplace_back("static_cast<rllm::FFDimension>", "(int)");
+    pairs.emplace_back("static_cast<rllm::NeuronConnectionIndex>", "(int)");
 }
 
 void print_json_pairs(const std::vector<SearchReplace>& pairs)

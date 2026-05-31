@@ -5,9 +5,22 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import subprocess
 
 from offloadize_common import LoopContext, resolve_symbol_values, transform_tree, write_manifest
+
+
+_SIMD_REDUCTION_PLUS_RE = re.compile(r"^\s*RLLM_OMP_SIMD_REDUCTION_PLUS\s*\([^)]*\)\s*;?\s*$")
+_STATIC_CAST_SIZE_T_RE = re.compile(r"static_cast\s*<\s*size_t\s*>\s*\(([^()]*)\)")
+_SIZE_T_WORD_RE = re.compile(r"\bsize_t\b")
+
+
+def _sanitize_kernel_line_for_glsl(line: str) -> str:
+    # GLSL has no size_t; map common generated C++ forms to int.
+    line = _STATIC_CAST_SIZE_T_RE.sub(r"int(\1)", line)
+    line = _SIZE_T_WORD_RE.sub("int", line)
+    return line
 
 
 @dataclass
@@ -43,9 +56,11 @@ def _spirv_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
 
 
 def _render_kernel_stub(spec: VulkanKernelSpec) -> str:
+    filtered_body_lines = [line for line in spec.body_lines if not _SIMD_REDUCTION_PLUS_RE.match(line)]
+    filtered_body_lines = [_sanitize_kernel_line_for_glsl(line) for line in filtered_body_lines]
     body_text = "\n".join(
         f"    {line.lstrip()}" if line.strip() else ""
-        for line in spec.body_lines
+        for line in filtered_body_lines
     )
     return (
         "#version 450\n"
