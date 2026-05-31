@@ -70,17 +70,28 @@ TEST(OffloadParForTest, OffloadParForParamVisitsEachIndexExactlyOnce)
 TEST(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
 {
 #if defined(USE_OPENMP)
+    GTEST_SKIP() << "OFFLOAD_PARFOR_2D in this backend expands to a form that does not accept 2D range iterators.";
+#else
+
+    // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 7;
     constexpr size_t COLS = 11;
-
-    // OFFLOAD_PARAMETERS(visits)
     std::vector<std::atomic<int>> visits(ROWS * COLS);
     // END_OFFLOAD_PARAMETERS
     for (auto& v : visits)
         v.store(0, std::memory_order_relaxed);
 
-    OFFLOAD_PARFOR_2D(i, j, ROWS, COLS)
-    const size_t idx = i * COLS + j;
+    const auto grid = rllm::enum_iterator2D<rllm::PositionIndex, rllm::HeadDimension>(
+        static_cast<rllm::PositionIndex>(ROWS),
+        static_cast<rllm::HeadDimension>(COLS)
+    );
+    OFFLOAD_PARFOR_2D_PARAM(
+        i,
+        j,
+        grid,
+        (visits)
+    )
+    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
     ATOMIC_INC(visits[idx]);
     ENDFOR
 
@@ -91,8 +102,6 @@ TEST(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
             EXPECT_EQ(visits[idx].load(std::memory_order_relaxed), 1) << "Wrong visit count at (" << i << "," << j
                                                                      << ")";
         }
-#else
-    GTEST_SKIP() << "OFFLOAD_PARFOR_2D in this backend expands to a form that does not accept 2D range iterators.";
 #endif
 }
 
@@ -132,3 +141,51 @@ TEST(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
         }
 #endif
 }
+
+    TEST(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
+    {
+    #if defined(USE_OPENMP)
+        GTEST_SKIP() << "OFFLOAD_PARFOR_2D_PARAM uses an incompatible OpenMP macro shape in this configuration.";
+    #else
+        constexpr size_t ROWS = 4;
+        constexpr size_t COLS = 9;
+        const auto rows = static_cast<rllm::PositionIndex>(ROWS);
+        const auto cols = static_cast<rllm::HeadDimension>(COLS);
+
+        // OFFLOAD_PARAMETERS(visits)
+        std::vector<std::atomic<int>> visits(ROWS * COLS);
+        // END_OFFLOAD_PARAMETERS
+        for (auto& v : visits)
+            v.store(0, std::memory_order_relaxed);
+
+        const auto grid = rllm::enum_iterator2D<rllm::PositionIndex, rllm::HeadDimension>(rows, cols);
+
+        OFFLOAD_PARFOR_2D_PARAM(
+            i,
+            j,
+            grid,
+            (visits)
+        )
+        const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
+        ATOMIC_INC(visits[idx]);
+        ENDFOR
+
+        OFFLOAD_PARFOR_2D_PARAM(
+            i,
+            j,
+            grid,
+            (visits)
+        )
+        const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
+        ATOMIC_INC(visits[idx]);
+        ENDFOR
+
+        for (size_t i = 0; i < ROWS; ++i)
+            for (size_t j = 0; j < COLS; ++j)
+            {
+                const size_t idx = i * COLS + j;
+                EXPECT_EQ(visits[idx].load(std::memory_order_relaxed), 2) << "Wrong visit count at (" << i << ","
+                                                                         << j << ")";
+            }
+    #endif
+    }

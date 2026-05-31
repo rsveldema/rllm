@@ -27,11 +27,11 @@ _COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
 
 
 def _sanitize_kernel_line_for_glsl(line: str) -> str:
-    # Replace C++ static_cast<T>(...) with C-style casts before further cleanup.
+    # GLSL has no size_t; map common generated C++ forms to uint.
+    line = _STATIC_CAST_SIZE_T_RE.sub(r"uint(\1)", line)
+    # Replace remaining C++ static_cast<T>(...) with C-style casts before further cleanup.
     line = _STATIC_CAST_GENERIC_RE.sub(r"(\1)(", line)
-    # GLSL has no size_t; map common generated C++ forms to int.
-    line = _STATIC_CAST_SIZE_T_RE.sub(r"int(\1)", line)
-    line = _SIZE_T_WORD_RE.sub("int", line)
+    line = _SIZE_T_WORD_RE.sub("uint", line)
     # Map project scalar aliases to GLSL scalar type.
     line = _RLMM_FLOAT_WORD_RE.sub("float", line)
     # GLSL builtins are unqualified (no std:: namespace).
@@ -55,6 +55,16 @@ def _sanitize_kernel_line_for_glsl(line: str) -> str:
     return line
 
 
+def _sanitize_offload_param_line_for_glsl(line: str) -> str | None:
+    match = _GLSL_CONST_DECL_RE.match(line.strip())
+    if match is None:
+        return None
+
+    name = match.group("name")
+    expr = _sanitize_kernel_line_for_glsl(match.group("expr"))
+    return f"const uint {name} = {expr};"
+
+
 @dataclass
 class VulkanKernelSpec:
     rel_path: str
@@ -63,6 +73,7 @@ class VulkanKernelSpec:
     vars: list[str]
     extra_params: str | None
     extra_param_types: dict[str, str] | None
+    offload_param_lines: list[str] | None
     range_expr: str
     body_lines: list[str]
 
@@ -91,6 +102,9 @@ _STD_VECTOR_ATOMIC_INT_RE = re.compile(
 )
 _STD_VECTOR_INT_RE = re.compile(
     r"^(?P<const>const\s+)?std::vector\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
+)
+_GLSL_CONST_DECL_RE = re.compile(
+    r"^\s*(?:constexpr|const)\s+(?:size_t|int|unsigned|auto)\s+(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+?)\s*;\s*$"
 )
 
 
@@ -209,6 +223,13 @@ def _spirv_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
 
 
 def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -> str:
+    const_preamble: list[str] = []
+    for line in spec.offload_param_lines or []:
+        rendered = _sanitize_offload_param_line_for_glsl(line)
+        if rendered is not None:
+            const_preamble.append(rendered)
+    const_block = ("\n".join(const_preamble) + "\n\n") if const_preamble else ""
+
     filtered_body_lines = [line for line in spec.body_lines if not _SIMD_REDUCTION_PLUS_RE.match(line)]
     filtered_body_lines = [_sanitize_kernel_line_for_glsl(line) for line in filtered_body_lines]
     matrix_view_specs: dict[str, MatrixViewSpec] = {}
@@ -293,6 +314,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
         "\n"
         "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;\n"
         "\n"
+        f"{const_block}"
         f"{ssbo_block}"
         f"void rllm_kernel_body({param_list})\n"
         "{\n"
@@ -390,6 +412,7 @@ def main() -> int:
                 vars=list(ctx.vars),
                 extra_params=ctx.extra_params,
                 extra_param_types=ctx.extra_param_types,
+                offload_param_lines=ctx.offload_param_lines,
                 range_expr=ctx.range_expr,
                 body_lines=list(ctx.body_lines),
             )

@@ -33,6 +33,7 @@ class LoopContext:
     range_expr: str
     extra_params: str | None
     extra_param_types: dict[str, str] | None
+    offload_param_lines: list[str] | None
     body_lines: list[str]
     emit_named_kernel: bool
 
@@ -317,7 +318,13 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
         kernel_symbol, rel_spv = _vulkan_kernel_symbol_and_rel_spv(ctx.rel_path, ctx.lineno)
         launch_name = "launch_2d" if ctx.is_2d else "launch_1d"
         extra_param_names = parse_extra_param_names(ctx.extra_params)
-        lines.append(f"{ctx.indent}static rllm::vulkan::ComputeKernel {kernel_symbol}(")
+        if extra_param_names:
+            kernel_template_args = ", ".join(f"decltype(({name}))" for name in extra_param_names)
+        else:
+            kernel_template_args = ""
+        lines.append(
+            f"{ctx.indent}static rllm::vulkan::ComputeKernel<{kernel_template_args}> {kernel_symbol}("
+        )
         lines.append(f"{ctx.indent}    \"{ctx.rel_path}:{ctx.lineno}\",")
         lines.append(f"{ctx.indent}    \"{rel_spv}\"")
         lines.append(f"{ctx.indent});")
@@ -474,9 +481,11 @@ def transform_source(
     conditional_stack: list[tuple[bool, bool]] = []
     active_code = True
     active_offload_param_types: dict[str, str] = {}
+    active_offload_param_lines: list[str] = []
     collecting_offload_params = False
     collecting_param_names: list[str] = []
     collecting_param_types: dict[str, str] = {}
+    collecting_param_lines: list[str] = []
 
     def append_to_current(line: str) -> None:
         if loop_stack:
@@ -564,14 +573,17 @@ def transform_source(
             if _OFFLOAD_PARAMETERS_END_RE.match(line.strip()):
                 collecting_offload_params = False
                 active_offload_param_types = dict(collecting_param_types)
+                active_offload_param_lines = list(collecting_param_lines)
                 collecting_param_names = []
                 collecting_param_types = {}
+                collecting_param_lines = []
                 append_to_current(line)
                 continue
 
             collecting_param_types.update(
                 parse_offload_param_types_from_declaration_line(line, collecting_param_names)
             )
+            collecting_param_lines.append(line)
             append_to_current(line)
             continue
 
@@ -619,6 +631,7 @@ def transform_source(
                     range_expr=apply_symbol_values(args[1], symbol_values),
                     extra_params=None,
                     extra_param_types=None,
+                    offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
                 )
@@ -644,6 +657,7 @@ def transform_source(
                     range_expr=apply_symbol_values(args[1], symbol_values),
                     extra_params=", ".join(args[2:]),
                     extra_param_types=extra_param_types,
+                    offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
                 )
@@ -663,6 +677,7 @@ def transform_source(
                     range_expr=apply_symbol_values(", ".join(args[2:]), symbol_values),
                     extra_params=None,
                     extra_param_types=None,
+                    offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
                 )
@@ -688,6 +703,7 @@ def transform_source(
                     range_expr=apply_symbol_values(args[2], symbol_values),
                     extra_params=", ".join(args[3:]),
                     extra_param_types=extra_param_types,
+                    offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
                 )

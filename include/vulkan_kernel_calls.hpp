@@ -125,17 +125,20 @@ namespace rllm::vulkan
         uint32_t count_ssbo_bindings_in_glsl(const std::filesystem::path& spirv_path);
     } // namespace detail
 
-    class ComputeKernel
+    class ComputeKernelRuntime
     {
+      protected:
+        struct RuntimeBuffer;
+
       public:
-        ComputeKernel(std::string_view kernel_name, std::filesystem::path spirv_path);
+        ComputeKernelRuntime(std::string_view kernel_name, std::filesystem::path spirv_path);
 
-        ~ComputeKernel();
+        ~ComputeKernelRuntime();
 
-        ComputeKernel(const ComputeKernel&) = delete;
-        ComputeKernel& operator=(const ComputeKernel&) = delete;
-        ComputeKernel(ComputeKernel&&) = delete;
-        ComputeKernel& operator=(ComputeKernel&&) = delete;
+        ComputeKernelRuntime(const ComputeKernelRuntime&) = delete;
+        ComputeKernelRuntime& operator=(const ComputeKernelRuntime&) = delete;
+        ComputeKernelRuntime(ComputeKernelRuntime&&) = delete;
+        ComputeKernelRuntime& operator=(ComputeKernelRuntime&&) = delete;
 
         const std::string& name() const
         {
@@ -153,14 +156,17 @@ namespace rllm::vulkan
         {
             return m_pipeline;
         }
-        template <typename Range, typename... Args>
-        void launch_1d(Range&& range, Args&&... args);
-        template <typename Range2D, typename... Args>
-        void launch_2d(Range2D&& range, Args&&... args);
-        void dispatch_kernel(uint32_t groups_x, uint32_t groups_y, std::span<const detail::HostBufferView> buffers);
+
+      protected:
+        void dispatch_kernel(
+            uint32_t groups_x,
+            uint32_t groups_y,
+            std::span<const detail::HostBufferView> buffers,
+            std::span<RuntimeBuffer> runtime_buffers,
+            size_t& runtime_buffer_count
+        );
         void ensure_pipeline(VkDevice device, uint32_t ssbo_binding_count);
 
-      private:
         struct RuntimeBuffer
         {
             VkBuffer buffer = VK_NULL_HANDLE;
@@ -184,10 +190,26 @@ namespace rllm::vulkan
         VkDevice m_command_buffer_device = VK_NULL_HANDLE;
         VkCommandPool m_command_pool = VK_NULL_HANDLE;
         VkCommandBuffer m_command_buffer = VK_NULL_HANDLE;
-        std::vector<RuntimeBuffer> m_runtime_buffers;
-        static constexpr size_t kMaxLaunchBuffers = 64;
-        std::array<detail::HostBufferView, kMaxLaunchBuffers> m_buffers{};
+    };
+
+    template <typename... KernelArgs>
+    class ComputeKernel : public ComputeKernelRuntime
+    {
+      public:
+        using ComputeKernelRuntime::ComputeKernelRuntime;
+
+        template <typename Range>
+        void launch_1d(Range&& range, KernelArgs... args);
+
+        template <typename Range2D>
+        void launch_2d(Range2D&& range, KernelArgs... args);
+
+      private:
+        static constexpr size_t kLaunchBufferCount = sizeof...(KernelArgs);
+        std::array<detail::HostBufferView, kLaunchBufferCount> m_buffers{};
         size_t m_buffer_count = 0;
+        std::array<typename ComputeKernelRuntime::RuntimeBuffer, kLaunchBufferCount> m_runtime_buffers{};
+        size_t m_runtime_buffer_count = 0;
     };
 
     namespace detail
@@ -293,8 +315,9 @@ namespace rllm::vulkan
 
     } // namespace detail
 
-    template <typename Range, typename... Args>
-    inline void ComputeKernel::launch_1d(Range&& range, Args&&... args)
+    template <typename... KernelArgs>
+    template <typename Range>
+    inline void ComputeKernel<KernelArgs...>::launch_1d(Range&& range, KernelArgs... args)
     {
         if (!std::filesystem::exists(spirv_path()))
         {
@@ -306,18 +329,21 @@ namespace rllm::vulkan
         const uint32_t x_items = detail::range_size_1d(range);
         const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);
 
-        static_assert(
-            sizeof...(Args) <= kMaxLaunchBuffers,
-            "Too many Vulkan kernel launch arguments for ComputeKernel::m_buffers capacity"
-        );
         m_buffer_count = 0;
-        (detail::append_buffer_view(m_buffers, m_buffer_count, std::forward<Args>(args)), ...);
+        (detail::append_buffer_view(m_buffers, m_buffer_count, args), ...);
 
-        dispatch_kernel(groups_x, 1, std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count));
+        dispatch_kernel(
+            groups_x,
+            1,
+            std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
+            std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),
+            m_runtime_buffer_count
+        );
     }
 
-    template <typename Range2D, typename... Args>
-    inline void ComputeKernel::launch_2d(Range2D&& range, Args&&... args)
+    template <typename... KernelArgs>
+    template <typename Range2D>
+    inline void ComputeKernel<KernelArgs...>::launch_2d(Range2D&& range, KernelArgs... args)
     {
         if (!std::filesystem::exists(spirv_path()))
         {
@@ -331,14 +357,16 @@ namespace rllm::vulkan
         const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);
         const uint32_t groups_y = detail::ceil_div_u32(y_items, kLocalSizeY);
 
-        static_assert(
-            sizeof...(Args) <= kMaxLaunchBuffers,
-            "Too many Vulkan kernel launch arguments for ComputeKernel::m_buffers capacity"
-        );
         m_buffer_count = 0;
-        (detail::append_buffer_view(m_buffers, m_buffer_count, std::forward<Args>(args)), ...);
+        (detail::append_buffer_view(m_buffers, m_buffer_count, args), ...);
 
-        dispatch_kernel(groups_x, groups_y, std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count));
+        dispatch_kernel(
+            groups_x,
+            groups_y,
+            std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
+            std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),
+            m_runtime_buffer_count
+        );
     }
 
 } // namespace rllm::vulkan

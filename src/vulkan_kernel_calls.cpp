@@ -9,7 +9,7 @@
 namespace rllm::vulkan
 {
 
-	ComputeKernel::ComputeKernel(std::string_view kernel_name, std::filesystem::path spirv_path)
+	ComputeKernelRuntime::ComputeKernelRuntime(std::string_view kernel_name, std::filesystem::path spirv_path)
 			: m_name(kernel_name)
 			, m_spirv_path(std::move(spirv_path))
 	{
@@ -21,7 +21,7 @@ namespace rllm::vulkan
 		m_parsed_ssbo_binding_count = detail::count_ssbo_bindings_in_glsl(m_spirv_path);
 	}
 
-	ComputeKernel::~ComputeKernel()
+	ComputeKernelRuntime::~ComputeKernelRuntime()
 	{
 		if (m_command_buffer != VK_NULL_HANDLE && m_command_buffer_device != VK_NULL_HANDLE &&
 			m_command_pool != VK_NULL_HANDLE)
@@ -57,7 +57,7 @@ namespace rllm::vulkan
 		}
 	}
 
-	void ComputeKernel::ensure_pipeline(VkDevice device, uint32_t ssbo_binding_count)
+	void ComputeKernelRuntime::ensure_pipeline(VkDevice device, uint32_t ssbo_binding_count)
 	{
 		if (m_pipeline != VK_NULL_HANDLE && m_cached_device == device && m_ssbo_binding_count == ssbo_binding_count)
 		{
@@ -249,7 +249,13 @@ namespace rllm::vulkan
 		m_ssbo_binding_count = ssbo_binding_count;
 	}
 
-	void ComputeKernel::dispatch_kernel(uint32_t groups_x, uint32_t groups_y, std::span<const detail::HostBufferView> buffers)
+	void ComputeKernelRuntime::dispatch_kernel(
+		uint32_t groups_x,
+		uint32_t groups_y,
+		std::span<const detail::HostBufferView> buffers,
+		std::span<ComputeKernelRuntime::RuntimeBuffer> runtime_buffers,
+		size_t& runtime_buffer_count
+	)
 	{
 		if (groups_x == 0 || groups_y == 0)
 		{
@@ -272,12 +278,23 @@ namespace rllm::vulkan
 
 		ensure_pipeline(ctx.device, ssbo_binding_count);
 
-		m_runtime_buffers.clear();
-		m_runtime_buffers.reserve(buffers.size());
+		if (runtime_buffers.size() < buffers.size())
+		{
+			LOG_ERROR(
+				"Kernel '{}' needs {} runtime buffers, but storage only has {}.",
+				name(),
+				buffers.size(),
+				runtime_buffers.size()
+			);
+			std::abort();
+		}
+
+		runtime_buffer_count = 0;
 
 		auto cleanup_runtime_buffers = [&]() {
-			for (RuntimeBuffer& rb : m_runtime_buffers)
+			for (size_t i = 0; i < runtime_buffer_count; ++i)
 			{
+				RuntimeBuffer& rb = runtime_buffers[i];
 				if (rb.mapped != nullptr)
 				{
 					if (rb.view.writable)
@@ -298,7 +315,7 @@ namespace rllm::vulkan
 					rb.memory = VK_NULL_HANDLE;
 				}
 			}
-			m_runtime_buffers.clear();
+			runtime_buffer_count = 0;
 		};
 
 		auto find_memory_type_index = [&](uint32_t type_filter, VkMemoryPropertyFlags properties) -> uint32_t {
@@ -368,7 +385,7 @@ namespace rllm::vulkan
 			}
 
 			std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
-			m_runtime_buffers.push_back(rb);
+			runtime_buffers[runtime_buffer_count++] = rb;
 		}
 
 		if (m_command_buffer == VK_NULL_HANDLE)
@@ -454,16 +471,16 @@ namespace rllm::vulkan
 
 		vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline());
 
-		if (!m_runtime_buffers.empty())
+		if (runtime_buffer_count > 0)
 		{
-			std::vector<VkDescriptorBufferInfo> buffer_infos(m_runtime_buffers.size());
-			std::vector<VkWriteDescriptorSet> writes(m_runtime_buffers.size());
+			std::vector<VkDescriptorBufferInfo> buffer_infos(runtime_buffer_count);
+			std::vector<VkWriteDescriptorSet> writes(runtime_buffer_count);
 
-			for (size_t i = 0; i < m_runtime_buffers.size(); ++i)
+			for (size_t i = 0; i < runtime_buffer_count; ++i)
 			{
-				buffer_infos[i].buffer = m_runtime_buffers[i].buffer;
+				buffer_infos[i].buffer = runtime_buffers[i].buffer;
 				buffer_infos[i].offset = 0;
-				buffer_infos[i].range = static_cast<VkDeviceSize>(m_runtime_buffers[i].view.size_bytes);
+				buffer_infos[i].range = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
 
 				writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 				writes[i].dstSet = m_descriptor_set;

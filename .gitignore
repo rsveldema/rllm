@@ -10,3 +10,4 @@ models/*.json
 staged/*.json
 *.log
 *.bin
+cmake_test_discovery*
