@@ -43,6 +43,14 @@ namespace rllm
 
     static std::ofstream s_log_file{"tokenization.log"};
 
+#ifdef LOG_INFO
+#undef LOG_INFO
+#endif
+
+#ifdef LOG_ERROR
+#undef LOG_ERROR
+#endif
+
 #define LOG_INFO(...) \
     if (log_info_enabled) \
     { \

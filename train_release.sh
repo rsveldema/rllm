@@ -5,6 +5,8 @@ set -euo pipefail
 echo "Configuring and building release before training..."
 sh ./build_release.sh
 
+TRAIN_DIR="${TRAIN_DIR:-training_data1}"
+
 echo "Locating checkpoint to resume from..."
 
 echo "Normalizing training_data1 with training_postprocessor.py..."
@@ -15,6 +17,11 @@ if compgen -G "training_data0/*.cpp" > /dev/null; then
     clang-format -i --style='{BasedOnStyle: LLVM, ColumnLimit: 0}' training_data0/*.cpp
 else
     echo "No .cpp files found in training_data0"
+fi
+
+if [ ! -d "$TRAIN_DIR" ]; then
+    echo "Training directory '$TRAIN_DIR' does not exist. Set TRAIN_DIR to an existing folder."
+    exit 1
 fi
 
 # Resume from an explicit model path, then after_training.json, then latest checkpoint.
@@ -48,6 +55,7 @@ echo "--- Starting training ---"
 
 ./build_release/rllm --train $input_arg \
     -o models/after_training.json \
+    --train-dir "$TRAIN_DIR" \
      --filter iuring \
      --filter simple \
      --filter self \

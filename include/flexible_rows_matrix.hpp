@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <utility>
 
+#include <parallel.hpp>
 #include <Range.hpp>
 
 namespace rllm
@@ -19,17 +20,19 @@ namespace rllm
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         flexible_rows_matrix()
-            : m_rows(X::MAX)
+            : m_data(ROWS * COLS)
+            , m_rows(X::MAX)
         {
-            m_data.fill(ElementType{});
+            fill(ElementType{});
         }
 
         flexible_rows_matrix(X rows)
-            : m_rows(rows)
+            : m_data(ROWS * COLS)
+            , m_rows(rows)
         {
-            m_data.fill(ElementType{});
+            fill(ElementType{});
         }
-        
+
         ~flexible_rows_matrix() = default;
 
         void set_rows(X rows)
@@ -42,7 +45,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] = value;
+            m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] = value;
         }
 
         void set(const std::pair<const X, const Y>& indices, ElementType value)
@@ -54,7 +57,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         const ElementType& get(const std::pair<const X, const Y>& indices) const
@@ -66,19 +69,19 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         const ElementType& operator[](X x, Y y) const
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            return m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         void fill(ElementType value)
         {
-            m_data.fill(value);
+            std::fill_n(m_data.get(), ROWS * COLS, value);
         }
 
         // Adds each element of other (must have the same runtime dimensions) into this matrix.
@@ -88,14 +91,14 @@ namespace rllm
             const size_t n = static_cast<size_t>(m_rows) * COLS;
 #pragma omp simd
             for (size_t i = 0; i < n; ++i)
-                m_data[i] += other.m_data[i];
+                m_data.get()[i] += other.m_data.get()[i];
         }
 
         void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            auto& cell = m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            auto& cell = m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
             cell = math::clamp(cell + delta, range.lo, range.hi);
         }
 
@@ -108,7 +111,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            m_data[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] += delta;
+            m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] += delta;
         }
 
         X num_rows() const
@@ -122,8 +125,7 @@ namespace rllm
         }
 
       private:
-        using flat_data_t = std::array<ElementType, ROWS * COLS>;
-        flat_data_t m_data;
+        DevicePointer<ElementType> m_data;
         X m_rows;
     };
 

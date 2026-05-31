@@ -52,7 +52,7 @@ namespace parallel {
 #define OFFLOADABLE_PARFOR_2D(v1, v2, ...)      PARFOR_2D(v1, v2, __VA_ARGS__)
 
 // Index-space loops intended for target offload-friendly kernels.
-#if defined(USE_ROCM_OFFLOAD)
+#if defined(USE_HIP_OFFLOAD)
 #define OFFLOAD_PARFOR(v, N) \
     _Pragma("omp target teams distribute parallel for") \
     for (std::size_t v = 0, _off_n_ = static_cast<std::size_t>(N); v < _off_n_; ++v) {

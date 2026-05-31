@@ -37,6 +37,11 @@ namespace rllm
 } // namespace rllm
 
 static std::ofstream s_nn_log;
+
+#ifdef LOG_INFO
+#undef LOG_INFO
+#endif
+
 #define LOG_INFO(...) (s_nn_log << std::format(__VA_ARGS__) << '\n' << std::flush)
 
 

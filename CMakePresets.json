@@ -36,14 +36,14 @@
       }
     },
     {
-      "name": "openmp-rocm",
-      "displayName": "OpenMP + ROCm Offload",
-      "description": "OpenMP backend with ROCm offload mode and explicit ROCm root",
+      "name": "openmp-hip",
+      "displayName": "OpenMP + HIP Offload",
+      "description": "OpenMP backend with HIP offload mode and explicit HIP root",
       "inherits": "base",
       "cacheVariables": {
         "PARALLEL_BACKEND": "openmp",
-        "OFFLOAD_BACKEND": "rocm",
-        "ROCM_ROOT": "/opt/rocm"
+        "OFFLOAD_BACKEND": "hip",
+        "HIP_ROOT": "/opt/rocm"
       }
     }
   ],
@@ -59,9 +59,9 @@
       "configurePreset": "fastfork-vulkan"
     },
     {
-      "name": "build-openmp-rocm",
-      "displayName": "Build OpenMP + ROCm",
-      "configurePreset": "openmp-rocm"
+      "name": "build-openmp-hip",
+      "displayName": "Build OpenMP + HIP",
+      "configurePreset": "openmp-hip"
     }
   ]
 }

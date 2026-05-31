@@ -31,7 +31,7 @@ struct CommandLineOption
 struct CommandLineParser
 {
 
-    std::string train_corpus_dir = "training_data";
+    std::optional<std::string> train_corpus_dir;
     std::vector<std::string> filters;
     bool train_mode = false;
     std::string output_filename = "model.json";
@@ -236,6 +236,12 @@ struct CommandLineParser
             option_it->action(args);
             i += static_cast<int>(option_it->required_args);
         }
+
+        if (train_mode && !train_corpus_dir.has_value())
+        {
+            std::println("Error: --train requires --train-dir <path>");
+            print_usage_and_exit(argv[0], 1);
+        }
     }
 };
 
@@ -247,6 +253,14 @@ int main(int argc, char* argv[])
     std::println("Build type: Release (NDEBUG defined)");
 #else
     std::println("Build type: Debug (NDEBUG not defined)");
+#endif
+
+#if defined(USE_VULKAN_OFFLOAD)
+    std::println("Offload type: Vulkan");
+#elif defined(USE_HIP_OFFLOAD)
+    std::println("Offload type: HIP");
+#else
+    std::println("Offload type: Host");
 #endif
 
     CommandLineParser parser;
@@ -264,7 +278,7 @@ int main(int argc, char* argv[])
             parser.checkpointing_interval,
             parser.window_size,
             parser.num_epochs,
-            parser.train_corpus_dir
+            parser.train_corpus_dir.value()
         );
     }
     else
