@@ -257,6 +257,7 @@ int main(int argc, char* argv[])
 
 #if defined(USE_VULKAN_OFFLOAD)
     std::println("Offload type: Vulkan");
+    parallel::print_vulkan_provider();
 #elif defined(USE_HIP_OFFLOAD)
     std::println("Offload type: HIP");
 #else

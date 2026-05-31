@@ -73,6 +73,9 @@ add_dependencies(generate_domain_replace_json generate_tokenizer_map)
 set_target_properties(generate_domain_replace_json PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 add_subdirectory(src)
+
+# Enable testing for the project
+enable_testing()
 add_subdirectory(tests)
 
 add_executable(rllm src/main.cc

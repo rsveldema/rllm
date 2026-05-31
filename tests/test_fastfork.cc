@@ -2,6 +2,7 @@
 
 #include <fastfork/fastfork.hpp>
 #include <math_utils.hpp>
+#include <parallel.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -286,6 +287,10 @@ TEST(FastforkTest, OverheadPerTaskBounded)
 int main(int argc, char** argv)
 {
     fastfork::init();
+    std::println("Parallel backend: {}", parallel::backend_name());
+#if defined(USE_VULKAN_OFFLOAD)
+    parallel::print_vulkan_provider();
+#endif
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

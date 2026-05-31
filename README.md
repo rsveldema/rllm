@@ -119,6 +119,22 @@ cmake -S . -B build/fastfork-vulkan -DPARALLEL_BACKEND=fastfork -DOFFLOAD_BACKEN
 cmake --build build/fastfork-vulkan --parallel
 ```
 
+Vulkan device selection (optional):
+
+```bash
+# Prefer AMD Vulkan devices (vendor id 0x1002)
+RLLM_VULKAN_VENDOR=amd ./build/fastfork-vulkan/rllm --help
+
+# Select a specific enumerated compute-capable Vulkan device index
+RLLM_VULKAN_DEVICE_INDEX=1 ./build/fastfork-vulkan/rllm --help
+
+# Match by case-insensitive device name substring
+RLLM_VULKAN_DEVICE_SUBSTRING=radeon ./build/fastfork-vulkan/rllm --help
+```
+
+Selection priority is: `RLLM_VULKAN_DEVICE_INDEX` first, then `RLLM_VULKAN_VENDOR` and/or
+`RLLM_VULKAN_DEVICE_SUBSTRING`, then automatic best-device scoring.
+
 Sequential build:
 
 ```bash

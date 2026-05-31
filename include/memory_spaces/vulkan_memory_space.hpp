@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include <IMemorySpace.hpp>
@@ -188,6 +189,16 @@ private:
     static void copy_vulkan_upload(void* offload_dst, const void* staging_src, size_t bytes)
     {
         TransferContext& ctx = transfer_context();
+
+        // Until Vulkan transfer buffers are fully provisioned, keep host/offload mirrors coherent.
+        if (ctx.device == VK_NULL_HANDLE || ctx.queue == VK_NULL_HANDLE ||
+            ctx.staging_buffer == VK_NULL_HANDLE || ctx.offload_buffer == VK_NULL_HANDLE ||
+            ctx.staging_base == nullptr || ctx.offload_base == nullptr)
+        {
+            std::memcpy(offload_dst, staging_src, bytes);
+            return;
+        }
+
         VkDeviceSize src_offset = 0;
         VkDeviceSize dst_offset = 0;
 
@@ -204,6 +215,16 @@ private:
     static void copy_vulkan_download(void* staging_dst, const void* offload_src, size_t bytes)
     {
         TransferContext& ctx = transfer_context();
+
+        // Until Vulkan transfer buffers are fully provisioned, keep host/offload mirrors coherent.
+        if (ctx.device == VK_NULL_HANDLE || ctx.queue == VK_NULL_HANDLE ||
+            ctx.staging_buffer == VK_NULL_HANDLE || ctx.offload_buffer == VK_NULL_HANDLE ||
+            ctx.staging_base == nullptr || ctx.offload_base == nullptr)
+        {
+            std::memcpy(staging_dst, offload_src, bytes);
+            return;
+        }
+
         VkDeviceSize src_offset = 0;
         VkDeviceSize dst_offset = 0;
 

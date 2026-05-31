@@ -124,6 +124,21 @@ namespace rllm
             return Y::MAX;
         }
 
+        ElementType* data()
+        {
+            return m_data.staging_data();
+        }
+
+        const ElementType* data() const
+        {
+            return m_data.staging_data();
+        }
+
+        size_t storage_size_bytes() const
+        {
+            return ROWS * COLS * sizeof(ElementType);
+        }
+
       private:
         DevicePointer<ElementType> m_data;
         X m_rows;

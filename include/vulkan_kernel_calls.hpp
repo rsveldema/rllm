@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <type_traits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,7 +22,42 @@ namespace rllm::vulkan
 
     namespace detail
     {
+        struct HostBufferView
+        {
+            void* host_ptr = nullptr;
+            size_t size_bytes = 0;
+            bool writable = false;
+        };
+
+        template <typename T>
+        inline constexpr bool is_host_buffer_arg_v =
+            requires(T value) {
+                value.data();
+                value.storage_size_bytes();
+            };
+
+        template <typename Arg>
+        inline void append_buffer_view(std::vector<HostBufferView>& out, Arg&& arg)
+        {
+            using ArgType = std::remove_reference_t<Arg>;
+            if constexpr (is_host_buffer_arg_v<ArgType>)
+            {
+                HostBufferView view{};
+                view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.data()));
+                view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
+                view.writable = !std::is_const_v<ArgType>;
+                out.push_back(view);
+            }
+            else
+            {
+                static_cast<void>(out);
+                static_cast<void>(arg);
+            }
+        }
+
         std::vector<uint32_t> load_spirv_words(const std::filesystem::path& spirv, const char* kernel_name);
+
+        uint32_t count_ssbo_bindings_in_glsl(const std::filesystem::path& spirv_path);
     }
 
         class ComputeKernel
@@ -44,8 +80,8 @@ namespace rllm::vulkan
                 void launch_1d(Range&& range, Args&&... args);
                 template <typename Range2D, typename... Args>
                 void launch_2d(Range2D&& range, Args&&... args);
-                void dispatch_kernel(uint32_t groups_x, uint32_t groups_y);
-                void ensure_pipeline(VkDevice device);
+                void dispatch_kernel(uint32_t groups_x, uint32_t groups_y, const std::vector<detail::HostBufferView>& buffers);
+                void ensure_pipeline(VkDevice device, uint32_t ssbo_binding_count);
 
             private:
                 std::string m_name;
@@ -54,7 +90,11 @@ namespace rllm::vulkan
                 VkDevice m_cached_device = VK_NULL_HANDLE;
                 VkShaderModule m_shader_module = VK_NULL_HANDLE;
                 VkPipelineLayout m_pipeline_layout = VK_NULL_HANDLE;
+                VkDescriptorSetLayout m_descriptor_set_layout = VK_NULL_HANDLE;
+                VkDescriptorPool m_descriptor_pool = VK_NULL_HANDLE;
+                VkDescriptorSet m_descriptor_set = VK_NULL_HANDLE;
                 VkPipeline m_pipeline = VK_NULL_HANDLE;
+                uint32_t m_ssbo_binding_count = 0;
                 VkDevice m_command_buffer_device = VK_NULL_HANDLE;
                 VkCommandPool m_command_pool = VK_NULL_HANDLE;
                 VkCommandBuffer m_command_buffer = VK_NULL_HANDLE;
@@ -154,7 +194,6 @@ namespace rllm::vulkan
     template <typename Range, typename... Args>
     inline void ComputeKernel::launch_1d(Range&& range, Args&&... args)
     {
-        (static_cast<void>(args), ...);
         if (!std::filesystem::exists(spirv_path()))
         {
             LOG_ERROR(
@@ -168,13 +207,17 @@ namespace rllm::vulkan
         constexpr uint32_t kLocalSizeX = 64;
         const uint32_t x_items = detail::range_size_1d(range);
         const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);
-        dispatch_kernel(groups_x, 1);
+
+        std::vector<detail::HostBufferView> buffers;
+        buffers.reserve(sizeof...(Args));
+        (detail::append_buffer_view(buffers, std::forward<Args>(args)), ...);
+
+        dispatch_kernel(groups_x, 1, buffers);
     }
 
     template <typename Range2D, typename... Args>
     inline void ComputeKernel::launch_2d(Range2D&& range, Args&&... args)
     {
-        (static_cast<void>(args), ...);
         if (!std::filesystem::exists(spirv_path()))
         {
             LOG_ERROR(
@@ -190,7 +233,12 @@ namespace rllm::vulkan
         const auto [x_items, y_items] = detail::range_size_2d(range);
         const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);
         const uint32_t groups_y = detail::ceil_div_u32(y_items, kLocalSizeY);
-        dispatch_kernel(groups_x, groups_y);
+
+        std::vector<detail::HostBufferView> buffers;
+        buffers.reserve(sizeof...(Args));
+        (detail::append_buffer_view(buffers, std::forward<Args>(args)), ...);
+
+        dispatch_kernel(groups_x, groups_y, buffers);
     }
 
 } // namespace rllm::vulkan

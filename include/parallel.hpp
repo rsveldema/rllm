@@ -34,6 +34,11 @@ inline Allocator& get_offload_allocator()
     return allocator;
 }
 
+namespace parallel {
+    const char* backend_name();
+    void print_vulkan_provider();
+}
+
 #include <device_pointer.hpp>
 
 

@@ -10,6 +10,12 @@ template<typename T>
 class DevicePointer
 {
 public:
+    enum class CurrentOwner
+    {
+        Device,
+        Host,
+    };
+
     explicit DevicePointer(size_t num_elements)
         : m_allocator(&get_offload_allocator())
         , m_memory_space(&m_allocator->memory_space())
@@ -18,6 +24,7 @@ public:
         allocate_internal();
         zero_initialize_staging();
         copy_to_offload_buffer();
+        m_current_owner = CurrentOwner::Host;
     }
 
     DevicePointer(Allocator& allocator, size_t num_elements)
@@ -31,7 +38,7 @@ public:
         , m_owns_staging(false)
         , m_owns_offload(false)
         , m_owns_heap_raw(false)
-        , m_staging_dirty(true)
+        , m_current_owner(CurrentOwner::Host)
     {
         zero_initialize_staging();
         copy_to_offload_buffer();
@@ -48,7 +55,7 @@ public:
         , m_owns_staging(owns_heap)
         , m_owns_offload(false)
         , m_owns_heap_raw(owns_heap)
-        , m_staging_dirty(false)
+        , m_current_owner(CurrentOwner::Host)
     {}
 
     DevicePointer(const DevicePointer& other)
@@ -60,7 +67,7 @@ public:
         , m_owns_staging(false)
         , m_owns_offload(false)
         , m_owns_heap_raw(false)
-        , m_staging_dirty(true)
+        , m_current_owner(CurrentOwner::Host)
     {
         if (m_bytes == 0)
             return;
@@ -75,6 +82,7 @@ public:
 
         std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
         copy_to_offload_buffer();
+        m_current_owner = CurrentOwner::Host;
     }
 
     DevicePointer& operator=(const DevicePointer& other)
@@ -98,7 +106,7 @@ public:
         , m_owns_staging(other.m_owns_staging)
         , m_owns_offload(other.m_owns_offload)
         , m_owns_heap_raw(other.m_owns_heap_raw)
-        , m_staging_dirty(other.m_staging_dirty)
+        , m_current_owner(other.m_current_owner)
     {
         other.m_allocator = nullptr;
         other.m_memory_space = nullptr;
@@ -110,7 +118,7 @@ public:
         other.m_owns_staging = false;
         other.m_owns_offload = false;
         other.m_owns_heap_raw = false;
-        other.m_staging_dirty = false;
+        other.m_current_owner = CurrentOwner::Host;
     }
 
     DevicePointer& operator=(DevicePointer&& other) noexcept
@@ -130,7 +138,7 @@ public:
         m_owns_staging = other.m_owns_staging;
         m_owns_offload = other.m_owns_offload;
         m_owns_heap_raw = other.m_owns_heap_raw;
-        m_staging_dirty = other.m_staging_dirty;
+        m_current_owner = other.m_current_owner;
 
         other.m_allocator = nullptr;
         other.m_memory_space = nullptr;
@@ -142,7 +150,7 @@ public:
         other.m_owns_staging = false;
         other.m_owns_offload = false;
         other.m_owns_heap_raw = false;
-        other.m_staging_dirty = false;
+        other.m_current_owner = CurrentOwner::Host;
         return *this;
     }
 
@@ -153,16 +161,22 @@ public:
 
     T* get() const
     {
+        ensure_host_data();
+        m_current_owner = CurrentOwner::Host;
         return m_staging_ptr;
     }
 
     T* staging_data() const
     {
+        ensure_host_data();
+        m_current_owner = CurrentOwner::Host;
         return m_staging_ptr;
     }
 
     void* offload_data() const
     {
+        ensure_device_data();
+        m_current_owner = CurrentOwner::Device;
         return m_offload_ptr;
     }
 
@@ -173,24 +187,28 @@ public:
 
     T& operator[](size_t idx)
     {
-        m_staging_dirty = true;
+        ensure_host_data();
+        m_current_owner = CurrentOwner::Host;
         return m_staging_ptr[idx];
     }
 
     const T& operator[](size_t idx) const
     {
+        ensure_host_data();
         return m_staging_ptr[idx];
     }
 
     T get(size_t idx) const
     {
+        ensure_host_data();
         return m_staging_ptr[idx];
     }
 
     void set(size_t idx, const T& value)
     {
+        ensure_host_data();
         m_staging_ptr[idx] = value;
-        m_staging_dirty = true;
+        m_current_owner = CurrentOwner::Host;
     }
 
     void copy_to_offload_buffer()
@@ -198,8 +216,11 @@ public:
         if (m_bytes == 0 || m_offload_ptr == nullptr || m_staging_ptr == nullptr)
             return;
 
+        if (m_current_owner == CurrentOwner::Device)
+            return;
+
         m_memory_space->copy_staging_to_offload(m_offload_ptr, m_staging_ptr, m_bytes);
-        m_staging_dirty = false;
+        m_current_owner = CurrentOwner::Device;
     }
 
     void copy_from_offload_buffer()
@@ -207,13 +228,16 @@ public:
         if (m_bytes == 0 || m_offload_ptr == nullptr || m_staging_ptr == nullptr)
             return;
 
+        if (m_current_owner == CurrentOwner::Host)
+            return;
+
         m_memory_space->copy_offload_to_staging(m_staging_ptr, m_offload_ptr, m_bytes);
-        m_staging_dirty = false;
+        m_current_owner = CurrentOwner::Host;
     }
 
     bool needs_offload_sync() const
     {
-        return m_staging_dirty;
+        return m_current_owner == CurrentOwner::Host;
     }
 
     void swap(DevicePointer& other) noexcept
@@ -228,7 +252,7 @@ public:
         std::swap(m_owns_staging, other.m_owns_staging);
         std::swap(m_owns_offload, other.m_owns_offload);
         std::swap(m_owns_heap_raw, other.m_owns_heap_raw);
-        std::swap(m_staging_dirty, other.m_staging_dirty);
+        std::swap(m_current_owner, other.m_current_owner);
     }
 
 private:
@@ -252,7 +276,7 @@ private:
         m_owns_staging = false;
         m_owns_offload = false;
         m_owns_heap_raw = false;
-        m_staging_dirty = true;
+        m_current_owner = CurrentOwner::Host;
     }
 
     void zero_initialize_staging()
@@ -269,7 +293,23 @@ private:
             for (size_t i = 0; i < m_count; ++i)
                 m_staging_ptr[i] = T{};
         }
-        m_staging_dirty = true;
+        m_current_owner = CurrentOwner::Host;
+    }
+
+    void ensure_host_data() const
+    {
+        if (m_current_owner == CurrentOwner::Device)
+        {
+            const_cast<DevicePointer*>(this)->copy_from_offload_buffer();
+        }
+    }
+
+    void ensure_device_data() const
+    {
+        if (m_current_owner == CurrentOwner::Host)
+        {
+            const_cast<DevicePointer*>(this)->copy_to_offload_buffer();
+        }
     }
 
     void release_internal()
@@ -282,7 +322,7 @@ private:
         m_owns_staging = false;
         m_owns_offload = false;
         m_owns_heap_raw = false;
-        m_staging_dirty = false;
+        m_current_owner = CurrentOwner::Host;
     }
 
     Allocator* m_allocator = nullptr;
@@ -295,5 +335,5 @@ private:
     bool m_owns_staging = false;
     bool m_owns_offload = false;
     bool m_owns_heap_raw = false;
-    bool m_staging_dirty = false;
+    mutable CurrentOwner m_current_owner = CurrentOwner::Host;
 };

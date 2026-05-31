@@ -65,6 +65,7 @@ class MatrixViewSpec:
     rows: int
     cols: int
     is_const: bool
+    flat_len: int
 
 
 _FLEX_ROWS_MATRIX_TYPE_RE = re.compile(
@@ -105,7 +106,14 @@ def _map_cpp_extra_param_to_vulkan(
         if rows_max is not None and cols_max is not None:
             is_const = flex_match.group("const") is not None
             # Matrix-like tensors are exposed as SSBO bindings, not copied into function-local arrays.
-            return "", "", MatrixViewSpec(name=name, rows=rows_max, cols=cols_max, is_const=is_const)
+            flat_len = rows_max * cols_max
+            return "", "", MatrixViewSpec(
+                name=name,
+                rows=rows_max,
+                cols=cols_max,
+                is_const=is_const,
+                flat_len=flat_len,
+            )
 
     # Fallback to scalar int plumbing for unknown/unhandled types.
     return f"int {name}", f"int {name} = 0;", None
@@ -198,7 +206,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
                 readonly = "readonly " if matrix_view_spec.is_const else ""
                 block_name = f"RllmBuffer_{name}"
                 ssbo_decls.append(
-                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ float {name}[]; }};"
+                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ float {name}[{matrix_view_spec.flat_len}]; }};"
                 )
                 ssbo_binding += 1
             else:
