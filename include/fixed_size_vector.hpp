@@ -8,6 +8,7 @@
 
 #include <Range.hpp>
 #include <enum_iterator.hpp>
+#include <parallel.hpp>
 
 namespace rllm
 {
@@ -15,10 +16,13 @@ namespace rllm
     class fixed_size_vector
     {
       public:
+        static constexpr size_t CAPACITY = static_cast<size_t>(LengthType::MAX);
+
         fixed_size_vector()
+            : m_data(make_storage())
         {
             if constexpr (std::is_trivially_default_constructible_v<T>)
-                m_data.fill(T{});
+                fill(T{});
             // else: T's own default constructor already initialises each element.
         }
 
@@ -32,10 +36,11 @@ namespace rllm
 
         float get_highest_value(const LengthType length) const
         {
+            const auto* data = m_data.get();
             float max_value = std::numeric_limits<float>::lowest();
             for (const auto i : enum_iterator<LengthType>(length))
             {
-                const auto val = m_data[static_cast<size_t>(i)];
+                const auto val = data[static_cast<size_t>(i)];
                 if (val > max_value)
                 {
                     max_value = val;
@@ -51,27 +56,29 @@ namespace rllm
          */
         void normalize_using_softmax(const LengthType length)
         {
+            auto* data = m_data.get();
             const auto max_value = get_highest_value(length);
 
             float sum_exp = 0.0f;
             for (const auto i : enum_iterator<LengthType>(length))
             {
-                sum_exp += std::exp(m_data[static_cast<size_t>(i)] - max_value);
+                sum_exp += std::exp(data[static_cast<size_t>(i)] - max_value);
             }
 
             for (const auto i : enum_iterator<LengthType>(length))
             {
-                m_data[static_cast<size_t>(i)] = std::exp(m_data[static_cast<size_t>(i)] - max_value) / sum_exp;
+                data[static_cast<size_t>(i)] = std::exp(data[static_cast<size_t>(i)] - max_value) / sum_exp;
             }
         }
 
         fixed_size_vector sub_array(LengthType length) const
         {
             assert(length <= len);
+            const auto* data = m_data.get();
             fixed_size_vector result;
             for (const auto i : enum_iterator<LengthType>(length))
             {
-                const auto tok = m_data[static_cast<size_t>(i)];
+                const auto tok = data[static_cast<size_t>(i)];
                 result.push_back(tok);
             }
             result.len = length;
@@ -81,14 +88,14 @@ namespace rllm
         void push_back(T value)
         {
             assert(len < LengthType::MAX);
-            m_data[static_cast<size_t>(len)] = value;
+            m_data.get()[static_cast<size_t>(len)] = value;
             len = static_cast<LengthType>(static_cast<size_t>(len) + 1);
         }
 
         const T& back() const
         {
             assert(len > LengthType::START);
-            return m_data[static_cast<size_t>(len) - 1];
+            return m_data.get()[static_cast<size_t>(len) - 1];
         }
 
         void pop_back()
@@ -109,39 +116,40 @@ namespace rllm
 
         T& operator[](LengthType index)
         {
-            return m_data[static_cast<size_t>(index)];
+            return m_data.get()[static_cast<size_t>(index)];
         }
 
         const T& operator[](LengthType index) const
         {
-            return m_data[static_cast<size_t>(index)];
+            return m_data.get()[static_cast<size_t>(index)];
         }
 
         void fill(T value)
         {
-            m_data.fill(value);
+            std::fill_n(m_data.get(), CAPACITY, value);
         }
 
         void fill(T value, LengthType length)
         {
             assert(length <= LengthType::MAX);
+            auto* data = m_data.get();
             for (const auto i : enum_iterator<LengthType>(length))
             {
-                m_data[static_cast<size_t>(i)] = value;
+                data[static_cast<size_t>(i)] = value;
             }
         }
 
         /** add a value to an element at index with clamping */
         void add_with_clamp(LengthType index, T delta, Range<T> range)
         {
-            auto& cell = m_data[static_cast<size_t>(index)];
+            auto& cell = m_data.get()[static_cast<size_t>(index)];
             cell = math::clamp(cell + delta, range.lo, range.hi);
         }
 
         /** add a value to an element at index without clamping */
         void add_no_clamp(LengthType index, T delta)
         {
-            m_data[static_cast<size_t>(index)] += delta;
+            m_data.get()[static_cast<size_t>(index)] += delta;
         }
 
         void clear()
@@ -150,8 +158,15 @@ namespace rllm
         }
 
       private:
-        using token_vector_data_t = std::array<T, static_cast<size_t>(LengthType::MAX)>;
-        token_vector_data_t m_data;
+        static DevicePointer<T> make_storage()
+        {
+            if constexpr (std::is_trivially_copyable_v<T>)
+                return DevicePointer<T>(CAPACITY);
+            else
+                return DevicePointer<T>(new T[CAPACITY], CAPACITY, true);
+        }
+
+        DevicePointer<T> m_data;
         LengthType len = LengthType::START;
     };
 } // namespace rllm

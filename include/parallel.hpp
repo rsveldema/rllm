@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include <IMemorySpace.hpp>
 
 // Backend selection is controlled via cmake:
@@ -37,6 +39,42 @@ inline Allocator& get_offload_allocator()
 namespace parallel {
     const char* backend_name();
     void print_vulkan_provider();
+
+    class Statistics
+    {
+      public:
+        void record_host_to_device_buffer_copy()
+        {
+            m_host_to_device_buffer_copies.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        void record_device_to_host_buffer_copy()
+        {
+            m_device_to_host_buffer_copies.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        size_t host_to_device_buffer_copies() const
+        {
+            return m_host_to_device_buffer_copies.load(std::memory_order_relaxed);
+        }
+
+        size_t device_to_host_buffer_copies() const
+        {
+            return m_device_to_host_buffer_copies.load(std::memory_order_relaxed);
+        }
+
+        void reset_buffer_copy_counters()
+        {
+            m_host_to_device_buffer_copies.store(0, std::memory_order_relaxed);
+            m_device_to_host_buffer_copies.store(0, std::memory_order_relaxed);
+        }
+
+      private:
+        std::atomic<size_t> m_host_to_device_buffer_copies{0};
+        std::atomic<size_t> m_device_to_host_buffer_copies{0};
+    };
+
+    extern Statistics statistics;
 }
 
 #include <device_pointer.hpp>

@@ -2,9 +2,15 @@
 
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <new>
 #include <type_traits>
 #include <utility>
+
+#include <IMemorySpace.hpp>
+#include <allocator.hpp>
+
+Allocator& get_offload_allocator();
 
 template<typename T>
 class DevicePointer
@@ -173,6 +179,11 @@ public:
         return m_staging_ptr;
     }
 
+    T* raw_staging_data() const
+    {
+        return m_staging_ptr;
+    }
+
     void* offload_data() const
     {
         ensure_device_data();
@@ -183,6 +194,37 @@ public:
     size_t size() const
     {
         return m_count;
+    }
+
+    size_t storage_size_bytes() const
+    {
+        return m_bytes;
+    }
+
+    T* data()
+    {
+        ensure_host_data();
+        m_current_owner = CurrentOwner::Host;
+        return m_staging_ptr;
+    }
+
+    const T* data() const
+    {
+        ensure_host_data();
+        return m_staging_ptr;
+    }
+
+    // Called by Vulkan kernel infrastructure to register a lazy flush callback.
+    // When set, ensure_host_data() will invoke the callback instead of copy_from_offload_buffer().
+    void set_pending_flush(std::function<void()> flush_fn)
+    {
+        m_pending_flush = std::move(flush_fn);
+        m_current_owner = CurrentOwner::Device;
+    }
+
+    bool has_pending_flush() const
+    {
+        return static_cast<bool>(m_pending_flush);
     }
 
     T& operator[](size_t idx)
@@ -300,7 +342,18 @@ private:
     {
         if (m_current_owner == CurrentOwner::Device)
         {
-            const_cast<DevicePointer*>(this)->copy_from_offload_buffer();
+            auto* self = const_cast<DevicePointer*>(this);
+            if (self->m_pending_flush)
+            {
+                auto fn = std::move(self->m_pending_flush);
+                self->m_pending_flush = nullptr;
+                fn();
+                self->m_current_owner = CurrentOwner::Host;
+            }
+            else
+            {
+                self->copy_from_offload_buffer();
+            }
         }
     }
 
@@ -336,4 +389,5 @@ private:
     bool m_owns_offload = false;
     bool m_owns_heap_raw = false;
     mutable CurrentOwner m_current_owner = CurrentOwner::Host;
+    std::function<void()> m_pending_flush;
 };

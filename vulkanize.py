@@ -103,6 +103,9 @@ _STD_VECTOR_ATOMIC_INT_RE = re.compile(
 _STD_VECTOR_INT_RE = re.compile(
     r"^(?P<const>const\s+)?std::vector\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
 )
+_DEVICE_POINTER_INT_RE = re.compile(
+    r"^(?P<const>const\s+)?DevicePointer\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
+)
 _GLSL_CONST_DECL_RE = re.compile(
     r"^\s*(?:constexpr|const)\s+(?:size_t|int|unsigned|auto)\s+(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+?)\s*;\s*$"
 )
@@ -158,6 +161,11 @@ def _map_cpp_extra_param_to_vulkan(
     vector_int_match = _STD_VECTOR_INT_RE.match(t)
     if vector_int_match:
         is_const = vector_int_match.group("const") is not None
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
+
+    device_pointer_int_match = _DEVICE_POINTER_INT_RE.match(t)
+    if device_pointer_int_match:
+        is_const = device_pointer_int_match.group("const") is not None
         return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
 
     # Fallback to scalar int plumbing for unknown/unhandled types.
@@ -312,7 +320,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
     return (
         "#version 450\n"
         "\n"
-        "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;\n"
+        "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
         "\n"
         f"{const_block}"
         f"{ssbo_block}"

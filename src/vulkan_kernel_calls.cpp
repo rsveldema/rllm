@@ -5,9 +5,29 @@
 #include <cstdlib>
 #include <cstring>
 #include <regex>
+#include <unordered_map>
+
+#include <parallel.hpp>
 
 namespace rllm::vulkan
 {
+	namespace detail
+	{
+		struct LazyRuntimeBufferCacheEntry
+		{
+			VkDevice device = VK_NULL_HANDLE;
+			VkBuffer buffer = VK_NULL_HANDLE;
+			VkDeviceMemory memory = VK_NULL_HANDLE;
+			void* mapped = nullptr;
+			size_t size_bytes = 0;
+		};
+
+		static std::unordered_map<void*, LazyRuntimeBufferCacheEntry>& lazy_runtime_buffer_cache()
+		{
+			static std::unordered_map<void*, LazyRuntimeBufferCacheEntry> cache;
+			return cache;
+		}
+	}
 
 	ComputeKernelRuntime::ComputeKernelRuntime(std::string_view kernel_name, std::filesystem::path spirv_path)
 			: m_name(kernel_name)
@@ -289,16 +309,39 @@ namespace rllm::vulkan
 			std::abort();
 		}
 
-		runtime_buffer_count = 0;
+		runtime_buffer_count = buffers.size();
+
+		// Release a single runtime buffer slot (unmap + free).
+		auto release_runtime_buffer = [&](RuntimeBuffer& rb) {
+			if (rb.mapped != nullptr)
+			{
+				vkUnmapMemory(ctx.device, rb.memory);
+				rb.mapped = nullptr;
+			}
+			if (rb.buffer != VK_NULL_HANDLE)
+			{
+				vkDestroyBuffer(ctx.device, rb.buffer, nullptr);
+				rb.buffer = VK_NULL_HANDLE;
+			}
+			if (rb.memory != VK_NULL_HANDLE)
+			{
+				vkFreeMemory(ctx.device, rb.memory, nullptr);
+				rb.memory = VK_NULL_HANDLE;
+			}
+			rb.cached = false;
+		};
 
 		auto cleanup_runtime_buffers = [&]() {
 			for (size_t i = 0; i < runtime_buffer_count; ++i)
 			{
 				RuntimeBuffer& rb = runtime_buffers[i];
+				if (rb.cached)
+					continue;  // lazy buffer — kept alive for deferred flush
 				if (rb.mapped != nullptr)
 				{
 					if (rb.view.writable)
 					{
+						parallel::statistics.record_device_to_host_buffer_copy();
 						std::memcpy(rb.view.host_ptr, rb.mapped, rb.view.size_bytes);
 					}
 					vkUnmapMemory(ctx.device, rb.memory);
@@ -332,9 +375,61 @@ namespace rllm::vulkan
 			std::abort();
 		};
 
-		for (const detail::HostBufferView& view : buffers)
+		for (size_t buf_idx = 0; buf_idx < buffers.size(); ++buf_idx)
 		{
-			RuntimeBuffer rb{};
+			const detail::HostBufferView& view = buffers[buf_idx];
+			RuntimeBuffer& rb = runtime_buffers[buf_idx];
+			auto& lazy_cache = detail::lazy_runtime_buffer_cache();
+
+			// Check if we can reuse a cached (lazy) RuntimeBuffer for this slot.
+			const bool can_reuse = rb.cached
+				&& rb.buffer != VK_NULL_HANDLE
+				&& rb.mapped != nullptr
+				&& rb.view.host_ptr == view.host_ptr
+				&& rb.view.size_bytes == view.size_bytes;
+
+			if (can_reuse)
+			{
+				// Reuse the existing device buffer — GPU already has the latest data.
+				// Update view metadata (e.g. lazy flag / on_device_ready callback).
+				rb.view = view;
+				// No h2d upload needed.
+				continue;
+			}
+
+			if (view.lazy)
+			{
+				auto cached_it = lazy_cache.find(view.host_ptr);
+				if (cached_it != lazy_cache.end())
+				{
+					const detail::LazyRuntimeBufferCacheEntry& cached = cached_it->second;
+					if (cached.device == ctx.device && cached.size_bytes == view.size_bytes && cached.buffer != VK_NULL_HANDLE &&
+						cached.memory != VK_NULL_HANDLE && cached.mapped != nullptr)
+					{
+						rb = RuntimeBuffer{};
+						rb.buffer = cached.buffer;
+						rb.memory = cached.memory;
+						rb.mapped = cached.mapped;
+						rb.view = view;
+						rb.cached = true;
+						continue;
+					}
+				}
+			}
+
+			// If there's a stale cached buffer for this slot, release it first.
+			if (rb.cached || rb.buffer != VK_NULL_HANDLE)
+			{
+				// Download stale lazy buffer to host before releasing.
+				if (rb.cached && rb.mapped != nullptr && rb.view.writable)
+				{
+					parallel::statistics.record_device_to_host_buffer_copy();
+					std::memcpy(rb.view.host_ptr, rb.mapped, rb.view.size_bytes);
+				}
+				release_runtime_buffer(rb);
+			}
+
+			rb = RuntimeBuffer{};
 			rb.view = view;
 
 			VkBufferCreateInfo buffer_info{};
@@ -384,8 +479,18 @@ namespace rllm::vulkan
 				std::abort();
 			}
 
+			parallel::statistics.record_host_to_device_buffer_copy();
 			std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
-			runtime_buffers[runtime_buffer_count++] = rb;
+			if (view.lazy)
+			{
+				detail::lazy_runtime_buffer_cache()[view.host_ptr] = {
+					.device = ctx.device,
+					.buffer = rb.buffer,
+					.memory = rb.memory,
+					.mapped = rb.mapped,
+					.size_bytes = rb.view.size_bytes,
+				};
+			}
 		}
 
 		if (m_command_buffer == VK_NULL_HANDLE)
@@ -544,6 +649,20 @@ namespace rllm::vulkan
 				static_cast<int>(wait_result)
 			);
 			std::abort();
+		}
+
+		for (size_t i = 0; i < runtime_buffer_count; ++i)
+		{
+			RuntimeBuffer& rb = runtime_buffers[i];
+			if (rb.view.lazy && rb.view.writable && rb.mapped != nullptr)
+			{
+				rb.cached = true;
+				if (rb.view.on_device_ready)
+				{
+					rb.view.on_device_ready(rb.mapped, rb.view.size_bytes);
+					rb.view.on_device_ready = nullptr;
+				}
+			}
 		}
 
 		cleanup_runtime_buffers();

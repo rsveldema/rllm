@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <span>
 #include <string>
@@ -13,7 +14,9 @@
 #include <utility>
 #include <vector>
 
+#include <device_pointer.hpp>
 #include <logging.hpp>
+#include <parallel.hpp>
 #include <vulkan/vulkan.h>
 
 namespace rllm::vulkan
@@ -29,16 +32,27 @@ namespace rllm::vulkan
             void* host_ptr = nullptr;
             size_t size_bytes = 0;
             bool writable = false;
+            bool lazy = false;  // if true, skip d2h after dispatch; flush happens via on_device_ready callback
+            // Called with (mapped_ptr, size_bytes) once the Vulkan device buffer is ready.
+            // Allows the caller to register a lazy-flush callback on a DevicePointer.
+            std::function<void(void*, size_t)> on_device_ready;
         };
 
         template <typename T>
-        inline constexpr bool is_host_buffer_arg_v = requires(T value) {
+        struct is_device_pointer : std::false_type {};
+        template <typename T>
+        struct is_device_pointer<DevicePointer<T>> : std::true_type {};
+        template <typename T>
+        inline constexpr bool is_device_pointer_v = is_device_pointer<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+
+        template <typename T>
+        inline constexpr bool is_host_buffer_arg_v = !is_device_pointer_v<T> && requires(T value) {
             value.data();
             value.storage_size_bytes();
         };
 
         template <typename T>
-        inline constexpr bool is_contiguous_container_arg_v = !is_host_buffer_arg_v<T> && requires(T value) {
+        inline constexpr bool is_contiguous_container_arg_v = !is_device_pointer_v<T> && !is_host_buffer_arg_v<T> && requires(T value) {
             value.data();
             value.size();
         };
@@ -47,7 +61,22 @@ namespace rllm::vulkan
         inline void append_buffer_view(std::vector<HostBufferView>& out, Arg&& arg)
         {
             using ArgType = std::remove_reference_t<Arg>;
-            if constexpr (is_host_buffer_arg_v<ArgType>)
+            if constexpr (is_device_pointer_v<ArgType>)
+            {
+                HostBufferView view{};
+                view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
+                view.size_bytes = arg.storage_size_bytes();
+                view.writable = !std::is_const_v<ArgType>;
+                view.lazy = true;
+                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz]() {
+                        parallel::statistics.record_device_to_host_buffer_copy();
+                        std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
+                    });
+                };
+                out.push_back(view);
+            }
+            else if constexpr (is_host_buffer_arg_v<ArgType>)
             {
                 HostBufferView view{};
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.data()));
@@ -77,7 +106,30 @@ namespace rllm::vulkan
         inline void append_buffer_view(std::array<HostBufferView, N>& out, size_t& out_count, Arg&& arg)
         {
             using ArgType = std::remove_reference_t<Arg>;
-            if constexpr (is_host_buffer_arg_v<ArgType>)
+            if constexpr (is_device_pointer_v<ArgType>)
+            {
+                if (out_count >= N)
+                {
+                    LOG_ERROR(
+                        "Vulkan launch argument buffer overflow: capacity={}, attempted to append one more argument.", N
+                    );
+                    std::abort();
+                }
+
+                HostBufferView view{};
+                view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
+                view.size_bytes = arg.storage_size_bytes();
+                view.writable = !std::is_const_v<ArgType>;
+                view.lazy = true;
+                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz]() {
+                        parallel::statistics.record_device_to_host_buffer_copy();
+                        std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
+                    });
+                };
+                out[out_count++] = view;
+            }
+            else if constexpr (is_host_buffer_arg_v<ArgType>)
             {
                 if (out_count >= N)
                 {
@@ -173,6 +225,7 @@ namespace rllm::vulkan
             VkDeviceMemory memory = VK_NULL_HANDLE;
             void* mapped = nullptr;
             detail::HostBufferView view{};
+            bool cached = false;  // true when buffer is kept alive for lazy-flush DevicePointer args
         };
 
         std::string m_name;
@@ -325,7 +378,7 @@ namespace rllm::vulkan
             std::abort();
         }
 
-        constexpr uint32_t kLocalSizeX = 64;
+        constexpr uint32_t kLocalSizeX = 1;
         const uint32_t x_items = detail::range_size_1d(range);
         const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);
 
@@ -351,7 +404,7 @@ namespace rllm::vulkan
             std::abort();
         }
 
-        constexpr uint32_t kLocalSizeX = 64;
+        constexpr uint32_t kLocalSizeX = 1;
         constexpr uint32_t kLocalSizeY = 1;
         const auto [x_items, y_items] = detail::range_size_2d(range);
         const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);

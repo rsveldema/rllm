@@ -12,6 +12,8 @@
 
 namespace parallel {
 
+Statistics statistics;
+
 const char* backend_name() {
 #if defined(USE_FASTFORK)
     return "fastfork";
