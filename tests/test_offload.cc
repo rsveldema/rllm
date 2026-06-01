@@ -214,7 +214,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
         for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
@@ -222,6 +222,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
                 (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
                 static_cast<float>(i * 100 + j + 1)
             );
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatParam)
@@ -238,7 +240,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
         for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
@@ -246,6 +248,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
                 (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
                 scale * static_cast<float>(i * 100 + j + 5)
             );
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
@@ -338,7 +342,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     );
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < static_cast<size_t>(rllm::EmbeddingDimension::MAX); ++i)
         for (size_t j = 0; j < static_cast<size_t>(rllm::EmbeddingDimension::MAX); ++j)
@@ -346,6 +350,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
                 (offload_values[static_cast<rllm::EmbeddingDimension>(i), static_cast<rllm::EmbeddingDimension>(j)]),
                 (parfor_values[static_cast<rllm::EmbeddingDimension>(i), static_cast<rllm::EmbeddingDimension>(j)])
             );
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
@@ -363,7 +369,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < 3; ++i)
         for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
@@ -371,6 +377,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
                 (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
                 static_cast<float>(i * 100 + j + 2)
             );
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
@@ -386,7 +394,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
         for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
@@ -394,6 +402,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
                 (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
                 static_cast<float>(i * 100 + j + 3)
             );
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
@@ -411,7 +421,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < 3; ++i)
         for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
@@ -419,6 +429,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
                 (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
                 static_cast<float>(i * 100 + j + 4)
             );
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
 
 #endif

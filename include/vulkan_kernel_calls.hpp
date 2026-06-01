@@ -35,6 +35,7 @@ namespace rllm::vulkan
             size_t size_bytes = 0;
             bool writable = false;
             bool lazy = false;  // if true, skip d2h after dispatch; flush happens via on_device_ready callback
+            bool host_is_latest = true;
             // Called with (mapped_ptr, size_bytes) once the Vulkan device buffer is ready.
             // Allows the caller to register a lazy-flush callback on a DevicePointer.
             std::function<void(void*, size_t)> on_device_ready;
@@ -51,6 +52,14 @@ namespace rllm::vulkan
         inline constexpr bool is_host_buffer_arg_v = !is_device_pointer_v<T> && requires(T value) {
             value.data();
             value.storage_size_bytes();
+        };
+
+        template <typename T>
+        inline constexpr bool is_lazy_host_buffer_arg_v = !is_device_pointer_v<T> && requires(T value, std::function<void()> flush_fn) {
+            value.raw_staging_data();
+            value.storage_size_bytes();
+            value.set_pending_flush(std::move(flush_fn));
+            value.needs_offload_sync();
         };
 
         template <typename T>
@@ -115,6 +124,23 @@ namespace rllm::vulkan
                 view.size_bytes = arg.storage_size_bytes();
                 view.writable = !std::is_const_v<ArgType>;
                 view.lazy = true;
+                view.host_is_latest = arg.needs_offload_sync();
+                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz]() {
+                        parallel::statistics.record_device_to_host_buffer_copy();
+                        std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
+                    });
+                };
+                out.push_back(view);
+            }
+            else if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
+            {
+                HostBufferView view{};
+                view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
+                view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
+                view.writable = true;
+                view.lazy = true;
+                view.host_is_latest = arg.needs_offload_sync();
                 view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
                     arg.set_pending_flush([&arg, mapped_ptr, sz]() {
                         parallel::statistics.record_device_to_host_buffer_copy();
@@ -129,6 +155,7 @@ namespace rllm::vulkan
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
                 view.writable = !std::is_const_v<ArgType>;
+                view.host_is_latest = true;
                 out.push_back(view);
             }
             else if constexpr (is_contiguous_container_arg_v<ArgType>)
@@ -168,6 +195,31 @@ namespace rllm::vulkan
                 view.size_bytes = arg.storage_size_bytes();
                 view.writable = !std::is_const_v<ArgType>;
                 view.lazy = true;
+                view.host_is_latest = arg.needs_offload_sync();
+                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz]() {
+                        parallel::statistics.record_device_to_host_buffer_copy();
+                        std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
+                    });
+                };
+                out[out_count++] = view;
+            }
+            else if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
+            {
+                if (out_count >= N)
+                {
+                    LOG_ERROR(
+                        "Vulkan launch argument buffer overflow: capacity={}, attempted to append one more argument.", N
+                    );
+                    std::abort();
+                }
+
+                HostBufferView view{};
+                view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
+                view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
+                view.writable = true;
+                view.lazy = true;
+                view.host_is_latest = arg.needs_offload_sync();
                 view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
                     arg.set_pending_flush([&arg, mapped_ptr, sz]() {
                         parallel::statistics.record_device_to_host_buffer_copy();
@@ -190,6 +242,7 @@ namespace rllm::vulkan
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
                 view.writable = !std::is_const_v<ArgType>;
+                view.host_is_latest = true;
                 out[out_count++] = view;
             }
             else if constexpr (is_contiguous_container_arg_v<ArgType>)
@@ -221,7 +274,15 @@ namespace rllm::vulkan
 
         std::vector<uint32_t> load_spirv_words(const std::filesystem::path& spirv, const char* kernel_name);
 
+        struct LocalSize
+        {
+            uint32_t x = 1;
+            uint32_t y = 1;
+            uint32_t z = 1;
+        };
+
         uint32_t count_ssbo_bindings_in_glsl(const std::filesystem::path& spirv_path);
+        LocalSize parse_local_size_from_glsl(const std::filesystem::path& spirv_path);
     } // namespace detail
 
     class ComputeKernelRuntime
@@ -254,6 +315,14 @@ namespace rllm::vulkan
         VkPipeline pipeline() const
         {
             return m_pipeline;
+        }
+        uint32_t local_size_x() const
+        {
+            return m_local_size.x;
+        }
+        uint32_t local_size_y() const
+        {
+            return m_local_size.y;
         }
 
       protected:
@@ -288,9 +357,12 @@ namespace rllm::vulkan
         VkPipeline m_pipeline = VK_NULL_HANDLE;
         uint32_t m_ssbo_binding_count = 0;
         uint32_t m_parsed_ssbo_binding_count = 0;
+        detail::LocalSize m_local_size{};
         VkDevice m_command_buffer_device = VK_NULL_HANDLE;
         VkCommandPool m_command_pool = VK_NULL_HANDLE;
         VkCommandBuffer m_command_buffer = VK_NULL_HANDLE;
+        VkDevice m_submit_fence_device = VK_NULL_HANDLE;
+        VkFence m_submit_fence = VK_NULL_HANDLE;
     };
 
     template <typename... KernelArgs>
@@ -429,9 +501,8 @@ namespace rllm::vulkan
             std::abort();
         }
 
-        constexpr uint32_t kLocalSizeX = 1;
         const uint32_t x_items = detail::range_size_1d(range);
-        const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);
+        const uint32_t groups_x = detail::ceil_div_u32(x_items, local_size_x());
 
         m_buffer_count = 0;
         m_push_constant_size = 0;
@@ -458,11 +529,9 @@ namespace rllm::vulkan
             std::abort();
         }
 
-        constexpr uint32_t kLocalSizeX = 1;
-        constexpr uint32_t kLocalSizeY = 1;
         const auto [x_items, y_items] = detail::range_size_2d(range);
-        const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);
-        const uint32_t groups_y = detail::ceil_div_u32(y_items, kLocalSizeY);
+        const uint32_t groups_x = detail::ceil_div_u32(x_items, local_size_x());
+        const uint32_t groups_y = detail::ceil_div_u32(y_items, local_size_y());
 
         m_buffer_count = 0;
         m_push_constant_size = 0;

@@ -39,10 +39,16 @@ namespace rllm::vulkan
 		}
 		m_spirv_words = detail::load_spirv_words(m_spirv_path, m_name.c_str());
 		m_parsed_ssbo_binding_count = detail::count_ssbo_bindings_in_glsl(m_spirv_path);
+		m_local_size = detail::parse_local_size_from_glsl(m_spirv_path);
 	}
 
 	ComputeKernelRuntime::~ComputeKernelRuntime()
 	{
+		if (m_submit_fence != VK_NULL_HANDLE && m_submit_fence_device != VK_NULL_HANDLE)
+		{
+			vkDestroyFence(m_submit_fence_device, m_submit_fence, nullptr);
+			m_submit_fence = VK_NULL_HANDLE;
+		}
 		if (m_command_buffer != VK_NULL_HANDLE && m_command_buffer_device != VK_NULL_HANDLE &&
 			m_command_pool != VK_NULL_HANDLE)
 		{
@@ -86,6 +92,12 @@ namespace rllm::vulkan
 
 		if (m_cached_device != VK_NULL_HANDLE && (m_cached_device != device || m_ssbo_binding_count != ssbo_binding_count))
 		{
+			if (m_submit_fence != VK_NULL_HANDLE && m_submit_fence_device != VK_NULL_HANDLE)
+			{
+				vkDestroyFence(m_submit_fence_device, m_submit_fence, nullptr);
+				m_submit_fence = VK_NULL_HANDLE;
+				m_submit_fence_device = VK_NULL_HANDLE;
+			}
 			if (m_pipeline != VK_NULL_HANDLE)
 			{
 				vkDestroyPipeline(m_cached_device, m_pipeline, nullptr);
@@ -320,6 +332,15 @@ namespace rllm::vulkan
 
 		// Release a single runtime buffer slot (unmap + free).
 		auto release_runtime_buffer = [&](RuntimeBuffer& rb) {
+			auto& lazy_cache = detail::lazy_runtime_buffer_cache();
+			if (rb.cached)
+			{
+				auto cached_it = lazy_cache.find(rb.view.host_ptr);
+				if (cached_it != lazy_cache.end() && cached_it->second.buffer == rb.buffer)
+				{
+					lazy_cache.erase(cached_it);
+				}
+			}
 			if (rb.mapped != nullptr)
 			{
 				vkUnmapMemory(ctx.device, rb.memory);
@@ -393,7 +414,8 @@ namespace rllm::vulkan
 				&& rb.buffer != VK_NULL_HANDLE
 				&& rb.mapped != nullptr
 				&& rb.view.host_ptr == view.host_ptr
-				&& rb.view.size_bytes == view.size_bytes;
+				&& rb.view.size_bytes == view.size_bytes
+				&& !view.host_is_latest;
 
 			if (can_reuse)
 			{
@@ -407,7 +429,7 @@ namespace rllm::vulkan
 			if (view.lazy)
 			{
 				auto cached_it = lazy_cache.find(view.host_ptr);
-				if (cached_it != lazy_cache.end())
+				if (!view.host_is_latest && cached_it != lazy_cache.end())
 				{
 					const detail::LazyRuntimeBufferCacheEntry& cached = cached_it->second;
 					if (cached.device == ctx.device && cached.size_bytes == view.size_bytes && cached.buffer != VK_NULL_HANDLE &&
@@ -422,13 +444,19 @@ namespace rllm::vulkan
 						continue;
 					}
 				}
+				else if (view.host_is_latest && cached_it != lazy_cache.end())
+				{
+					lazy_cache.erase(cached_it);
+				}
 			}
 
 			// If there's a stale cached buffer for this slot, release it first.
 			if (rb.cached || rb.buffer != VK_NULL_HANDLE)
 			{
+				const bool same_host_storage = rb.view.host_ptr == view.host_ptr && rb.view.size_bytes == view.size_bytes;
+				const bool preserve_newer_host_data = same_host_storage && view.host_is_latest;
 				// Download stale lazy buffer to host before releasing.
-				if (rb.cached && rb.mapped != nullptr && rb.view.writable)
+				if (rb.cached && rb.mapped != nullptr && rb.view.writable && !preserve_newer_host_data)
 				{
 					parallel::statistics.record_device_to_host_buffer_copy();
 					std::memcpy(rb.view.host_ptr, rb.mapped, rb.view.size_bytes);
@@ -498,6 +526,31 @@ namespace rllm::vulkan
 					.size_bytes = rb.view.size_bytes,
 				};
 			}
+		}
+
+		if (m_submit_fence == VK_NULL_HANDLE || m_submit_fence_device != ctx.device)
+		{
+			if (m_submit_fence != VK_NULL_HANDLE && m_submit_fence_device != VK_NULL_HANDLE)
+			{
+				vkDestroyFence(m_submit_fence_device, m_submit_fence, nullptr);
+				m_submit_fence = VK_NULL_HANDLE;
+			}
+
+			VkFenceCreateInfo fence_info{};
+			fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+			const VkResult fence_result = vkCreateFence(ctx.device, &fence_info, nullptr, &m_submit_fence);
+			if (fence_result != VK_SUCCESS)
+			{
+				LOG_ERROR(
+					"vkCreateFence failed for kernel '{}' ({}): {}",
+					name(),
+					spirv_path().string(),
+					static_cast<int>(fence_result)
+				);
+				std::abort();
+			}
+			m_submit_fence_device = ctx.device;
 		}
 
 		if (m_command_buffer == VK_NULL_HANDLE)
@@ -646,7 +699,19 @@ namespace rllm::vulkan
 		submit_info.commandBufferCount = 1;
 		submit_info.pCommandBuffers = &m_command_buffer;
 
-		const VkResult submit_result = vkQueueSubmit(ctx.queue, 1, &submit_info, VK_NULL_HANDLE);
+		const VkResult reset_fence_result = vkResetFences(ctx.device, 1, &m_submit_fence);
+		if (reset_fence_result != VK_SUCCESS)
+		{
+			LOG_ERROR(
+				"vkResetFences failed for kernel '{}' ({}): {}",
+				name(),
+				spirv_path().string(),
+				static_cast<int>(reset_fence_result)
+			);
+			std::abort();
+		}
+
+		const VkResult submit_result = vkQueueSubmit(ctx.queue, 1, &submit_info, m_submit_fence);
 		if (submit_result != VK_SUCCESS)
 		{
 			LOG_ERROR(
@@ -658,11 +723,11 @@ namespace rllm::vulkan
 			std::abort();
 		}
 
-		const VkResult wait_result = vkQueueWaitIdle(ctx.queue);
+		const VkResult wait_result = vkWaitForFences(ctx.device, 1, &m_submit_fence, VK_TRUE, UINT64_MAX);
 		if (wait_result != VK_SUCCESS)
 		{
 			LOG_ERROR(
-				"vkQueueWaitIdle failed for kernel '{}' ({}): {}",
+				"vkWaitForFences failed for kernel '{}' ({}): {}",
 				name(),
 				spirv_path().string(),
 				static_cast<int>(wait_result)
@@ -676,6 +741,7 @@ namespace rllm::vulkan
 			if (rb.view.lazy && rb.view.writable && rb.mapped != nullptr)
 			{
 				rb.cached = true;
+				rb.view.host_is_latest = false;
 				if (rb.view.on_device_ready)
 				{
 					rb.view.on_device_ready(rb.mapped, rb.view.size_bytes);
@@ -800,6 +866,37 @@ namespace rllm::vulkan
 			}
 
 			return found ? (max_binding + 1u) : 0u;
+		}
+
+		detail::LocalSize parse_local_size_from_glsl(const std::filesystem::path& spirv_path)
+		{
+			std::filesystem::path comp_path = spirv_path;
+			comp_path.replace_extension(".comp");
+
+			std::ifstream input(comp_path);
+			if (!input)
+			{
+				return {};
+			}
+
+			const std::regex local_size_re(
+				R"(layout\s*\(\s*local_size_x\s*=\s*([0-9]+)\s*,\s*local_size_y\s*=\s*([0-9]+)\s*,\s*local_size_z\s*=\s*([0-9]+)\s*\)\s*in\s*;)"
+			);
+			std::string line;
+			while (std::getline(input, line))
+			{
+				std::smatch match;
+				if (std::regex_search(line, match, local_size_re))
+				{
+					return detail::LocalSize{
+						.x = static_cast<uint32_t>(std::stoul(match[1].str())),
+						.y = static_cast<uint32_t>(std::stoul(match[2].str())),
+						.z = static_cast<uint32_t>(std::stoul(match[3].str())),
+					};
+				}
+			}
+
+			return {};
 		}
 
 		RuntimeContext create_runtime_context()

@@ -56,6 +56,7 @@ elseif(OFFLOAD_BACKEND STREQUAL "vulkan")
             generate_domain_replace_json
             "${CMAKE_CURRENT_SOURCE_DIR}/test_offload.cc"
             "${CMAKE_SOURCE_DIR}/vulkanize.py"
+            "${CMAKE_SOURCE_DIR}/vulkan-config.json"
             "${CMAKE_SOURCE_DIR}/offloadize_common.py"
         COMMENT "Generating Vulkan-offload test source tree from tests/ and compiling shaders"
         VERBATIM

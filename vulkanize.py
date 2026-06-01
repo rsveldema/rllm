@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -105,6 +106,13 @@ class BufferViewSpec:
 class ScalarParamSpec:
     name: str
     glsl_type: str
+
+
+@dataclass(frozen=True)
+class VulkanConfig:
+    workgroup_size_x: int = 1
+    workgroup_size_y: int = 1
+    workgroup_size_z: int = 1
 
 
 _MATRIX_TYPE_RE = re.compile(
@@ -256,7 +264,22 @@ def _spirv_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
     return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.spv"
 
 
-def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -> str:
+def _load_vulkan_config(config_path: Path) -> VulkanConfig:
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    workgroup = raw.get("workgroup_size", {})
+
+    x = int(workgroup.get("x", 1))
+    y = int(workgroup.get("y", 1))
+    z = int(workgroup.get("z", 1))
+    if x <= 0 or y <= 0 or z <= 0:
+        raise ValueError(
+            f"Invalid Vulkan workgroup size in {config_path}: expected positive integers, got x={x}, y={y}, z={z}"
+        )
+
+    return VulkanConfig(workgroup_size_x=x, workgroup_size_y=y, workgroup_size_z=z)
+
+
+def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], config: VulkanConfig) -> str:
     const_preamble: list[str] = []
     for line in spec.offload_param_lines or []:
         rendered = _sanitize_offload_param_line_for_glsl(line)
@@ -359,7 +382,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
     return (
         "#version 450\n"
         "\n"
-        "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+        f"layout(local_size_x = {config.workgroup_size_x}, local_size_y = {config.workgroup_size_y}, local_size_z = {config.workgroup_size_z}) in;\n"
         "\n"
         f"{const_block}"
         f"{push_constant_block}"
@@ -381,12 +404,13 @@ def _write_kernel_stubs(
     kernel_specs: list[VulkanKernelSpec],
     kernel_root: Path,
     symbol_values: dict[str, str],
+    config: VulkanConfig,
 ) -> list[Path]:
     generated_kernel_files: list[Path] = []
     for spec in kernel_specs:
         kernel_path = _kernel_file_path(kernel_root, spec)
         kernel_path.parent.mkdir(parents=True, exist_ok=True)
-        kernel_path.write_text(_render_kernel_stub(spec, symbol_values), encoding="utf-8")
+        kernel_path.write_text(_render_kernel_stub(spec, symbol_values, config), encoding="utf-8")
         generated_kernel_files.append(kernel_path)
     return generated_kernel_files
 
@@ -444,6 +468,7 @@ def main() -> int:
     src_dir = Path(args.src_dir).resolve()
     out_dir = Path(args.out_dir).resolve()
     kernel_root = out_dir.parent / "kernels"
+    config = _load_vulkan_config(Path(__file__).resolve().with_name("vulkan-config.json"))
     kernel_specs: list[VulkanKernelSpec] = []
     symbol_values = resolve_symbol_values(args.enum_value_tool)
 
@@ -475,7 +500,7 @@ def main() -> int:
         on_emit_loop=collect_kernel,
         symbol_values=symbol_values,
     )
-    generated_kernels = _write_kernel_stubs(kernel_specs, kernel_root, symbol_values)
+    generated_kernels = _write_kernel_stubs(kernel_specs, kernel_root, symbol_values, config)
     generated_spirv: list[Path] = []
 
     if args.shader_compiler:

@@ -136,6 +136,21 @@ namespace rllm
             return m_data.staging_data();
         }
 
+        ElementType* raw_staging_data() const
+        {
+            return m_data.raw_staging_data();
+        }
+
+        void set_pending_flush(std::function<void()> flush_fn)
+        {
+            m_data.set_pending_flush(std::move(flush_fn));
+        }
+
+        bool needs_offload_sync() const
+        {
+            return m_data.needs_offload_sync();
+        }
+
         size_t storage_size_bytes() const
         {
             return ROWS * COLS * sizeof(ElementType);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <print>
 
 #include <IMemorySpace.hpp>
 
@@ -67,6 +68,13 @@ namespace parallel {
         {
             m_host_to_device_buffer_copies.store(0, std::memory_order_relaxed);
             m_device_to_host_buffer_copies.store(0, std::memory_order_relaxed);
+        }
+
+        void print_statistics() const
+        {
+            std::println("Parallel statistics:");
+            std::println("  Host-to-device buffer copies: {}", host_to_device_buffer_copies());
+            std::println("  Device-to-host buffer copies: {}", device_to_host_buffer_copies());
         }
 
       private:

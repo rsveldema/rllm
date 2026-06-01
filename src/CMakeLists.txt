@@ -122,6 +122,7 @@ if(OFFLOAD_BACKEND STREQUAL "vulkan")
             generate_domain_replace_json
             ${RLLM_OFFLOAD_INPUT_SOURCES}
             "${CMAKE_SOURCE_DIR}/vulkanize.py"
+            "${CMAKE_SOURCE_DIR}/vulkan-config.json"
             "${CMAKE_SOURCE_DIR}/offloadize_common.py"
         COMMENT "Generating Vulkan-offload source tree from src/ and compiling shaders"
         VERBATIM

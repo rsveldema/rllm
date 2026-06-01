@@ -35,6 +35,7 @@ namespace rllm
         nn->train(verbose, num_epochs, input_filename, checkpointing_interval);
 
         stats.print_statistics();
+        parallel::statistics.print_statistics();
 
         nn->save(output_filename);
     }
