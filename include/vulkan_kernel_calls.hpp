@@ -39,9 +39,9 @@ namespace rllm::vulkan
             bool writable = false;
             bool lazy = false;  // if true, skip d2h after dispatch; flush happens via on_device_ready callback
             bool host_is_latest = true;
-            // Called with (mapped_ptr, size_bytes) once the Vulkan device buffer is ready.
+            // Called with (mapped_ptr, size_bytes, kernel_name) once the Vulkan device buffer is ready.
             // Allows the caller to register a lazy-flush callback on a DevicePointer.
-            std::function<void(void*, size_t)> on_device_ready;
+            std::function<void(void*, size_t, std::string_view)> on_device_ready;
         };
 
         template <typename T>
@@ -129,9 +129,9 @@ namespace rllm::vulkan
                 view.writable = !std::is_const_v<ArgType>;
                 view.lazy = true;
                 view.host_is_latest = arg.needs_offload_sync();
-                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
-                    arg.set_pending_flush([&arg, mapped_ptr, sz]() {
-                        parallel::statistics.record_device_to_host_buffer_copy();
+                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz, std::string_view kernel_name) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name]() {
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name);
                         std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                     });
                 };
@@ -146,9 +146,9 @@ namespace rllm::vulkan
                 view.writable = true;
                 view.lazy = true;
                 view.host_is_latest = arg.needs_offload_sync();
-                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
-                    arg.set_pending_flush([&arg, mapped_ptr, sz]() {
-                        parallel::statistics.record_device_to_host_buffer_copy();
+                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz, std::string_view kernel_name) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name]() {
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name);
                         std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                     });
                 };
@@ -204,9 +204,9 @@ namespace rllm::vulkan
                 view.writable = !std::is_const_v<ArgType>;
                 view.lazy = true;
                 view.host_is_latest = arg.needs_offload_sync();
-                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
-                    arg.set_pending_flush([&arg, mapped_ptr, sz]() {
-                        parallel::statistics.record_device_to_host_buffer_copy();
+                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz, std::string_view kernel_name) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name]() {
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name);
                         std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                     });
                 };
@@ -229,9 +229,9 @@ namespace rllm::vulkan
                 view.writable = true;
                 view.lazy = true;
                 view.host_is_latest = arg.needs_offload_sync();
-                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz) {
-                    arg.set_pending_flush([&arg, mapped_ptr, sz]() {
-                        parallel::statistics.record_device_to_host_buffer_copy();
+                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz, std::string_view kernel_name) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name]() {
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name);
                         std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                     });
                 };

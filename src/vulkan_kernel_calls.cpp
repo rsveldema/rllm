@@ -370,7 +370,7 @@ namespace rllm::vulkan
 				{
 					if (rb.view.writable)
 					{
-						parallel::statistics.record_device_to_host_buffer_copy();
+						parallel::statistics.record_device_to_host_buffer_copy(name());
 						std::memcpy(rb.view.host_ptr, rb.mapped, rb.view.size_bytes);
 					}
 					vkUnmapMemory(ctx.device, rb.memory);
@@ -422,7 +422,7 @@ namespace rllm::vulkan
 				rb.view = view;
 				if (view.host_is_latest)
 				{
-					parallel::statistics.record_host_to_device_buffer_copy();
+					parallel::statistics.record_host_to_device_buffer_copy(name());
 					std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
 				}
 				continue;
@@ -453,7 +453,7 @@ namespace rllm::vulkan
 						rb.cached = true;
 						if (view.host_is_latest)
 						{
-							parallel::statistics.record_host_to_device_buffer_copy();
+							parallel::statistics.record_host_to_device_buffer_copy(name());
 							std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
 						}
 						continue;
@@ -508,7 +508,7 @@ namespace rllm::vulkan
 				std::abort();
 			}
 
-			parallel::statistics.record_host_to_device_buffer_copy();
+			parallel::statistics.record_host_to_device_buffer_copy(name());
 			std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
 			if (view.lazy)
 			{
@@ -739,7 +739,7 @@ namespace rllm::vulkan
 				rb.view.host_is_latest = false;
 				if (rb.view.on_device_ready)
 				{
-					rb.view.on_device_ready(rb.mapped, rb.view.size_bytes);
+					rb.view.on_device_ready(rb.mapped, rb.view.size_bytes, name());
 					rb.view.on_device_ready = nullptr;
 				}
 			}
