@@ -13,10 +13,14 @@ from typing import Callable
 OFFLOAD_1D_PARAM_MACROS = {"OFFLOAD_PARFOR_1D_PARAM"}
 OFFLOAD_2D_MACROS = {"OFFLOAD_PARFOR_2D"}
 OFFLOAD_2D_PARAM_MACROS = {"OFFLOAD_PARFOR_2D_PARAM"}
+OFFLOAD_2D_TRIANGULAR_PARAM_MACROS = {"OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM"}
+OFFLOAD_2D_UPPER_TRIANGULAR_PARAM_MACROS = {"OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM"}
 OFFLOAD_ALL_MACROS = (
     OFFLOAD_1D_PARAM_MACROS
     | OFFLOAD_2D_MACROS
     | OFFLOAD_2D_PARAM_MACROS
+    | OFFLOAD_2D_TRIANGULAR_PARAM_MACROS
+    | OFFLOAD_2D_UPPER_TRIANGULAR_PARAM_MACROS
 )
 
 
@@ -29,6 +33,7 @@ class LoopContext:
     is_2d: bool
     vars: list[str]
     range_expr: str
+    kernel_guard_expr: str | None
     extra_params: str | None
     extra_param_types: dict[str, str] | None
     offload_param_lines: list[str] | None
@@ -53,6 +58,14 @@ def parse_extra_param_names(raw: str | None) -> list[str]:
     if len(text) >= 2 and text[0] in "[{(" and text[-1] in "]})":
         text = text[1:-1].strip()
     return parse_identifier_list(text)
+
+
+def parse_bound_param_name(raw: str) -> str | None:
+    text = raw.strip()
+    match = re.search(r"([A-Za-z_]\w*)\s*\)?\s*$", text)
+    if match is None:
+        return None
+    return match.group(1)
 
 
 def parse_offload_param_types_from_declaration_line(line: str, names: list[str]) -> dict[str, str]:
@@ -641,6 +654,7 @@ def transform_source(
                     is_2d=False,
                     vars=[args[0]],
                     range_expr=apply_symbol_values(args[1], symbol_values),
+                    kernel_guard_expr=None,
                     extra_params=", ".join(args[2:]),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
@@ -661,6 +675,7 @@ def transform_source(
                     is_2d=True,
                     vars=[args[0], args[1]],
                     range_expr=apply_symbol_values(", ".join(args[2:]), symbol_values),
+                    kernel_guard_expr=None,
                     extra_params=None,
                     extra_param_types=None,
                     offload_param_lines=list(active_offload_param_lines),
@@ -687,7 +702,84 @@ def transform_source(
                     is_2d=True,
                     vars=[args[0], args[1]],
                     range_expr=apply_symbol_values(args[2], symbol_values),
+                    kernel_guard_expr=None,
                     extra_params=", ".join(args[3:]),
+                    extra_param_types=extra_param_types,
+                    offload_param_lines=list(active_offload_param_lines),
+                    body_lines=[],
+                    emit_named_kernel=emit_named_kernels,
+                )
+            )
+            changed = True
+            continue
+
+        if macro in OFFLOAD_2D_TRIANGULAR_PARAM_MACROS and len(args) >= 4:
+            extra_param_names = parse_extra_param_names(", ".join(args[3:]))
+            bound_param_name = parse_bound_param_name(args[2])
+            if bound_param_name and bound_param_name not in extra_param_names:
+                extra_param_names.append(bound_param_name)
+            extra_param_types = {
+                name: active_offload_param_types[name]
+                for name in extra_param_names
+                if name in active_offload_param_types
+            }
+            bound_expr = apply_symbol_values(args[2], symbol_values)
+            guard_expr = f"{args[1]} > {args[0]}"
+            if bound_param_name:
+                guard_expr = (
+                    f"{args[0]} >= int({bound_param_name}) || "
+                    f"{args[1]} >= int({bound_param_name}) || "
+                    f"{guard_expr}"
+                )
+            loop_stack.append(
+                LoopContext(
+                    indent=indent,
+                    backend_namespace=backend_namespace,
+                    rel_path=rel_path,
+                    lineno=lineno,
+                    is_2d=True,
+                    vars=[args[0], args[1]],
+                    range_expr=f"rllm::enum_iterator2D<decltype({bound_expr}), decltype({bound_expr})>({bound_expr})",
+                    kernel_guard_expr=guard_expr,
+                    extra_params=", ".join(extra_param_names),
+                    extra_param_types=extra_param_types,
+                    offload_param_lines=list(active_offload_param_lines),
+                    body_lines=[],
+                    emit_named_kernel=emit_named_kernels,
+                )
+            )
+            changed = True
+            continue
+
+        if macro in OFFLOAD_2D_UPPER_TRIANGULAR_PARAM_MACROS and len(args) >= 4:
+            extra_param_names = parse_extra_param_names(", ".join(args[3:]))
+            bound_param_name = parse_bound_param_name(args[2])
+            if bound_param_name and bound_param_name not in extra_param_names:
+                extra_param_names.append(bound_param_name)
+            extra_param_types = {
+                name: active_offload_param_types[name]
+                for name in extra_param_names
+                if name in active_offload_param_types
+            }
+            bound_expr = apply_symbol_values(args[2], symbol_values)
+            guard_expr = f"{args[0]} > {args[1]}"
+            if bound_param_name:
+                guard_expr = (
+                    f"{args[0]} >= int({bound_param_name}) || "
+                    f"{args[1]} >= int({bound_param_name}) || "
+                    f"{guard_expr}"
+                )
+            loop_stack.append(
+                LoopContext(
+                    indent=indent,
+                    backend_namespace=backend_namespace,
+                    rel_path=rel_path,
+                    lineno=lineno,
+                    is_2d=True,
+                    vars=[args[0], args[1]],
+                    range_expr=f"rllm::enum_iterator2D<decltype({bound_expr}), decltype({bound_expr})>({bound_expr})",
+                    kernel_guard_expr=guard_expr,
+                    extra_params=", ".join(extra_param_names),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],

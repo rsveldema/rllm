@@ -1,5 +1,6 @@
 #include <NeuralNetwork.hpp>
 #include <TokenIDFormatter.hpp>
+#include <parallel.hpp>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -77,6 +78,19 @@ namespace rllm
         // layer count made deeper models (e.g. 4 layers) overfit tiny corpora
         // and collapse to near one-hot predictions in just a few epochs.
         return NUMBER_OF_LAYER_VISITS_PER_EXAMPLE;
+    }
+
+    static void print_parallel_statistics_for_epoch(size_t epoch)
+    {
+        std::println("Parallel statistics after epoch {}:", epoch);
+        std::println(
+            "  Host-to-device buffer copies: {}",
+            parallel::statistics.host_to_device_buffer_copies()
+        );
+        std::println(
+            "  Device-to-host buffer copies: {}",
+            parallel::statistics.device_to_host_buffer_copies()
+        );
     }
 
     // Layers
@@ -513,6 +527,8 @@ namespace rllm
 
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
+            bool should_stop = false;
+
             if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN ||
                 m_training_method == TrainingMethod::RANDOM_LINE_FULL)
             {
@@ -633,10 +649,15 @@ namespace rllm
                             epoch,
                             epochs_without_improvement
                         );
-                        break;
+                        should_stop = true;
                     }
                 }
             }
+
+            print_parallel_statistics_for_epoch(epoch);
+
+            if (should_stop)
+                break;
         }
 
         if (has_best_checkpoint)
@@ -733,6 +754,7 @@ namespace rllm
 
             std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
             checkpoint();
+            print_parallel_statistics_for_epoch(epoch);
         }
     }
 

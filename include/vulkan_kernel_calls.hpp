@@ -33,6 +33,7 @@ namespace rllm::vulkan
     {
         struct HostBufferView
         {
+            const void* cache_key = nullptr;
             void* host_ptr = nullptr;
             size_t size_bytes = 0;
             bool writable = false;
@@ -122,6 +123,7 @@ namespace rllm::vulkan
             if constexpr (is_device_pointer_v<ArgType>)
             {
                 HostBufferView view{};
+                view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
                 view.size_bytes = arg.storage_size_bytes();
                 view.writable = !std::is_const_v<ArgType>;
@@ -138,6 +140,7 @@ namespace rllm::vulkan
             else if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
             {
                 HostBufferView view{};
+                view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
                 view.writable = true;
@@ -154,6 +157,7 @@ namespace rllm::vulkan
             else if constexpr (is_host_buffer_arg_v<ArgType>)
             {
                 HostBufferView view{};
+                view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
                 view.writable = !std::is_const_v<ArgType>;
@@ -166,6 +170,7 @@ namespace rllm::vulkan
                 using ElementType = std::remove_const_t<std::remove_pointer_t<decltype(ptr)>>;
 
                 HostBufferView view{};
+                view.cache_key = static_cast<const void*>(ptr);
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(ptr));
                 view.size_bytes = static_cast<size_t>(arg.size()) * sizeof(ElementType);
                 view.writable = !std::is_const_v<std::remove_pointer_t<decltype(ptr)>>;
@@ -193,6 +198,7 @@ namespace rllm::vulkan
                 }
 
                 HostBufferView view{};
+                view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
                 view.size_bytes = arg.storage_size_bytes();
                 view.writable = !std::is_const_v<ArgType>;
@@ -217,6 +223,7 @@ namespace rllm::vulkan
                 }
 
                 HostBufferView view{};
+                view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
                 view.writable = true;
@@ -241,6 +248,7 @@ namespace rllm::vulkan
                 }
 
                 HostBufferView view{};
+                view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
                 view.writable = !std::is_const_v<ArgType>;
@@ -261,6 +269,7 @@ namespace rllm::vulkan
                 using ElementType = std::remove_const_t<std::remove_pointer_t<decltype(ptr)>>;
 
                 HostBufferView view{};
+                view.cache_key = static_cast<const void*>(ptr);
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(ptr));
                 view.size_bytes = static_cast<size_t>(arg.size()) * sizeof(ElementType);
                 view.writable = !std::is_const_v<std::remove_pointer_t<decltype(ptr)>>;

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -195,12 +196,14 @@ public:
     // When set, ensure_host_data() will invoke the callback instead of copy_from_offload_buffer().
     void set_pending_flush(std::function<void()> flush_fn)
     {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
         m_pending_flush = std::move(flush_fn);
         m_current_owner = CurrentOwner::Device;
     }
 
     bool has_pending_flush() const
     {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
         return static_cast<bool>(m_pending_flush);
     }
 
@@ -232,6 +235,25 @@ public:
 
     void copy_to_offload_buffer()
     {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        copy_to_offload_buffer_unlocked();
+    }
+
+    void copy_from_offload_buffer()
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        copy_from_offload_buffer_unlocked();
+    }
+
+    bool needs_offload_sync() const
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        return m_current_owner == CurrentOwner::Host;
+    }
+
+private:
+    void copy_to_offload_buffer_unlocked()
+    {
         if (m_bytes == 0 || m_offload_ptr == nullptr || m_staging_ptr == nullptr)
             return;
 
@@ -242,7 +264,7 @@ public:
         m_current_owner = CurrentOwner::Device;
     }
 
-    void copy_from_offload_buffer()
+    void copy_from_offload_buffer_unlocked()
     {
         if (m_bytes == 0 || m_offload_ptr == nullptr || m_staging_ptr == nullptr)
             return;
@@ -254,12 +276,6 @@ public:
         m_current_owner = CurrentOwner::Host;
     }
 
-    bool needs_offload_sync() const
-    {
-        return m_current_owner == CurrentOwner::Host;
-    }
-
-private:
     void assign_storage_like(const DevicePointer& other)
     {
         if (m_count == other.m_count && m_bytes == other.m_bytes && m_alignment == other.m_alignment &&
@@ -309,9 +325,12 @@ private:
         }
 
         const bool can_copy_device_to_device =
-            m_memory_space == other.m_memory_space &&
-            other.m_current_owner == CurrentOwner::Device &&
-            !other.m_pending_flush;
+            [this, &other]() {
+                std::lock_guard<std::mutex> other_lock(other.m_state_mutex);
+                return m_memory_space == other.m_memory_space &&
+                    other.m_current_owner == CurrentOwner::Device &&
+                    !other.m_pending_flush;
+            }();
 
         if (can_copy_device_to_device)
         {
@@ -369,9 +388,10 @@ private:
 
     void ensure_host_data() const
     {
-        if (m_current_owner == CurrentOwner::Device)
+        auto* self = const_cast<DevicePointer*>(this);
+        std::lock_guard<std::mutex> lock(self->m_state_mutex);
+        if (self->m_current_owner == CurrentOwner::Device)
         {
-            auto* self = const_cast<DevicePointer*>(this);
             if (self->m_pending_flush)
             {
                 auto fn = std::move(self->m_pending_flush);
@@ -381,16 +401,18 @@ private:
             }
             else
             {
-                self->copy_from_offload_buffer();
+                self->copy_from_offload_buffer_unlocked();
             }
         }
     }
 
     void ensure_device_data() const
     {
-        if (m_current_owner == CurrentOwner::Host)
+        auto* self = const_cast<DevicePointer*>(this);
+        std::lock_guard<std::mutex> lock(self->m_state_mutex);
+        if (self->m_current_owner == CurrentOwner::Host)
         {
-            const_cast<DevicePointer*>(this)->copy_to_offload_buffer();
+            self->copy_to_offload_buffer_unlocked();
         }
     }
 
@@ -418,5 +440,6 @@ private:
     bool m_owns_offload = false;
     bool m_owns_heap_raw = false;
     mutable CurrentOwner m_current_owner = CurrentOwner::Host;
+    mutable std::mutex m_state_mutex;
     std::function<void()> m_pending_flush;
 };

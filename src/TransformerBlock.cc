@@ -520,8 +520,13 @@ namespace rllm
         const float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
         PARFOR(hi, enum_iterator<HeadsIndex>())
         // Each head owns its own d_scores_h / d_raw_h so parallel heads never conflict.
-        auto& d_scores_h = ws->d_scores[hi];
-        auto& d_raw_h = ws->d_raw[hi];
+        // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, hStart, hEnd)
+        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h = ws->d_scores[hi];
+        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws->d_raw[hi];
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws->d_attn_concat;
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V = fwd.V;
+        const PositionIndex seq_len = fwd.seq_len;
+        // END_OFFLOAD_PARAMETERS
         d_scores_h.set_size(fwd.seq_len, fwd.seq_len);
         d_raw_h.set_size(fwd.seq_len, fwd.seq_len);
         d_raw_h.fill(RLMM_ZERO);
@@ -540,10 +545,11 @@ namespace rllm
         ENDFOR
 
         // d_scores_h[i,j] = d_attn_concat[i, d] · V[j, d]
-        PARFOR_2D_TRIANGULAR(i, j, fwd.seq_len)
+        // Safe for offload because each triangular cell writes a unique output element.
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (d_scores_h, d_attn_concat, V, hStart, hEnd))
         float dot = 0.f;
         for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-            dot += ws->d_attn_concat[i, d] * fwd.V[j, d];
+            dot += d_attn_concat[i, d] * V[j, d];
         d_scores_h[i, j] = dot;
         ENDFOR
 

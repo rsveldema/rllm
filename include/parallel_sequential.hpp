@@ -38,3 +38,5 @@ namespace parallel {
 // macros; the distinct name marks the intent without changing behaviour.
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)

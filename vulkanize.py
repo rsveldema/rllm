@@ -79,6 +79,7 @@ class VulkanKernelSpec:
     lineno: int
     is_2d: bool
     vars: list[str]
+    kernel_guard_expr: str | None
     extra_params: str | None
     extra_param_types: dict[str, str] | None
     offload_param_lines: list[str] | None
@@ -348,10 +349,16 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
         for line in filtered_body_lines
     )
     if spec.is_2d and len(spec.vars) >= 2:
-        arg_setup = (
-            f"    int {spec.vars[0]} = int(gl_GlobalInvocationID.x);\n"
-            f"    int {spec.vars[1]} = int(gl_GlobalInvocationID.y);"
-        )
+        if spec.kernel_guard_expr is not None:
+            arg_setup = (
+                f"    int {spec.vars[0]} = int(gl_GlobalInvocationID.y);\n"
+                f"    int {spec.vars[1]} = int(gl_GlobalInvocationID.x);"
+            )
+        else:
+            arg_setup = (
+                f"    int {spec.vars[0]} = int(gl_GlobalInvocationID.x);\n"
+                f"    int {spec.vars[1]} = int(gl_GlobalInvocationID.y);"
+            )
         call_arg_names = [spec.vars[0], spec.vars[1]]
     elif spec.vars:
         arg_setup = f"    int {spec.vars[0]} = int(gl_GlobalInvocationID.x);"
@@ -366,6 +373,10 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
             arg_setup = arg_setup + "\n" + "\n".join(extra_arg_setup_lines)
         else:
             arg_setup = "\n".join(extra_arg_setup_lines)
+    guard_block = ""
+    if spec.kernel_guard_expr:
+        guard_expr = _sanitize_kernel_line_for_glsl(spec.kernel_guard_expr)
+        guard_block = f"    if ({guard_expr}) {{\n        return;\n    }}\n"
     call_arg_names.extend(
         name for name in extra_param_names if name not in matrix_view_specs and name not in buffer_view_specs
     )
@@ -395,6 +406,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
         "void main()\n"
         "{\n"
         f"{arg_setup}\n"
+        f"{guard_block}"
         f"    rllm_kernel_body({call_args});\n"
         "}\n"
     )
@@ -483,6 +495,7 @@ def main() -> int:
                 lineno=ctx.lineno,
                 is_2d=ctx.is_2d,
                 vars=list(ctx.vars),
+                kernel_guard_expr=ctx.kernel_guard_expr,
                 extra_params=ctx.extra_params,
                 extra_param_types=ctx.extra_param_types,
                 offload_param_lines=ctx.offload_param_lines,

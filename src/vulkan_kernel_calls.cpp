@@ -22,9 +22,9 @@ namespace rllm::vulkan
 			size_t size_bytes = 0;
 		};
 
-		static std::unordered_map<void*, LazyRuntimeBufferCacheEntry>& lazy_runtime_buffer_cache()
+		static std::unordered_map<const void*, LazyRuntimeBufferCacheEntry>& lazy_runtime_buffer_cache()
 		{
-			static auto* cache = new std::unordered_map<void*, LazyRuntimeBufferCacheEntry>();
+			static auto* cache = new std::unordered_map<const void*, LazyRuntimeBufferCacheEntry>();
 			return *cache;
 		}
 	}
@@ -439,7 +439,7 @@ namespace rllm::vulkan
 
 			if (view.lazy)
 			{
-				auto cached_it = lazy_cache.find(view.host_ptr);
+				auto cached_it = lazy_cache.find(view.cache_key);
 				if (cached_it != lazy_cache.end())
 				{
 					detail::LazyRuntimeBufferCacheEntry& cached = cached_it->second;
@@ -512,7 +512,7 @@ namespace rllm::vulkan
 			std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
 			if (view.lazy)
 			{
-				lazy_cache[view.host_ptr] = {
+				lazy_cache[view.cache_key] = {
 					.device = ctx.device,
 					.buffer = rb.buffer,
 					.memory = rb.memory,

@@ -136,6 +136,60 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
             }
 }
 
+TEST_F(OffloadParForTest, OffloadParFor2DTriangularParamVisitsLowerTriangle)
+{
+    // OFFLOAD_PARAMETERS(visits,N)
+    constexpr size_t N = 8;
+    std::vector<std::atomic<int>> visits(N * N);
+    // END_OFFLOAD_PARAMETERS
+
+    for (auto& v : visits)
+        v.store(0, std::memory_order_relaxed);
+
+    OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, static_cast<rllm::PositionIndex>(N), (visits))
+    const size_t idx = static_cast<size_t>(i) * N + static_cast<size_t>(j);
+    ATOMIC_INC(visits[idx]);
+    ENDFOR
+
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+
+    for (size_t i = 0; i < N; ++i)
+        for (size_t j = 0; j < N; ++j)
+        {
+            const int expected = (j <= i) ? 1 : 0;
+            EXPECT_EQ(visits[i * N + j].load(std::memory_order_relaxed), expected)
+                << "Wrong visit count at (" << i << "," << j << ")";
+        }
+}
+
+TEST_F(OffloadParForTest, OffloadParFor2DUpperTriangularParamVisitsUpperTriangle)
+{
+    // OFFLOAD_PARAMETERS(visits,N)
+    constexpr size_t N = 8;
+    std::vector<std::atomic<int>> visits(N * N);
+    // END_OFFLOAD_PARAMETERS
+
+    for (auto& v : visits)
+        v.store(0, std::memory_order_relaxed);
+
+    OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(i, j, static_cast<rllm::PositionIndex>(N), (visits))
+    const size_t idx = static_cast<size_t>(i) * N + static_cast<size_t>(j);
+    ATOMIC_INC(visits[idx]);
+    ENDFOR
+
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+
+    for (size_t i = 0; i < N; ++i)
+        for (size_t j = 0; j < N; ++j)
+        {
+            const int expected = (i <= j) ? 1 : 0;
+            EXPECT_EQ(visits[i * N + j].load(std::memory_order_relaxed), expected)
+                << "Wrong visit count at (" << i << "," << j << ")";
+        }
+}
+
 
 /** Test that between two OFFLOAD_PARFOR_2D_PARAM calls with the same parameters,
  *  the second call does not cause additional host-device buffer copies because the data is still valid on the device from the first call.

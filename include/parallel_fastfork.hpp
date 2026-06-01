@@ -135,6 +135,8 @@ namespace parallel {
 // Keep header-time uses valid by falling back to the CPU PARFOR forms.
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 #else
 
 // Index-space OFFLOAD_PARFOR* fallback for fastfork builds.
@@ -145,5 +147,9 @@ namespace parallel {
     PARFOR(v, n)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+
+#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
+
+#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 
 #endif
