@@ -222,6 +222,30 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
             );
 }
 
+TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatParam)
+{
+    // OFFLOAD_PARAMETERS(values, scale)
+    rllm::fixed_size_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values;
+    float scale = 0.25f;
+    // END_OFFLOAD_PARAMETERS
+    values.fill(0.0f);
+
+    const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
+    OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values, scale))
+    values[j, i] = scale * static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 5);
+    ENDFOR
+
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+
+    for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
+        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+            EXPECT_FLOAT_EQ(
+                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
+                scale * static_cast<float>(i * 100 + j + 5)
+            );
+}
+
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
 {
     // OFFLOAD_PARAMETERS(values)

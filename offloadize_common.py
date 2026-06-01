@@ -100,6 +100,14 @@ def default_symbol_values() -> dict[str, str]:
         "FFDimension::MAX": "2048",
         "NeuronConnectionIndex::START": "0",
         "NeuronConnectionIndex::MAX": "128",
+        "TransformerBlock::MOMENTUM_BETA": "0.9",
+        "TransformerBlock::GRAD_CLIP": "1.0",
+        "TransformerBlock::VEL_CLIP": "0.1",
+        "TransformerBlock::WEIGHT_CLAMP": "2.0",
+        "rllm::TransformerBlock::MOMENTUM_BETA": "0.9",
+        "rllm::TransformerBlock::GRAD_CLIP": "1.0",
+        "rllm::TransformerBlock::VEL_CLIP": "0.1",
+        "rllm::TransformerBlock::WEIGHT_CLAMP": "2.0",
     }
 
     return values

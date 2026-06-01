@@ -78,13 +78,13 @@ namespace rllm
             softmax_backward(dp, p, dscores, T);
         }
 
-      private:
-        // Optimizer hyper-parameters
-        static constexpr float MOMENTUM_BETA = 0.9f;
-        static constexpr float GRAD_CLIP = 1.0f;
-        static constexpr float VEL_CLIP = 0.1f;
-        static constexpr float WEIGHT_CLAMP = 2.0f;
+                // Optimizer hyper-parameters
+                static constexpr float MOMENTUM_BETA = 0.9f;
+                static constexpr float GRAD_CLIP = 1.0f;
+                static constexpr float VEL_CLIP = 0.1f;
+                static constexpr float WEIGHT_CLAMP = 2.0f;
 
+      private:
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
         fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
         fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
@@ -93,8 +93,8 @@ namespace rllm
         //   gate, up:  [FFDimension::MAX    × D_MODEL]  (out × in)
         //   down:      [D_MODEL × FFDimension::MAX   ]  (out × in)
         fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension> W_gate, W_up;
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension> W_down;
         fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> V_gate, V_up;
+        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension> W_down;
         fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> V_down;
 
         // Activations cached during forward() for use in backward().
@@ -138,23 +138,6 @@ namespace rllm
             flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_gate_pre,
             flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_up_pre
         );
-
-        // SGD + momentum update: clips gradients, clips velocity, clamps weights.
-        template <typename R_enum, typename C_enum, typename WType, typename VType, typename GType>
-        static void sgd_update(
-            fixed_size_matrix<WType, R_enum, C_enum>& W,
-            fixed_size_matrix<VType, R_enum, C_enum>& vel,
-            const fixed_size_matrix<GType, R_enum, C_enum>& grad,
-            float lr
-        )
-        {
-            const auto grid = enum_iterator2D<R_enum, C_enum>();
-            OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad))
-            const float g = math::clamp(grad[r, c], -GRAD_CLIP, GRAD_CLIP);
-            vel[r, c] = math::clamp(MOMENTUM_BETA * vel[r, c] + lr * g, -VEL_CLIP, VEL_CLIP);
-            W[r, c] = math::clamp(W[r, c] + vel[r, c], -WEIGHT_CLAMP, WEIGHT_CLAMP);
-            ENDFOR
-        }
     };
 
 } // namespace rllm

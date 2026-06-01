@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -56,6 +58,51 @@ namespace rllm::vulkan
             value.data();
             value.size();
         };
+
+        template <typename T>
+        inline constexpr bool is_scalar_kernel_arg_v =
+            !is_device_pointer_v<T> && !is_host_buffer_arg_v<T> && !is_contiguous_container_arg_v<T> &&
+            (std::is_enum_v<std::remove_cv_t<std::remove_reference_t<T>>> ||
+             std::is_integral_v<std::remove_cv_t<std::remove_reference_t<T>>> ||
+             std::is_floating_point_v<std::remove_cv_t<std::remove_reference_t<T>>>);
+
+        template <size_t N, typename Arg>
+        inline void append_scalar_arg(std::array<std::byte, N>& out, size_t& out_size, Arg&& arg)
+        {
+            using ArgType = std::remove_cv_t<std::remove_reference_t<Arg>>;
+            if constexpr (is_scalar_kernel_arg_v<ArgType>)
+            {
+                if (out_size + sizeof(uint32_t) > N)
+                {
+                    LOG_ERROR("Vulkan launch scalar buffer overflow: capacity={}, attempted to append one more scalar argument.", N);
+                    std::abort();
+                }
+
+                if constexpr (std::is_floating_point_v<ArgType>)
+                {
+                    const float value = static_cast<float>(arg);
+                    std::memcpy(out.data() + out_size, &value, sizeof(value));
+                }
+                else if constexpr (std::is_enum_v<ArgType>)
+                {
+                    const int32_t value = static_cast<int32_t>(arg);
+                    std::memcpy(out.data() + out_size, &value, sizeof(value));
+                }
+                else
+                {
+                    const int32_t value = static_cast<int32_t>(arg);
+                    std::memcpy(out.data() + out_size, &value, sizeof(value));
+                }
+
+                out_size += sizeof(uint32_t);
+            }
+            else
+            {
+                static_cast<void>(out);
+                static_cast<void>(out_size);
+                static_cast<void>(arg);
+            }
+        }
 
         template <typename Arg>
         inline void append_buffer_view(std::vector<HostBufferView>& out, Arg&& arg)
@@ -214,6 +261,7 @@ namespace rllm::vulkan
             uint32_t groups_x,
             uint32_t groups_y,
             std::span<const detail::HostBufferView> buffers,
+            std::span<const std::byte> push_constants,
             std::span<RuntimeBuffer> runtime_buffers,
             size_t& runtime_buffer_count
         );
@@ -259,8 +307,11 @@ namespace rllm::vulkan
 
       private:
         static constexpr size_t kLaunchBufferCount = sizeof...(KernelArgs);
+                static constexpr size_t kLaunchScalarBytes = sizeof...(KernelArgs) * sizeof(uint32_t);
         std::array<detail::HostBufferView, kLaunchBufferCount> m_buffers{};
         size_t m_buffer_count = 0;
+                std::array<std::byte, kLaunchScalarBytes> m_push_constant_bytes{};
+                size_t m_push_constant_size = 0;
         std::array<typename ComputeKernelRuntime::RuntimeBuffer, kLaunchBufferCount> m_runtime_buffers{};
         size_t m_runtime_buffer_count = 0;
     };
@@ -383,12 +434,15 @@ namespace rllm::vulkan
         const uint32_t groups_x = detail::ceil_div_u32(x_items, kLocalSizeX);
 
         m_buffer_count = 0;
+        m_push_constant_size = 0;
         (detail::append_buffer_view(m_buffers, m_buffer_count, args), ...);
+        (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);
 
         dispatch_kernel(
             groups_x,
             1,
             std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
+            std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
             std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),
             m_runtime_buffer_count
         );
@@ -411,12 +465,15 @@ namespace rllm::vulkan
         const uint32_t groups_y = detail::ceil_div_u32(y_items, kLocalSizeY);
 
         m_buffer_count = 0;
+        m_push_constant_size = 0;
         (detail::append_buffer_view(m_buffers, m_buffer_count, args), ...);
+        (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);
 
         dispatch_kernel(
             groups_x,
             groups_y,
             std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
+            std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
             std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),
             m_runtime_buffer_count
         );

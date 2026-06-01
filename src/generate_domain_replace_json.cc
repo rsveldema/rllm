@@ -1,4 +1,5 @@
 #include <LayerPrimitives.hpp>
+#include <TransformerBlock.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -14,6 +15,11 @@ namespace
 using SearchReplace = std::pair<std::string, std::string>;
 
 void append_enum_pair(std::vector<SearchReplace>& pairs, const std::string& key, size_t value)
+{
+    pairs.emplace_back(key, std::to_string(value));
+}
+
+void append_float_pair(std::vector<SearchReplace>& pairs, const std::string& key, float value)
 {
     pairs.emplace_back(key, std::to_string(value));
 }
@@ -99,6 +105,18 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     pairs.emplace_back("static_cast<rllm::NeuronConnectionIndex>", "(int)");
 }
 
+void append_transformer_block_constant_pairs(std::vector<SearchReplace>& pairs)
+{
+    append_float_pair(pairs, "TransformerBlock::MOMENTUM_BETA", rllm::TransformerBlock::MOMENTUM_BETA);
+    append_float_pair(pairs, "TransformerBlock::GRAD_CLIP", rllm::TransformerBlock::GRAD_CLIP);
+    append_float_pair(pairs, "TransformerBlock::VEL_CLIP", rllm::TransformerBlock::VEL_CLIP);
+    append_float_pair(pairs, "TransformerBlock::WEIGHT_CLAMP", rllm::TransformerBlock::WEIGHT_CLAMP);
+    append_float_pair(pairs, "rllm::TransformerBlock::MOMENTUM_BETA", rllm::TransformerBlock::MOMENTUM_BETA);
+    append_float_pair(pairs, "rllm::TransformerBlock::GRAD_CLIP", rllm::TransformerBlock::GRAD_CLIP);
+    append_float_pair(pairs, "rllm::TransformerBlock::VEL_CLIP", rllm::TransformerBlock::VEL_CLIP);
+    append_float_pair(pairs, "rllm::TransformerBlock::WEIGHT_CLAMP", rllm::TransformerBlock::WEIGHT_CLAMP);
+}
+
 void print_json_pairs(const std::vector<SearchReplace>& pairs)
 {
     nlohmann::json json_pairs = nlohmann::json::array();
@@ -123,6 +141,7 @@ int main(int argc, char** argv)
     {
         std::vector<SearchReplace> pairs;
         append_layer_primitives_enum_pairs(pairs);
+        append_transformer_block_constant_pairs(pairs);
         print_json_pairs(pairs);
         return 0;
     }

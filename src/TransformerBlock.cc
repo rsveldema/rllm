@@ -16,6 +16,84 @@ namespace rllm
         "EmbeddingDimension::MAX must be divisible by HeadsIndex::MAX"
     );
 
+    // SGD + momentum update for the Q/K/V/O square weight matrices.
+    static void sgd_update_Wqkvo_x_Vqkvo_dWqkvo(
+        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
+        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& W,
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& vel,
+        const fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& grad,
+        float lr
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
+        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        vel[r, c] = math::clamp(
+            TransformerBlock::MOMENTUM_BETA * vel[r, c] + lr * g,
+            -TransformerBlock::VEL_CLIP,
+            TransformerBlock::VEL_CLIP
+        );
+        W[r, c] = math::clamp(
+            W[r, c] + vel[r, c],
+            -TransformerBlock::WEIGHT_CLAMP,
+            TransformerBlock::WEIGHT_CLAMP
+        );
+        ENDFOR
+    }
+
+    // SGD + momentum update for the gate/up FFN weight matrices.
+    static void sgd_update_Wgateup_x_Vgateup_dWgateup(
+        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
+        fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& W,
+        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& vel,
+        const fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& grad,
+        float lr
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
+        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        vel[r, c] = math::clamp(
+            TransformerBlock::MOMENTUM_BETA * vel[r, c] + lr * g,
+            -TransformerBlock::VEL_CLIP,
+            TransformerBlock::VEL_CLIP
+        );
+        W[r, c] = math::clamp(
+            W[r, c] + vel[r, c],
+            -TransformerBlock::WEIGHT_CLAMP,
+            TransformerBlock::WEIGHT_CLAMP
+        );
+        ENDFOR
+    }
+
+    // SGD + momentum update for the down-projection FFN weight matrix.
+    static void sgd_update_Wdown_x_Vdown_dWdown(
+        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
+        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension>& W,
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension>& vel,
+        const fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension>& grad,
+        float lr
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
+        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        vel[r, c] = math::clamp(
+            TransformerBlock::MOMENTUM_BETA * vel[r, c] + lr * g,
+            -TransformerBlock::VEL_CLIP,
+            TransformerBlock::VEL_CLIP
+        );
+        W[r, c] = math::clamp(
+            W[r, c] + vel[r, c],
+            -TransformerBlock::WEIGHT_CLAMP,
+            TransformerBlock::WEIGHT_CLAMP
+        );
+        ENDFOR
+    }
+
     // ── randomize ─────────────────────────────────────────────────────────────
 
     void TransformerBlock::randomize()
@@ -510,19 +588,19 @@ namespace rllm
         din = ws->d_h_mid;
         rms_norm_backward(ws->d_h_norm_attn, fwd.h_in, din);
         PARSECTION
-        sgd_update(W_q, V_q, ws->dW_q, learning_rate);
+        sgd_update_Wqkvo_x_Vqkvo_dWqkvo(W_q, V_q, ws->dW_q, learning_rate);
         PARSECTION
-        sgd_update(W_k, V_k, ws->dW_k, learning_rate);
+        sgd_update_Wqkvo_x_Vqkvo_dWqkvo(W_k, V_k, ws->dW_k, learning_rate);
         PARSECTION
-        sgd_update(W_v, V_v, ws->dW_v, learning_rate);
+        sgd_update_Wqkvo_x_Vqkvo_dWqkvo(W_v, V_v, ws->dW_v, learning_rate);
         PARSECTION
-        sgd_update(W_o, V_o, ws->dW_o, learning_rate);
+        sgd_update_Wqkvo_x_Vqkvo_dWqkvo(W_o, V_o, ws->dW_o, learning_rate);
         PARSECTION
-        sgd_update(W_gate, V_gate, ws->dW_gate, learning_rate);
+        sgd_update_Wgateup_x_Vgateup_dWgateup(W_gate, V_gate, ws->dW_gate, learning_rate);
         PARSECTION
-        sgd_update(W_up, V_up, ws->dW_up, learning_rate);
+        sgd_update_Wgateup_x_Vgateup_dWgateup(W_up, V_up, ws->dW_up, learning_rate);
         PARSECTION
-        sgd_update(W_down, V_down, ws->dW_down, learning_rate);
+        sgd_update_Wdown_x_Vdown_dWdown(W_down, V_down, ws->dW_down, learning_rate);
         PARSECTIONS_END
     }
 

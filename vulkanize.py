@@ -19,11 +19,17 @@ _RLMM_FLOAT_WORD_RE = re.compile(r"\brlmm_float(?:_small)?\b")
 _STD_SQRT_RE = re.compile(r"\bstd\s*::\s*sqrt\s*\(")
 _STD_EXP_RE = re.compile(r"\bstd\s*::\s*exp\s*\(")
 _MATH_MAX_RE = re.compile(r"\bmath\s*::\s*max\s*\(")
+_MATH_CLAMP_RE = re.compile(r"\bmath\s*::\s*clamp\s*\(")
 _CONSTEXPR_WORD_RE = re.compile(r"\bconstexpr\b")
 _CSTYLE_FLOAT_CAST_RE = re.compile(r"\(\s*float\s*\)\s*\(")
 _CSTYLE_INT_CAST_RE = re.compile(r"\(\s*int\s*\)\s*\(")
 _ATOMIC_INC_CALL_RE = re.compile(r"\bATOMIC_INC\s*\((.+)\)\s*;\s*$")
 _COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
+# Scalar kernel args are passed via push constants, so we only match by-value
+# float aliases here and leave reference/pointer forms on the buffer path.
+_FLOAT_SCALAR_RE = re.compile(
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:float|rlmm_float(?:_small)?)\s*(?P<ref>[&*])?\s*$"
+)
 
 
 def _sanitize_kernel_line_for_glsl(line: str) -> str:
@@ -38,6 +44,7 @@ def _sanitize_kernel_line_for_glsl(line: str) -> str:
     line = _STD_SQRT_RE.sub("sqrt(", line)
     line = _STD_EXP_RE.sub("exp(", line)
     line = _MATH_MAX_RE.sub("max(", line)
+    line = _MATH_CLAMP_RE.sub("clamp(", line)
     # GLSL does not support constexpr declarations.
     line = _CONSTEXPR_WORD_RE.sub("const", line)
     # Prefer GLSL constructor-style casts over C-style casts.
@@ -94,6 +101,12 @@ class BufferViewSpec:
     is_const: bool
 
 
+@dataclass
+class ScalarParamSpec:
+    name: str
+    glsl_type: str
+
+
 _MATRIX_TYPE_RE = re.compile(
     r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:fixed_size_matrix|flexible_rows_matrix|flexible_cols_matrix|flexible_rows_cols_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
 )
@@ -137,7 +150,7 @@ def _map_cpp_extra_param_to_vulkan(
     name: str,
     cpp_type: str,
     symbol_values: dict[str, str],
-) -> tuple[str, str, MatrixViewSpec | None, BufferViewSpec | None]:
+) -> tuple[str, str, MatrixViewSpec | None, BufferViewSpec | None, ScalarParamSpec | None]:
     # Returns: (kernel_param_declaration, main_local_setup_declaration, optional_matrix_view_spec)
     t = cpp_type.strip()
     matrix_match = _MATRIX_TYPE_RE.match(t)
@@ -154,30 +167,35 @@ def _map_cpp_extra_param_to_vulkan(
                 cols=cols_max,
                 is_const=is_const,
                 flat_len=flat_len,
-            ), None
+            ), None, None
 
     vector_atomic_match = _STD_VECTOR_ATOMIC_INT_RE.match(t)
     if vector_atomic_match:
         is_const = vector_atomic_match.group("const") is not None
-        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
 
     vector_int_match = _STD_VECTOR_INT_RE.match(t)
     if vector_int_match:
         is_const = vector_int_match.group("const") is not None
-        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
 
     fixed_size_vector_int_match = _FIXED_SIZE_VECTOR_INT_RE.match(t)
     if fixed_size_vector_int_match:
         is_const = fixed_size_vector_int_match.group("const") is not None
-        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
 
     device_pointer_int_match = _DEVICE_POINTER_INT_RE.match(t)
     if device_pointer_int_match:
         is_const = device_pointer_int_match.group("const") is not None
-        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
 
-    # Fallback to scalar int plumbing for unknown/unhandled types.
-    return f"int {name}", f"int {name} = 0;", None, None
+    float_scalar_match = _FLOAT_SCALAR_RE.match(t)
+    if float_scalar_match and float_scalar_match.group("ref") is None:
+        return f"float {name}", f"float {name} = rllm_push.{name};", None, None, ScalarParamSpec(name=name, glsl_type="float")
+
+    # Keep unknown scalar-like params off the SSBO path. The rewriter already
+    # normalizes enum-ish and size-like expressions to integer GLSL usage.
+    return f"int {name}", f"int {name} = rllm_push.{name};", None, None, ScalarParamSpec(name=name, glsl_type="int")
 
 
 def _rewrite_matrix_view_indexing(line: str, specs: dict[str, MatrixViewSpec]) -> str:
@@ -250,6 +268,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
     filtered_body_lines = [_sanitize_kernel_line_for_glsl(line) for line in filtered_body_lines]
     matrix_view_specs: dict[str, MatrixViewSpec] = {}
     buffer_view_specs: dict[str, BufferViewSpec] = {}
+    scalar_param_specs: list[ScalarParamSpec] = []
     body_text = "\n".join(
         f"    {_rewrite_matrix_view_indexing(line.lstrip(), matrix_view_specs)}" if line.strip() else ""
         for line in filtered_body_lines
@@ -265,7 +284,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
     ssbo_binding = 0
     for name in extra_param_names:
         if spec.extra_param_types and name in spec.extra_param_types:
-            mapped_param, mapped_setup, matrix_view_spec, buffer_view_spec = _map_cpp_extra_param_to_vulkan(
+            mapped_param, mapped_setup, matrix_view_spec, buffer_view_spec, scalar_param_spec = _map_cpp_extra_param_to_vulkan(
                 name,
                 spec.extra_param_types[name],
                 symbol_values,
@@ -286,6 +305,12 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
                     f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ {buffer_view_spec.glsl_scalar} {name}[]; }};"
                 )
                 ssbo_binding += 1
+            elif scalar_param_spec is not None:
+                # Scalars are emitted as function parameters for readability but
+                # sourced from a single push-constant block in main().
+                scalar_param_specs.append(scalar_param_spec)
+                typed_params.append(mapped_param)
+                extra_setup_decls.append(mapped_setup)
             else:
                 typed_params.append(mapped_param)
                 extra_setup_decls.append(mapped_setup)
@@ -325,12 +350,19 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str]) -
     ssbo_block = "\n".join(ssbo_decls)
     if ssbo_block:
         ssbo_block = ssbo_block + "\n\n"
+    push_constant_block = ""
+    if scalar_param_specs:
+        # Vulkan gives us a compact scalar-argument path without inventing a
+        # one-off SSBO for values like learning rates.
+        fields = "\n".join(f"    {scalar.glsl_type} {scalar.name};" for scalar in scalar_param_specs)
+        push_constant_block = f"layout(push_constant) uniform RllmPushConstants {{\n{fields}\n}} rllm_push;\n\n"
     return (
         "#version 450\n"
         "\n"
         "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
         "\n"
         f"{const_block}"
+        f"{push_constant_block}"
         f"{ssbo_block}"
         f"void rllm_kernel_body({param_list})\n"
         "{\n"

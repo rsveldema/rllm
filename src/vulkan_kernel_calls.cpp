@@ -213,11 +213,17 @@ namespace rllm::vulkan
 		{
 			VkPipelineLayoutCreateInfo layout_info{};
 			layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+			layout_info.pushConstantRangeCount = 1;
+			VkPushConstantRange push_constant_range{};
+			push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+			push_constant_range.offset = 0;
+			push_constant_range.size = 128;
 			if (ssbo_binding_count > 0)
 			{
 				layout_info.setLayoutCount = 1;
 				layout_info.pSetLayouts = &m_descriptor_set_layout;
 			}
+			layout_info.pPushConstantRanges = &push_constant_range;
 
 			const VkResult layout_result = vkCreatePipelineLayout(device, &layout_info, nullptr, &m_pipeline_layout);
 			if (layout_result != VK_SUCCESS)
@@ -273,6 +279,7 @@ namespace rllm::vulkan
 		uint32_t groups_x,
 		uint32_t groups_y,
 		std::span<const detail::HostBufferView> buffers,
+		std::span<const std::byte> push_constants,
 		std::span<ComputeKernelRuntime::RuntimeBuffer> runtime_buffers,
 		size_t& runtime_buffer_count
 	)
@@ -575,6 +582,18 @@ namespace rllm::vulkan
 		}
 
 		vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline());
+
+		if (!push_constants.empty())
+		{
+			vkCmdPushConstants(
+				m_command_buffer,
+				m_pipeline_layout,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				0,
+				static_cast<uint32_t>(push_constants.size()),
+				push_constants.data()
+			);
+		}
 
 		if (runtime_buffer_count > 0)
 		{
