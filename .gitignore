@@ -1,5 +1,7 @@
 __pycache__
-build_*
+build
+build_release
+build_profile
 perf_fwd.data
 build
 *.o
@@ -11,3 +13,4 @@ staged/*.json
 *.log
 *.bin
 cmake_test_discovery*
+perf*.data
