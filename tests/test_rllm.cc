@@ -5,6 +5,8 @@
 #include <Statistics.hpp>
 #include <TransformerBlock.hpp>
 #include <parallel.hpp>
+#include <enum_iterator.hpp>
+#include <enum_iterator2D.hpp>
 
 #include <chrono>
 #include <cstdlib>

@@ -19,12 +19,16 @@ _SIZE_T_WORD_RE = re.compile(r"\bsize_t\b")
 _RLMM_FLOAT_WORD_RE = re.compile(r"\brlmm_float(?:_small)?\b")
 _STD_SQRT_RE = re.compile(r"\bstd\s*::\s*sqrt\s*\(")
 _STD_EXP_RE = re.compile(r"\bstd\s*::\s*exp\s*\(")
+_STD_SIN_RE = re.compile(r"\bstd\s*::\s*sin\s*\(")
+_STD_COS_RE = re.compile(r"\bstd\s*::\s*cos\s*\(")
+_STD_POW_RE = re.compile(r"\bstd\s*::\s*pow\s*\(")
 _MATH_MAX_RE = re.compile(r"\bmath\s*::\s*max\s*\(")
 _MATH_CLAMP_RE = re.compile(r"\bmath\s*::\s*clamp\s*\(")
 _CONSTEXPR_WORD_RE = re.compile(r"\bconstexpr\b")
 _CSTYLE_FLOAT_CAST_RE = re.compile(r"\(\s*float\s*\)\s*\(")
 _CSTYLE_INT_CAST_RE = re.compile(r"\(\s*int\s*\)\s*\(")
 _ATOMIC_INC_CALL_RE = re.compile(r"\bATOMIC_INC\s*\((.+)\)\s*;\s*$")
+_OVERFLOW_CHECK_ADD_RE = re.compile(r"^\s*OVERFLOW_CHECK_ADD\s*\([^;]*\)\s*;?\s*$")
 _COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
 # Scalar kernel args are passed via push constants, so we only match by-value
 # float aliases here and leave reference/pointer forms on the buffer path.
@@ -34,6 +38,8 @@ _FLOAT_SCALAR_RE = re.compile(
 
 
 def _sanitize_kernel_line_for_glsl(line: str) -> str:
+    if _OVERFLOW_CHECK_ADD_RE.match(line):
+        return ""
     # GLSL has no size_t; map common generated C++ forms to uint.
     line = _STATIC_CAST_SIZE_T_RE.sub(r"uint(\1)", line)
     # Replace remaining C++ static_cast<T>(...) with C-style casts before further cleanup.
@@ -44,6 +50,9 @@ def _sanitize_kernel_line_for_glsl(line: str) -> str:
     # GLSL builtins are unqualified (no std:: namespace).
     line = _STD_SQRT_RE.sub("sqrt(", line)
     line = _STD_EXP_RE.sub("exp(", line)
+    line = _STD_SIN_RE.sub("sin(", line)
+    line = _STD_COS_RE.sub("cos(", line)
+    line = _STD_POW_RE.sub("pow(", line)
     line = _MATH_MAX_RE.sub("max(", line)
     line = _MATH_CLAMP_RE.sub("clamp(", line)
     # GLSL does not support constexpr declarations.
@@ -125,8 +134,14 @@ _STD_VECTOR_ATOMIC_INT_RE = re.compile(
 _STD_VECTOR_INT_RE = re.compile(
     r"^(?P<const>const\s+)?std::vector\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
 )
+_INPUT_LINE_RE = re.compile(
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*InputLine\s*(?P<ref>[&*])?\s*$"
+)
 _FIXED_SIZE_VECTOR_INT_RE = re.compile(
     r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*int\s*,\s*[^>]+>\s*(?P<ref>[&*])?\s*$"
+)
+_NESTED_FIXED_SIZE_VECTOR_MATRIX_RE = re.compile(
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*,\s*(?P<rows>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _DEVICE_POINTER_INT_RE = re.compile(
     r"^(?P<const>const\s+)?DevicePointer\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
@@ -143,15 +158,39 @@ def _normalize_enum_type_name(raw: str) -> str:
     return token
 
 
+def _resolve_generated_token_id_max() -> int | None:
+    repo_root = Path(__file__).resolve().parent
+    candidates = [
+        repo_root / "build_release/generated/tokenizer_map.hpp",
+        repo_root / "build/generated/tokenizer_map.hpp",
+    ]
+    pattern = re.compile(r"\bMAX\s*=\s*(\d+)\s*,")
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        match = pattern.search(text)
+        if match is not None:
+            return int(match.group(1))
+    return None
+
+
 def _resolve_enum_max(raw_enum_type: str, symbol_values: dict[str, str]) -> int | None:
     enum_type = _normalize_enum_type_name(raw_enum_type)
     key = f"{enum_type}::MAX"
     raw = symbol_values.get(key)
     if raw is None:
+        if enum_type == "TokenID":
+            return _resolve_generated_token_id_max()
         return None
     try:
         return int(raw)
     except ValueError:
+        if enum_type == "TokenID":
+            return _resolve_generated_token_id_max()
         return None
 
 
@@ -162,6 +201,8 @@ def _map_cpp_extra_param_to_vulkan(
 ) -> tuple[str, str, MatrixViewSpec | None, BufferViewSpec | None, ScalarParamSpec | None]:
     # Returns: (kernel_param_declaration, main_local_setup_declaration, optional_matrix_view_spec)
     t = cpp_type.strip()
+    core_type = re.sub(r"^const\s+", "", t)
+    core_type = re.sub(r"\s*[&*]\s*$", "", core_type).strip()
     matrix_match = _MATRIX_TYPE_RE.match(t)
     if matrix_match:
         rows_max = _resolve_enum_max(matrix_match.group("rows"), symbol_values)
@@ -188,10 +229,47 @@ def _map_cpp_extra_param_to_vulkan(
         is_const = vector_int_match.group("const") is not None
         return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
 
+    input_line_match = _INPUT_LINE_RE.match(t)
+    if input_line_match or core_type.endswith("InputLine"):
+        is_const = input_line_match.group("const") is not None if input_line_match else t.startswith("const ")
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
+
     fixed_size_vector_int_match = _FIXED_SIZE_VECTOR_INT_RE.match(t)
     if fixed_size_vector_int_match:
         is_const = fixed_size_vector_int_match.group("const") is not None
         return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
+
+    nested_fixed_size_vector_matrix_match = _NESTED_FIXED_SIZE_VECTOR_MATRIX_RE.match(t)
+    if nested_fixed_size_vector_matrix_match:
+        rows_max = _resolve_enum_max(nested_fixed_size_vector_matrix_match.group("rows"), symbol_values)
+        cols_max = _resolve_enum_max(nested_fixed_size_vector_matrix_match.group("cols"), symbol_values)
+        if rows_max is not None and cols_max is not None:
+            is_const = nested_fixed_size_vector_matrix_match.group("const") is not None
+            flat_len = rows_max * cols_max
+            return "", "", MatrixViewSpec(
+                name=name,
+                rows=rows_max,
+                cols=cols_max,
+                is_const=is_const,
+                flat_len=flat_len,
+            ), None, None
+
+    nested_core_match = re.match(
+        r"^(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*,\s*(?P<rows>[^>]+)\s*>$",
+        core_type,
+    )
+    if nested_core_match:
+        rows_max = _resolve_enum_max(nested_core_match.group("rows"), symbol_values)
+        cols_max = _resolve_enum_max(nested_core_match.group("cols"), symbol_values)
+        if rows_max is not None and cols_max is not None:
+            flat_len = rows_max * cols_max
+            return "", "", MatrixViewSpec(
+                name=name,
+                rows=rows_max,
+                cols=cols_max,
+                is_const=t.startswith("const "),
+                flat_len=flat_len,
+            ), None, None
 
     device_pointer_int_match = _DEVICE_POINTER_INT_RE.match(t)
     if device_pointer_int_match:

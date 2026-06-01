@@ -37,9 +37,13 @@ namespace rllm
         void set_random_embeddings();
 
         // Returns the raw learned embedding for a single token (without positional encoding).
-        const fixed_size_vector<rlmm_float_small, EmbeddingDimension>& get_embedding(TokenID tok) const
+        fixed_size_vector<rlmm_float_small, EmbeddingDimension> get_embedding(TokenID tok) const
         {
-            return m_embeddings[tok];
+            fixed_size_vector<rlmm_float_small, EmbeddingDimension> embedding;
+            embedding.set_size(EmbeddingDimension::MAX);
+            for (const auto d : enum_iterator<EmbeddingDimension>())
+                embedding[d] = m_embeddings[tok, d];
+            return embedding;
         }
 
         void load(const nlohmann::json& j);
@@ -47,7 +51,7 @@ namespace rllm
 
       private:
         // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.
-        fixed_size_vector<fixed_size_vector<rlmm_float_small, EmbeddingDimension>, TokenID> m_embeddings;
+                fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension> m_embeddings;
 
         void reset_embeddings();
     };

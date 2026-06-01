@@ -13,14 +13,14 @@ namespace rllm
     {
         for (const auto tok : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
-                m_embeddings[tok][d] = RLMM_ZERO;
+                m_embeddings[tok, d] = RLMM_ZERO;
     }
 
     void InputLayer::set_random_embeddings()
     {
         for (const auto tok : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
-                m_embeddings[tok][d] = static_cast<rlmm_float>(get_random_value(-0.1f, 0.1f));
+                m_embeddings[tok, d] = static_cast<rlmm_float>(get_random_value(-0.1f, 0.1f));
     }
 
     // Fill h[T × D_MODEL] = token_embedding + sinusoidal positional encoding.
@@ -37,9 +37,8 @@ namespace rllm
 
         PARFOR_2D(pos, di, enum_iterator2D<PositionIndex, EmbeddingDimension>(input.size()))
         const TokenID tok = input[pos];
-        const auto& embed = m_embeddings[tok];
         const int di_int = static_cast<int>(di);
-        const float emb_val = embed[di];
+        const float emb_val = m_embeddings[tok, di];
         const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / D);
         const float pe =
             (di_int % 2 == 0) ? std::sin(static_cast<float>(pos) * freq) : std::cos(static_cast<float>(pos) * freq);
@@ -96,15 +95,14 @@ namespace rllm
         // each duplicate we'll handle sequentially to avoid race conditions on the same embedding vector
         for (const auto i : enum_iterator<ConflictIndex>(duplicate_count))
         {
-            auto& conflict = conflicts[i];
-            auto& embed = m_embeddings[conflict.tok];
-
             for (const auto di : enum_iterator<EmbeddingDimension>())
             {
-                auto& e = embed[di];
+                auto& conflict_tok = conflicts[i].tok;
+                auto& conflict_pos = conflicts[i].pos;
+                auto& e = m_embeddings[conflict_tok, di];
                 // if the same token appears multiple times, we average the gradient across those positions
-                const auto rate = learning_rate / float(updated_tokens[conflict.tok]);
-                e = math::clamp(e + rate * dh[conflict.pos, di], RLMM_NEG_ONE, RLMM_ONE);
+                const auto rate = learning_rate / float(updated_tokens[conflict_tok]);
+                e = math::clamp(e + rate * dh[conflict_pos, di], RLMM_NEG_ONE, RLMM_ONE);
             }
         }
 
@@ -128,8 +126,7 @@ namespace rllm
 
         assert(count == 1); // sanity check: this token should only appear once in the input, otherwise it would have been handled in the sequential loop above
 
-        auto& embed = m_embeddings[tok];
-        auto& e = embed[di];
+        auto& e = m_embeddings[tok, di];
         e = math::clamp(e + learning_rate * dh[pos, di], RLMM_NEG_ONE, RLMM_ONE);
         ENDFOR
     }

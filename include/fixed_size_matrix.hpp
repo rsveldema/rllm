@@ -89,11 +89,47 @@ namespace rllm
             return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
+        template <std::integral XIndex>
+        inline ElementType& operator[](XIndex x, Y y)
+        {
+            return (*this)[static_cast<X>(x), y];
+        }
+
+        template <std::integral YIndex>
+        inline ElementType& operator[](X x, YIndex y)
+        {
+            return (*this)[x, static_cast<Y>(y)];
+        }
+
+        template <std::integral XIndex, std::integral YIndex>
+        inline ElementType& operator[](XIndex x, YIndex y)
+        {
+            return (*this)[static_cast<X>(x), static_cast<Y>(y)];
+        }
+
         inline const ElementType& operator[](X x, Y y) const
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
             return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+        }
+
+        template <std::integral XIndex>
+        inline const ElementType& operator[](XIndex x, Y y) const
+        {
+            return (*this)[static_cast<X>(x), y];
+        }
+
+        template <std::integral YIndex>
+        inline const ElementType& operator[](X x, YIndex y) const
+        {
+            return (*this)[x, static_cast<Y>(y)];
+        }
+
+        template <std::integral XIndex, std::integral YIndex>
+        inline const ElementType& operator[](XIndex x, YIndex y) const
+        {
+            return (*this)[static_cast<X>(x), static_cast<Y>(y)];
         }
 
         inline void fill(ElementType value)

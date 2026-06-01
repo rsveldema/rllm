@@ -71,7 +71,7 @@
         {
           "name": "Placeholder",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 40
+          "line": 42
         }
       ]
     },
@@ -82,22 +82,22 @@
         {
           "name": "GuaranteedModel_HashPredictsInclude",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 81
+          "line": 83
         },
         {
           "name": "MTP_HashPredictsInThenCluInParallel",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 135
+          "line": 137
         },
         {
           "name": "GuaranteedModel_IncludePredictsA",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 166
+          "line": 168
         },
         {
           "name": "SimplestGuaranteedTraining_HashKeepsDefineAboveFloor",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 192
+          "line": 194
         }
       ]
     },
@@ -108,32 +108,32 @@
         {
           "name": "ForwardOutputShape",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 243
+          "line": 245
         },
         {
           "name": "BackwardOutputShape",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 263
+          "line": 265
         },
         {
           "name": "CausalSoftmaxMasksFutureTokensAndNormalizesRows",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 289
+          "line": 291
         },
         {
           "name": "SoftmaxBackwardMatchesJacobianAndAccumulates",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 350
+          "line": 352
         },
         {
           "name": "ForwardParallelFasterThanSerial",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 424
+          "line": 426
         },
         {
           "name": "BackwardParallelFasterThanSerial",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 488
+          "line": 490
         }
       ]
     },
@@ -144,7 +144,7 @@
         {
           "name": "SpeedupFasterThanSerial",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 569
+          "line": 571
         }
       ]
     },
@@ -155,12 +155,12 @@
         {
           "name": "VisitsAllLowerTriangularPairsExactlyOnce",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 647
+          "line": 649
         },
         {
           "name": "SpeedupFasterThanSerial",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 674
+          "line": 676
         }
       ]
     },
@@ -171,12 +171,12 @@
         {
           "name": "VisitsAllUpperTriangularPairsExactlyOnce",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 754
+          "line": 756
         },
         {
           "name": "SpeedupFasterThanSerial",
           "file": "\/projects\/rllm\/tests\/test_rllm.cc",
-          "line": 781
+          "line": 783
         }
       ]
     }

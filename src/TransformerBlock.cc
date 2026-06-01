@@ -1,7 +1,10 @@
 #include <JsonTensorHelpers.hpp>
 #include <RandomHelpers.hpp>
 #include <TransformerBlock.hpp>
+#include <enum_iterator.hpp>
+#include <enum_iterator2D.hpp>
 #include <parallel.hpp>
+#include <vecmath.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -15,84 +18,6 @@ namespace rllm
         static_cast<int>(EmbeddingDimension::MAX) % static_cast<int>(HeadsIndex::MAX) == 0,
         "EmbeddingDimension::MAX must be divisible by HeadsIndex::MAX"
     );
-
-    // SGD + momentum update for the Q/K/V/O square weight matrices.
-    static void sgd_update_Wqkvo_x_Vqkvo_dWqkvo(
-        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& W,
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& vel,
-        const fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& grad,
-        float lr
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
-        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel[r, c] = math::clamp(
-            TransformerBlock::MOMENTUM_BETA * vel[r, c] + lr * g,
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W[r, c] = math::clamp(
-            W[r, c] + vel[r, c],
-            -TransformerBlock::WEIGHT_CLAMP,
-            TransformerBlock::WEIGHT_CLAMP
-        );
-        ENDFOR
-    }
-
-    // SGD + momentum update for the gate/up FFN weight matrices.
-    static void sgd_update_Wgateup_x_Vgateup_dWgateup(
-        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
-        fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& W,
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& vel,
-        const fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& grad,
-        float lr
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
-        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel[r, c] = math::clamp(
-            TransformerBlock::MOMENTUM_BETA * vel[r, c] + lr * g,
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W[r, c] = math::clamp(
-            W[r, c] + vel[r, c],
-            -TransformerBlock::WEIGHT_CLAMP,
-            TransformerBlock::WEIGHT_CLAMP
-        );
-        ENDFOR
-    }
-
-    // SGD + momentum update for the down-projection FFN weight matrix.
-    static void sgd_update_Wdown_x_Vdown_dWdown(
-        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension>& W,
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension>& vel,
-        const fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension>& grad,
-        float lr
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
-        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel[r, c] = math::clamp(
-            TransformerBlock::MOMENTUM_BETA * vel[r, c] + lr * g,
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W[r, c] = math::clamp(
-            W[r, c] + vel[r, c],
-            -TransformerBlock::WEIGHT_CLAMP,
-            TransformerBlock::WEIGHT_CLAMP
-        );
-        ENDFOR
-    }
 
     // ── randomize ─────────────────────────────────────────────────────────────
 
@@ -343,38 +268,26 @@ namespace rllm
         ws.attn_concat.zero();
 
         PARFOR(hi, enum_iterator<HeadsIndex>())
-        auto& scores_mat = ws.attn_w[hi];
+        const auto hi_int = static_cast<size_t>(hi);
+        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat = ws.attn_w[hi];
         scores_mat.set_size(seq_len, seq_len);
 
-        const auto hi_int = static_cast<size_t>(hi);
-        const auto hStart = static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
-        const auto hEnd = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
+        const int h_start = static_cast<int>(hi_int * static_cast<size_t>(HeadDimension::MAX));
+        const int h_end = static_cast<int>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
 
         // scores_mat[i, j] = Q[i, hi*Dh..] · K[j, hi*Dh..] * scale
-        PARFOR_2D(i, j, enum_iterator2D<PositionIndex, PositionIndex>(seq_len, seq_len))
-        float dot = 0.f;
-        RLLM_OMP_SIMD_REDUCTION_PLUS(dot)
-        for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-            dot += ws.Q[i, d] * ws.K[j, d];
-        scores_mat[i, j] = dot * scale;
-        ENDFOR
+        attention_scores_for_head(scores_mat, ws.Q, ws.K, h_start, h_end, scale, seq_len);
 
         causal_softmax(scores_mat, seq_len);
 
         // attn_concat[i, d] = sum_j scores_mat[i,j] * V[j, d]  (causal: j ≤ i)
-        PARFOR_2D_TRIANGULAR(i, j, seq_len)
-        const float w = scores_mat[i, j];
-        for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-            ws.attn_concat[i, d] += w * ws.V[j, d];
-        ENDFOR
+        attention_values_for_head(ws.attn_concat, scores_mat, ws.V, h_start, h_end, seq_len);
         ENDFOR
 
         // ── 4. Output projection + residual ──────────────────────────────────
         matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
 
-        PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
-        ws.h_mid[t, d] = h[t, d] + ws.attn_proj[t, d];
-        ENDFOR
+        element_wise_sum(h, ws.attn_proj, ws.h_mid);
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
         rms_norm(ws.h_mid, ws.h_norm_ff);
@@ -386,18 +299,12 @@ namespace rllm
         matmul_ABt(ws.h_norm_ff, W_up, ws.up_pre);
         PARSECTIONS_END
 
-        PARFOR_2D(t, f, enum_iterator2D<PositionIndex, FFDimension>(seq_len))
-        const float g = ws.gate_pre[t, f];
-        const float silu = g / (1.0f + std::exp(-g));
-        ws.ffn_act[t, f] = silu * ws.up_pre[t, f];
-        ENDFOR
+        swiglu_forward(ws.gate_pre, ws.up_pre, ws.ffn_act, seq_len);
 
         matmul_ABt(ws.ffn_act, W_down, ws.ffn_out);
 
         // ── 7. Residual ───────────────────────────────────────────────────────
-        PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq_len))
-        h[t, d] = ws.h_mid[t, d] + ws.ffn_out[t, d];
-        ENDFOR
+        element_wise_sum(ws.h_mid, ws.ffn_out, h);
     }
 
     // ── backward temporaries ──────────────────────────────────────────────────
@@ -466,6 +373,19 @@ namespace rllm
 
     // ── backward pass ─────────────────────────────────────────────────────────
 
+    void element_wise_add(
+        // OFFLOAD_PARAMETERS(src,dst)
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(src.num_rows(), src.num_cols());
+        OFFLOAD_PARFOR_2D_PARAM(t, d, grid, (src, dst))
+        dst[t, d] += src[t, d];
+        ENDFOR
+    }
+
     void TransformerBlock::backward(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din,
@@ -487,22 +407,22 @@ namespace rllm
         matmul_AB(dout, W_down, ws->d_ffn_act);
 
         // dW_down[D, Dff] += dout^T @ ffn_act
-        matmul_AtB_acc(dout, fwd.ffn_act, ws->dW_down);
+        matmul_AtB_acc(dout, fwd.ffn_act, ws->dW_down, fwd.seq_len);
 
         // SwiGLU backward: d(silu(g)*u) / dg, du
         swiglu_backward(fwd.seq_len, fwd.gate_pre, fwd.up_pre, ws->d_ffn_act, ws->d_gate_pre, ws->d_up_pre);
 
         // d_h_norm_ff = d_gate_pre @ W_gate  +  d_up_pre @ W_up
         matmul_AB(ws->d_gate_pre, W_gate, ws->tmp);
-        ws->d_h_norm_ff.element_wise_add(ws->tmp);
+        element_wise_add(ws->tmp, ws->d_h_norm_ff);
         matmul_AB(ws->d_up_pre, W_up, ws->tmp);
-        ws->d_h_norm_ff.element_wise_add(ws->tmp);
+        element_wise_add(ws->tmp, ws->d_h_norm_ff);
 
         // weight gradients for gate, up
         PARSECTIONS_BEGIN
-        matmul_AtB_acc(ws->d_gate_pre, fwd.h_norm_ff, ws->dW_gate);
+        matmul_AtB_acc(ws->d_gate_pre, fwd.h_norm_ff, ws->dW_gate, fwd.seq_len);
         PARSECTION
-        matmul_AtB_acc(ws->d_up_pre, fwd.h_norm_ff, ws->dW_up);
+        matmul_AtB_acc(ws->d_up_pre, fwd.h_norm_ff, ws->dW_up, fwd.seq_len);
         PARSECTIONS_END
 
         // RMSNorm backward for FFN: d_h_mid += rms_bwd(d_h_norm_ff, h_mid)
@@ -514,7 +434,7 @@ namespace rllm
 
         // d_attn_concat = d_attn_proj @ W_o
         matmul_AB(ws->d_h_mid, W_o, ws->d_attn_concat);
-        matmul_AtB_acc(ws->d_h_mid, fwd.attn_concat, ws->dW_o);
+        matmul_AtB_acc(ws->d_h_mid, fwd.attn_concat, ws->dW_o, fwd.seq_len);
 
         // Per-head backward
         const float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
@@ -584,20 +504,20 @@ namespace rllm
 
         // Weight gradients for W_q, W_k, W_v
         PARSECTIONS_BEGIN
-        matmul_AtB_acc(ws->d_Q, fwd.h_norm_attn, ws->dW_q);
+        matmul_AtB_acc(ws->d_Q, fwd.h_norm_attn, ws->dW_q, fwd.seq_len);
         PARSECTION
-        matmul_AtB_acc(ws->d_K, fwd.h_norm_attn, ws->dW_k);
+        matmul_AtB_acc(ws->d_K, fwd.h_norm_attn, ws->dW_k, fwd.seq_len);
         PARSECTION
-        matmul_AtB_acc(ws->d_V, fwd.h_norm_attn, ws->dW_v);
+        matmul_AtB_acc(ws->d_V, fwd.h_norm_attn, ws->dW_v, fwd.seq_len);
         PARSECTIONS_END
 
         // d_h_norm_attn = d_Q @ W_q  +  d_K @ W_k  +  d_V @ W_v
         matmul_AB(ws->d_Q, W_q, ws->tmp);
-        ws->d_h_norm_attn.element_wise_add(ws->tmp);
+        element_wise_add(ws->tmp, ws->d_h_norm_attn);
         matmul_AB(ws->d_K, W_k, ws->tmp);
-        ws->d_h_norm_attn.element_wise_add(ws->tmp);
+        element_wise_add(ws->tmp, ws->d_h_norm_attn);
         matmul_AB(ws->d_V, W_v, ws->tmp);
-        ws->d_h_norm_attn.element_wise_add(ws->tmp);
+        element_wise_add(ws->tmp, ws->d_h_norm_attn);
 
         // ── d_h_in + weight updates ───────────────────────────────────────────
         // d_h_in (residual + RMSNorm backward) and all seven weight updates are

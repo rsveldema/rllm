@@ -140,16 +140,25 @@ function(rllm_define_lib target_name)
         add_dependencies(${target_name} ${RLLM_OFFLOAD_PREPROCESS_TARGET})
     endif()
 
-    target_sources(${target_name} PRIVATE
+    set(RLLM_LIBRARY_SOURCES
         "${RLLM_COMPILE_SRC_DIR}/Trainer.cc"
         "${RLLM_COMPILE_SRC_DIR}/Prompter.cc"
         "${RLLM_COMPILE_SRC_DIR}/Corpus.cpp"
         "${RLLM_COMPILE_SRC_DIR}/InputLayer.cc"
+        "${RLLM_COMPILE_SRC_DIR}/vecmath.cc"
         "${RLLM_COMPILE_SRC_DIR}/TransformerBlock.cc"
         "${RLLM_COMPILE_SRC_DIR}/OutputLayer.cc"
         "${RLLM_COMPILE_SRC_DIR}/NeuralNetwork.cc"
         "${RLLM_COMPILE_SRC_DIR}/serialization.cc"
         "${RLLM_COMPILE_SRC_DIR}/parallel.cc"
+    )
+
+    if(RLLM_OFFLOAD_PREPROCESS_TARGET)
+        set_source_files_properties(${RLLM_LIBRARY_SOURCES} PROPERTIES GENERATED TRUE)
+    endif()
+
+    target_sources(${target_name} PRIVATE
+        ${RLLM_LIBRARY_SOURCES}
         "${CMAKE_BINARY_DIR}/generated/tokenizer_map.cc"
     )
 

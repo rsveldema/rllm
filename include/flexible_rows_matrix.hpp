@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <concepts>
 #include <utility>
 
 #include <parallel.hpp>
@@ -106,11 +107,47 @@ namespace rllm
             return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
+        template <std::integral YIndex>
+        ElementType& operator[](X x, YIndex y)
+        {
+            return (*this)[x, static_cast<Y>(y)];
+        }
+
+        template <std::integral XIndex>
+        ElementType& operator[](XIndex x, Y y)
+        {
+            return (*this)[static_cast<X>(x), y];
+        }
+
+        template <std::integral XIndex, std::integral YIndex>
+        ElementType& operator[](XIndex x, YIndex y)
+        {
+            return (*this)[static_cast<X>(x), static_cast<Y>(y)];
+        }
+
         const ElementType& operator[](X x, Y y) const
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
             return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+        }
+
+        template <std::integral YIndex>
+        const ElementType& operator[](X x, YIndex y) const
+        {
+            return (*this)[x, static_cast<Y>(y)];
+        }
+
+        template <std::integral XIndex>
+        const ElementType& operator[](XIndex x, Y y) const
+        {
+            return (*this)[static_cast<X>(x), y];
+        }
+
+        template <std::integral XIndex, std::integral YIndex>
+        const ElementType& operator[](XIndex x, YIndex y) const
+        {
+            return (*this)[static_cast<X>(x), static_cast<Y>(y)];
         }
 
         void fill(ElementType value)

@@ -14,7 +14,7 @@
 #if defined(USE_VULKAN_OFFLOAD)
 #define ATOMIC_INC(x) ((x)++)
 #else
-#define ATOMIC_INC(x) ((x).fetch_add(1, std::memory_order_relaxed))
+#define ATOMIC_INC(x) (++(x))
 #endif
 
 #if !defined(USE_OPENMP)
@@ -92,7 +92,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
         static_cast<rllm::PositionIndex>(ROWS), static_cast<rllm::HeadDimension>(COLS)
     );
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
-    const size_t idx = static_cast<size_t>(j) * COLS + static_cast<size_t>(i);
+    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
     ATOMIC_INC(visits[idx]);
     ENDFOR
 
@@ -120,7 +120,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
 
     const auto grid = rllm::enum_iterator2D<rllm::PositionIndex, rllm::HeadDimension>(rows, cols);
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
-    const size_t idx = static_cast<size_t>(j) * COLS + static_cast<size_t>(i);
+    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
     ATOMIC_INC(visits[idx]);
     ENDFOR
 
@@ -209,7 +209,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     );
 
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
-    const size_t idx = static_cast<size_t>(j) * COLS + static_cast<size_t>(i);
+    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
     ATOMIC_INC(visits[idx]);
     ENDFOR
 
@@ -217,7 +217,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
-    const size_t idx = static_cast<size_t>(j) * COLS + static_cast<size_t>(i);
+    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
     ATOMIC_INC(visits[idx]);
     ENDFOR
 
@@ -266,7 +266,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
 
     const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
-    values[j, i] = static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 1);
+    values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 1);
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
@@ -292,7 +292,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
 
     const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values, scale))
-    values[j, i] = scale * static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 5);
+    values[i, j] = scale * static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 5);
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
@@ -421,7 +421,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
         static_cast<rllm::MultiTokenPredictionIndex>(3)
     );
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
-    values[j, i] = static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 2);
+    values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 2);
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
@@ -446,7 +446,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
 
     const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
-    values[j, i] = static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 3);
+    values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 3);
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
@@ -473,7 +473,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
         static_cast<rllm::MultiTokenPredictionIndex>(3)
     );
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
-    values[j, i] = static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 4);
+    values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 4);
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);

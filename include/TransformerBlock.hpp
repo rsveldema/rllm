@@ -1,7 +1,6 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
-#include <matmul.hpp>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <parallel.hpp>
