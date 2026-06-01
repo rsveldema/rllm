@@ -109,13 +109,13 @@ namespace rllm
         W_up.fill_rand(-sd, sd);
         W_down.fill_rand(-sf, sf);
 
-        V_q.fill(RLMM_ZERO);
-        V_k.fill(RLMM_ZERO);
-        V_v.fill(RLMM_ZERO);
-        V_o.fill(RLMM_ZERO);
-        V_gate.fill(RLMM_ZERO);
-        V_up.fill(RLMM_ZERO);
-        V_down.fill(RLMM_ZERO);
+        V_q.zero();
+        V_k.zero();
+        V_v.zero();
+        V_o.zero();
+        V_gate.zero();
+        V_up.zero();
+        V_down.zero();
     }
 
     // ── normalisation ──────────────────────────────────────────────────────────
@@ -340,7 +340,7 @@ namespace rllm
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
         const float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
-        ws.attn_concat.fill(RLMM_ZERO);
+        ws.attn_concat.zero();
 
         PARFOR(hi, enum_iterator<HeadsIndex>())
         auto& scores_mat = ws.attn_w[hi];
@@ -449,18 +449,18 @@ namespace rllm
         // d_up_pre, d_attn_concat, tmp, d_scores, d_raw) are left untouched.
         void reset()
         {
-            dW_down.fill(RLMM_ZERO);
-            d_h_norm_ff.fill(RLMM_ZERO);
-            dW_gate.fill(RLMM_ZERO);
-            dW_up.fill(RLMM_ZERO);
-            dW_o.fill(RLMM_ZERO);
-            d_Q.fill(RLMM_ZERO);
-            d_K.fill(RLMM_ZERO);
-            d_V.fill(RLMM_ZERO);
-            dW_q.fill(RLMM_ZERO);
-            dW_k.fill(RLMM_ZERO);
-            dW_v.fill(RLMM_ZERO);
-            d_h_norm_attn.fill(RLMM_ZERO);
+            dW_down.zero();
+            d_h_norm_ff.zero();
+            dW_gate.zero();
+            dW_up.zero();
+            dW_o.zero();
+            d_Q.zero();
+            d_K.zero();
+            d_V.zero();
+            dW_q.zero();
+            dW_k.zero();
+            dW_v.zero();
+            d_h_norm_attn.zero();
         }
     };
 
@@ -519,29 +519,34 @@ namespace rllm
         // Per-head backward
         const float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
         PARFOR(hi, enum_iterator<HeadsIndex>())
+        const auto hi_int = static_cast<size_t>(hi);
         // Each head owns its own d_scores_h / d_raw_h so parallel heads never conflict.
-        // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, hStart, hEnd)
+        // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, d_V, d_Q, d_K, d_attn_concat, Q, K, V, scores_mat, hStart, hEnd, head_scale, seq_len)
         flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h = ws->d_scores[hi];
         flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws->d_raw[hi];
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_V = ws->d_V;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_Q = ws->d_Q;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K = ws->d_K;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws->d_attn_concat;
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = fwd.K;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V = fwd.V;
         const PositionIndex seq_len = fwd.seq_len;
+        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat = fwd.attn_w[hi];
+        EmbeddingDimension hStart = static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
+        EmbeddingDimension hEnd = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
+        const float head_scale = scale;
         // END_OFFLOAD_PARAMETERS
         d_scores_h.set_size(fwd.seq_len, fwd.seq_len);
         d_raw_h.set_size(fwd.seq_len, fwd.seq_len);
-        d_raw_h.fill(RLMM_ZERO);
-
-        const auto& scores_mat = fwd.attn_w[hi];
-        const auto hi_int = static_cast<size_t>(hi);
-        const auto hStart = static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
-        const auto hEnd = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
+        d_raw_h.zero();
 
         // d_V_h[j, d] += sum_i scores_mat[i,j] * d_attn_concat[i, d]
         // Safe across heads: each head writes its own [hStart, hEnd) columns of d_V.
-        PARFOR_2D_UPPER_TRIANGULAR(j, i, fwd.seq_len)
+        OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(j, i, seq_len, (d_V, scores_mat, d_attn_concat, hStart, hEnd))
         const float w = scores_mat[i, j];
         for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-            ws->d_V[j, d] += w * ws->d_attn_concat[i, d];
+            d_V[j, d] += w * d_attn_concat[i, d];
         ENDFOR
 
         // d_scores_h[i,j] = d_attn_concat[i, d] · V[j, d]
@@ -554,19 +559,26 @@ namespace rllm
         ENDFOR
 
         // Backward through causal softmax
-        softmax_backward(d_scores_h, scores_mat, d_raw_h, fwd.seq_len);
+        softmax_backward(d_scores_h, scores_mat, d_raw_h, seq_len);
 
-        // d_Q and d_K — each head writes its own [hStart, hEnd) columns.
-        PARFOR_2D_TRIANGULAR(i, j, fwd.seq_len)
-        const float ds = d_raw_h[i, j] * scale;
-        for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-            ws->d_Q[i, d] += ds * fwd.K[j, d];
+        // d_Q and d_K are triangular reductions over j/i respectively.
+        // Offload per output cell to avoid cross-thread accumulation races.
+        const auto head_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
+
+        OFFLOAD_PARFOR_2D_PARAM(i, d_head, head_grid, (d_Q, d_raw_h, K, hStart, head_scale, seq_len))
+        const int d = int(hStart) + int(d_head);
+        float sum_q = 0.f;
+        for (const auto j : enum_iterator<PositionIndex>(inc(i)))
+            sum_q += d_raw_h[i, j] * head_scale * K[j, d];
+        d_Q[i, d] = sum_q;
         ENDFOR
 
-        PARFOR_2D_UPPER_TRIANGULAR(j, i, fwd.seq_len)
-        const float ds = d_raw_h[i, j] * scale;
-        for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-            ws->d_K[j, d] += ds * fwd.Q[i, d];
+        OFFLOAD_PARFOR_2D_PARAM(j, d_head, head_grid, (d_K, d_raw_h, Q, hStart, head_scale, seq_len))
+        const int d = int(hStart) + int(d_head);
+        float sum_k = 0.f;
+        for (const auto i : enum_iterator<PositionIndex>(j, seq_len))
+            sum_k += d_raw_h[i, j] * head_scale * Q[i, d];
+        d_K[j, d] = sum_k;
         ENDFOR
         ENDFOR
 
@@ -638,13 +650,13 @@ namespace rllm
         deserialize_matrix(j.at("W_down"), W_down);
 
         // Reset momentum on load — do not persist transient training state
-        V_q.fill(RLMM_ZERO);
-        V_k.fill(RLMM_ZERO);
-        V_v.fill(RLMM_ZERO);
-        V_o.fill(RLMM_ZERO);
-        V_gate.fill(RLMM_ZERO);
-        V_up.fill(RLMM_ZERO);
-        V_down.fill(RLMM_ZERO);
+        V_q.zero();
+        V_k.zero();
+        V_v.zero();
+        V_o.zero();
+        V_gate.zero();
+        V_up.zero();
+        V_down.zero();
     }
 
 } // namespace rllm

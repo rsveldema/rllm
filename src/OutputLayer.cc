@@ -25,7 +25,7 @@ namespace rllm
         for (const auto v : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
                 W_lm_head[v, d] = get_random_value(-scale, scale);
-        V_lm_head.fill(RLMM_ZERO);
+        V_lm_head.zero();
     }
 
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]

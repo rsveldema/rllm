@@ -90,6 +90,29 @@ public:
         copy_contents_from(other);
     }
 
+    void zero()
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        if (m_bytes == 0 || m_staging_ptr == nullptr)
+            return;
+
+        if (m_current_owner == CurrentOwner::Device)
+        {
+            if (m_offload_ptr != nullptr)
+            {
+                m_memory_space->zero_offload(m_offload_ptr, m_bytes);
+                m_pending_flush = nullptr;
+                m_current_owner = CurrentOwner::Device;
+                return;
+            }
+        }
+
+        zero_initialize_staging();
+        m_pending_flush = nullptr;
+        m_current_owner = CurrentOwner::Host;
+    }
+
+
     DevicePointer& operator=(const DevicePointer& other)
     {
         if (this == &other)

@@ -51,6 +51,13 @@ public:
         std::memcpy(offload_dst, offload_src, bytes);
     }
 
+    void zero_offload(void* offload_dst, size_t bytes) override
+    {
+        if (bytes == 0)
+            return;
+        std::memset(offload_dst, 0, bytes);
+    }
+
 private:
     std::vector<std::byte> storage_;
 };

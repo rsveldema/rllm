@@ -118,6 +118,11 @@ namespace rllm
             std::fill_n(m_data.get(), ROWS * COLS, value);
         }
 
+        void zero()
+        {
+            m_data.zero();
+        }
+
         // Adds each element of other (must have the same runtime dimensions) into this matrix.
         void element_wise_add(const flexible_cols_matrix& other)
         {

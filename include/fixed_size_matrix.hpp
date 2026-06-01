@@ -101,6 +101,11 @@ namespace rllm
             std::fill_n(m_data.get(), ROWS * COLS, value);
         }
 
+        inline void zero()
+        {
+            m_data.zero();
+        }
+
         inline void fill_rand(ElementType lo, ElementType hi)
         {
             auto* ptr = m_data.get();

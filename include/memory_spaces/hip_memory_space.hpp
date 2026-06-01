@@ -87,6 +87,18 @@ public:
         }
     }
 
+    void zero_offload(void* offload_dst, size_t bytes) override
+    {
+        if (bytes == 0)
+            return;
+        const hipError_t status = hipMemset(offload_dst, 0, bytes);
+        if (status != hipSuccess)
+        {
+            LOG_ERROR("Fatal: HIP offload memset failed: {}", hipGetErrorString(status));
+            std::abort();
+        }
+    }
+
 private:
     std::vector<std::byte> staging_storage_;
     void* offload_storage_;

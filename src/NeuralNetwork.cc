@@ -244,7 +244,7 @@ namespace rllm
             ws->h_last_vec[d] = m_last_hidden[last_pos, d];
 
         // Accumulate dh_last contributions from every valid output head.
-        ws->dh_last.fill(RLMM_ZERO);
+        ws->dh_last.zero();
         for (auto oi = MultiTokenPredictionIndex::START; oi < num_valid; oi = inc(oi))
         {
             m_output_layers[oi].compute_deltas(scores[oi], ws->output_layer_delta);
@@ -255,8 +255,8 @@ namespace rllm
         }
 
         // Propagate the summed gradient through the transformer blocks.
-        ws->dh.fill(RLMM_ZERO);
-        ws->din.fill(RLMM_ZERO);
+        ws->dh.zero();
+        ws->din.zero();
         for (const auto d : enum_iterator<EmbeddingDimension>())
             ws->dh[last_pos, d] = ws->dh_last[d];
 

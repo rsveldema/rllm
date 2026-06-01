@@ -66,7 +66,7 @@ namespace rllm
 
     void OutputLayer::load(const nlohmann::json& j)
     {
-        m_inputs.fill(RLMM_ZERO);
+        m_inputs.zero();
         if (j.contains("W_lm_head"))
         {
             const auto& w_j = j.at("W_lm_head");
@@ -75,7 +75,7 @@ namespace rllm
                 for (const auto d : enum_iterator<EmbeddingDimension>())
                     W_lm_head[t, d] = w_j.at(i++).template get<float>();
         }
-        V_lm_head.fill(RLMM_ZERO);
+        V_lm_head.zero();
     }
 
     nlohmann::json OutputLayer::save() const

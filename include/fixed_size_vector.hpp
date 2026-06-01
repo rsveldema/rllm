@@ -216,6 +216,21 @@ namespace rllm
             }
         }
 
+        void zero(LengthType length)
+        {
+            assert(length <= LengthType::MAX);
+            auto* data = m_data.get();
+            for (const auto i : enum_iterator<LengthType>(length))
+            {
+                data[static_cast<size_t>(i)] = 0;
+            }
+        }
+
+        void zero()
+        {
+            m_data.zero();
+        }
+
         /** add a value to an element at index with clamping */
         void add_with_clamp(LengthType index, T delta, Range<T> range)
         {
