@@ -62,6 +62,13 @@ public:
         copy_vulkan_download(staging_dst, offload_src, bytes);
     }
 
+    void copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes) override
+    {
+        if (bytes == 0)
+            return;
+        copy_vulkan_device_copy(offload_dst, offload_src, bytes);
+    }
+
     static void set_transfer_context(const TransferContext& ctx)
     {
         transfer_context() = ctx;
@@ -235,6 +242,31 @@ private:
             return;
         }
         LOG_ERROR("Fatal: Vulkan offload download failed and fallback is disabled.");
+        std::abort();
+    }
+
+    static void copy_vulkan_device_copy(void* offload_dst, const void* offload_src, size_t bytes)
+    {
+        TransferContext& ctx = transfer_context();
+
+        if (ctx.device == VK_NULL_HANDLE || ctx.queue == VK_NULL_HANDLE ||
+            ctx.offload_buffer == VK_NULL_HANDLE || ctx.offload_base == nullptr)
+        {
+            std::memcpy(offload_dst, offload_src, bytes);
+            return;
+        }
+
+        VkDeviceSize src_offset = 0;
+        VkDeviceSize dst_offset = 0;
+
+        if (resolve_offset(ctx.offload_base, ctx.offload_size, offload_src, bytes, src_offset) &&
+            resolve_offset(ctx.offload_base, ctx.offload_size, offload_dst, bytes, dst_offset) &&
+            submit_buffer_copy(ctx.offload_buffer, ctx.offload_buffer, src_offset, dst_offset, bytes))
+        {
+            return;
+        }
+
+        LOG_ERROR("Fatal: Vulkan offload device copy failed and fallback is disabled.");
         std::abort();
     }
 

@@ -1,9 +1,1 @@
-Natural next steps are:
 
-Make matrix-like host buffers use the same lazy cached device-buffer path that DevicePointer uses.
-
-Stop using vkQueueWaitIdle for every launch; use a fence per submission instead.
-
-Generate larger workgroup sizes, for example 8x8 or 16x16, instead of 1x1.
-
-Move benchmark repetitions inside one offload launch if you want to measure compute rather than dispatch overhead.

@@ -75,6 +75,18 @@ public:
         }
     }
 
+    void copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes) override
+    {
+        if (bytes == 0)
+            return;
+        const hipError_t status = hipMemcpy(offload_dst, offload_src, bytes, hipMemcpyDefault);
+        if (status != hipSuccess)
+        {
+            LOG_ERROR("Fatal: HIP offload device copy failed: {}", hipGetErrorString(status));
+            std::abort();
+        }
+    }
+
 private:
     std::vector<std::byte> staging_storage_;
     void* offload_storage_;

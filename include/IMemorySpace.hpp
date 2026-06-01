@@ -23,6 +23,7 @@ public:
     virtual void* get_offload_memory() = 0;
     virtual void copy_staging_to_offload(void* offload_dst, const void* staging_src, size_t bytes) = 0;
     virtual void copy_offload_to_staging(void* staging_dst, const void* offload_src, size_t bytes) = 0;
+    virtual void copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes) = 0;
 
     /** returns the memory space for a given offload engine, for example,
      * for Vulkan offload this would return a VulkanMemorySpace that allocates

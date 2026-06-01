@@ -9,6 +9,8 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -363,6 +365,7 @@ namespace rllm::vulkan
         VkCommandBuffer m_command_buffer = VK_NULL_HANDLE;
         VkDevice m_submit_fence_device = VK_NULL_HANDLE;
         VkFence m_submit_fence = VK_NULL_HANDLE;
+        std::mutex m_launch_mutex;
     };
 
     template <typename... KernelArgs>
@@ -398,6 +401,7 @@ namespace rllm::vulkan
             uint32_t queue_family_index = 0;
             VkQueue queue = VK_NULL_HANDLE;
             VkCommandPool command_pool = VK_NULL_HANDLE;
+            std::shared_ptr<std::mutex> launch_mutex = std::make_shared<std::mutex>();
         };
 
         inline uint32_t ceil_div_u32(uint32_t v, uint32_t d)
@@ -495,6 +499,8 @@ namespace rllm::vulkan
     template <typename Range>
     inline void ComputeKernel<KernelArgs...>::launch_1d(Range&& range, KernelArgs... args)
     {
+        std::lock_guard<std::mutex> lock(m_launch_mutex);
+
         if (!std::filesystem::exists(spirv_path()))
         {
             LOG_ERROR("Missing generated Vulkan kernel artifact '{}' for kernel '{}'.", spirv_path().string(), name());
@@ -523,6 +529,8 @@ namespace rllm::vulkan
     template <typename Range2D>
     inline void ComputeKernel<KernelArgs...>::launch_2d(Range2D&& range, KernelArgs... args)
     {
+        std::lock_guard<std::mutex> lock(m_launch_mutex);
+
         if (!std::filesystem::exists(spirv_path()))
         {
             LOG_ERROR("Missing generated Vulkan kernel artifact '{}' for kernel '{}'.", spirv_path().string(), name());

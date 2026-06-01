@@ -44,6 +44,13 @@ public:
         std::memcpy(staging_dst, offload_src, bytes);
     }
 
+    void copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes) override
+    {
+        if (bytes == 0)
+            return;
+        std::memcpy(offload_dst, offload_src, bytes);
+    }
+
 private:
     std::vector<std::byte> storage_;
 };

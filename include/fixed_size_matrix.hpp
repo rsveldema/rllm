@@ -29,6 +29,33 @@ namespace rllm
         {
             fill(ElementType{});
         }
+
+        fixed_size_matrix(const fixed_size_matrix& other)
+            : m_data(ROWS * COLS)
+        {
+            assign_from(other);
+        }
+
+        fixed_size_matrix& operator=(const fixed_size_matrix& other)
+        {
+            if (this != &other)
+                assign_from(other);
+            return *this;
+        }
+
+        fixed_size_matrix(fixed_size_matrix&& other)
+            : m_data(ROWS * COLS)
+        {
+            assign_from(other);
+        }
+
+        fixed_size_matrix& operator=(fixed_size_matrix&& other)
+        {
+            if (this != &other)
+                assign_from(other);
+            return *this;
+        }
+
         ~fixed_size_matrix() = default;
 
         inline void set(const X x, const Y y, ElementType value)
@@ -132,6 +159,11 @@ namespace rllm
         }
 
       private:
+                void assign_from(const fixed_size_matrix& other)
+                {
+                    m_data = other.m_data;
+                }
+
         DevicePointer<ElementType> m_data;
     };
 } // namespace rllm

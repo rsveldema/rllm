@@ -195,10 +195,12 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFix
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < N; ++i)
         EXPECT_EQ(visits[i], static_cast<int>(i) + 42) << "Wrong value at i=" << i;
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)

@@ -33,6 +33,40 @@ namespace rllm
             fill(ElementType{});
         }
 
+        flexible_rows_matrix(const flexible_rows_matrix& other)
+            : m_data(ROWS * COLS)
+            , m_rows(other.m_rows)
+        {
+            m_data = other.m_data;
+        }
+
+        flexible_rows_matrix& operator=(const flexible_rows_matrix& other)
+        {
+            if (this != &other)
+            {
+                m_data = other.m_data;
+                m_rows = other.m_rows;
+            }
+            return *this;
+        }
+
+        flexible_rows_matrix(flexible_rows_matrix&& other)
+            : m_data(ROWS * COLS)
+            , m_rows(other.m_rows)
+        {
+            m_data = other.m_data;
+        }
+
+        flexible_rows_matrix& operator=(flexible_rows_matrix&& other)
+        {
+            if (this != &other)
+            {
+                m_data = other.m_data;
+                m_rows = other.m_rows;
+            }
+            return *this;
+        }
+
         ~flexible_rows_matrix() = default;
 
         void set_rows(X rows)

@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 
 #include <Range.hpp>
 #include <enum_iterator.hpp>
@@ -24,6 +25,40 @@ namespace rllm
             if constexpr (std::is_trivially_default_constructible_v<T>)
                 fill(T{});
             // else: T's own default constructor already initialises each element.
+        }
+
+        fixed_size_vector(const fixed_size_vector& other)
+            : m_data(make_storage())
+            , len(other.len)
+        {
+            m_data = other.m_data;
+        }
+
+        fixed_size_vector& operator=(const fixed_size_vector& other)
+        {
+            if (this != &other)
+            {
+                m_data = other.m_data;
+                len = other.len;
+            }
+            return *this;
+        }
+
+        fixed_size_vector(fixed_size_vector&& other)
+            : m_data(make_storage())
+            , len(other.len)
+        {
+            m_data = other.m_data;
+        }
+
+        fixed_size_vector& operator=(fixed_size_vector&& other)
+        {
+            if (this != &other)
+            {
+                m_data = other.m_data;
+                len = other.len;
+            }
+            return *this;
         }
 
         ~fixed_size_vector() = default;
@@ -122,6 +157,21 @@ namespace rllm
         const T* data() const
         {
             return m_data.get();
+        }
+
+        T* raw_staging_data() const
+        {
+            return m_data.raw_staging_data();
+        }
+
+        void set_pending_flush(std::function<void()> flush_fn)
+        {
+            m_data.set_pending_flush(std::move(flush_fn));
+        }
+
+        bool needs_offload_sync() const
+        {
+            return m_data.needs_offload_sync();
         }
 
         size_t storage_size_bytes() const
