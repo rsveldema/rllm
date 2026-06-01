@@ -101,6 +101,21 @@ namespace rllm
             m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] += delta;
         }
 
+        ElementType* data()
+        {
+            return m_data.staging_data();
+        }
+
+        const ElementType* data() const
+        {
+            return m_data.staging_data();
+        }
+
+        size_t storage_size_bytes() const
+        {
+            return ROWS * COLS * sizeof(ElementType);
+        }
+
       private:
         DevicePointer<ElementType> m_data;
     };

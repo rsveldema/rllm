@@ -10,13 +10,11 @@ import subprocess
 from typing import Callable
 
 
-OFFLOAD_1D_MACROS = {"OFFLOAD_PARFOR"}
-OFFLOAD_1D_PARAM_MACROS = {"OFFLOAD_PARFOR_PARAM"}
+OFFLOAD_1D_PARAM_MACROS = {"OFFLOAD_PARFOR_1D_PARAM"}
 OFFLOAD_2D_MACROS = {"OFFLOAD_PARFOR_2D"}
 OFFLOAD_2D_PARAM_MACROS = {"OFFLOAD_PARFOR_2D_PARAM"}
 OFFLOAD_ALL_MACROS = (
-    OFFLOAD_1D_MACROS
-    | OFFLOAD_1D_PARAM_MACROS
+    OFFLOAD_1D_PARAM_MACROS
     | OFFLOAD_2D_MACROS
     | OFFLOAD_2D_PARAM_MACROS
 )
@@ -619,26 +617,6 @@ def transform_source(
             continue
 
         macro, args, indent = parsed
-        if macro in OFFLOAD_1D_MACROS and len(args) == 2:
-            loop_stack.append(
-                LoopContext(
-                    indent=indent,
-                    backend_namespace=backend_namespace,
-                    rel_path=rel_path,
-                    lineno=lineno,
-                    is_2d=False,
-                    vars=[args[0]],
-                    range_expr=apply_symbol_values(args[1], symbol_values),
-                    extra_params=None,
-                    extra_param_types=None,
-                    offload_param_lines=list(active_offload_param_lines),
-                    body_lines=[],
-                    emit_named_kernel=emit_named_kernels,
-                )
-            )
-            changed = True
-            continue
-
         if macro in OFFLOAD_1D_PARAM_MACROS and len(args) >= 3:
             extra_param_names = parse_extra_param_names(", ".join(args[2:]))
             extra_param_types = {

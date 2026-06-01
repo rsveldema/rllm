@@ -36,7 +36,5 @@ namespace parallel {
 // Top-level (non-nested) parallel loops that are candidates for future GPU /
 // accelerator offload. Currently they expand identically to the CPU PARFOR*
 // macros; the distinct name marks the intent without changing behaviour.
-#define OFFLOAD_PARFOR(v, n)                     PARFOR(v, n)
-#define OFFLOAD_PARFOR_2D(v1, v2, n1, n2)      PARFOR_2D(v1, v2, n1, n2)
-#define OFFLOAD_PARFOR_PARAM(v, n, PARAMS) PARFOR(v, n)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)

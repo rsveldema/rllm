@@ -114,14 +114,41 @@ namespace rllm
             return len;
         }
 
+        T* data()
+        {
+            return m_data.get();
+        }
+
+        const T* data() const
+        {
+            return m_data.get();
+        }
+
+        size_t storage_size_bytes() const
+        {
+            return static_cast<size_t>(len) * sizeof(T);
+        }
+
         T& operator[](LengthType index)
         {
             return m_data.get()[static_cast<size_t>(index)];
         }
 
+        T& operator[](size_t index)
+        {
+            assert(index < static_cast<size_t>(len));
+            return m_data.get()[index];
+        }
+
         const T& operator[](LengthType index) const
         {
             return m_data.get()[static_cast<size_t>(index)];
+        }
+
+        const T& operator[](size_t index) const
+        {
+            assert(index < static_cast<size_t>(len));
+            return m_data.get()[index];
         }
 
         void fill(T value)

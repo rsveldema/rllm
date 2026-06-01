@@ -133,9 +133,7 @@ namespace parallel {
 #if defined(USE_VULKAN_OFFLOAD) or defined(USE_HIP_OFFLOAD) or defined(USE_CUDA_OFFLOAD)
 // Source offload macros are rewritten by vulkanize/hipify, but headers are not rewritten.
 // Keep header-time uses valid by falling back to the CPU PARFOR forms.
-#define OFFLOAD_PARFOR(v, N) PARFOR(v, N)
-#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) PARFOR_2D(v1, v2, N1, N2)
-#define OFFLOAD_PARFOR_PARAM(v, n, PARAMS) PARFOR(v, n)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
 #else
 
@@ -143,12 +141,8 @@ namespace parallel {
 // With Vulkan/HIP these are located and replaced by the
 // vulkanizer/hipify scripts with target-specific offload pragmas and APIs,
 // but for CPU builds they just map to the regular PARFOR* macros.
-#define OFFLOAD_PARFOR(v, N) PARFOR(v, N)
-
-#define OFFLOAD_PARFOR_PARAM(v, n, PARAMS) \
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) \
     PARFOR(v, n)
-
-#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) PARFOR_2D(v1, v2, N1, N2)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
 

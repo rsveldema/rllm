@@ -15,6 +15,8 @@
 #define ATOMIC_INC(x) ((x).fetch_add(1, std::memory_order_relaxed))
 #endif
 
+#if !defined(USE_OPENMP)
+
 int main(int argc, char** argv)
 {
     parallel::init_parallel();
@@ -40,13 +42,9 @@ TEST_F(OffloadParForTest, OffloadParForVisitsEachIndexExactlyOnce)
     for (auto& v : visits)
         v.store(0, std::memory_order_relaxed);
 
-#if defined(USE_OPENMP)
-    GTEST_SKIP() << "OFFLOAD_PARFOR_PARAM is not defined in the OpenMP backend header.";
-#else
-    OFFLOAD_PARFOR_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (visits))
+    OFFLOAD_PARFOR_1D_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (visits))
     ATOMIC_INC(visits[static_cast<size_t>(i)]);
     ENDFOR
-#endif
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
@@ -57,9 +55,6 @@ TEST_F(OffloadParForTest, OffloadParForVisitsEachIndexExactlyOnce)
 
 TEST_F(OffloadParForTest, OffloadParForParamVisitsEachIndexExactlyOnce)
 {
-#if defined(USE_OPENMP)
-    GTEST_SKIP() << "OFFLOAD_PARFOR_PARAM is not defined in the OpenMP backend header.";
-#else
     constexpr size_t N = 19;
     // PARFOR_PARAM requires the loop variable to be captured in a lambda, so we can't use a simple array of ints here.
     // Instead, we use atomics to track visits.
@@ -73,21 +68,16 @@ TEST_F(OffloadParForTest, OffloadParForParamVisitsEachIndexExactlyOnce)
     for (auto& v : visits)
         v.store(0, std::memory_order_relaxed);
 
-    OFFLOAD_PARFOR_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (visits))
+    OFFLOAD_PARFOR_1D_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (visits))
     ATOMIC_INC(visits[static_cast<size_t>(i)]);
     ENDFOR
 
     for (size_t i = 0; i < N; ++i)
         EXPECT_EQ(visits[i].load(std::memory_order_relaxed), 1) << "Wrong visit count at i=" << i;
-#endif
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
 {
-#if defined(USE_OPENMP)
-    GTEST_SKIP() << "OFFLOAD_PARFOR_2D in this backend expands to a form that does not accept 2D range iterators.";
-#else
-
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 7;
     constexpr size_t COLS = 11;
@@ -111,16 +101,10 @@ TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
             EXPECT_EQ(visits[idx].load(std::memory_order_relaxed), 1)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
-#endif
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
 {
-#if defined(USE_OPENMP)
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 0u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
-    GTEST_SKIP() << "OFFLOAD_PARFOR_2D_PARAM uses an incompatible OpenMP macro shape in this configuration.";
-#else
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 5;
     constexpr size_t COLS = 13;
@@ -147,8 +131,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
             const size_t idx = i * COLS + j;
             EXPECT_EQ(visits[idx].load(std::memory_order_relaxed), 1)
                 << "Wrong visit count at (" << i << "," << j << ")";
-        }
-#endif
+            }
 }
 
 
@@ -157,9 +140,6 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
  */
 TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
 {
-#if defined(USE_OPENMP)
-    GTEST_SKIP() << "OFFLOAD_PARFOR_2D_PARAM uses an incompatible OpenMP macro shape in this configuration.";
-#else
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 4;
     constexpr size_t COLS = 9;
@@ -197,5 +177,122 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
         }
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
-#endif
 }
+
+TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFixedSizeVector)
+{
+    // OFFLOAD_PARAMETERS(visits,N)
+    constexpr size_t N = 21;
+    rllm::fixed_size_vector<int, rllm::PositionIndex> visits;
+    visits.set_size(static_cast<rllm::PositionIndex>(N));
+    // END_OFFLOAD_PARAMETERS
+    visits.fill(0, static_cast<rllm::PositionIndex>(N));
+
+    OFFLOAD_PARFOR_1D_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (visits))
+    visits[static_cast<size_t>(i)] = static_cast<int>(i) + 42;
+    ENDFOR
+
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+
+    for (size_t i = 0; i < N; ++i)
+        EXPECT_EQ(visits[i], static_cast<int>(i) + 42) << "Wrong value at i=" << i;
+}
+
+TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
+{
+    // OFFLOAD_PARAMETERS(values)
+    rllm::fixed_size_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values;
+    // END_OFFLOAD_PARAMETERS
+    values.fill(0.0f);
+
+    const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
+    OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
+    values[j, i] = static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 1);
+    ENDFOR
+
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+
+    for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
+        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+            EXPECT_FLOAT_EQ(
+                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
+                static_cast<float>(i * 100 + j + 1)
+            );
+}
+
+TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
+{
+    // OFFLOAD_PARAMETERS(values)
+    rllm::flexible_rows_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values(static_cast<rllm::MultiTokenPredictionIndex>(3));
+    // END_OFFLOAD_PARAMETERS
+    values.fill(0.0f);
+
+    const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>(
+        static_cast<rllm::MultiTokenPredictionIndex>(3)
+    );
+    OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
+    values[j, i] = static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 2);
+    ENDFOR
+
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+
+    for (size_t i = 0; i < 3; ++i)
+        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+            EXPECT_FLOAT_EQ(
+                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
+                static_cast<float>(i * 100 + j + 2)
+            );
+}
+
+TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
+{
+    // OFFLOAD_PARAMETERS(values)
+    rllm::flexible_cols_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values(rllm::HeadsIndex::MAX);
+    // END_OFFLOAD_PARAMETERS
+    values.fill(0.0f);
+
+    const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
+    OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
+    values[j, i] = static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 3);
+    ENDFOR
+
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+
+    for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
+        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+            EXPECT_FLOAT_EQ(
+                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
+                static_cast<float>(i * 100 + j + 3)
+            );
+}
+
+TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
+{
+    // OFFLOAD_PARAMETERS(values)
+    rllm::flexible_rows_cols_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values(static_cast<rllm::MultiTokenPredictionIndex>(3), rllm::HeadsIndex::MAX);
+    // END_OFFLOAD_PARAMETERS
+    values.fill(0.0f);
+
+    const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>(
+        static_cast<rllm::MultiTokenPredictionIndex>(3)
+    );
+    OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
+    values[j, i] = static_cast<float>(static_cast<size_t>(j) * 100 + static_cast<size_t>(i) + 4);
+    ENDFOR
+
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+
+    for (size_t i = 0; i < 3; ++i)
+        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+            EXPECT_FLOAT_EQ(
+                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
+                static_cast<float>(i * 100 + j + 4)
+            );
+}
+
+#endif

@@ -50,7 +50,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_PARAM(t, enum_iterator<PositionIndex>(x.num_rows()), (x, y))
+        OFFLOAD_PARFOR_1D_PARAM(t, enum_iterator<PositionIndex>(x.num_rows()), (x, y))
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
 
@@ -77,7 +77,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_PARAM(t, enum_iterator<PositionIndex>(x.num_rows()), (dy, x, dx))
+        OFFLOAD_PARFOR_1D_PARAM(t, enum_iterator<PositionIndex>(x.num_rows()), (dy, x, dx))
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
 
@@ -113,7 +113,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_PARAM(i, enum_iterator<PositionIndex>(T), (x, T))
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(T), (x, T))
         rlmm_float max_val = x[i, PositionIndex::START];
         for (const auto j : enum_iterator<PositionIndex>(inc(PositionIndex::START), inc(i)))
             max_val = math::max(max_val, x[i, j]);
@@ -149,7 +149,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_PARAM(i, enum_iterator<PositionIndex>(T), (dp, p, dscores))
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(T), (dp, p, dscores))
         rlmm_float dot = 0.f;
         for (const auto j : enum_iterator<PositionIndex>(inc(i)))
             dot += dp[i, j] * p[i, j];

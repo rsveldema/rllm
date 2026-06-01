@@ -48,36 +48,21 @@ namespace parallel {
 // Top-level (non-nested) parallel loops that are candidates for future GPU /
 // accelerator offload. Currently they expand identically to the CPU PARFOR*
 // macros; the distinct name marks the intent without changing behaviour.
-#define OFFLOAD_PARFOR(v, ...)              PARFOR(v, __VA_ARGS__)
-#define OFFLOAD_PARFOR_2D(v1, v2, ...)      PARFOR_2D(v1, v2, __VA_ARGS__)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
 
 // Index-space loops intended for target offload-friendly kernels.
 #if defined(USE_HIP_OFFLOAD)
-#define OFFLOAD_PARFOR(v, N) \
-    _Pragma("omp target teams distribute parallel for") \
-    for (std::size_t v = 0, _off_n_ = static_cast<std::size_t>(N); v < _off_n_; ++v) {
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 
-#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) \
-    _Pragma("omp target teams distribute parallel for collapse(2)") \
-    for (std::size_t v1 = 0, _off_n1_ = static_cast<std::size_t>(N1); v1 < _off_n1_; ++v1) \
-        for (std::size_t v2 = 0, _off_n2_ = static_cast<std::size_t>(N2); v2 < _off_n2_; ++v2) {
-#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) OFFLOAD_PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
 #elif defined(USE_VULKAN_OFFLOAD)
 // Vulkan offload mode currently keeps a canonical CPU index loop shape.
-#define OFFLOAD_PARFOR(v, N) \
-    for (std::size_t v = 0, _off_n_ = static_cast<std::size_t>(N); v < _off_n_; ++v) {
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 
-#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) \
-    for (std::size_t v1 = 0, _off_n1_ = static_cast<std::size_t>(N1); v1 < _off_n1_; ++v1) \
-        for (std::size_t v2 = 0, _off_n2_ = static_cast<std::size_t>(N2); v2 < _off_n2_; ++v2) {
-#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) OFFLOAD_PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
 #else
-#define OFFLOAD_PARFOR(v, N) \
-    for (std::size_t v = 0, _off_n_ = static_cast<std::size_t>(N); v < _off_n_; ++v) {
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 
-#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) \
-    for (std::size_t v1 = 0, _off_n1_ = static_cast<std::size_t>(N1); v1 < _off_n1_; ++v1) \
-        for (std::size_t v2 = 0, _off_n2_ = static_cast<std::size_t>(N2); v2 < _off_n2_; ++v2) {
-#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) OFFLOAD_PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
 #endif

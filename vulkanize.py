@@ -94,14 +94,17 @@ class BufferViewSpec:
     is_const: bool
 
 
-_FLEX_ROWS_MATRIX_TYPE_RE = re.compile(
-    r"^(?P<const>const\s+)?flexible_rows(?:_cols)?_matrix\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
+_MATRIX_TYPE_RE = re.compile(
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:fixed_size_matrix|flexible_rows_matrix|flexible_cols_matrix|flexible_rows_cols_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _STD_VECTOR_ATOMIC_INT_RE = re.compile(
     r"^(?P<const>const\s+)?std::vector\s*<\s*std::atomic\s*<\s*int\s*>\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _STD_VECTOR_INT_RE = re.compile(
     r"^(?P<const>const\s+)?std::vector\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
+)
+_FIXED_SIZE_VECTOR_INT_RE = re.compile(
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*int\s*,\s*[^>]+>\s*(?P<ref>[&*])?\s*$"
 )
 _DEVICE_POINTER_INT_RE = re.compile(
     r"^(?P<const>const\s+)?DevicePointer\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
@@ -137,12 +140,12 @@ def _map_cpp_extra_param_to_vulkan(
 ) -> tuple[str, str, MatrixViewSpec | None, BufferViewSpec | None]:
     # Returns: (kernel_param_declaration, main_local_setup_declaration, optional_matrix_view_spec)
     t = cpp_type.strip()
-    flex_match = _FLEX_ROWS_MATRIX_TYPE_RE.match(t)
-    if flex_match:
-        rows_max = _resolve_enum_max(flex_match.group("rows"), symbol_values)
-        cols_max = _resolve_enum_max(flex_match.group("cols"), symbol_values)
+    matrix_match = _MATRIX_TYPE_RE.match(t)
+    if matrix_match:
+        rows_max = _resolve_enum_max(matrix_match.group("rows"), symbol_values)
+        cols_max = _resolve_enum_max(matrix_match.group("cols"), symbol_values)
         if rows_max is not None and cols_max is not None:
-            is_const = flex_match.group("const") is not None
+            is_const = matrix_match.group("const") is not None
             # Matrix-like tensors are exposed as SSBO bindings, not copied into function-local arrays.
             flat_len = rows_max * cols_max
             return "", "", MatrixViewSpec(
@@ -161,6 +164,11 @@ def _map_cpp_extra_param_to_vulkan(
     vector_int_match = _STD_VECTOR_INT_RE.match(t)
     if vector_int_match:
         is_const = vector_int_match.group("const") is not None
+        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
+
+    fixed_size_vector_int_match = _FIXED_SIZE_VECTOR_INT_RE.match(t)
+    if fixed_size_vector_int_match:
+        is_const = fixed_size_vector_int_match.group("const") is not None
         return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const)
 
     device_pointer_int_match = _DEVICE_POINTER_INT_RE.match(t)

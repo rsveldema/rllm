@@ -148,7 +148,8 @@ namespace rllm
             float lr
         )
         {
-            OFFLOAD_PARFOR_2D(r, c, enum_iterator2D<R_enum, C_enum>())
+            const auto grid = enum_iterator2D<R_enum, C_enum>();
+            OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad))
             const float g = math::clamp(grad[r, c], -GRAD_CLIP, GRAD_CLIP);
             vel[r, c] = math::clamp(MOMENTUM_BETA * vel[r, c] + lr * g, -VEL_CLIP, VEL_CLIP);
             W[r, c] = math::clamp(W[r, c] + vel[r, c], -WEIGHT_CLAMP, WEIGHT_CLAMP);

@@ -124,8 +124,23 @@ namespace rllm
             return m_cols;
         }
 
+        ElementType* data()
+        {
+            return m_data.staging_data();
+        }
+
+        const ElementType* data() const
+        {
+            return m_data.staging_data();
+        }
+
+        size_t storage_size_bytes() const
+        {
+            return ROWS * COLS * sizeof(ElementType);
+        }
+
       private:
-                DevicePointer<ElementType> m_data;
+        DevicePointer<ElementType> m_data;
         Y m_cols;
     };
 
