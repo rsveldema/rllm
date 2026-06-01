@@ -9,6 +9,28 @@
 
 namespace rllm
 {
+    static void fill_embeddings_with_positional_encoding(
+        // OFFLOAD_PARAMETERS(tokens, embeddings, h, model_dim)
+        const InputLine& tokens,
+        const fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension>& embeddings,
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h,
+        float model_dim
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(tokens.size());
+
+        OFFLOAD_PARFOR_2D_PARAM(pos, di, grid, (tokens, embeddings, h, model_dim))
+        const int tok = static_cast<int>(tokens[pos]);
+        const int di_int = static_cast<int>(di);
+        const float emb_val = embeddings[tok, di];
+        const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / model_dim);
+        const float pos_f = static_cast<float>(pos);
+        const float pe = (di_int % 2 == 0) ? std::sin(pos_f * freq) : std::cos(pos_f * freq);
+        h[pos, di] = static_cast<rlmm_float>(emb_val + pe);
+        ENDFOR
+    }
+
     void InputLayer::reset_embeddings()
     {
         for (const auto tok : enum_iterator<TokenID>())
@@ -33,17 +55,7 @@ namespace rllm
     {
         h.set_rows(static_cast<PositionIndex>(input.size()));
 
-        constexpr float D = static_cast<float>(EmbeddingDimension::MAX);
-
-        PARFOR_2D(pos, di, enum_iterator2D<PositionIndex, EmbeddingDimension>(input.size()))
-        const TokenID tok = input[pos];
-        const int di_int = static_cast<int>(di);
-        const float emb_val = m_embeddings[tok, di];
-        const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / D);
-        const float pe =
-            (di_int % 2 == 0) ? std::sin(static_cast<float>(pos) * freq) : std::cos(static_cast<float>(pos) * freq);
-        h.set(pos, di, static_cast<rlmm_float>(emb_val + pe));
-        ENDFOR
+        fill_embeddings_with_positional_encoding(input, m_embeddings, h, static_cast<float>(EmbeddingDimension::MAX));
     }
 
 

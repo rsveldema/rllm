@@ -4,6 +4,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdio>
+#include <type_traits>
 #include <fastfork/fastfork.hpp>
 
 namespace parallel {
@@ -90,8 +91,8 @@ namespace parallel {
           fastfork::fork_task(_tri_ctx_, [&, _tri_t_, _tri_nt_]() { \
               for (size_t _tri_i_ = _tri_t_; _tri_i_ < _tri_n_; _tri_i_ += _tri_nt_) \
               for (size_t _tri_j_ = 0; _tri_j_ <= _tri_i_; ++_tri_j_) { \
-                  const auto v1 = static_cast<decltype(N)>(_tri_i_); \
-                  const auto v2 = static_cast<decltype(N)>(_tri_j_);
+                    const auto v1 = static_cast<std::remove_cvref_t<decltype(N)>>(_tri_i_); \
+                    const auto v2 = static_cast<std::remove_cvref_t<decltype(N)>>(_tri_j_);
 // Parallelises the upper-triangular iteration space { (v1,v2) | 0 <= v1 <= v2 < N }.
 // Same interleaved-striping strategy and cell-count-based task cap as the lower
 // triangular variant above.
@@ -106,8 +107,8 @@ namespace parallel {
           fastfork::fork_task(_utri_ctx_, [&, _utri_t_, _utri_nt_]() { \
               for (size_t _utri_i_ = _utri_t_; _utri_i_ < _utri_n_; _utri_i_ += _utri_nt_) \
               for (size_t _utri_j_ = _utri_i_; _utri_j_ < _utri_n_; ++_utri_j_) { \
-                  const auto v1 = static_cast<decltype(N)>(_utri_i_); \
-                  const auto v2 = static_cast<decltype(N)>(_utri_j_);
+                    const auto v1 = static_cast<std::remove_cvref_t<decltype(N)>>(_utri_i_); \
+                    const auto v2 = static_cast<std::remove_cvref_t<decltype(N)>>(_utri_j_);
 
 #define PARSECTIONS_BEGIN  { fastfork::Context _ff_ctx_; fastfork::fork_task(_ff_ctx_, [&]() {
 #define PARSECTION         }); fastfork::fork_task(_ff_ctx_, [&]() {
