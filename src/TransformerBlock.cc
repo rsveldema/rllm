@@ -373,19 +373,6 @@ namespace rllm
 
     // ── backward pass ─────────────────────────────────────────────────────────
 
-    void element_wise_add(
-        // OFFLOAD_PARAMETERS(src,dst)
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(src.num_rows(), src.num_cols());
-        OFFLOAD_PARFOR_2D_PARAM(t, d, grid, (src, dst))
-        dst[t, d] += src[t, d];
-        ENDFOR
-    }
-
     void TransformerBlock::backward(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din,

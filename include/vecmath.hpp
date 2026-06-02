@@ -4,6 +4,12 @@
 
 namespace rllm
 {
+    void copy_hidden_row_to_vector(
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
+        PositionIndex row,
+        fixed_size_vector<rlmm_float, EmbeddingDimension>& dst
+    );
+
     void sgd_update_Wqkvo_x_Vqkvo_dWqkvo(
         fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& W,
         fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& vel,
@@ -104,6 +110,11 @@ namespace rllm
     void element_wise_sum(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& lhs,
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& rhs,
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst
+    );
+
+    void element_wise_add(
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst
     );
 

@@ -261,6 +261,23 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFix
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
 
+TEST_F(OffloadParForTest, OffloadParFor1DParamWritesFixedSizeFloatVector)
+{
+    // OFFLOAD_PARAMETERS(values,N)
+    constexpr size_t N = 21;
+    rllm::fixed_size_vector<rllm::rlmm_float, rllm::PositionIndex> values;
+    values.set_size(static_cast<rllm::PositionIndex>(N));
+    // END_OFFLOAD_PARAMETERS
+    values.fill(0.0f, static_cast<rllm::PositionIndex>(N));
+
+    OFFLOAD_PARFOR_1D_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (values))
+    values[static_cast<size_t>(i)] = static_cast<rllm::rlmm_float>(static_cast<float>(i) + 0.5f);
+    ENDFOR
+
+    for (size_t i = 0; i < N; ++i)
+        EXPECT_FLOAT_EQ(values[i], static_cast<float>(i) + 0.5f) << "Wrong value at i=" << i;
+}
+
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
 {
     // OFFLOAD_PARAMETERS(values)

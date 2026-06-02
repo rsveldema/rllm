@@ -6,6 +6,19 @@
 
 namespace rllm
 {
+    void copy_hidden_row_to_vector(
+        // OFFLOAD_PARAMETERS(src, row, dst)
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
+        PositionIndex row,
+        fixed_size_vector<rlmm_float, EmbeddingDimension>& dst
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator<EmbeddingDimension>(), (src, row, dst))
+        dst[d] = src[row, d];
+        ENDFOR
+    }
+
     void sgd_update_Wqkvo_x_Vqkvo_dWqkvo(
         // OFFLOAD_PARAMETERS(W, vel, grad, lr)
         fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& W,
@@ -348,6 +361,19 @@ namespace rllm
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(lhs.num_rows());
         OFFLOAD_PARFOR_2D_PARAM(t, d, grid, (lhs, rhs, dst))
         dst[t, d] = lhs[t, d] + rhs[t, d];
+        ENDFOR
+    }
+
+    void element_wise_add(
+        // OFFLOAD_PARAMETERS(src, dst)
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(src.num_rows(), src.num_cols());
+        OFFLOAD_PARFOR_2D_PARAM(t, d, grid, (src, dst))
+        dst[t, d] += src[t, d];
         ENDFOR
     }
 

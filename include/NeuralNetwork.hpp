@@ -9,6 +9,7 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <chrono>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -16,6 +17,7 @@
 namespace rllm
 {
     void set_nn_log_file(const std::string& filename);
+    struct BackwardPropWorkspace;
 
     enum class TrainingMethod
     {
@@ -37,19 +39,8 @@ namespace rllm
         // NOTE: if set too high, we drive a specific example to high confidence but fail to learn from other examples, harming generalization.
         static constexpr float k_convergence_divisor = 2.0f;
 
-        NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats)
-            : m_corpus(corpus)
-            , m_stats(stats)
-            , m_input_layer()
-            // Compute CE-based constants from the actual corpus size.
-            , m_fires_nothing_ce_loss(std::log(static_cast<float>(TokenID::MAX)))
-            , m_convergence_threshold(m_fires_nothing_ce_loss / k_convergence_divisor)
-        {
-            assert(static_cast<size_t>(TokenID::MAX) > 1);
-            for (size_t i = 0; i < num_layers; ++i)
-                m_transformer_blocks.emplace_back();
-        }
-        ~NeuralNetwork() = default;
+        NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats);
+        ~NeuralNetwork();
         NeuralNetwork(const NeuralNetwork&) = delete;
         NeuralNetwork& operator=(const NeuralNetwork&) = delete;
 
@@ -116,6 +107,7 @@ namespace rllm
         // Hidden state at the final position after the last transformer block.
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> m_last_hidden;
         PositionIndex m_seq_len{PositionIndex::START};
+        std::unique_ptr<BackwardPropWorkspace> m_backward_workspace;
 
         // Computed from the actual corpus size.
         const float m_fires_nothing_ce_loss;

@@ -40,21 +40,20 @@ namespace rllm
         }
     }
 
-    // Returns dL/dh_last[D] and updates W_lm_head.
-    fixed_size_vector<rlmm_float, EmbeddingDimension> OutputLayer::backward_and_update(
+    // Accumulates dL/dh_last[D] and updates W_lm_head.
+    void OutputLayer::backward_and_update(
         const fixed_size_vector<rlmm_float, TokenID>& delta,
         const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
+        fixed_size_vector<rlmm_float, EmbeddingDimension>& dh_last,
         float learning_rate
     )
     {
-        fixed_size_vector<rlmm_float, EmbeddingDimension> dh;
-
         for (const auto v : enum_iterator<TokenID>())
         {
             const float dv = delta[v];
             for (const auto d : enum_iterator<EmbeddingDimension>())
             {
-                dh[d] += dv * W_lm_head[v, d];
+                dh_last[d] += dv * W_lm_head[v, d];
                 const float g = math::clamp(dv * h_last[d], -GRAD_CLIP, GRAD_CLIP);
                 V_lm_head[v, d] = math::clamp(
                     MOMENTUM_BETA * V_lm_head[v, d] + learning_rate * g,
@@ -68,7 +67,6 @@ namespace rllm
                 );
             }
         }
-        return dh;
     }
 
     // ── scoring (unchanged from previous architecture) ─────────────────────────
@@ -147,10 +145,4 @@ namespace rllm
 
         return -log_prob;
     }
-
-    void OutputLayer::compute_deltas(const Score& score, fixed_size_vector<rlmm_float, TokenID>& deltas) const
-    {
-        deltas = score.values;
-    }
-
 } // namespace rllm

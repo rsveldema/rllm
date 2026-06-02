@@ -28,17 +28,17 @@ namespace rllm
         void forward_from_hidden(const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last);
 
         // Backpropagate the output delta through W_lm_head.
-        // Returns d_h_last[D_MODEL] = ∂L/∂h_last and updates W_lm_head via SGD+momentum.
-        fixed_size_vector<rlmm_float, EmbeddingDimension> backward_and_update(
+        // Accumulates ∂L/∂h_last into dh_last and updates W_lm_head via SGD+momentum.
+        void backward_and_update(
             const fixed_size_vector<rlmm_float, TokenID>& delta,
             const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
+          fixed_size_vector<rlmm_float, EmbeddingDimension>& dh_last,
             float learning_rate
         );
 
         // Computes softmax deltas (with label smoothing) into score for backprop,
         // and returns the cross-entropy loss -log(softmax[target]).
         float compute_score(Score& score, const TokenID expected_output_token);
-        void compute_deltas(const Score& score, fixed_size_vector<rlmm_float, TokenID>& deltas) const;
         void rms_normalize_inputs();
 
         void load(const nlohmann::json& j);

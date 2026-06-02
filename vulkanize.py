@@ -137,8 +137,8 @@ _STD_VECTOR_INT_RE = re.compile(
 _INPUT_LINE_RE = re.compile(
     r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*InputLine\s*(?P<ref>[&*])?\s*$"
 )
-_FIXED_SIZE_VECTOR_INT_RE = re.compile(
-    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*int\s*,\s*[^>]+>\s*(?P<ref>[&*])?\s*$"
+_FIXED_SIZE_VECTOR_RE = re.compile(
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?P<scalar>[^,]+)\s*,\s*[^>]+>\s*(?P<ref>[&*])?\s*$"
 )
 _NESTED_FIXED_SIZE_VECTOR_MATRIX_RE = re.compile(
     r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*,\s*(?P<rows>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
@@ -156,6 +156,18 @@ def _normalize_enum_type_name(raw: str) -> str:
     if "::" in token:
         token = token.split("::")[-1]
     return token
+
+
+def _map_cpp_buffer_scalar_to_glsl(raw_scalar: str) -> str | None:
+    token = raw_scalar.strip()
+    if "::" in token:
+        token = token.split("::")[-1]
+
+    if token in {"int", "int32_t"}:
+        return "int"
+    if token in {"float", "rlmm_float", "rlmm_float_small"}:
+        return "float"
+    return None
 
 
 def _resolve_generated_token_id_max() -> int | None:
@@ -234,11 +246,6 @@ def _map_cpp_extra_param_to_vulkan(
         is_const = input_line_match.group("const") is not None if input_line_match else t.startswith("const ")
         return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
 
-    fixed_size_vector_int_match = _FIXED_SIZE_VECTOR_INT_RE.match(t)
-    if fixed_size_vector_int_match:
-        is_const = fixed_size_vector_int_match.group("const") is not None
-        return "", "", None, BufferViewSpec(name=name, glsl_scalar="int", is_const=is_const), None
-
     nested_fixed_size_vector_matrix_match = _NESTED_FIXED_SIZE_VECTOR_MATRIX_RE.match(t)
     if nested_fixed_size_vector_matrix_match:
         rows_max = _resolve_enum_max(nested_fixed_size_vector_matrix_match.group("rows"), symbol_values)
@@ -253,6 +260,13 @@ def _map_cpp_extra_param_to_vulkan(
                 is_const=is_const,
                 flat_len=flat_len,
             ), None, None
+
+    fixed_size_vector_match = _FIXED_SIZE_VECTOR_RE.match(t)
+    if fixed_size_vector_match:
+        glsl_scalar = _map_cpp_buffer_scalar_to_glsl(fixed_size_vector_match.group("scalar"))
+        if glsl_scalar is not None:
+            is_const = fixed_size_vector_match.group("const") is not None
+            return "", "", None, BufferViewSpec(name=name, glsl_scalar=glsl_scalar, is_const=is_const), None
 
     nested_core_match = re.match(
         r"^(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?:[A-Za-z_]\w*::)*fixed_size_vector\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*,\s*(?P<rows>[^>]+)\s*>$",

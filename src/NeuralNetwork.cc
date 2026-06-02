@@ -1,6 +1,7 @@
 #include <NeuralNetwork.hpp>
 #include <TokenIDFormatter.hpp>
 #include <parallel.hpp>
+#include <vecmath.hpp>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -101,7 +102,9 @@ namespace rllm
         fixed_size_vector<rlmm_float, EmbeddingDimension> h_last;
         explicit NeuralNetworkForwardWorkspace(PositionIndex seq_len)
             : h(seq_len)
-        {}
+        {
+            h_last.set_size(EmbeddingDimension::MAX);
+        }
     };
 
     void NeuralNetwork::propagate_forward(const InputLine& input)
@@ -127,8 +130,7 @@ namespace rllm
         // Given a string of N tokens, the model learns to predict the N+1'th token,
         // so the final output is based on the hidden state at the last input position.
         const auto last_pos = dec(m_seq_len);
-        for (const auto d : enum_iterator<EmbeddingDimension>())
-            ws->h_last[d] = ws->h[last_pos, d];
+        copy_hidden_row_to_vector(ws->h, last_pos, ws->h_last);
 
         PARFOR(output_index, enum_iterator<MultiTokenPredictionIndex>())
             m_output_layers[output_index].forward_from_hidden(ws->h_last);
@@ -225,8 +227,28 @@ namespace rllm
         explicit BackwardPropWorkspace(PositionIndex seq_len)
             : dh(seq_len)
             , din(seq_len)
-        {}
+        {
+            output_layer_delta.set_size(TokenID::MAX);
+            h_last_vec.set_size(EmbeddingDimension::MAX);
+            dh_last.set_size(EmbeddingDimension::MAX);
+        }
     };
+
+    NeuralNetwork::NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats)
+        : m_corpus(corpus)
+        , m_stats(stats)
+        , m_input_layer()
+        , m_fires_nothing_ce_loss(std::log(static_cast<float>(TokenID::MAX)))
+        , m_convergence_threshold(m_fires_nothing_ce_loss / k_convergence_divisor)
+    {
+        assert(static_cast<size_t>(TokenID::MAX) > 1);
+        for (size_t i = 0; i < num_layers; ++i)
+            m_transformer_blocks.emplace_back();
+
+        m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::MAX);
+    }
+
+    NeuralNetwork::~NeuralNetwork() = default;
 
     void NeuralNetwork::propagate_backward_mtp(
         const fixed_size_vector<Score, MultiTokenPredictionIndex>& scores,
@@ -237,36 +259,34 @@ namespace rllm
         const float learning_rate =
             BASE_LEARNING_RATE / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
 
-        auto ws = std::make_unique<BackwardPropWorkspace>(m_seq_len);
+        auto& ws = *m_backward_workspace;
+        ws.dh.set_rows(m_seq_len);
+        ws.din.set_rows(m_seq_len);
 
         const auto last_pos = dec(m_seq_len);
-        for (const auto d : enum_iterator<EmbeddingDimension>())
-            ws->h_last_vec[d] = m_last_hidden[last_pos, d];
+        copy_hidden_row_to_vector(m_last_hidden, last_pos, ws.h_last_vec);
 
         // Accumulate dh_last contributions from every valid output head.
-        ws->dh_last.zero();
-        for (auto oi = MultiTokenPredictionIndex::START; oi < num_valid; oi = inc(oi))
+        ws.dh_last.zero();
+        for (const auto oi : enum_iterator<MultiTokenPredictionIndex>(num_valid))
         {
-            m_output_layers[oi].compute_deltas(scores[oi], ws->output_layer_delta);
-            const auto dh_k =
-                m_output_layers[oi].backward_and_update(ws->output_layer_delta, ws->h_last_vec, learning_rate);
-            for (const auto d : enum_iterator<EmbeddingDimension>())
-                ws->dh_last[d] += dh_k[d];
+            ws.output_layer_delta = scores[oi].values;
+            m_output_layers[oi].backward_and_update(ws.output_layer_delta, ws.h_last_vec, ws.dh_last, learning_rate);
         }
 
         // Propagate the summed gradient through the transformer blocks.
-        ws->dh.zero();
-        ws->din.zero();
+        ws.dh.zero();
+        ws.din.zero();
         for (const auto d : enum_iterator<EmbeddingDimension>())
-            ws->dh[last_pos, d] = ws->dh_last[d];
+            ws.dh[last_pos, d] = ws.dh_last[d];
 
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
-            m_transformer_blocks[i].backward(ws->dh, ws->din, learning_rate);
-            ws->dh = ws->din;
+            m_transformer_blocks[i].backward(ws.dh, ws.din, learning_rate);
+            ws.dh = ws.din;
         }
 
-        m_input_layer.propagate_backward(m_last_input, ws->dh, learning_rate);
+        m_input_layer.propagate_backward(m_last_input, ws.dh, learning_rate);
     }
 
 
