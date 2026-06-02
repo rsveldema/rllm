@@ -127,26 +127,27 @@ namespace rllm
         m_last_input = input;
         m_seq_len = input.size();
 
-        auto ws = std::make_unique<NeuralNetworkForwardWorkspace>(m_seq_len);
+        auto& ws = *m_forward_workspace;
+        ws.h.set_rows(m_seq_len);
 
         // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
-        m_input_layer.propagate_forward(input, ws->h);
+        m_input_layer.propagate_forward(input, ws.h);
 
         // Pass through each transformer block in order
         for (auto& block : m_transformer_blocks)
-            block.forward(ws->h, m_seq_len);
+            block.forward(ws.h, m_seq_len);
 
         // Keep full hidden state for backward pass
-        m_last_hidden = ws->h;
+        m_last_hidden = ws.h;
 
         // Project the last-position hidden state to vocabulary logits.
         // Given a string of N tokens, the model learns to predict the N+1'th token,
         // so the final output is based on the hidden state at the last input position.
         const auto last_pos = dec(m_seq_len);
-        copy_hidden_row_to_vector(ws->h, last_pos, ws->h_last);
+        copy_hidden_row_to_vector(ws.h, last_pos, ws.h_last);
 
         PARFOR(output_index, enum_iterator<MultiTokenPredictionIndex>())
-            m_output_layers[output_index].forward_from_hidden(ws->h_last);
+            m_output_layers[output_index].forward_from_hidden(ws.h_last);
         ENDFOR
     }
 
@@ -258,6 +259,7 @@ namespace rllm
         for (size_t i = 0; i < num_layers; ++i)
             m_transformer_blocks.emplace_back();
 
+        m_forward_workspace = std::make_unique<NeuralNetworkForwardWorkspace>(PositionIndex::MAX);
         m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::MAX);
     }
 

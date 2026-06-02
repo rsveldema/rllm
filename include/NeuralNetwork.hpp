@@ -17,6 +17,7 @@
 namespace rllm
 {
     void set_nn_log_file(const std::string& filename);
+    struct NeuralNetworkForwardWorkspace;
     struct BackwardPropWorkspace;
 
     enum class TrainingMethod
@@ -107,6 +108,7 @@ namespace rllm
         // Hidden state at the final position after the last transformer block.
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> m_last_hidden;
         PositionIndex m_seq_len{PositionIndex::START};
+        std::unique_ptr<NeuralNetworkForwardWorkspace> m_forward_workspace;
         std::unique_ptr<BackwardPropWorkspace> m_backward_workspace;
 
         // Computed from the actual corpus size.

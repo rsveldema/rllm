@@ -1,5 +1,6 @@
 __pycache__
 build
+build_release_cpu
 build_release
 build_profile
 perf_fwd.data

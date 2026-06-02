@@ -1,4 +1,5 @@
 #include <OutputLayer.hpp>
+#include <parallel.hpp>
 #include <RandomHelpers.hpp>
 
 #include <enum_iterator2D.hpp>
@@ -11,6 +12,38 @@
 
 namespace rllm
 {
+    using uint = unsigned int;
+
+#if !defined(USE_VULKAN_OFFLOAD)
+    struct cpu_invocation_id
+    {
+        uint x;
+        uint y;
+        uint z;
+    };
+
+    struct cpu_push_constants
+    {
+        int rllm_bound_x;
+    };
+
+    static inline cpu_invocation_id rllm_cpu_zero_invocation_id()
+    {
+        return {0u, 0u, 0u};
+    }
+
+    static inline cpu_invocation_id rllm_cpu_workgroup_size()
+    {
+        return {1u, 1u, 1u};
+    }
+
+    static inline cpu_push_constants rllm_cpu_push()
+    {
+        return {std::numeric_limits<int>::max()};
+    }
+
+#endif
+
     OutputLayer::OutputLayer()
     {
         m_inputs.set_size(TokenID::MAX);
@@ -74,8 +107,15 @@ namespace rllm
         ENDFOR
     }
 
-#if defined(USE_VULKAN_OFFLOAD)
-    static void initialize_softmax_temp_values(
+#if !defined(USE_VULKAN_OFFLOAD)
+#define gl_GlobalInvocationID rllm_cpu_zero_invocation_id()
+#define gl_LocalInvocationID rllm_cpu_zero_invocation_id()
+#define gl_LocalInvocationIndex 0u
+#define gl_WorkGroupSize rllm_cpu_workgroup_size()
+#define rllm_push rllm_cpu_push()
+#endif
+
+    [[maybe_unused]] static void initialize_softmax_temp_values(
         // OFFLOAD_PARAMETERS(temp_values)
         fixed_size_vector<rlmm_float, TempStorage>& temp_values
         // END_OFFLOAD_PARAMETERS
@@ -88,7 +128,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void reduce_logits_max_to_temp(
+    [[maybe_unused]] static void reduce_logits_max_to_temp(
         // OFFLOAD_PARAMETERS(inputs, temp_values)
         const fixed_size_vector<rlmm_float, TokenID>& inputs,
         fixed_size_vector<rlmm_float, TempStorage>& temp_values
@@ -96,17 +136,21 @@ namespace rllm
     )
     {
         // PARFOR_SHARED_VARIABLES(workgroup_max)
+#if defined(USE_VULKAN_OFFLOAD)
         float workgroup_max = -std::numeric_limits<float>::infinity();
+#else
+        float workgroup_max[1] = {-std::numeric_limits<float>::infinity()};
+#endif
         // ENDPARFOR_SHARED_VARIABLES
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, temp_values))
         const uint lid = gl_LocalInvocationIndex;
-        const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (i < rllm_push.rllm_bound_x);
+        const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (int(i) < rllm_push.rllm_bound_x);
         workgroup_max[lid] = in_bounds ? inputs[i] : -3.402823e38f;
         barrier();
         for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u; stride >>= 1u)
         {
             if (lid < stride)
-                workgroup_max[lid] = max(workgroup_max[lid], workgroup_max[lid + stride]);
+                workgroup_max[lid] = math::max(workgroup_max[lid], workgroup_max[lid + stride]);
             barrier();
         }
         if (lid == 0u)
@@ -114,7 +158,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void compute_exp_and_accumulate_sum(
+    [[maybe_unused]] static void compute_exp_and_accumulate_sum(
         // OFFLOAD_PARAMETERS(inputs, values, temp_values)
         const fixed_size_vector<rlmm_float, TokenID>& inputs,
         fixed_size_vector<rlmm_float, TokenID>& values,
@@ -123,11 +167,15 @@ namespace rllm
     )
     {
         // PARFOR_SHARED_VARIABLES(workgroup_sum)
+#if defined(USE_VULKAN_OFFLOAD)
         float workgroup_sum = 0.0f;
+#else
+        float workgroup_sum[1] = {0.0f};
+#endif
         // ENDPARFOR_SHARED_VARIABLES
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, values, temp_values))
         const uint lid = gl_LocalInvocationIndex;
-        const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (i < rllm_push.rllm_bound_x);
+        const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (int(i) < rllm_push.rllm_bound_x);
         const float max_val = temp_values[0];
         float exp_value = 0.0f;
         if (in_bounds)
@@ -148,7 +196,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void finalize_softmax_delta(
+    [[maybe_unused]] static void finalize_softmax_delta(
         // OFFLOAD_PARAMETERS(values, temp_values, expected_output_token)
         fixed_size_vector<rlmm_float, TokenID>& values,
         const fixed_size_vector<rlmm_float, TempStorage>& temp_values,
@@ -166,7 +214,6 @@ namespace rllm
         values[i] = delta;
         ENDFOR
     }
-#endif
 
     OutputLayer::OutputLayer(const Corpus& corpus)
         : OutputLayer()
@@ -238,35 +285,37 @@ namespace rllm
         // token gets a small positive gradient of ε/V. This prevents the model
         // from driving non-target logits to -∞ and collapsing to one token.
 
-#if defined(USE_VULKAN_OFFLOAD)
-        initialize_softmax_temp_values(score.temp_values);
-        reduce_logits_max_to_temp(m_inputs, score.temp_values);
-        compute_exp_and_accumulate_sum(m_inputs, score.values, score.temp_values);
-        finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
-
-        const float max_val = score.temp_values[TempStorage::START];
-        const float sum_exp = score.temp_values[TempStorage::ONE];
-        const float log_prob = m_inputs[expected_output_token] - max_val - std::log(sum_exp);
-        return -log_prob;
-#else
-        float max_val = m_inputs[TokenID::START];
-        for (const auto i : enum_iterator<TokenID>())
-            max_val = math::max(max_val, m_inputs[i]);
+        float max_val = -std::numeric_limits<float>::infinity();
+        for (const auto token : enum_iterator<TokenID>())
+            max_val = math::max(max_val, m_inputs[token]);
 
         float sum_exp = 0.0f;
-        for (const auto i : enum_iterator<TokenID>())
+        for (const auto token : enum_iterator<TokenID>())
         {
-            score.values[i] = std::exp(m_inputs[i] - max_val);
-            sum_exp += score.values[i];
+            const float exp_value = std::exp(m_inputs[token] - max_val);
+            score.values[token] = exp_value;
+            sum_exp += exp_value;
         }
 
+        for (const auto token : enum_iterator<TokenID>())
+        {
+            float delta = OutputLayer::smooth - score.values[token] / sum_exp;
+            if (token == expected_output_token)
+                delta += (1.0f - OutputLayer::LABEL_SMOOTHING);
+            score.values[token] = delta;
+        }
+
+        score.temp_values[TempStorage::START] = max_val;
+        score.temp_values[TempStorage::ONE] = sum_exp;
         const float log_prob = m_inputs[expected_output_token] - max_val - std::log(sum_exp);
-
-        for (const auto i : enum_iterator<TokenID>())
-            score.values[i] = OutputLayer::smooth - score.values[i] / sum_exp;
-
-        score.values[expected_output_token] += (RLMM_ONE - OutputLayer::LABEL_SMOOTHING);
         return -log_prob;
-#endif
     }
 } // namespace rllm
+
+#if !defined(USE_VULKAN_OFFLOAD)
+#undef rllm_push
+#undef gl_WorkGroupSize
+#undef gl_LocalInvocationIndex
+#undef gl_LocalInvocationID
+#undef gl_GlobalInvocationID
+#endif

@@ -65,6 +65,7 @@ endif()
 
 add_executable(test_rllm
     test_rllm.cc
+    test_outputlayer.cc
     test_enum_iterator.cc
     test_enum_iterator2D.cc
 )

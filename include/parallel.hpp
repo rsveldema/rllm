@@ -43,6 +43,47 @@ inline Allocator& get_offload_allocator()
     return allocator;
 }
 
+#if !defined(USE_VULKAN_OFFLOAD)
+namespace parallel::detail
+{
+    inline void cpu_barrier()
+    {
+    }
+
+    inline void cpu_atomic_add(float& dst, const float value)
+    {
+        std::atomic_ref<float> atomic_dst(dst);
+        float current = atomic_dst.load(std::memory_order_relaxed);
+        while (!atomic_dst.compare_exchange_weak(
+            current,
+            current + value,
+            std::memory_order_relaxed,
+            std::memory_order_relaxed
+        ))
+        {
+        }
+    }
+
+    inline void cpu_atomic_max(float& dst, const float value)
+    {
+        std::atomic_ref<float> atomic_dst(dst);
+        float current = atomic_dst.load(std::memory_order_relaxed);
+        while (current < value && !atomic_dst.compare_exchange_weak(
+            current,
+            value,
+            std::memory_order_relaxed,
+            std::memory_order_relaxed
+        ))
+        {
+        }
+    }
+}
+
+#define barrier() ::parallel::detail::cpu_barrier()
+#define atomicAdd(dst, value) ::parallel::detail::cpu_atomic_add((dst), (value))
+#define atomicMax(dst, value) ::parallel::detail::cpu_atomic_max((dst), (value))
+#endif
+
 namespace parallel {
     const char* backend_name();
     void print_vulkan_provider();
