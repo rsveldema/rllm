@@ -69,6 +69,19 @@ namespace rllm
 
 namespace rllm
 {
+    static void scatter_dh_last_to_row(
+        // OFFLOAD_PARAMETERS(dh_last, dh, last_pos)
+        const fixed_size_vector<rlmm_float, EmbeddingDimension>& dh_last,
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dh,
+        PositionIndex last_pos
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator<EmbeddingDimension>(), (dh_last, dh, last_pos))
+        dh[last_pos, d] = dh_last[d];
+        ENDFOR
+    }
+
     // Number of gradient-update passes over all layers per training example per epoch.
     constexpr size_t NUMBER_OF_LAYER_VISITS_PER_EXAMPLE = 8;
 
@@ -277,8 +290,7 @@ namespace rllm
         // Propagate the summed gradient through the transformer blocks.
         ws.dh.zero();
         ws.din.zero();
-        for (const auto d : enum_iterator<EmbeddingDimension>())
-            ws.dh[last_pos, d] = ws.dh_last[d];
+        scatter_dh_last_to_row(ws.dh_last, ws.dh, last_pos);
 
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
@@ -874,6 +886,62 @@ namespace rllm
         }
     }
 
+    bool NeuralNetwork::should_trace_example(const std::string& full_string) const
+    {
+        const char* v = std::getenv("RLLM_TRACE_INCLUDE");
+        const bool trace_enabled = v != nullptr && std::string(v) != "0";
+        return trace_enabled && (full_string.find("#include") != std::string::npos);
+    }
+
+    void NeuralNetwork::trace_example_probes(const char* phase, size_t iter, float loss_value, const std::string& full_string)
+    {
+        for (const char* probe : {"#", "#include"})
+        {
+            const auto probe_ids = m_corpus.get_token_ids(probe);
+            if (probe_ids.empty())
+                continue;
+
+            propagate_forward(probe_ids);
+            const auto top5 = get_best_output_token_ids(5, MultiTokenPredictionIndex::START);
+
+            if (top5.empty())
+            {
+                LOG_INFO(
+                    "[TRACE] phase='{}' iter={} train='{}' probe='{}' top1='<none>' loss={:.6f}",
+                    phase,
+                    iter,
+                    full_string,
+                    probe,
+                    loss_value
+                );
+                continue;
+            }
+
+            const auto top1_tok = m_corpus.get_token_from_id(top5.front().token_id);
+            LOG_INFO(
+                "[TRACE] phase='{}' iter={} train='{}' probe='{}' top1='{}' p={:.6f} loss={:.6f}",
+                phase,
+                iter,
+                full_string,
+                probe,
+                top1_tok,
+                top5.front().activation,
+                loss_value
+            );
+
+            for (size_t k = 0; k < top5.size(); ++k)
+            {
+                LOG_INFO(
+                    "[TRACE]   top{} token='{}' id={} p={:.6f}",
+                    k,
+                    m_corpus.get_token_from_id(top5[k].token_id),
+                    top5[k].token_id,
+                    top5[k].activation
+                );
+            }
+        }
+    }
+
 
     void NeuralNetwork::do_training(const InputLine& train_output, bool verbose, size_t max_iterations)
     {
@@ -893,64 +961,7 @@ namespace rllm
         const auto full_string_opt = m_corpus.get_line(train_output);
         assert(full_string_opt.has_value());
         const auto& full_string = *full_string_opt;
-
-        const bool trace_enabled = []() {
-            const char* v = std::getenv("RLLM_TRACE_INCLUDE");
-            return v != nullptr && std::string(v) != "0";
-        }();
-        const bool trace_this_example = trace_enabled && (full_string.find("#include") != std::string::npos);
-
-        auto trace_probes = [&](const char* phase, size_t iter, float loss_value) {
-            if (!trace_this_example)
-                return;
-
-            static const std::array<std::string, 2> probes = {"#", "#include"};
-            for (const auto& probe : probes)
-            {
-                const auto probe_ids = m_corpus.get_token_ids(probe);
-                if (probe_ids.empty())
-                    continue;
-
-                propagate_forward(probe_ids);
-                const auto top5 = get_best_output_token_ids(5, MultiTokenPredictionIndex::START);
-
-                if (top5.empty())
-                {
-                    LOG_INFO(
-                        "[TRACE] phase='{}' iter={} train='{}' probe='{}' top1='<none>' loss={:.6f}",
-                        phase,
-                        iter,
-                        full_string,
-                        probe,
-                        loss_value
-                    );
-                    continue;
-                }
-
-                const auto top1_tok = m_corpus.get_token_from_id(top5.front().token_id);
-                LOG_INFO(
-                    "[TRACE] phase='{}' iter={} train='{}' probe='{}' top1='{}' p={:.6f} loss={:.6f}",
-                    phase,
-                    iter,
-                    full_string,
-                    probe,
-                    top1_tok,
-                    top5.front().activation,
-                    loss_value
-                );
-
-                for (size_t k = 0; k < top5.size(); ++k)
-                {
-                    LOG_INFO(
-                        "[TRACE]   top{} token='{}' id={} p={:.6f}",
-                        k,
-                        m_corpus.get_token_from_id(top5[k].token_id),
-                        top5[k].token_id,
-                        top5[k].activation
-                    );
-                }
-            }
-        };
+        const bool trace_this_example = should_trace_example(full_string);
 
         // In multi-epoch training each call gets a small fixed budget (max_iterations).
         // We allow an early return once this example reaches a reasonable confidence target.
@@ -974,7 +985,7 @@ namespace rllm
             propagate_backward_mtp(*scores_storage, num_valid_heads);
 
             if (trace_this_example && i < 4)
-                trace_probes("post_step", i + 1, loss);
+                trace_example_probes("post_step", i + 1, loss, full_string);
 
             if (loss < m_convergence_threshold)
             {

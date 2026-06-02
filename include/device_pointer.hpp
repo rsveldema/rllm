@@ -298,6 +298,10 @@ private:
         m_current_owner = CurrentOwner::Host;
     }
 
+    /** Ensure this pointer has compatible staging/offload storage for `other`.
+    * Used by copy/move assignment before copy_contents_from() so allocation and
+    * data-transfer policy stay centralized and consistent.
+    */
     void assign_storage_like(const DevicePointer& other)
     {
         if (m_count == other.m_count && m_bytes == other.m_bytes && m_alignment == other.m_alignment &&
@@ -350,8 +354,7 @@ private:
             [this, &other]() {
                 std::lock_guard<std::mutex> other_lock(other.m_state_mutex);
                 return m_memory_space == other.m_memory_space &&
-                    other.m_current_owner == CurrentOwner::Device &&
-                    !other.m_pending_flush;
+                    other.m_current_owner == CurrentOwner::Device;
             }();
 
         if (can_copy_device_to_device)

@@ -114,6 +114,7 @@ namespace rllm
         const float m_convergence_threshold;
 
         void dump_top_predictions();
+        void trace_probes_for_example(const char* phase, size_t iter, float loss_value, const std::string& full_string);
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
         // Accumulates gradients from all valid MTP heads and backpropagates once.
         void propagate_backward_mtp(
@@ -154,6 +155,8 @@ namespace rllm
             size_t num_epochs,
             const std::optional<std::chrono::seconds>& checkpointing_interval
         );
+        bool should_trace_example(const std::string& full_string) const;
+        void trace_example_probes(const char* phase, size_t iter, float loss_value, const std::string& full_string);
         void do_line_based_training(
             bool verbose,
             size_t num_epochs,

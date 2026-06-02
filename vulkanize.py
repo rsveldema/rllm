@@ -27,6 +27,7 @@ _MATH_CLAMP_RE = re.compile(r"\bmath\s*::\s*clamp\s*\(")
 _CONSTEXPR_WORD_RE = re.compile(r"\bconstexpr\b")
 _CSTYLE_FLOAT_CAST_RE = re.compile(r"\(\s*float\s*\)\s*\(")
 _CSTYLE_INT_CAST_RE = re.compile(r"\(\s*int\s*\)\s*\(")
+_QUALIFIED_GLSL_SCALAR_RE = re.compile(r"\b(?:[A-Za-z_]\w*::)+(float|int|uint)\b")
 _ATOMIC_INC_CALL_RE = re.compile(r"\bATOMIC_INC\s*\((.+)\)\s*;\s*$")
 _OVERFLOW_CHECK_ADD_RE = re.compile(r"^\s*OVERFLOW_CHECK_ADD\s*\([^;]*\)\s*;?\s*$")
 _COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
@@ -47,6 +48,8 @@ def _sanitize_kernel_line_for_glsl(line: str) -> str:
     line = _SIZE_T_WORD_RE.sub("uint", line)
     # Map project scalar aliases to GLSL scalar type.
     line = _RLMM_FLOAT_WORD_RE.sub("float", line)
+    # GLSL primitive types cannot be namespace-qualified (e.g. rllm::float).
+    line = _QUALIFIED_GLSL_SCALAR_RE.sub(r"\1", line)
     # GLSL builtins are unqualified (no std:: namespace).
     line = _STD_SQRT_RE.sub("sqrt(", line)
     line = _STD_EXP_RE.sub("exp(", line)
