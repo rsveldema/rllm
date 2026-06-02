@@ -144,3 +144,121 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
     for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
         EXPECT_NEAR(score.values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
+
+TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
+{
+    auto weights = zero_output_layer_weights_json();
+    const auto tokens = first_n_tokens(3);
+    ASSERT_EQ(tokens.size(), 3u);
+
+    weight_at(weights, tokens[0], rllm::EmbeddingDimension::START) = -3.0f;
+    weight_at(weights, tokens[1], rllm::EmbeddingDimension::START) = -1.5f;
+    weight_at(weights, tokens[2], rllm::EmbeddingDimension::START) = -2.25f;
+
+    rllm::OutputLayer layer;
+    layer.load(weights);
+
+    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> h_last;
+    h_last.set_size(rllm::EmbeddingDimension::MAX);
+    h_last.zero();
+    h_last[rllm::EmbeddingDimension::START] = 1.0f;
+
+    layer.forward_from_hidden(h_last);
+
+    rllm::Score score;
+    const auto expected_token = tokens[1];
+    const float loss = layer.compute_score(score, expected_token);
+
+    std::vector<float> expected_deltas;
+    const auto logits = logits_from_output_layer(layer);
+    EXPECT_NEAR(logits[static_cast<size_t>(tokens[0])], -3.0f, 1e-5f);
+    EXPECT_NEAR(logits[static_cast<size_t>(tokens[1])], -1.5f, 1e-5f);
+    EXPECT_NEAR(logits[static_cast<size_t>(tokens[2])], -2.25f, 1e-5f);
+    const float expected_loss = reference_compute_score(logits, expected_deltas, expected_token);
+
+    EXPECT_NEAR(loss, expected_loss, 1e-5f);
+
+    for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+        EXPECT_NEAR(score.values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
+}
+
+TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
+{
+    auto weights = zero_output_layer_weights_json();
+    const auto tokens = first_n_tokens(3);
+    ASSERT_EQ(tokens.size(), 3u);
+
+    weight_at(weights, tokens[0], rllm::EmbeddingDimension::START) = -1.0f;
+    weight_at(weights, tokens[1], rllm::EmbeddingDimension::START) = 2.0f;
+    weight_at(weights, tokens[2], rllm::EmbeddingDimension::START) = 0.5f;
+
+    rllm::OutputLayer layer;
+    layer.load(weights);
+
+    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> h_last;
+    h_last.set_size(rllm::EmbeddingDimension::MAX);
+    h_last.zero();
+
+    rllm::Score score;
+
+    h_last[rllm::EmbeddingDimension::START] = 1.0f;
+    layer.forward_from_hidden(h_last);
+
+    std::vector<float> expected_deltas_first;
+    const auto logits_first = logits_from_output_layer(layer);
+    const float expected_loss_first = reference_compute_score(logits_first, expected_deltas_first, tokens[1]);
+    const float loss_first = layer.compute_score(score, tokens[1]);
+
+    EXPECT_NEAR(loss_first, expected_loss_first, 1e-5f);
+    for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+        EXPECT_NEAR(score.values[tok], expected_deltas_first[static_cast<size_t>(tok)], 1e-5f);
+
+    h_last.zero();
+    h_last[rllm::EmbeddingDimension::START] = -1.0f;
+    layer.forward_from_hidden(h_last);
+
+    std::vector<float> expected_deltas_second;
+    const auto logits_second = logits_from_output_layer(layer);
+    const float expected_loss_second = reference_compute_score(logits_second, expected_deltas_second, tokens[0]);
+    const float loss_second = layer.compute_score(score, tokens[0]);
+
+    EXPECT_NEAR(loss_second, expected_loss_second, 1e-5f);
+    for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+        EXPECT_NEAR(score.values[tok], expected_deltas_second[static_cast<size_t>(tok)], 1e-5f);
+}
+
+TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
+{
+    rllm::OutputLayer layer;
+    layer.load(zero_output_layer_weights_json());
+
+    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> h_last;
+    h_last.set_size(rllm::EmbeddingDimension::MAX);
+    h_last.zero();
+    h_last[rllm::EmbeddingDimension::START] = 1.0f;
+
+    const auto expected_token = first_n_tokens(1).front();
+    rllm::Score score;
+    rllm::fixed_size_vector<rlmm_float, rllm::TokenID> delta;
+    delta.set_size(rllm::TokenID::MAX);
+    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> dh_last;
+    dh_last.set_size(rllm::EmbeddingDimension::MAX);
+
+    layer.forward_from_hidden(h_last);
+    const float initial_loss = layer.compute_score(score, expected_token);
+
+    for (int step = 0; step < 8; ++step)
+    {
+        layer.forward_from_hidden(h_last);
+        const float loss = layer.compute_score(score, expected_token);
+        (void)loss;
+        delta = score.values;
+        dh_last.zero();
+        layer.backward_and_update(delta, h_last, dh_last, 0.003f);
+    }
+
+    layer.forward_from_hidden(h_last);
+    const float final_loss = layer.compute_score(score, expected_token);
+
+    EXPECT_LT(final_loss, initial_loss);
+}

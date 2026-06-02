@@ -281,32 +281,16 @@ namespace rllm
     // cross-entropy loss -log(softmax[target]) in a single pass over the logits.
     float OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
-        // Label smoothing (ε=0.1): instead of a one-hot target, each non-target
-        // token gets a small positive gradient of ε/V. This prevents the model
-        // from driving non-target logits to -∞ and collapsing to one token.
-
         float max_val = -std::numeric_limits<float>::infinity();
         for (const auto token : enum_iterator<TokenID>())
             max_val = math::max(max_val, m_inputs[token]);
 
-        float sum_exp = 0.0f;
-        for (const auto token : enum_iterator<TokenID>())
-        {
-            const float exp_value = std::exp(m_inputs[token] - max_val);
-            score.values[token] = exp_value;
-            sum_exp += exp_value;
-        }
-
-        for (const auto token : enum_iterator<TokenID>())
-        {
-            float delta = OutputLayer::smooth - score.values[token] / sum_exp;
-            if (token == expected_output_token)
-                delta += (1.0f - OutputLayer::LABEL_SMOOTHING);
-            score.values[token] = delta;
-        }
-
         score.temp_values[TempStorage::START] = max_val;
-        score.temp_values[TempStorage::ONE] = sum_exp;
+        score.temp_values[TempStorage::ONE] = 0.0f;
+        compute_exp_and_accumulate_sum(m_inputs, score.values, score.temp_values);
+        finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
+
+        const float sum_exp = score.temp_values[TempStorage::ONE];
         const float log_prob = m_inputs[expected_output_token] - max_val - std::log(sum_exp);
         return -log_prob;
     }

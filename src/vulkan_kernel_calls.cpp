@@ -366,14 +366,9 @@ namespace rllm::vulkan
 			{
 				RuntimeBuffer& rb = runtime_buffers[i];
 				if (rb.cached)
-					continue;  // lazy buffer — kept alive for deferred flush
+					continue;  // cached runtime buffer — kept alive for deferred host sync
 				if (rb.mapped != nullptr)
 				{
-					if (rb.view.writable)
-					{
-						parallel::statistics.record_device_to_host_buffer_copy(name());
-						std::memcpy(rb.view.host_ptr, rb.mapped, rb.view.size_bytes);
-					}
 					vkUnmapMemory(ctx.device, rb.memory);
 					rb.mapped = nullptr;
 				}
@@ -410,8 +405,24 @@ namespace rllm::vulkan
 			const detail::HostBufferView& view = buffers[buf_idx];
 			RuntimeBuffer& rb = runtime_buffers[buf_idx];
 			auto& lazy_cache = detail::lazy_runtime_buffer_cache();
+			const bool keep_runtime_buffer = view.offload_ptr != nullptr;
+			auto seed_runtime_buffer = [&](RuntimeBuffer& runtime_buffer) {
+				const DeviceMemoryOwner owner = view.memory_owner ? view.memory_owner() : DeviceMemoryOwner::ON_HOST;
+				if (view.offload_ptr != nullptr && owner == DeviceMemoryOwner::ON_DEVICE)
+				{
+					get_offload_allocator().memory_space().copy_offload_to_staging(
+						runtime_buffer.mapped,
+						const_cast<void*>(view.offload_ptr),
+						view.size_bytes
+					);
+					return;
+				}
 
-			// Check if we can reuse a cached (lazy) RuntimeBuffer for this slot.
+				parallel::statistics.record_host_to_device_buffer_copy(name(), view.parameter_name);
+				std::memcpy(runtime_buffer.mapped, runtime_buffer.view.host_ptr, runtime_buffer.view.size_bytes);
+			};
+
+			// Check if we can reuse a cached RuntimeBuffer for this slot.
 			const bool can_reuse = rb.cached
 				&& rb.buffer != VK_NULL_HANDLE
 				&& rb.mapped != nullptr
@@ -421,11 +432,7 @@ namespace rllm::vulkan
 			if (can_reuse)
 			{
 				rb.view = view;
-				if (view.host_is_latest)
-				{
-					parallel::statistics.record_host_to_device_buffer_copy(name(), view.parameter_name);
-					std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
-				}
+				seed_runtime_buffer(rb);
 				continue;
 			}
 
@@ -450,7 +457,7 @@ namespace rllm::vulkan
 				std::abort();
 			}
 
-			if (view.lazy)
+			if (keep_runtime_buffer)
 			{
 				auto cached_it = lazy_cache.find(view.cache_key);
 				if (cached_it != lazy_cache.end())
@@ -464,11 +471,7 @@ namespace rllm::vulkan
 						rb.mapped = cached.mapped;
 						rb.view = view;
 						rb.cached = true;
-						if (view.host_is_latest)
-						{
-							parallel::statistics.record_host_to_device_buffer_copy(name(), view.parameter_name);
-							std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
-						}
+						seed_runtime_buffer(rb);
 						continue;
 					}
 				}
@@ -521,9 +524,8 @@ namespace rllm::vulkan
 				std::abort();
 			}
 
-			parallel::statistics.record_host_to_device_buffer_copy(name(), view.parameter_name);
-			std::memcpy(rb.mapped, rb.view.host_ptr, rb.view.size_bytes);
-			if (view.lazy)
+			seed_runtime_buffer(rb);
+			if (keep_runtime_buffer)
 			{
 				lazy_cache[view.cache_key] = {
 					.device = ctx.device,
@@ -746,16 +748,19 @@ namespace rllm::vulkan
 		for (size_t i = 0; i < runtime_buffer_count; ++i)
 		{
 			RuntimeBuffer& rb = runtime_buffers[i];
-			if (rb.view.lazy && rb.mapped != nullptr)
+			const bool kernel_writes_buffer = static_cast<bool>(rb.view.on_device_ready);
+			if (kernel_writes_buffer && rb.view.offload_ptr != nullptr && rb.mapped != nullptr)
 			{
-				rb.cached = true;
-				if (rb.view.writable)
-					rb.view.host_is_latest = false;
-				if (rb.view.writable && rb.view.on_device_ready)
-				{
-					rb.view.on_device_ready(rb.mapped, rb.view.size_bytes, name(), rb.view.parameter_name);
-					rb.view.on_device_ready = nullptr;
-				}
+				get_offload_allocator().memory_space().copy_staging_to_offload(
+					const_cast<void*>(rb.view.offload_ptr),
+					rb.mapped,
+					rb.view.size_bytes
+				);
+			}
+			if (kernel_writes_buffer)
+			{
+				rb.view.on_device_ready(rb.mapped, rb.view.size_bytes, name(), rb.view.parameter_name);
+				rb.view.on_device_ready = nullptr;
 			}
 		}
 

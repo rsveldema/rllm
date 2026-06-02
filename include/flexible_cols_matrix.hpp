@@ -174,9 +174,24 @@ namespace rllm
             return m_data.raw_staging_data();
         }
 
+        void* raw_offload_data() const
+        {
+            return m_data.raw_offload_data();
+        }
+
+        DeviceMemoryOwner device_memory_owner() const
+        {
+            return m_data.device_memory_owner();
+        }
+
         void set_pending_flush(std::function<void()> flush_fn)
         {
             m_data.set_pending_flush(std::move(flush_fn));
+        }
+
+        void mark_device_latest()
+        {
+            m_data.mark_device_latest();
         }
 
         bool needs_offload_sync() const
