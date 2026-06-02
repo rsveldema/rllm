@@ -133,6 +133,9 @@ void append_output_layer_constant_pairs(std::vector<SearchReplace>& pairs)
     append_float_pair(pairs, "rllm::OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
     append_float_pair(pairs, "rllm::OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
     append_float_pair(pairs, "rllm::OutputLayer::WEIGHT_CLAMP", rllm::OutputLayer::WEIGHT_CLAMP);
+
+    append_float_pair(pairs, "rllm::OutputLayer::smooth", rllm::OutputLayer::smooth);
+    append_float_pair(pairs, "rllm::OutputLayer::LABEL_SMOOTHING", rllm::OutputLayer::LABEL_SMOOTHING);
 }
 
 void print_json_pairs(const std::vector<SearchReplace>& pairs)

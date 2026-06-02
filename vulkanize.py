@@ -97,6 +97,7 @@ class VulkanKernelSpec:
     offload_param_lines: list[str] | None
     range_expr: str
     body_lines: list[str]
+    shared_vars: dict[str, str] | None = None  # var_name -> type for shared variables
 
 
 @dataclass
@@ -375,6 +376,22 @@ def _load_vulkan_config(config_path: Path) -> VulkanConfig:
     return VulkanConfig(workgroup_size_x=x, workgroup_size_y=y, workgroup_size_z=z)
 
 
+def _sanitize_cpp_type_to_glsl(cpp_type: str) -> str:
+    """Convert a C++ type to GLSL type for shared variables."""
+    glsl_type = _sanitize_kernel_line_for_glsl(cpp_type)
+    # Convert C++ floating point types to float
+    glsl_type = re.sub(r"\brlmm_float(?:_small)?\b", "float", glsl_type)
+    glsl_type = re.sub(r"\bsize_t\b", "uint", glsl_type)
+    # Remove qualifiers that don't apply in shared context
+    glsl_type = re.sub(r"\bconst\b", "", glsl_type).strip()
+    return glsl_type
+
+
+def _requires_atomic_float_extensions(lines: list[str]) -> bool:
+    joined = "\n".join(lines)
+    return "atomicAdd(" in joined or "atomicMax(" in joined or "atomicMin(" in joined
+
+
 def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], config: VulkanConfig) -> str:
     const_preamble: list[str] = []
     for line in spec.offload_param_lines or []:
@@ -469,10 +486,11 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
         else:
             arg_setup = "\n".join(extra_arg_setup_lines)
     guard_terms: list[str] = []
-    if spec.is_2d and len(spec.vars) >= 2:
-        guard_terms.append(f"{spec.vars[0]} >= rllm_push.rllm_bound_x || {spec.vars[1]} >= rllm_push.rllm_bound_y")
-    elif spec.vars:
-        guard_terms.append(f"{spec.vars[0]} >= rllm_push.rllm_bound_x")
+    if not spec.shared_vars:
+        if spec.is_2d and len(spec.vars) >= 2:
+            guard_terms.append(f"{spec.vars[0]} >= rllm_push.rllm_bound_x || {spec.vars[1]} >= rllm_push.rllm_bound_y")
+        elif spec.vars:
+            guard_terms.append(f"{spec.vars[0]} >= rllm_push.rllm_bound_x")
     if spec.kernel_guard_expr:
         guard_terms.append(_sanitize_kernel_line_for_glsl(spec.kernel_guard_expr))
     guard_block = ""
@@ -486,6 +504,25 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
     ssbo_block = "\n".join(ssbo_decls)
     if ssbo_block:
         ssbo_block = ssbo_block + "\n\n"
+    
+    # Generate shared variable declarations. GLSL requires workgroup storage to
+    # live at global scope, not inside function scope.
+    shared_decls: list[str] = []
+    if spec.shared_vars:
+        for var_name, var_type in spec.shared_vars.items():
+            glsl_type = _sanitize_cpp_type_to_glsl(var_type)
+            shared_decls.append(f"shared {glsl_type} {var_name}[{config.workgroup_size_x * config.workgroup_size_y * config.workgroup_size_z}];")
+    shared_block = "\n".join(shared_decls)
+    if shared_block:
+        shared_block = shared_block + "\n\n"
+
+    extension_block = ""
+    if _requires_atomic_float_extensions(filtered_body_lines):
+        extension_block = (
+            "#extension GL_EXT_shader_atomic_float : require\n"
+            "#extension GL_EXT_shader_atomic_float2 : require\n\n"
+        )
+    
     push_constant_fields = [
         "    int rllm_bound_x;",
         "    int rllm_bound_y;",
@@ -499,11 +536,13 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
     return (
         "#version 450\n"
         "\n"
+        f"{extension_block}"
         f"layout(local_size_x = {config.workgroup_size_x}, local_size_y = {config.workgroup_size_y}, local_size_z = {config.workgroup_size_z}) in;\n"
         "\n"
         f"{const_block}"
         f"{push_constant_block}"
         f"{ssbo_block}"
+        f"{shared_block}"
         f"void rllm_kernel_body({param_list})\n"
         "{\n"
         f"{body_text}\n"
@@ -607,6 +646,7 @@ def main() -> int:
                 offload_param_lines=ctx.offload_param_lines,
                 range_expr=ctx.range_expr,
                 body_lines=list(ctx.body_lines),
+                shared_vars=ctx.shared_vars,
             )
         )
 

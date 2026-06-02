@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <limits>
 #include <omp.h>
 
 namespace rllm
@@ -72,6 +73,100 @@ namespace rllm
         );
         ENDFOR
     }
+
+#if defined(USE_VULKAN_OFFLOAD)
+    static void initialize_softmax_temp_values(
+        // OFFLOAD_PARAMETERS(temp_values)
+        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TempStorage>(), (temp_values))
+        if (gl_GlobalInvocationID.y != 0u)
+            return;
+        temp_values[i] = (i == TempStorage::START) ? -3.402823e38f : 0.0f;
+        ENDFOR
+    }
+
+    static void reduce_logits_max_to_temp(
+        // OFFLOAD_PARAMETERS(inputs, temp_values)
+        const fixed_size_vector<rlmm_float, TokenID>& inputs,
+        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        // PARFOR_SHARED_VARIABLES(workgroup_max)
+        float workgroup_max = -std::numeric_limits<float>::infinity();
+        // ENDPARFOR_SHARED_VARIABLES
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, temp_values))
+        const uint lid = gl_LocalInvocationIndex;
+        const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (i < rllm_push.rllm_bound_x);
+        workgroup_max[lid] = in_bounds ? inputs[i] : -3.402823e38f;
+        barrier();
+        for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u; stride >>= 1u)
+        {
+            if (lid < stride)
+                workgroup_max[lid] = max(workgroup_max[lid], workgroup_max[lid + stride]);
+            barrier();
+        }
+        if (lid == 0u)
+            atomicMax(temp_values[0], workgroup_max[0]);
+        ENDFOR
+    }
+
+    static void compute_exp_and_accumulate_sum(
+        // OFFLOAD_PARAMETERS(inputs, values, temp_values)
+        const fixed_size_vector<rlmm_float, TokenID>& inputs,
+        fixed_size_vector<rlmm_float, TokenID>& values,
+        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        // PARFOR_SHARED_VARIABLES(workgroup_sum)
+        float workgroup_sum = 0.0f;
+        // ENDPARFOR_SHARED_VARIABLES
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, values, temp_values))
+        const uint lid = gl_LocalInvocationIndex;
+        const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (i < rllm_push.rllm_bound_x);
+        const float max_val = temp_values[0];
+        float exp_value = 0.0f;
+        if (in_bounds)
+        {
+            exp_value = exp(inputs[i] - max_val);
+            values[i] = exp_value;
+        }
+        workgroup_sum[lid] = exp_value;
+        barrier();
+        for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u; stride >>= 1u)
+        {
+            if (lid < stride)
+                workgroup_sum[lid] += workgroup_sum[lid + stride];
+            barrier();
+        }
+        if (lid == 0u)
+            atomicAdd(temp_values[1], workgroup_sum[0]);
+        ENDFOR
+    }
+
+    static void finalize_softmax_delta(
+        // OFFLOAD_PARAMETERS(values, temp_values, expected_output_token)
+        fixed_size_vector<rlmm_float, TokenID>& values,
+        const fixed_size_vector<rlmm_float, TempStorage>& temp_values,
+        TokenID expected_output_token
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (values, temp_values, expected_output_token))
+        if (gl_GlobalInvocationID.y != 0u)
+            return;
+        const float sum_exp = temp_values[TempStorage::ONE];
+        float delta = OutputLayer::smooth - values[i] / sum_exp;
+        if (i == expected_output_token)
+            delta += (1.0f - OutputLayer::LABEL_SMOOTHING);
+        values[i] = delta;
+        ENDFOR
+    }
+#endif
 
     OutputLayer::OutputLayer(const Corpus& corpus)
         : OutputLayer()
@@ -142,9 +237,18 @@ namespace rllm
         // Label smoothing (ε=0.1): instead of a one-hot target, each non-target
         // token gets a small positive gradient of ε/V. This prevents the model
         // from driving non-target logits to -∞ and collapsing to one token.
-        static constexpr float LABEL_SMOOTHING = 0.1f;
-        const float smooth = LABEL_SMOOTHING / static_cast<float>(static_cast<int>(TokenID::MAX));
 
+#if defined(USE_VULKAN_OFFLOAD)
+        initialize_softmax_temp_values(score.temp_values);
+        reduce_logits_max_to_temp(m_inputs, score.temp_values);
+        compute_exp_and_accumulate_sum(m_inputs, score.values, score.temp_values);
+        finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
+
+        const float max_val = score.temp_values[TempStorage::START];
+        const float sum_exp = score.temp_values[TempStorage::ONE];
+        const float log_prob = m_inputs[expected_output_token] - max_val - std::log(sum_exp);
+        return -log_prob;
+#else
         float max_val = m_inputs[TokenID::START];
         for (const auto i : enum_iterator<TokenID>())
             max_val = math::max(max_val, m_inputs[i]);
@@ -158,13 +262,11 @@ namespace rllm
 
         const float log_prob = m_inputs[expected_output_token] - max_val - std::log(sum_exp);
 
-        // delta[i] = smooth - softmax[i]  (small positive floor for all non-targets)
         for (const auto i : enum_iterator<TokenID>())
-            score.values[i] = smooth - score.values[i] / sum_exp;
+            score.values[i] = OutputLayer::smooth - score.values[i] / sum_exp;
 
-        // delta[expected] += (1 - LABEL_SMOOTHING)
-        score.values[expected_output_token] += (RLMM_ONE - LABEL_SMOOTHING);
-
+        score.values[expected_output_token] += (RLMM_ONE - OutputLayer::LABEL_SMOOTHING);
         return -log_prob;
+#endif
     }
 } // namespace rllm

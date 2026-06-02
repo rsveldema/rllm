@@ -19,6 +19,8 @@ namespace rllm
         static constexpr float GRAD_CLIP = 1.0f;
         static constexpr float VEL_CLIP = 0.1f;
         static constexpr float WEIGHT_CLAMP = 2.0f;
+        static constexpr float LABEL_SMOOTHING = 0.1f;
+        static constexpr float smooth = LABEL_SMOOTHING / static_cast<float>(static_cast<int>(TokenID::MAX));
 
         OutputLayer();
         OutputLayer(const Corpus& corpus);

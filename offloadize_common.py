@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
@@ -39,12 +39,17 @@ class LoopContext:
     offload_param_lines: list[str] | None
     body_lines: list[str]
     emit_named_kernel: bool
+    shared_vars: dict[str, str] | None = field(default=None)  # var_name -> type (extracted from PARFOR_SHARED_VARIABLES blocks)
 
 
 _OFFLOAD_PARAMETERS_START_RE = re.compile(
     r"^\s*(?://\s*)?OFFLOAD_PARAMETERS\s*\((?P<names>[^)]*)\)\s*$"
 )
 _OFFLOAD_PARAMETERS_END_RE = re.compile(r"^\s*(?://\s*)?END_OFFLOAD_PARAMETERS\s*$")
+_SHARED_VARIABLES_START_RE = re.compile(
+    r"^\s*//\s*PARFOR_SHARED_VARIABLES\s*\((?P<names>[^)]*)\)\s*$"
+)
+_SHARED_VARIABLES_END_RE = re.compile(r"^\s*//\s*ENDPARFOR_SHARED_VARIABLES\s*$")
 
 
 def parse_identifier_list(raw: str) -> list[str]:
@@ -90,6 +95,61 @@ def parse_offload_param_types_from_declaration_line(line: str, names: list[str])
     return found
 
 
+def extract_shared_variables_from_body_lines(body_lines: list[str]) -> tuple[dict[str, str], list[str]]:
+    """
+    Extract PARFOR_SHARED_VARIABLES blocks from body_lines.
+    Returns (shared_vars_dict, filtered_body_lines) where:
+      shared_vars_dict maps variable names to their types
+      filtered_body_lines has the PARFOR_SHARED_VARIABLES blocks removed
+    """
+    shared_vars: dict[str, str] = {}
+    filtered: list[str] = []
+    i = 0
+    
+    # Regex to match: // PARFOR_SHARED_VARIABLES(var_name1, var_name2, ...)
+    # Regex to extract type and variable name from declaration: float max_val = -std::numeric_limits<float>::infinity();
+    var_decl_re = re.compile(
+        r"^\s*(?P<type>(?:const\s+)?(?:[a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)*\s*)+)\s+(?P<name>[a-zA-Z_]\w*)\s*(?:=|;|;)"
+    )
+    
+    while i < len(body_lines):
+        line = body_lines[i]
+        match = _SHARED_VARIABLES_START_RE.match(line)
+        
+        if match:
+            # Found start of shared variables block
+            var_names_str = match.group(1)
+            var_names = [name.strip() for name in var_names_str.split(",")]
+            
+            # Skip the PARFOR_SHARED_VARIABLES line
+            i += 1
+            
+            # Collect variable declarations until ENDPARFOR_SHARED_VARIABLES
+            while i < len(body_lines):
+                decl_line = body_lines[i]
+                end_match = _SHARED_VARIABLES_END_RE.match(decl_line)
+                
+                if end_match:
+                    # Skip the ENDPARFOR_SHARED_VARIABLES line
+                    i += 1
+                    break
+                
+                # Try to extract type from the declaration
+                decl_match = var_decl_re.match(decl_line)
+                if decl_match:
+                    var_name = decl_match.group("name")
+                    var_type = decl_match.group("type").strip()
+                    if var_name in var_names:
+                        shared_vars[var_name] = var_type
+                
+                i += 1
+        else:
+            filtered.append(line)
+            i += 1
+    
+    return shared_vars, filtered
+
+
 def default_symbol_values() -> dict[str, str]:
     # Fallback substitutions used when the enum-value helper executable is unavailable
     # at configure time (common for fresh build trees).
@@ -125,10 +185,20 @@ def default_symbol_values() -> dict[str, str]:
         "OutputLayer::GRAD_CLIP": "1.0",
         "OutputLayer::VEL_CLIP": "0.1",
         "OutputLayer::WEIGHT_CLAMP": "2.0",
+        "OutputLayer::LABEL_SMOOTHING": "0.1",
+        "OutputLayer::smooth": "(OutputLayer::LABEL_SMOOTHING / float(TokenID::MAX))",
         "rllm::OutputLayer::MOMENTUM_BETA": "0.9",
         "rllm::OutputLayer::GRAD_CLIP": "1.0",
         "rllm::OutputLayer::VEL_CLIP": "0.1",
         "rllm::OutputLayer::WEIGHT_CLAMP": "2.0",
+        "rllm::OutputLayer::LABEL_SMOOTHING": "0.1",
+        "rllm::OutputLayer::smooth": "(rllm::OutputLayer::LABEL_SMOOTHING / float(TokenID::MAX))",
+        "TempStorage::START": "0",
+        "TempStorage::ONE": "1",
+        "TempStorage::MAX": "2",
+        "rllm::TempStorage::START": "0",
+        "rllm::TempStorage::ONE": "1",
+        "rllm::TempStorage::MAX": "2",
     }
 
     return values
@@ -271,9 +341,13 @@ def apply_symbol_values(text: str, symbol_values: dict[str, str] | None) -> str:
         return text
 
     out = text
-    for symbol, value in symbol_values.items():
-        pattern = rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])"
-        out = re.sub(pattern, value, out)
+    for _ in range(4):
+        prev = out
+        for symbol, value in symbol_values.items():
+            pattern = rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])"
+            out = re.sub(pattern, value, out)
+        if out == prev:
+            break
     return out
 
 
@@ -310,7 +384,7 @@ def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
             f"stderr:\n{proc.stderr}"
         )
 
-    replacements: dict[str, str] = {}
+    replacements: dict[str, str] = default_symbol_values()
     for idx, item in enumerate(payload):
         if not isinstance(item, dict):
             raise RuntimeError(
@@ -516,6 +590,10 @@ def transform_source(
     collecting_param_names: list[str] = []
     collecting_param_types: dict[str, str] = {}
     collecting_param_lines: list[str] = []
+    collecting_shared_vars = False
+    collecting_shared_names: list[str] = []
+    collecting_shared_types: dict[str, str] = {}
+    pending_shared_vars: dict[str, str] | None = None
 
     def append_to_current(line: str) -> None:
         if loop_stack:
@@ -617,12 +695,32 @@ def transform_source(
             append_to_current(line)
             continue
 
+        if collecting_shared_vars:
+            if _SHARED_VARIABLES_END_RE.match(line.strip()):
+                collecting_shared_vars = False
+                pending_shared_vars = dict(collecting_shared_types) if collecting_shared_types else None
+                collecting_shared_names = []
+                collecting_shared_types = {}
+                continue
+
+            collecting_shared_types.update(
+                parse_offload_param_types_from_declaration_line(line, collecting_shared_names)
+            )
+            continue
+
         offload_params_start = _OFFLOAD_PARAMETERS_START_RE.match(line.strip())
         if offload_params_start:
             collecting_offload_params = True
             collecting_param_names = parse_identifier_list(offload_params_start.group("names"))
             collecting_param_types = {}
             append_to_current(line)
+            continue
+
+        shared_vars_start = _SHARED_VARIABLES_START_RE.match(line.strip())
+        if shared_vars_start and not loop_stack:
+            collecting_shared_vars = True
+            collecting_shared_names = parse_identifier_list(shared_vars_start.group("names"))
+            collecting_shared_types = {}
             continue
 
         parsed = parse_macro_invocation(line)
@@ -636,6 +734,14 @@ def transform_source(
                     name: apply_symbol_values(type_name, symbol_values)
                     for name, type_name in ctx.extra_param_types.items()
                 }
+            # Extract shared variables from body lines
+            shared_vars, filtered_body = extract_shared_variables_from_body_lines(ctx.body_lines)
+            if shared_vars:
+                merged_shared_vars = dict(ctx.shared_vars or {})
+                merged_shared_vars.update(shared_vars)
+                ctx.shared_vars = merged_shared_vars
+            ctx.body_lines = filtered_body
+            
             ctx.body_lines = [apply_symbol_values(body_line, symbol_values) for body_line in ctx.body_lines]
             ctx.body_lines = rewrite_enum_iterator_loops(ctx.body_lines, symbol_values)
             if on_emit_loop is not None:
@@ -671,8 +777,10 @@ def transform_source(
                     offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            pending_shared_vars = None
             changed = True
             continue
 
@@ -692,8 +800,10 @@ def transform_source(
                     offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            pending_shared_vars = None
             changed = True
             continue
 
@@ -719,8 +829,10 @@ def transform_source(
                     offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            pending_shared_vars = None
             changed = True
             continue
 
@@ -757,8 +869,10 @@ def transform_source(
                     offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            pending_shared_vars = None
             changed = True
             continue
 
@@ -795,8 +909,10 @@ def transform_source(
                     offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            pending_shared_vars = None
             changed = True
             continue
 

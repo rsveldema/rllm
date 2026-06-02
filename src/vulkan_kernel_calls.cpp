@@ -992,10 +992,48 @@ namespace rllm::vulkan
 			queue_info.queueCount = 1;
 			queue_info.pQueuePriorities = &queue_priority;
 
+			VkPhysicalDeviceShaderAtomicFloat2FeaturesEXT supported_atomic_float2{};
+			supported_atomic_float2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_2_FEATURES_EXT;
+			VkPhysicalDeviceShaderAtomicFloatFeaturesEXT supported_atomic_float{};
+			supported_atomic_float.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+			supported_atomic_float.pNext = &supported_atomic_float2;
+			VkPhysicalDeviceFeatures2 supported_features{};
+			supported_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+			supported_features.pNext = &supported_atomic_float;
+			vkGetPhysicalDeviceFeatures2(ctx.physical_device, &supported_features);
+
+			if (!supported_atomic_float.shaderBufferFloat32AtomicAdd
+				|| !supported_atomic_float.shaderSharedFloat32AtomicAdd
+				|| !supported_atomic_float2.shaderBufferFloat32AtomicMinMax
+				|| !supported_atomic_float2.shaderSharedFloat32AtomicMinMax)
+			{
+				LOG_ERROR("Selected Vulkan device does not support required float atomic add/minmax features.");
+				std::abort();
+			}
+
+			VkPhysicalDeviceShaderAtomicFloat2FeaturesEXT atomic_float2_features{};
+			atomic_float2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_2_FEATURES_EXT;
+			atomic_float2_features.shaderBufferFloat32AtomicMinMax = VK_TRUE;
+			atomic_float2_features.shaderSharedFloat32AtomicMinMax = VK_TRUE;
+
+			VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_features{};
+			atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+			atomic_float_features.pNext = &atomic_float2_features;
+			atomic_float_features.shaderBufferFloat32AtomicAdd = VK_TRUE;
+			atomic_float_features.shaderSharedFloat32AtomicAdd = VK_TRUE;
+
+			const char* device_extensions[] = {
+				VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME,
+				VK_EXT_SHADER_ATOMIC_FLOAT_2_EXTENSION_NAME,
+			};
+
 			VkDeviceCreateInfo device_info{};
 			device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 			device_info.queueCreateInfoCount = 1;
 			device_info.pQueueCreateInfos = &queue_info;
+			device_info.enabledExtensionCount = 2;
+			device_info.ppEnabledExtensionNames = device_extensions;
+			device_info.pNext = &atomic_float_features;
 
 			const VkResult device_result = vkCreateDevice(ctx.physical_device, &device_info, nullptr, &ctx.device);
 			if (device_result != VK_SUCCESS)

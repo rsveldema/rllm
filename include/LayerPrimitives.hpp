@@ -110,6 +110,19 @@ namespace rllm
         MAX = static_cast<size_t>(EmbeddingDimension::MAX) * 4
     };
 
+    enum class TempStorage : size_t
+    {
+        START = 0,
+        ONE = 1,
+        MAX = 2 // defines an array with up-to M temp variables in a kernel
+    };
+
+    static inline TempStorage inc(TempStorage id)
+    {
+        assert(id < TempStorage::MAX);
+        return static_cast<TempStorage>(static_cast<size_t>(id) + 1);
+    }
+
     static inline TokenID inc(TokenID id)
     {
         assert(id != TokenID::UNKNOWN_TOKEN_ID);
@@ -217,9 +230,11 @@ namespace rllm
         Score()
         {
             values.set_size(TokenID::MAX);
+            temp_values.set_size(TempStorage::MAX);
         }
 
         fixed_size_vector<rlmm_float, TokenID> values;
+        fixed_size_vector<rlmm_float, TempStorage> temp_values; // for use in softmax computation, to avoid modifying the original logits
     };
 
     struct OutputToken
