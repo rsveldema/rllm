@@ -1,4 +1,5 @@
 #include <LayerPrimitives.hpp>
+#include <OutputLayer.hpp>
 #include <TransformerBlock.hpp>
 
 #include <nlohmann/json.hpp>
@@ -122,6 +123,18 @@ void append_transformer_block_constant_pairs(std::vector<SearchReplace>& pairs)
     append_float_pair(pairs, "rllm::TransformerBlock::WEIGHT_CLAMP", rllm::TransformerBlock::WEIGHT_CLAMP);
 }
 
+void append_output_layer_constant_pairs(std::vector<SearchReplace>& pairs)
+{
+    append_float_pair(pairs, "OutputLayer::MOMENTUM_BETA", rllm::OutputLayer::MOMENTUM_BETA);
+    append_float_pair(pairs, "OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
+    append_float_pair(pairs, "OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
+    append_float_pair(pairs, "OutputLayer::WEIGHT_CLAMP", rllm::OutputLayer::WEIGHT_CLAMP);
+    append_float_pair(pairs, "rllm::OutputLayer::MOMENTUM_BETA", rllm::OutputLayer::MOMENTUM_BETA);
+    append_float_pair(pairs, "rllm::OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
+    append_float_pair(pairs, "rllm::OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
+    append_float_pair(pairs, "rllm::OutputLayer::WEIGHT_CLAMP", rllm::OutputLayer::WEIGHT_CLAMP);
+}
+
 void print_json_pairs(const std::vector<SearchReplace>& pairs)
 {
     nlohmann::json json_pairs = nlohmann::json::array();
@@ -147,6 +160,7 @@ int main(int argc, char** argv)
         std::vector<SearchReplace> pairs;
         append_layer_primitives_enum_pairs(pairs);
         append_transformer_block_constant_pairs(pairs);
+        append_output_layer_constant_pairs(pairs);
         print_json_pairs(pairs);
         return 0;
     }

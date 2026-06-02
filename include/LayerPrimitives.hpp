@@ -214,6 +214,11 @@ namespace rllm
 
     struct Score
     {
+        Score()
+        {
+            values.set_size(TokenID::MAX);
+        }
+
         fixed_size_vector<rlmm_float, TokenID> values;
     };
 

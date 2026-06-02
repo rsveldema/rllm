@@ -1,6 +1,8 @@
 #include <OutputLayer.hpp>
 #include <RandomHelpers.hpp>
 
+#include <enum_iterator2D.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -8,14 +10,52 @@
 
 namespace rllm
 {
-    static constexpr float MOMENTUM_BETA = 0.9f;
-    static constexpr float GRAD_CLIP = 1.0f;
-    static constexpr float VEL_CLIP = 0.1f;
-    static constexpr float WEIGHT_CLAMP = 2.0f;
+    static void accumulate_output_layer_dh_last(
+        // OFFLOAD_PARAMETERS(delta, dh_last, W)
+        const fixed_size_vector<rlmm_float, TokenID>& delta,
+        fixed_size_vector<rlmm_float, EmbeddingDimension>& dh_last,
+        const fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension>& W
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator<EmbeddingDimension>(), (delta, dh_last, W))
+        float sum = dh_last[d];
+        for (const auto v : enum_iterator<TokenID>())
+            sum += delta[v] * W[v, d];
+        dh_last[d] = sum;
+        ENDFOR
+    }
+
+    static void update_output_layer_weights(
+        // OFFLOAD_PARAMETERS(delta, h_last, W, V, learning_rate)
+        const fixed_size_vector<rlmm_float, TokenID>& delta,
+        const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
+        fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension>& W,
+        fixed_size_matrix<rlmm_float, TokenID, EmbeddingDimension>& V,
+        float learning_rate
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(v, d, grid, (delta, h_last, W, V, learning_rate))
+        const float g = math::clamp(delta[v] * h_last[d], -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
+        V[v, d] = math::clamp(
+            OutputLayer::MOMENTUM_BETA * V[v, d] + learning_rate * g,
+            -OutputLayer::VEL_CLIP,
+            OutputLayer::VEL_CLIP
+        );
+        W[v, d] = math::clamp(
+            W[v, d] + V[v, d],
+            -OutputLayer::WEIGHT_CLAMP,
+            OutputLayer::WEIGHT_CLAMP
+        );
+        ENDFOR
+    }
 
     OutputLayer::OutputLayer(const Corpus& corpus)
     {
         (void)corpus;
+        m_inputs.set_size(TokenID::MAX);
     }
 
     void OutputLayer::set_random_weights()
@@ -48,25 +88,8 @@ namespace rllm
         float learning_rate
     )
     {
-        for (const auto v : enum_iterator<TokenID>())
-        {
-            const float dv = delta[v];
-            for (const auto d : enum_iterator<EmbeddingDimension>())
-            {
-                dh_last[d] += dv * W_lm_head[v, d];
-                const float g = math::clamp(dv * h_last[d], -GRAD_CLIP, GRAD_CLIP);
-                V_lm_head[v, d] = math::clamp(
-                    MOMENTUM_BETA * V_lm_head[v, d] + learning_rate * g,
-                    -VEL_CLIP,
-                    VEL_CLIP
-                );
-                W_lm_head[v, d] = math::clamp(
-                    W_lm_head[v, d] + V_lm_head[v, d],
-                    -WEIGHT_CLAMP,
-                    WEIGHT_CLAMP
-                );
-            }
-        }
+        accumulate_output_layer_dh_last(delta, dh_last, W_lm_head);
+        update_output_layer_weights(delta, h_last, W_lm_head, V_lm_head, learning_rate);
     }
 
     // ── scoring (unchanged from previous architecture) ─────────────────────────

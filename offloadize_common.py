@@ -121,6 +121,14 @@ def default_symbol_values() -> dict[str, str]:
         "rllm::TransformerBlock::GRAD_CLIP": "1.0",
         "rllm::TransformerBlock::VEL_CLIP": "0.1",
         "rllm::TransformerBlock::WEIGHT_CLAMP": "2.0",
+        "OutputLayer::MOMENTUM_BETA": "0.9",
+        "OutputLayer::GRAD_CLIP": "1.0",
+        "OutputLayer::VEL_CLIP": "0.1",
+        "OutputLayer::WEIGHT_CLAMP": "2.0",
+        "rllm::OutputLayer::MOMENTUM_BETA": "0.9",
+        "rllm::OutputLayer::GRAD_CLIP": "1.0",
+        "rllm::OutputLayer::VEL_CLIP": "0.1",
+        "rllm::OutputLayer::WEIGHT_CLAMP": "2.0",
     }
 
     return values

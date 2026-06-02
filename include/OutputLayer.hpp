@@ -15,6 +15,11 @@ namespace rllm
     class OutputLayer
     {
       public:
+        static constexpr float MOMENTUM_BETA = 0.9f;
+        static constexpr float GRAD_CLIP = 1.0f;
+        static constexpr float VEL_CLIP = 0.1f;
+        static constexpr float WEIGHT_CLAMP = 2.0f;
+
         OutputLayer() = default;
         OutputLayer(const Corpus& corpus);
         ~OutputLayer() = default;
