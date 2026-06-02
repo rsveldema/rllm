@@ -8,6 +8,7 @@
 #include <new>
 #include <type_traits>
 #include <utility>
+#include <cassert>
 
 #include <IMemorySpace.hpp>
 #include <allocator.hpp>
@@ -25,15 +26,19 @@ template<typename T>
 class DevicePointer
 {
 public:
+    static constexpr size_t kAlignment = alignof(T);
+
     explicit DevicePointer(size_t num_elements)
         : m_allocator(&get_offload_allocator())
         , m_memory_space(&m_allocator->memory_space())
         , m_count(num_elements)
     {
+        assert(m_count > 0);
+
         allocate_internal();
-        zero_initialize_staging();
-        zero_initialize_offload();
+        zero();
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
+        assert(m_bytes > 0);
     }
 
     DevicePointer(Allocator& allocator, size_t num_elements)
@@ -41,55 +46,26 @@ public:
         , m_memory_space(&allocator.memory_space())
         , m_count(num_elements)
     {
+        assert(m_count > 0);
+
         allocate_internal();
-        zero_initialize_staging();
-        zero_initialize_offload();
+        zero();
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
+
+        assert(m_bytes > 0);
     }
 
-    DevicePointer(T* ptr, size_t num_elements, bool owns_heap = false)
-        : m_allocator(&get_offload_allocator())
-        , m_memory_space(&m_allocator->memory_space())
-        , m_count(num_elements)
-        , m_bytes(sizeof(T) * num_elements)
-        , m_alignment(alignof(T))
-        , m_staging_ptr(ptr)
-        , m_owns_heap_raw(owns_heap)
-    {
-        if (m_bytes == 0)
-        {
-            m_memory_owner = DeviceMemoryOwner::INVALID;
-            return;
-        }
-
-        if (m_staging_ptr == nullptr)
-            std::abort();
-
-        m_offload_ptr = m_allocator->allocate_offload(m_bytes, m_alignment);
-        if (m_offload_ptr == nullptr)
-            std::abort();
-
-        if (m_count > 0)
-        {
-            m_memory_owner = DeviceMemoryOwner::ON_HOST;
-            copy_to_offload_buffer_unlocked();
-        }
-
-        m_memory_owner = DeviceMemoryOwner::REPLICATED;
-    }
 
     DevicePointer(const DevicePointer& other)
         : m_allocator(&get_offload_allocator())
         , m_memory_space(&m_allocator->memory_space())
         , m_count(other.m_count)
         , m_bytes(other.m_bytes)
-        , m_alignment(other.m_alignment)
     {
-        if (m_bytes == 0)
-            return;
+        assert(m_bytes > 0);
 
-        m_staging_ptr = static_cast<T*>(m_allocator->allocate_staging(m_bytes, m_alignment));
-        m_offload_ptr = m_allocator->allocate_offload(m_bytes, m_alignment);
+        m_staging_ptr = static_cast<T*>(m_allocator->allocate_staging(m_bytes, kAlignment));
+        m_offload_ptr = m_allocator->allocate_offload(m_bytes, kAlignment);
         if (m_staging_ptr == nullptr || m_offload_ptr == nullptr)
         {
             release_internal();
@@ -114,11 +90,8 @@ public:
         , m_memory_space(other.m_memory_space)
         , m_count(other.m_count)
         , m_bytes(other.m_bytes)
-        , m_alignment(other.m_alignment)
         , m_staging_ptr(other.m_staging_ptr)
         , m_offload_ptr(other.m_offload_ptr)
-        , m_owns_staging(other.m_owns_staging)
-        , m_owns_offload(other.m_owns_offload)
         , m_memory_owner(other.m_memory_owner)
         , m_pending_flush(std::move(other.m_pending_flush))
     {
@@ -126,13 +99,12 @@ public:
         other.m_memory_space = nullptr;
         other.m_count = 0;
         other.m_bytes = 0;
-        other.m_alignment = alignof(T);
         other.m_staging_ptr = nullptr;
         other.m_offload_ptr = nullptr;
-        other.m_owns_staging = false;
-        other.m_owns_offload = false;
         other.m_memory_owner = DeviceMemoryOwner::INVALID;
         other.m_pending_flush = nullptr;
+
+        assert(m_bytes > 0);
     }
 
     DevicePointer& operator=(DevicePointer&& other) noexcept
@@ -146,11 +118,8 @@ public:
         m_memory_space = other.m_memory_space;
         m_count = other.m_count;
         m_bytes = other.m_bytes;
-        m_alignment = other.m_alignment;
         m_staging_ptr = other.m_staging_ptr;
         m_offload_ptr = other.m_offload_ptr;
-        m_owns_staging = other.m_owns_staging;
-        m_owns_offload = other.m_owns_offload;
         m_memory_owner = other.m_memory_owner;
         m_pending_flush = std::move(other.m_pending_flush);
 
@@ -158,13 +127,12 @@ public:
         other.m_memory_space = nullptr;
         other.m_count = 0;
         other.m_bytes = 0;
-        other.m_alignment = alignof(T);
         other.m_staging_ptr = nullptr;
         other.m_offload_ptr = nullptr;
-        other.m_owns_staging = false;
-        other.m_owns_offload = false;
         other.m_memory_owner = DeviceMemoryOwner::INVALID;
         other.m_pending_flush = nullptr;
+
+        assert(m_bytes > 0);
         return *this;
     }
 
@@ -176,13 +144,14 @@ public:
     void zero()
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
-        if (m_bytes == 0 || m_staging_ptr == nullptr)
-            return;
+        assert(m_bytes > 0);
+        assert(m_staging_ptr != nullptr);
+        assert(m_offload_ptr != nullptr);
 
         zero_initialize_staging();
         zero_initialize_offload();
-        m_pending_flush = nullptr;
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
+        m_pending_flush = nullptr;
     }
 
     T* get() const
@@ -338,8 +307,9 @@ private:
 
     void copy_to_offload_buffer_unlocked()
     {
-        if (m_bytes == 0 || m_offload_ptr == nullptr || m_staging_ptr == nullptr)
-            return;
+        assert(m_bytes > 0);
+        assert(m_staging_ptr != nullptr);
+        assert(m_offload_ptr != nullptr);
 
         if (device_data_is_current_unlocked() && m_memory_owner != DeviceMemoryOwner::ON_HOST)
             return;
@@ -350,8 +320,9 @@ private:
 
     void copy_from_offload_buffer_unlocked()
     {
-        if (m_bytes == 0 || m_offload_ptr == nullptr || m_staging_ptr == nullptr)
-            return;
+        assert(m_bytes > 0);
+        assert(m_staging_ptr != nullptr);
+        assert(m_offload_ptr != nullptr);
 
         if (host_data_is_current_unlocked() && m_memory_owner != DeviceMemoryOwner::ON_DEVICE)
             return;
@@ -362,7 +333,7 @@ private:
 
     void assign_storage_like(const DevicePointer& other)
     {
-        if (m_count == other.m_count && m_bytes == other.m_bytes && m_alignment == other.m_alignment &&
+        if (m_count == other.m_count && m_bytes == other.m_bytes &&
             m_staging_ptr != nullptr && m_offload_ptr != nullptr)
         {
             m_pending_flush = nullptr;
@@ -375,7 +346,6 @@ private:
         m_memory_space = &m_allocator->memory_space();
         m_count = other.m_count;
         m_bytes = other.m_bytes;
-        m_alignment = other.m_alignment;
         if (m_bytes == 0)
         {
             m_memory_owner = DeviceMemoryOwner::INVALID;
@@ -383,47 +353,71 @@ private:
             return;
         }
 
-        m_staging_ptr = static_cast<T*>(m_allocator->allocate_staging(m_bytes, m_alignment));
-        m_offload_ptr = m_allocator->allocate_offload(m_bytes, m_alignment);
+        m_staging_ptr = static_cast<T*>(m_allocator->allocate_staging(m_bytes, kAlignment));
+        m_offload_ptr = m_allocator->allocate_offload(m_bytes, kAlignment);
         if (m_staging_ptr == nullptr || m_offload_ptr == nullptr)
         {
             release_internal();
             std::abort();
         }
 
-        m_owns_staging = false;
-        m_owns_offload = false;
         m_memory_owner = DeviceMemoryOwner::INVALID;
         m_pending_flush = nullptr;
+    }
+
+    void copy_host_to_host(const DevicePointer& other)
+    {
+        assert(other.m_staging_ptr != nullptr);
+        assert(m_staging_ptr != nullptr);
+
+        std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
+        m_memory_owner = DeviceMemoryOwner::ON_HOST;
+    }
+
+    void copy_device_to_device(const DevicePointer& other)
+    {
+        assert(other.m_offload_ptr != nullptr);
+        assert(m_offload_ptr != nullptr);
+
+        m_memory_space->copy_offload_to_offload(m_offload_ptr, other.m_offload_ptr, m_bytes);
+        m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
+    }
+
+    void copy_replicated_to_replicated(const DevicePointer& other)
+    {
+        assert(other.m_staging_ptr != nullptr);
+        assert(other.m_offload_ptr != nullptr);
+        assert(m_staging_ptr != nullptr);
+        assert(m_offload_ptr != nullptr);
+
+        std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
+        m_memory_space->copy_offload_to_offload(m_offload_ptr, other.m_offload_ptr, m_bytes);
+        m_memory_owner = DeviceMemoryOwner::REPLICATED;
     }
 
     void copy_contents_from(const DevicePointer& other)
     {
         m_pending_flush = nullptr;
 
-        if (m_bytes == 0)
+        assert(m_bytes != 0);
+
+        switch (other.m_memory_owner)
         {
-            m_memory_owner = DeviceMemoryOwner::INVALID;
-            return;
+            case DeviceMemoryOwner::INVALID:
+                std::abort();
+
+            case DeviceMemoryOwner::ON_HOST:
+                copy_host_to_host(other);
+                break;
+
+            case DeviceMemoryOwner::ON_DEVICE:
+                copy_device_to_device(other);
+                break;
+
+            case DeviceMemoryOwner::REPLICATED:
+                copy_replicated_to_replicated(other);
+                break;
         }
-
-        const bool can_copy_device_to_device =
-            [this, &other]() {
-                std::lock_guard<std::mutex> other_lock(other.m_state_mutex);
-                return m_memory_space == other.m_memory_space && other.m_memory_owner == DeviceMemoryOwner::ON_DEVICE;
-            }();
-
-        if (can_copy_device_to_device)
-        {
-            m_memory_space->copy_offload_to_offload(m_offload_ptr, other.m_offload_ptr, m_bytes);
-            m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
-            return;
-        }
-
-        other.ensure_host_data();
-        std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
-        copy_to_offload_buffer_unlocked();
-        m_memory_owner = DeviceMemoryOwner::REPLICATED;
     }
 
     void allocate_internal()
@@ -432,44 +426,30 @@ private:
             m_allocator = &get_offload_allocator();
         m_memory_space = &m_allocator->memory_space();
         m_bytes = sizeof(T) * m_count;
-        m_alignment = alignof(T);
         if (m_bytes == 0)
             return;
 
-        m_staging_ptr = static_cast<T*>(m_allocator->allocate_staging(m_bytes, m_alignment));
-        m_offload_ptr = m_allocator->allocate_offload(m_bytes, m_alignment);
+        m_staging_ptr = static_cast<T*>(m_allocator->allocate_staging(m_bytes, kAlignment));
+        m_offload_ptr = m_allocator->allocate_offload(m_bytes, kAlignment);
         if (m_staging_ptr == nullptr || m_offload_ptr == nullptr)
         {
             release_internal();
             std::abort();
         }
 
-        m_owns_staging = false;
-        m_owns_offload = false;
         m_memory_owner = DeviceMemoryOwner::INVALID;
         m_pending_flush = nullptr;
     }
 
     void zero_initialize_staging()
     {
-        if (m_staging_ptr == nullptr)
-            return;
-
-        if constexpr (std::is_trivially_copyable_v<T>)
-        {
-            std::memset(m_staging_ptr, 0, m_bytes);
-        }
-        else
-        {
-            for (size_t i = 0; i < m_count; ++i)
-                m_staging_ptr[i] = T{};
-        }
+        assert(m_staging_ptr != nullptr);
+        std::memset((void*)m_staging_ptr, 0, m_bytes);
     }
 
     void zero_initialize_offload()
     {
-        if (m_offload_ptr == nullptr || m_bytes == 0)
-            return;
+        assert(m_offload_ptr != nullptr);
 
         m_memory_space->zero_offload(m_offload_ptr, m_bytes);
         m_pending_flush = nullptr;
@@ -505,28 +485,25 @@ private:
 
     void release_internal()
     {
-        if (m_owns_heap_raw && m_staging_ptr != nullptr)
-            delete[] m_staging_ptr;
+        m_pending_flush = nullptr;
+
+        if (m_staging_ptr != nullptr)
+            m_allocator->release_staging(m_staging_ptr, kAlignment);
+
+        if (m_offload_ptr != nullptr)
+            m_allocator->release_offload(m_offload_ptr, kAlignment);
 
         m_staging_ptr = nullptr;
         m_offload_ptr = nullptr;
-        m_owns_staging = false;
-        m_owns_offload = false;
-        m_owns_heap_raw = false;
         m_memory_owner = DeviceMemoryOwner::INVALID;
-        m_pending_flush = nullptr;
     }
 
     Allocator* m_allocator = nullptr;
     IMemorySpace* m_memory_space = nullptr;
     size_t m_count = 0;
     size_t m_bytes = 0;
-    size_t m_alignment = alignof(T);
     T* m_staging_ptr = nullptr;
     void* m_offload_ptr = nullptr;
-    bool m_owns_staging = false;
-    bool m_owns_offload = false;
-    bool m_owns_heap_raw = false;
     mutable DeviceMemoryOwner m_memory_owner = DeviceMemoryOwner::INVALID;
     mutable std::mutex m_state_mutex;
     std::function<void()> m_pending_flush;

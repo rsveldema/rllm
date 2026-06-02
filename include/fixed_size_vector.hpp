@@ -20,14 +20,13 @@ namespace rllm
         static constexpr size_t CAPACITY = static_cast<size_t>(LengthType::MAX);
 
         fixed_size_vector()
-            : m_data(make_storage())
+            : m_data(CAPACITY)
         {}
 
         fixed_size_vector(const fixed_size_vector& other)
-            : m_data(make_storage())
+            : m_data(other.m_data)
             , len(other.len)
         {
-            m_data = other.m_data;
         }
 
         fixed_size_vector& operator=(const fixed_size_vector& other)
@@ -41,7 +40,7 @@ namespace rllm
         }
 
         fixed_size_vector(fixed_size_vector&& other)
-            : m_data(make_storage())
+            : m_data(CAPACITY)
             , len(other.len)
         {
             m_data = other.m_data;
@@ -261,14 +260,6 @@ namespace rllm
         }
 
       private:
-        static DevicePointer<T> make_storage()
-        {
-            if constexpr (std::is_trivially_copyable_v<T>)
-                return DevicePointer<T>(CAPACITY);
-            else
-                return DevicePointer<T>(new T[CAPACITY], CAPACITY, true);
-        }
-
         DevicePointer<T> m_data;
         LengthType len = LengthType::START;
     };
