@@ -7,6 +7,8 @@ OUTPUT_MODEL="${OUTPUT_MODEL:-/tmp/rllm-profile-small.json}"
 LAYERS="${LAYERS:-1}"
 EPOCHS="${EPOCHS:-1}"
 
+EPOCHS=10
+
 if [[ ! -d "$TRAIN_DIR" ]]; then
     echo "Training directory '$TRAIN_DIR' does not exist. Set TRAIN_DIR to an existing folder."
     exit 1

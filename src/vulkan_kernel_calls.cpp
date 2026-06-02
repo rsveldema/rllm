@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <regex>
 #include <unordered_map>
 
@@ -436,6 +437,18 @@ namespace rllm::vulkan
 
 			rb = RuntimeBuffer{};
 			rb.view = view;
+
+			if (view.size_bytes == 0 || view.size_bytes == std::numeric_limits<size_t>::max())
+			{
+				LOG_ERROR(
+					"Refusing to allocate Vulkan buffer for kernel '{}' parameter '{}' with invalid size {}.",
+					name(),
+					view.parameter_name.empty() ? std::string_view{"<unnamed>"} : view.parameter_name,
+					view.size_bytes
+				);
+				cleanup_runtime_buffers();
+				std::abort();
+			}
 
 			if (view.lazy)
 			{

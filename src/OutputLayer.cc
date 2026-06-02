@@ -10,6 +10,27 @@
 
 namespace rllm
 {
+    OutputLayer::OutputLayer()
+    {
+        m_inputs.set_size(TokenID::MAX);
+    }
+
+    static void output_layer_forward_from_hidden_impl(
+        // OFFLOAD_PARAMETERS(h_last, W, inputs)
+        const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
+        const fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension>& W,
+        fixed_size_vector<rlmm_float, TokenID>& inputs
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator<TokenID>(), (h_last, W, inputs))
+        float sum = 0.f;
+        for (const auto d : enum_iterator<EmbeddingDimension>())
+            sum += h_last[d] * W[v, d];
+        inputs[v] = sum;
+        ENDFOR
+    }
+
     static void accumulate_output_layer_dh_last(
         // OFFLOAD_PARAMETERS(delta, dh_last, W)
         const fixed_size_vector<rlmm_float, TokenID>& delta,
@@ -53,9 +74,9 @@ namespace rllm
     }
 
     OutputLayer::OutputLayer(const Corpus& corpus)
+        : OutputLayer()
     {
         (void)corpus;
-        m_inputs.set_size(TokenID::MAX);
     }
 
     void OutputLayer::set_random_weights()
@@ -71,13 +92,7 @@ namespace rllm
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
     void OutputLayer::forward_from_hidden(const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last)
     {
-        for (const auto v : enum_iterator<TokenID>())
-        {
-            float sum = 0.f;
-            for (const auto d : enum_iterator<EmbeddingDimension>())
-                sum += h_last[d] * W_lm_head[v, d];
-            m_inputs[v] = sum;
-        }
+        output_layer_forward_from_hidden_impl(h_last, W_lm_head, m_inputs);
     }
 
     // Accumulates dL/dh_last[D] and updates W_lm_head.
@@ -92,26 +107,9 @@ namespace rllm
         update_output_layer_weights(delta, h_last, W_lm_head, V_lm_head, learning_rate);
     }
 
-    // ── scoring (unchanged from previous architecture) ─────────────────────────
-
-
-    void OutputLayer::rms_normalize_inputs()
-    {
-        constexpr float eps = 1e-6f;
-        const float n = static_cast<float>(TokenID::MAX);
-        float sum_sq = 0.0f;
-        for (const auto i : enum_iterator<TokenID>())
-            sum_sq += m_inputs[i] * m_inputs[i];
-        const float rms = std::sqrt(sum_sq / n + eps);
-        for (const auto i : enum_iterator<TokenID>())
-            m_inputs[i] /= rms;
-    }
-
-
     std::vector<OutputToken> OutputLayer::get_top_k_by_logit(size_t k) const
     {
-        if (k == 0)
-            return {};
+        assert (k != 0);
 
         std::vector<OutputToken> top_k;
         for (const auto i : enum_iterator<TokenID>())

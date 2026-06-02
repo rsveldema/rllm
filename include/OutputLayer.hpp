@@ -20,7 +20,7 @@ namespace rllm
         static constexpr float VEL_CLIP = 0.1f;
         static constexpr float WEIGHT_CLAMP = 2.0f;
 
-        OutputLayer() = default;
+        OutputLayer();
         OutputLayer(const Corpus& corpus);
         ~OutputLayer() = default;
         OutputLayer(const OutputLayer&) = delete;
@@ -44,7 +44,6 @@ namespace rllm
         // Computes softmax deltas (with label smoothing) into score for backprop,
         // and returns the cross-entropy loss -log(softmax[target]).
         float compute_score(Score& score, const TokenID expected_output_token);
-        void rms_normalize_inputs();
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
