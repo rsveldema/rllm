@@ -451,9 +451,16 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
             arg_setup = arg_setup + "\n" + "\n".join(extra_arg_setup_lines)
         else:
             arg_setup = "\n".join(extra_arg_setup_lines)
-    guard_block = ""
+    guard_terms: list[str] = []
+    if spec.is_2d and len(spec.vars) >= 2:
+        guard_terms.append(f"{spec.vars[0]} >= rllm_push.rllm_bound_x || {spec.vars[1]} >= rllm_push.rllm_bound_y")
+    elif spec.vars:
+        guard_terms.append(f"{spec.vars[0]} >= rllm_push.rllm_bound_x")
     if spec.kernel_guard_expr:
-        guard_expr = _sanitize_kernel_line_for_glsl(spec.kernel_guard_expr)
+        guard_terms.append(_sanitize_kernel_line_for_glsl(spec.kernel_guard_expr))
+    guard_block = ""
+    if guard_terms:
+        guard_expr = " || ".join(f"({term})" for term in guard_terms)
         guard_block = f"    if ({guard_expr}) {{\n        return;\n    }}\n"
     call_arg_names.extend(
         name for name in extra_param_names if name not in matrix_view_specs and name not in buffer_view_specs
@@ -462,12 +469,16 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
     ssbo_block = "\n".join(ssbo_decls)
     if ssbo_block:
         ssbo_block = ssbo_block + "\n\n"
-    push_constant_block = ""
+    push_constant_fields = [
+        "    int rllm_bound_x;",
+        "    int rllm_bound_y;",
+    ]
     if scalar_param_specs:
         # Vulkan gives us a compact scalar-argument path without inventing a
         # one-off SSBO for values like learning rates.
-        fields = "\n".join(f"    {scalar.glsl_type} {scalar.name};" for scalar in scalar_param_specs)
-        push_constant_block = f"layout(push_constant) uniform RllmPushConstants {{\n{fields}\n}} rllm_push;\n\n"
+        push_constant_fields.extend(f"    {scalar.glsl_type} {scalar.name};" for scalar in scalar_param_specs)
+    fields = "\n".join(push_constant_fields)
+    push_constant_block = f"layout(push_constant) uniform RllmPushConstants {{\n{fields}\n}} rllm_push;\n\n"
     return (
         "#version 450\n"
         "\n"

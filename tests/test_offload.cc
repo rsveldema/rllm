@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <InputLayer.hpp>
 #include <LayerPrimitives.hpp>
 #include <device_pointer.hpp>
 #include <enum_iterator.hpp>
@@ -8,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -107,6 +109,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
 {
+    // TODO: change visits to a fixed_size_matrix and test that as well, to cover the fixed-size matrix path in the offload codegen.
+
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 5;
     constexpr size_t COLS = 13;
@@ -272,14 +276,55 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
-        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+    for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>())
+        for (const auto j : rllm::enum_iterator<rllm::HeadsIndex>())
             ASSERT_FLOAT_EQ(
-                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
-                static_cast<float>(i * 100 + j + 1)
+                (values[i, j]),
+                static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 1)
             );
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+}
+
+
+TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
+{
+    std::srand(0);
+
+    rllm::InputLayer input_layer;
+    input_layer.set_random_embeddings();
+
+    rllm::InputLine input;
+    input.push_back(static_cast<rllm::TokenID>(1));
+    input.push_back(static_cast<rllm::TokenID>(7));
+    input.push_back(static_cast<rllm::TokenID>(11));
+    input.push_back(static_cast<rllm::TokenID>(19));
+
+    rllm::flexible_rows_matrix<rllm::rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> actual(input.size());
+    input_layer.propagate_forward(input, actual);
+
+    constexpr float model_dim = static_cast<float>(rllm::EmbeddingDimension::MAX);
+    constexpr float max_abs_error = 1e-5f;
+
+    for (const auto pos : rllm::enum_iterator<rllm::PositionIndex>(input.size()))
+    {
+        const auto embedding = input_layer.get_embedding(input[pos]);
+        const float pos_f = static_cast<float>(pos);
+
+        for (const auto di : rllm::enum_iterator<rllm::EmbeddingDimension>())
+        {
+            const int di_int = static_cast<int>(di);
+            const float emb_val = embedding[di];
+            const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / model_dim);
+            const float pe = (di_int % 2 == 0) ? std::sin(pos_f * freq) : std::cos(pos_f * freq);
+            const float expected = emb_val + pe;
+            const float actual_value = actual[pos, di];
+
+            ASSERT_NEAR(actual_value, expected, max_abs_error)
+                << "Mismatch at pos=" << static_cast<size_t>(pos)
+                << ", di=" << static_cast<size_t>(di);
+        }
+    }
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatParam)
@@ -298,11 +343,11 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
-        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+    for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>())
+        for (const auto j : rllm::enum_iterator<rllm::HeadsIndex>())
             EXPECT_FLOAT_EQ(
-                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
-                scale * static_cast<float>(i * 100 + j + 5)
+                (values[i, j]),
+                scale * static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 5)
             );
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
@@ -400,11 +445,11 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (size_t i = 0; i < static_cast<size_t>(rllm::EmbeddingDimension::MAX); ++i)
-        for (size_t j = 0; j < static_cast<size_t>(rllm::EmbeddingDimension::MAX); ++j)
+    for (const auto i : rllm::enum_iterator<rllm::EmbeddingDimension>())
+        for (const auto j : rllm::enum_iterator<rllm::EmbeddingDimension>())
             EXPECT_FLOAT_EQ(
-                (offload_values[static_cast<rllm::EmbeddingDimension>(i), static_cast<rllm::EmbeddingDimension>(j)]),
-                (parfor_values[static_cast<rllm::EmbeddingDimension>(i), static_cast<rllm::EmbeddingDimension>(j)])
+                (offload_values[i, j]),
+                (parfor_values[i, j])
             );
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
@@ -427,12 +472,15 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (size_t i = 0; i < 3; ++i)
-        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+    for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>(rllm::MultiTokenPredictionIndex::THREE))
+        for (const auto j : rllm::enum_iterator<rllm::HeadsIndex>())
+        {
+            const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(
-                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
-                static_cast<float>(i * 100 + j + 2)
+                actual_value,
+                static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 2)
             );
+        }
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
@@ -452,12 +500,15 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (size_t i = 0; i < static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX); ++i)
-        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+    for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>(static_cast<rllm::MultiTokenPredictionIndex>(3)))
+        for (const auto j : rllm::enum_iterator<rllm::HeadsIndex>())
+        {
+            const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(
-                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
-                static_cast<float>(i * 100 + j + 3)
+                actual_value,
+                static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 3)
             );
+        }
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
@@ -479,12 +530,15 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (size_t i = 0; i < 3; ++i)
-        for (size_t j = 0; j < static_cast<size_t>(rllm::HeadsIndex::MAX); ++j)
+    for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>(static_cast<rllm::MultiTokenPredictionIndex>(3)))
+        for (const auto j : rllm::enum_iterator<rllm::HeadsIndex>())
+        {
+            const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(
-                (values[static_cast<rllm::MultiTokenPredictionIndex>(i), static_cast<rllm::HeadsIndex>(j)]),
-                static_cast<float>(i * 100 + j + 4)
+                actual_value,
+                static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 4)
             );
+        }
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }

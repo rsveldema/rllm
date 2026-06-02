@@ -51,7 +51,7 @@ namespace rllm
 
       private:
         // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.
-                fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension> m_embeddings;
+        fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension> m_embeddings;
 
         void reset_embeddings();
     };

@@ -391,7 +391,7 @@ namespace rllm::vulkan
 
       private:
         static constexpr size_t kLaunchBufferCount = sizeof...(KernelArgs);
-                static constexpr size_t kLaunchScalarBytes = sizeof...(KernelArgs) * sizeof(uint32_t);
+                static constexpr size_t kLaunchScalarBytes = (sizeof...(KernelArgs) + 2) * sizeof(uint32_t);
         std::array<detail::HostBufferView, kLaunchBufferCount> m_buffers{};
         size_t m_buffer_count = 0;
                 std::array<std::byte, kLaunchScalarBytes> m_push_constant_bytes{};
@@ -471,16 +471,16 @@ namespace rllm::vulkan
                               range.outer_size();
                           })
             {
-                x = to_size(range.inner_size());
-                y = to_size(range.outer_size());
+                x = to_size(range.outer_size());
+                y = to_size(range.inner_size());
             }
             else if constexpr (requires {
                                    range.cols();
                                    range.rows();
                                })
             {
-                x = to_size(range.cols());
-                y = to_size(range.rows());
+                x = to_size(range.rows());
+                y = to_size(range.cols());
             }
             else
             {
@@ -522,6 +522,8 @@ namespace rllm::vulkan
         m_buffer_count = 0;
         m_push_constant_size = 0;
         (detail::append_buffer_view(m_buffers, m_buffer_count, args), ...);
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(x_items));
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(1));
         (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);
 
         dispatch_kernel(
@@ -553,6 +555,8 @@ namespace rllm::vulkan
         m_buffer_count = 0;
         m_push_constant_size = 0;
         (detail::append_buffer_view(m_buffers, m_buffer_count, args), ...);
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(x_items));
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(y_items));
         (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);
 
         dispatch_kernel(
