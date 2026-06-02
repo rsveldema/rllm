@@ -60,6 +60,7 @@ namespace rllm
             for (const auto t : enum_iterator<TokenID>())
                 for (const auto d : enum_iterator<EmbeddingDimension>())
                     W_lm_head[t, d] = w_j.at(i++).template get<float>();
+            W_lm_head.copy_to_offload_buffer();
         }
         V_lm_head.zero();
     }

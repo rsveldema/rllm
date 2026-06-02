@@ -187,6 +187,11 @@ namespace rllm
             m_data.set_pending_flush(std::move(flush_fn));
         }
 
+        void copy_to_offload_buffer()
+        {
+            m_data.copy_to_offload_buffer();
+        }
+
         bool needs_offload_sync() const
         {
             return m_data.needs_offload_sync();

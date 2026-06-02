@@ -86,6 +86,7 @@ namespace rllm
         for (const auto v : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
                 W_lm_head[v, d] = get_random_value(-scale, scale);
+        W_lm_head.copy_to_offload_buffer();
         V_lm_head.zero();
     }
 
