@@ -335,7 +335,7 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
 
     if ctx.backend_namespace == "vulkan":
         kernel_symbol, rel_spv = _vulkan_kernel_symbol_and_rel_spv(ctx.rel_path, ctx.lineno)
-        launch_name = "launch_2d" if ctx.is_2d else "launch_1d"
+        launch_name = "launch_2d_named" if ctx.is_2d else "launch_1d_named"
         extra_param_names = parse_extra_param_names(ctx.extra_params)
         if extra_param_names:
             kernel_template_args = ", ".join(f"decltype(({name}))" for name in extra_param_names)
@@ -349,6 +349,9 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
         lines.append(f"{ctx.indent});")
         lines.append(f"{ctx.indent}{kernel_symbol}.{launch_name}(")
         lines.append(f"{ctx.indent}    {ctx.range_expr}{',' if extra_param_names else ''}")
+        if extra_param_names:
+            joined_names = ", ".join(f'\"{name}\"' for name in extra_param_names)
+            lines.append(f"{ctx.indent}    {{{joined_names}}},")
         for idx, name in enumerate(extra_param_names):
             suffix = "," if idx + 1 < len(extra_param_names) else ""
             lines.append(f"{ctx.indent}    {name}{suffix}")

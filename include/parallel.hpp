@@ -57,16 +57,26 @@ namespace parallel {
             size_t device_to_host = 0;
         };
 
-        void record_host_to_device_buffer_copy(std::string_view site = {})
+        struct CopyParameterBreakdown
+        {
+            std::string site;
+            std::string parameter;
+            size_t host_to_device = 0;
+            size_t device_to_host = 0;
+        };
+
+        void record_host_to_device_buffer_copy(std::string_view site = {}, std::string_view parameter = {})
         {
             m_host_to_device_buffer_copies.fetch_add(1, std::memory_order_relaxed);
             record_copy_site(site, true);
+            record_copy_parameter(site, parameter, true);
         }
 
-        void record_device_to_host_buffer_copy(std::string_view site = {})
+        void record_device_to_host_buffer_copy(std::string_view site = {}, std::string_view parameter = {})
         {
             m_device_to_host_buffer_copies.fetch_add(1, std::memory_order_relaxed);
             record_copy_site(site, false);
+            record_copy_parameter(site, parameter, false);
         }
 
         size_t host_to_device_buffer_copies() const
@@ -86,6 +96,7 @@ namespace parallel {
 
             std::lock_guard<std::mutex> lock(m_copy_site_mutex);
             m_copy_sites.clear();
+            m_copy_parameters.clear();
         }
 
         void print_statistics() const
@@ -105,6 +116,22 @@ namespace parallel {
                         site.site,
                         site.host_to_device,
                         site.device_to_host
+                    );
+                }
+            }
+
+            const auto top_parameters = top_copy_parameters();
+            if (!top_parameters.empty())
+            {
+                std::println("  Top copy parameters:");
+                for (const auto& item : top_parameters)
+                {
+                    std::println(
+                        "    {} [{}]: H2D={}, D2H={}",
+                        item.site,
+                        item.parameter,
+                        item.host_to_device,
+                        item.device_to_host
                     );
                 }
             }
@@ -139,6 +166,42 @@ namespace parallel {
             return sites;
         }
 
+        std::vector<CopyParameterBreakdown> top_copy_parameters(size_t limit = 10) const
+        {
+            std::lock_guard<std::mutex> lock(m_copy_site_mutex);
+
+            std::vector<CopyParameterBreakdown> items;
+            items.reserve(m_copy_parameters.size());
+            for (const auto& [key, counts] : m_copy_parameters)
+            {
+                const size_t split = key.find('\n');
+                if (split == std::string::npos)
+                    continue;
+
+                items.push_back(CopyParameterBreakdown{
+                    .site = key.substr(0, split),
+                    .parameter = key.substr(split + 1),
+                    .host_to_device = counts.host_to_device,
+                    .device_to_host = counts.device_to_host,
+                });
+            }
+
+            std::sort(items.begin(), items.end(), [](const auto& lhs, const auto& rhs) {
+                const size_t lhs_total = lhs.host_to_device + lhs.device_to_host;
+                const size_t rhs_total = rhs.host_to_device + rhs.device_to_host;
+                if (lhs_total != rhs_total)
+                    return lhs_total > rhs_total;
+                if (lhs.site != rhs.site)
+                    return lhs.site < rhs.site;
+                return lhs.parameter < rhs.parameter;
+            });
+
+            if (items.size() > limit)
+                items.resize(limit);
+
+            return items;
+        }
+
       private:
         struct CopyCounts
         {
@@ -159,10 +222,30 @@ namespace parallel {
                 counts.device_to_host++;
         }
 
+        void record_copy_parameter(std::string_view site, std::string_view parameter, bool host_to_device)
+        {
+            if (site.empty() || parameter.empty())
+                return;
+
+            std::lock_guard<std::mutex> lock(m_copy_site_mutex);
+            std::string key;
+            key.reserve(site.size() + 1 + parameter.size());
+            key.append(site);
+            key.push_back('\n');
+            key.append(parameter);
+
+            auto& counts = m_copy_parameters[key];
+            if (host_to_device)
+                counts.host_to_device++;
+            else
+                counts.device_to_host++;
+        }
+
         std::atomic<size_t> m_host_to_device_buffer_copies{0};
         std::atomic<size_t> m_device_to_host_buffer_copies{0};
         mutable std::mutex m_copy_site_mutex;
         std::unordered_map<std::string, CopyCounts> m_copy_sites;
+        std::unordered_map<std::string, CopyCounts> m_copy_parameters;
     };
 
     extern Statistics statistics;

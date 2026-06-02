@@ -30,8 +30,7 @@ public:
     {
         allocate_internal();
         zero_initialize_staging();
-        copy_to_offload_buffer();
-        m_current_owner = CurrentOwner::Host;
+        zero_initialize_offload();
     }
 
     DevicePointer(Allocator& allocator, size_t num_elements)
@@ -48,7 +47,7 @@ public:
         , m_current_owner(CurrentOwner::Host)
     {
         zero_initialize_staging();
-        copy_to_offload_buffer();
+        zero_initialize_offload();
     }
 
     DevicePointer(T* ptr, size_t num_elements, bool owns_heap = false)
@@ -407,6 +406,16 @@ private:
                 m_staging_ptr[i] = T{};
         }
         m_current_owner = CurrentOwner::Host;
+    }
+
+    void zero_initialize_offload()
+    {
+        if (m_offload_ptr == nullptr || m_bytes == 0)
+            return;
+
+        m_memory_space->zero_offload(m_offload_ptr, m_bytes);
+        m_pending_flush = nullptr;
+        m_current_owner = CurrentOwner::Device;
     }
 
     void ensure_host_data() const

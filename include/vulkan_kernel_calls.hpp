@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -36,12 +37,13 @@ namespace rllm::vulkan
             const void* cache_key = nullptr;
             void* host_ptr = nullptr;
             size_t size_bytes = 0;
+            std::string_view parameter_name{};
             bool writable = false;
             bool lazy = false;  // if true, skip d2h after dispatch; flush happens via on_device_ready callback
             bool host_is_latest = true;
             // Called with (mapped_ptr, size_bytes, kernel_name) once the Vulkan device buffer is ready.
             // Allows the caller to register a lazy-flush callback on a DevicePointer.
-            std::function<void(void*, size_t, std::string_view)> on_device_ready;
+            std::function<void(void*, size_t, std::string_view, std::string_view)> on_device_ready;
         };
 
         template <typename T>
@@ -62,6 +64,13 @@ namespace rllm::vulkan
             value.raw_staging_data();
             value.storage_size_bytes();
             value.set_pending_flush(std::move(flush_fn));
+            value.needs_offload_sync();
+        };
+
+        template <typename T>
+        inline constexpr bool is_offload_backed_buffer_arg_v = !is_device_pointer_v<T> && requires(T value) {
+            value.raw_staging_data();
+            value.storage_size_bytes();
             value.needs_offload_sync();
         };
 
@@ -117,7 +126,7 @@ namespace rllm::vulkan
         }
 
         template <typename Arg>
-        inline void append_buffer_view(std::vector<HostBufferView>& out, Arg&& arg)
+        inline void append_buffer_view(std::vector<HostBufferView>& out, std::string_view parameter_name, Arg&& arg)
         {
             using ArgType = std::remove_reference_t<Arg>;
             if constexpr (is_device_pointer_v<ArgType>)
@@ -126,32 +135,47 @@ namespace rllm::vulkan
                 view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
                 view.size_bytes = arg.storage_size_bytes();
+                view.parameter_name = parameter_name;
                 view.writable = !std::is_const_v<ArgType>;
                 view.lazy = true;
                 view.host_is_latest = arg.needs_offload_sync();
-                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz, std::string_view kernel_name) {
-                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name]() {
-                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name);
+                view.on_device_ready = [&arg](
+                    void* mapped_ptr,
+                    size_t sz,
+                    std::string_view kernel_name,
+                    std::string_view parameter_name_value
+                ) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name, parameter_name_value]() {
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
                         std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                     });
                 };
                 out.push_back(view);
             }
-            else if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
+            else if constexpr (is_offload_backed_buffer_arg_v<ArgType>)
             {
                 HostBufferView view{};
                 view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
-                view.writable = true;
+                view.parameter_name = parameter_name;
+                view.writable = !std::is_const_v<ArgType>;
                 view.lazy = true;
                 view.host_is_latest = arg.needs_offload_sync();
-                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz, std::string_view kernel_name) {
-                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name]() {
-                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name);
-                        std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
-                    });
-                };
+                if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
+                {
+                    view.on_device_ready = [&arg](
+                        void* mapped_ptr,
+                        size_t sz,
+                        std::string_view kernel_name,
+                        std::string_view parameter_name_value
+                    ) {
+                        arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name, parameter_name_value]() {
+                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                            std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
+                        });
+                    };
+                }
                 out.push_back(view);
             }
             else if constexpr (is_host_buffer_arg_v<ArgType>)
@@ -160,6 +184,7 @@ namespace rllm::vulkan
                 view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
+                view.parameter_name = parameter_name;
                 view.writable = !std::is_const_v<ArgType>;
                 view.host_is_latest = true;
                 out.push_back(view);
@@ -173,18 +198,25 @@ namespace rllm::vulkan
                 view.cache_key = static_cast<const void*>(ptr);
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(ptr));
                 view.size_bytes = static_cast<size_t>(arg.size()) * sizeof(ElementType);
+                view.parameter_name = parameter_name;
                 view.writable = !std::is_const_v<std::remove_pointer_t<decltype(ptr)>>;
                 out.push_back(view);
             }
             else
             {
                 static_cast<void>(out);
+                static_cast<void>(parameter_name);
                 static_cast<void>(arg);
             }
         }
 
         template <size_t N, typename Arg>
-        inline void append_buffer_view(std::array<HostBufferView, N>& out, size_t& out_count, Arg&& arg)
+        inline void append_buffer_view(
+            std::array<HostBufferView, N>& out,
+            size_t& out_count,
+            std::string_view parameter_name,
+            Arg&& arg
+        )
         {
             using ArgType = std::remove_reference_t<Arg>;
             if constexpr (is_device_pointer_v<ArgType>)
@@ -201,18 +233,24 @@ namespace rllm::vulkan
                 view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
                 view.size_bytes = arg.storage_size_bytes();
+                view.parameter_name = parameter_name;
                 view.writable = !std::is_const_v<ArgType>;
                 view.lazy = true;
                 view.host_is_latest = arg.needs_offload_sync();
-                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz, std::string_view kernel_name) {
-                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name]() {
-                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name);
+                view.on_device_ready = [&arg](
+                    void* mapped_ptr,
+                    size_t sz,
+                    std::string_view kernel_name,
+                    std::string_view parameter_name_value
+                ) {
+                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name, parameter_name_value]() {
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
                         std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                     });
                 };
                 out[out_count++] = view;
             }
-            else if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
+            else if constexpr (is_offload_backed_buffer_arg_v<ArgType>)
             {
                 if (out_count >= N)
                 {
@@ -226,15 +264,24 @@ namespace rllm::vulkan
                 view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.raw_staging_data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
-                view.writable = true;
+                view.parameter_name = parameter_name;
+                view.writable = !std::is_const_v<ArgType>;
                 view.lazy = true;
                 view.host_is_latest = arg.needs_offload_sync();
-                view.on_device_ready = [&arg](void* mapped_ptr, size_t sz, std::string_view kernel_name) {
-                    arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name]() {
-                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name);
-                        std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
-                    });
-                };
+                if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
+                {
+                    view.on_device_ready = [&arg](
+                        void* mapped_ptr,
+                        size_t sz,
+                        std::string_view kernel_name,
+                        std::string_view parameter_name_value
+                    ) {
+                        arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name, parameter_name_value]() {
+                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                            std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
+                        });
+                    };
+                }
                 out[out_count++] = view;
             }
             else if constexpr (is_host_buffer_arg_v<ArgType>)
@@ -251,6 +298,7 @@ namespace rllm::vulkan
                 view.cache_key = static_cast<const void*>(std::addressof(arg));
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(arg.data()));
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
+                view.parameter_name = parameter_name;
                 view.writable = !std::is_const_v<ArgType>;
                 view.host_is_latest = true;
                 out[out_count++] = view;
@@ -272,6 +320,7 @@ namespace rllm::vulkan
                 view.cache_key = static_cast<const void*>(ptr);
                 view.host_ptr = const_cast<void*>(static_cast<const void*>(ptr));
                 view.size_bytes = static_cast<size_t>(arg.size()) * sizeof(ElementType);
+                view.parameter_name = parameter_name;
                 view.writable = !std::is_const_v<std::remove_pointer_t<decltype(ptr)>>;
                 out[out_count++] = view;
             }
@@ -279,6 +328,7 @@ namespace rllm::vulkan
             {
                 static_cast<void>(out);
                 static_cast<void>(out_count);
+                static_cast<void>(parameter_name);
                 static_cast<void>(arg);
             }
         }
@@ -386,10 +436,30 @@ namespace rllm::vulkan
         template <typename Range>
         void launch_1d(Range&& range, KernelArgs... args);
 
+                template <typename Range>
+                void launch_1d_named(Range&& range, std::initializer_list<std::string_view> parameter_names, KernelArgs... args);
+
         template <typename Range2D>
         void launch_2d(Range2D&& range, KernelArgs... args);
 
+                template <typename Range2D>
+                void launch_2d_named(
+                        Range2D&& range,
+                        std::initializer_list<std::string_view> parameter_names,
+                        KernelArgs... args
+                );
+
       private:
+                template <size_t... I>
+                void append_named_buffer_views(
+                        std::index_sequence<I...>,
+                        const std::array<std::string_view, sizeof...(KernelArgs)>& parameter_names,
+                        KernelArgs... args
+                )
+                {
+                        (detail::append_buffer_view(m_buffers, m_buffer_count, parameter_names[I], args), ...);
+                }
+
         static constexpr size_t kLaunchBufferCount = sizeof...(KernelArgs);
                 static constexpr size_t kLaunchScalarBytes = (sizeof...(KernelArgs) + 2) * sizeof(uint32_t);
         std::array<detail::HostBufferView, kLaunchBufferCount> m_buffers{};
@@ -518,10 +588,11 @@ namespace rllm::vulkan
 
         const uint32_t x_items = detail::range_size_1d(range);
         const uint32_t groups_x = detail::ceil_div_u32(x_items, local_size_x());
+        const std::array<std::string_view, sizeof...(KernelArgs)> parameter_names{};
 
         m_buffer_count = 0;
         m_push_constant_size = 0;
-        (detail::append_buffer_view(m_buffers, m_buffer_count, args), ...);
+        append_named_buffer_views(std::index_sequence_for<KernelArgs...>{}, parameter_names, args...);
         detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(x_items));
         detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(1));
         (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);
@@ -551,10 +622,112 @@ namespace rllm::vulkan
         const auto [x_items, y_items] = detail::range_size_2d(range);
         const uint32_t groups_x = detail::ceil_div_u32(x_items, local_size_x());
         const uint32_t groups_y = detail::ceil_div_u32(y_items, local_size_y());
+        const std::array<std::string_view, sizeof...(KernelArgs)> parameter_names{};
 
         m_buffer_count = 0;
         m_push_constant_size = 0;
-        (detail::append_buffer_view(m_buffers, m_buffer_count, args), ...);
+        append_named_buffer_views(std::index_sequence_for<KernelArgs...>{}, parameter_names, args...);
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(x_items));
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(y_items));
+        (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);
+
+        dispatch_kernel(
+            groups_x,
+            groups_y,
+            std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
+            std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
+            std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),
+            m_runtime_buffer_count
+        );
+    }
+
+    template <typename... KernelArgs>
+    template <typename Range>
+    inline void ComputeKernel<KernelArgs...>::launch_1d_named(
+        Range&& range,
+        std::initializer_list<std::string_view> parameter_names_list,
+        KernelArgs... args
+    )
+    {
+        std::lock_guard<std::mutex> lock(m_launch_mutex);
+
+        if (!std::filesystem::exists(spirv_path()))
+        {
+            LOG_ERROR("Missing generated Vulkan kernel artifact '{}' for kernel '{}'.", spirv_path().string(), name());
+            std::abort();
+        }
+
+        if (parameter_names_list.size() != sizeof...(KernelArgs))
+        {
+            LOG_ERROR(
+                "Kernel '{}' expected {} parameter names, but launch provided {}.",
+                name(),
+                sizeof...(KernelArgs),
+                parameter_names_list.size()
+            );
+            std::abort();
+        }
+
+        std::array<std::string_view, sizeof...(KernelArgs)> parameter_names{};
+        std::copy(parameter_names_list.begin(), parameter_names_list.end(), parameter_names.begin());
+
+        const uint32_t x_items = detail::range_size_1d(range);
+        const uint32_t groups_x = detail::ceil_div_u32(x_items, local_size_x());
+
+        m_buffer_count = 0;
+        m_push_constant_size = 0;
+        append_named_buffer_views(std::index_sequence_for<KernelArgs...>{}, parameter_names, args...);
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(x_items));
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(1));
+        (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);
+
+        dispatch_kernel(
+            groups_x,
+            1,
+            std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
+            std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
+            std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),
+            m_runtime_buffer_count
+        );
+    }
+
+    template <typename... KernelArgs>
+    template <typename Range2D>
+    inline void ComputeKernel<KernelArgs...>::launch_2d_named(
+        Range2D&& range,
+        std::initializer_list<std::string_view> parameter_names_list,
+        KernelArgs... args
+    )
+    {
+        std::lock_guard<std::mutex> lock(m_launch_mutex);
+
+        if (!std::filesystem::exists(spirv_path()))
+        {
+            LOG_ERROR("Missing generated Vulkan kernel artifact '{}' for kernel '{}'.", spirv_path().string(), name());
+            std::abort();
+        }
+
+        if (parameter_names_list.size() != sizeof...(KernelArgs))
+        {
+            LOG_ERROR(
+                "Kernel '{}' expected {} parameter names, but launch provided {}.",
+                name(),
+                sizeof...(KernelArgs),
+                parameter_names_list.size()
+            );
+            std::abort();
+        }
+
+        std::array<std::string_view, sizeof...(KernelArgs)> parameter_names{};
+        std::copy(parameter_names_list.begin(), parameter_names_list.end(), parameter_names.begin());
+
+        const auto [x_items, y_items] = detail::range_size_2d(range);
+        const uint32_t groups_x = detail::ceil_div_u32(x_items, local_size_x());
+        const uint32_t groups_y = detail::ceil_div_u32(y_items, local_size_y());
+
+        m_buffer_count = 0;
+        m_push_constant_size = 0;
+        append_named_buffer_views(std::index_sequence_for<KernelArgs...>{}, parameter_names, args...);
         detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(x_items));
         detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(y_items));
         (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);

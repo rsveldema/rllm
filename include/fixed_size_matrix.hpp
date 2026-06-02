@@ -26,9 +26,7 @@ namespace rllm
 
         fixed_size_matrix()
             : m_data(ROWS * COLS)
-        {
-            fill(ElementType{});
-        }
+        {}
 
         fixed_size_matrix(const fixed_size_matrix& other)
             : m_data(ROWS * COLS)

@@ -5,6 +5,8 @@
 #include <device_pointer.hpp>
 #include <enum_iterator.hpp>
 #include <enum_iterator2D.hpp>
+#include <fixed_size_matrix.hpp>
+#include <fixed_size_vector.hpp>
 #include <parallel.hpp>
 
 #include <atomic>
@@ -15,8 +17,14 @@
 
 #if defined(USE_VULKAN_OFFLOAD)
 #define ATOMIC_INC(x) ((x)++)
+constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES = 1u;
+constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ = 0u;
+constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ = 1u;
 #else
 #define ATOMIC_INC(x) (++(x))
+constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES = 0u;
+constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ = 0u;
+constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ = 0u;
 #endif
 
 #if !defined(USE_OPENMP)
@@ -41,43 +49,38 @@ TEST_F(OffloadParForTest, OffloadParForVisitsEachIndexExactlyOnce)
 {
     constexpr size_t N = 17;
     // OFFLOAD_PARAMETERS(visits)
-    std::vector<std::atomic<int>> visits(N);
+    rllm::fixed_size_vector<int, rllm::PositionIndex> visits;
+    visits.set_size(static_cast<rllm::PositionIndex>(N));
     // END_OFFLOAD_PARAMETERS
-    for (auto& v : visits)
-        v.store(0, std::memory_order_relaxed);
 
     OFFLOAD_PARFOR_1D_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (visits))
     ATOMIC_INC(visits[static_cast<size_t>(i)]);
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
     for (size_t i = 0; i < N; ++i)
-        EXPECT_EQ(visits[i].load(std::memory_order_relaxed), 1) << "Wrong visit count at i=" << i;
+        EXPECT_EQ(visits[i], 1) << "Wrong visit count at i=" << i;
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ);
 }
 
 TEST_F(OffloadParForTest, OffloadParForParamVisitsEachIndexExactlyOnce)
 {
     constexpr size_t N = 19;
     // PARFOR_PARAM requires the loop variable to be captured in a lambda, so we can't use a simple array of ints here.
-    // Instead, we use atomics to track visits.
-
     // OFFLOAD_PARAMETERS(visits)
-    std::vector<std::atomic<int>> visits(N);
+    rllm::fixed_size_vector<int, rllm::PositionIndex> visits;
+    visits.set_size(static_cast<rllm::PositionIndex>(N));
     // END_OFFLOAD_PARAMETERS
-
-    // PARFOR_PARAM may execute iterations in any order and potentially in parallel, so we initialize the visit counts
-    // to 0 before the loop.
-    for (auto& v : visits)
-        v.store(0, std::memory_order_relaxed);
 
     OFFLOAD_PARFOR_1D_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (visits))
     ATOMIC_INC(visits[static_cast<size_t>(i)]);
     ENDFOR
 
     for (size_t i = 0; i < N; ++i)
-        EXPECT_EQ(visits[i].load(std::memory_order_relaxed), 1) << "Wrong visit count at i=" << i;
+        EXPECT_EQ(visits[i], 1) << "Wrong visit count at i=" << i;
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
@@ -85,113 +88,101 @@ TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 7;
     constexpr size_t COLS = 11;
-    std::vector<std::atomic<int>> visits(ROWS * COLS);
+    rllm::fixed_size_matrix<int, rllm::PositionIndex, rllm::HeadDimension> visits;
     // END_OFFLOAD_PARAMETERS
-    for (auto& v : visits)
-        v.store(0, std::memory_order_relaxed);
 
     const auto grid = rllm::enum_iterator2D<rllm::PositionIndex, rllm::HeadDimension>(
         static_cast<rllm::PositionIndex>(ROWS), static_cast<rllm::HeadDimension>(COLS)
     );
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
-    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
-    ATOMIC_INC(visits[idx]);
+    ATOMIC_INC((visits[i, j]));
     ENDFOR
 
     for (size_t i = 0; i < ROWS; ++i)
         for (size_t j = 0; j < COLS; ++j)
         {
-            const size_t idx = i * COLS + j;
-            EXPECT_EQ(visits[idx].load(std::memory_order_relaxed), 1)
+            EXPECT_EQ((visits[static_cast<rllm::PositionIndex>(i), static_cast<rllm::HeadDimension>(j)]), 1)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
 {
-    // TODO: change visits to a fixed_size_matrix and test that as well, to cover the fixed-size matrix path in the offload codegen.
-
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 5;
     constexpr size_t COLS = 13;
-    std::vector<std::atomic<int>> visits(ROWS * COLS);
+    rllm::fixed_size_matrix<int, rllm::PositionIndex, rllm::HeadDimension> visits;
     // END_OFFLOAD_PARAMETERS
 
     const auto rows = static_cast<rllm::PositionIndex>(ROWS);
     const auto cols = static_cast<rllm::HeadDimension>(COLS);
-    for (auto& v : visits)
-        v.store(0, std::memory_order_relaxed);
 
     const auto grid = rllm::enum_iterator2D<rllm::PositionIndex, rllm::HeadDimension>(rows, cols);
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
-    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
-    ATOMIC_INC(visits[idx]);
+    ATOMIC_INC((visits[i, j]));
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
     for (size_t i = 0; i < ROWS; ++i)
         for (size_t j = 0; j < COLS; ++j)
         {
-            const size_t idx = i * COLS + j;
-            EXPECT_EQ(visits[idx].load(std::memory_order_relaxed), 1)
+            EXPECT_EQ((visits[static_cast<rllm::PositionIndex>(i), static_cast<rllm::HeadDimension>(j)]), 1)
                 << "Wrong visit count at (" << i << "," << j << ")";
-            }
+        }
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DTriangularParamVisitsLowerTriangle)
 {
     // OFFLOAD_PARAMETERS(visits,N)
     constexpr size_t N = 8;
-    std::vector<std::atomic<int>> visits(N * N);
+    rllm::fixed_size_matrix<int, rllm::PositionIndex, rllm::PositionIndex> visits;
     // END_OFFLOAD_PARAMETERS
 
-    for (auto& v : visits)
-        v.store(0, std::memory_order_relaxed);
-
     OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, static_cast<rllm::PositionIndex>(N), (visits))
-    const size_t idx = static_cast<size_t>(i) * N + static_cast<size_t>(j);
-    ATOMIC_INC(visits[idx]);
+    ATOMIC_INC((visits[i, j]));
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
     for (size_t i = 0; i < N; ++i)
         for (size_t j = 0; j < N; ++j)
         {
             const int expected = (j <= i) ? 1 : 0;
-            EXPECT_EQ(visits[i * N + j].load(std::memory_order_relaxed), expected)
+            EXPECT_EQ((visits[static_cast<rllm::PositionIndex>(i), static_cast<rllm::PositionIndex>(j)]), expected)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DUpperTriangularParamVisitsUpperTriangle)
 {
     // OFFLOAD_PARAMETERS(visits,N)
     constexpr size_t N = 8;
-    std::vector<std::atomic<int>> visits(N * N);
+    rllm::fixed_size_matrix<int, rllm::PositionIndex, rllm::PositionIndex> visits;
     // END_OFFLOAD_PARAMETERS
 
-    for (auto& v : visits)
-        v.store(0, std::memory_order_relaxed);
-
     OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(i, j, static_cast<rllm::PositionIndex>(N), (visits))
-    const size_t idx = static_cast<size_t>(i) * N + static_cast<size_t>(j);
-    ATOMIC_INC(visits[idx]);
+    ATOMIC_INC((visits[i, j]));
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
     for (size_t i = 0; i < N; ++i)
         for (size_t j = 0; j < N; ++j)
         {
             const int expected = (i <= j) ? 1 : 0;
-            EXPECT_EQ(visits[i * N + j].load(std::memory_order_relaxed), expected)
+            EXPECT_EQ((visits[static_cast<rllm::PositionIndex>(i), static_cast<rllm::PositionIndex>(j)]), expected)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
+
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ);
 }
 
 

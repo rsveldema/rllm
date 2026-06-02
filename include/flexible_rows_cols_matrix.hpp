@@ -22,16 +22,12 @@ namespace rllm
         flexible_rows_cols_matrix()
             : m_data(ROWS * COLS)
             , m_rows(X::MAX), m_cols(Y::MAX)
-        {
-            fill(ElementType{});
-        }
+        {}
 
         flexible_rows_cols_matrix( X rows, Y cols)
             : m_data(ROWS * COLS)
             , m_rows(rows), m_cols(cols)
-        {
-            fill(ElementType{});
-        }
+        {}
 
         flexible_rows_cols_matrix(const flexible_rows_cols_matrix& other)
             : m_data(ROWS * COLS)

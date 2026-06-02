@@ -21,11 +21,7 @@ namespace rllm
 
         fixed_size_vector()
             : m_data(make_storage())
-        {
-            if constexpr (std::is_trivially_default_constructible_v<T>)
-                fill(T{});
-            // else: T's own default constructor already initialises each element.
-        }
+        {}
 
         fixed_size_vector(const fixed_size_vector& other)
             : m_data(make_storage())
