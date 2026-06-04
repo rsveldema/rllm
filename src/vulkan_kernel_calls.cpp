@@ -1048,9 +1048,9 @@ namespace rllm::vulkan
 		for (size_t i = 0; i < runtime_buffer_count; ++i)
 		{
 			RuntimeBuffer& rb = runtime_buffers[i];
-			if (rb.view.on_device_ready || rb.view.writes_to_buffer)
+			if (rb.view.on_device_ready)
 				needs_immediate_wait = true;
-			if (!rb.cached)
+			if (!rb.cached && !rb.bind_offload_direct)
 				needs_immediate_wait = true;
 		}
 		if (needs_immediate_wait)

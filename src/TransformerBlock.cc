@@ -269,13 +269,11 @@ namespace rllm
         rms_norm(h, ws.h_norm_attn);
 
         // ── 2. Q / K / V projections ─────────────────────────────────────────
-        PARSECTIONS_BEGIN
-        matmul_ABt(ws.h_norm_attn, W_q, ws.Q);
-        PARSECTION
-        matmul_ABt(ws.h_norm_attn, W_k, ws.K);
-        PARSECTION
-        matmul_ABt(ws.h_norm_attn, W_v, ws.V);
-        PARSECTIONS_END
+        matmul_ABt_3_matrix_muls(
+            ws.h_norm_attn, W_q, ws.Q,
+            W_k, ws.K,
+            W_v, ws.V
+        );
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
         const float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
@@ -307,11 +305,8 @@ namespace rllm
         rms_norm(ws.h_mid, ws.h_norm_ff);
 
         // ── 6. SwiGLU FFN ─────────────────────────────────────────────────────
-        PARSECTIONS_BEGIN
-        matmul_ABt(ws.h_norm_ff, W_gate, ws.gate_pre);
-        PARSECTION
-        matmul_ABt(ws.h_norm_ff, W_up, ws.up_pre);
-        PARSECTIONS_END
+        matmul_ABt_2_matrix_muls(ws.h_norm_ff, W_gate, ws.gate_pre, 
+                                 W_up, ws.up_pre);
 
         swiglu_forward(ws.gate_pre, ws.up_pre, ws.ffn_act, seq_len);
 
@@ -338,6 +333,7 @@ namespace rllm
         OFFLOAD_PARFOR_2D_PARAM(i, d_head, head_grid, (d_Q, d_raw_h, K, hStart, head_scale, seq_len))
         const int d = int(hStart) + int(d_head);
         float sum_q = 0.f;
+        // iterates from 0...i due to causality (scores_mat is upper-triangular); d_raw_h[i, j] is nonzero only for j ≤ i.
         for (const auto j : enum_iterator<PositionIndex>(inc(i)))
             sum_q += d_raw_h[i, j] * head_scale * K[j, d];
         d_Q[i, d] = sum_q;
@@ -359,6 +355,7 @@ namespace rllm
         OFFLOAD_PARFOR_2D_PARAM(j, d_head, head_grid, (d_K, d_raw_h, Q, hStart, head_scale, seq_len))
         const int d = int(hStart) + int(d_head);
         float sum_k = 0.f;
+        // iterates from j...seq-1 due to causality (scores_mat is upper-triangular); d_raw_h[i, j] is nonzero only for i ≥ j.
         for (const auto i : enum_iterator<PositionIndex>(j, seq_len))
             sum_k += d_raw_h[i, j] * head_scale * Q[i, d];
         d_K[j, d] = sum_k;
@@ -428,17 +425,18 @@ namespace rllm
         swiglu_backward(fwd.seq_len, fwd.gate_pre, fwd.up_pre, ws->d_ffn_act, ws->d_gate_pre, ws->d_up_pre);
 
         // d_h_norm_ff = d_gate_pre @ W_gate  +  d_up_pre @ W_up
-        matmul_AB(ws->d_gate_pre, W_gate, ws->tmp);
-        element_wise_add(ws->tmp, ws->d_h_norm_ff);
-        matmul_AB(ws->d_up_pre, W_up, ws->tmp);
-        element_wise_add(ws->tmp, ws->d_h_norm_ff);
+        matmul_AB_add(ws->d_gate_pre, W_gate, ws->d_h_norm_ff);
+        matmul_AB_add(ws->d_up_pre, W_up, ws->d_h_norm_ff);
 
         // weight gradients for gate, up
-        PARSECTIONS_BEGIN;
-        matmul_AtB_acc(ws->d_gate_pre, fwd.h_norm_ff, ws->dW_gate, fwd.seq_len);
-        PARSECTION
-        matmul_AtB_acc(ws->d_up_pre, fwd.h_norm_ff, ws->dW_up, fwd.seq_len);
-        PARSECTIONS_END;
+        matmul_AtB_acc_2_matrix(
+            ws->d_gate_pre,
+            ws->d_up_pre,
+            fwd.h_norm_ff,
+            ws->dW_gate,
+            ws->dW_up,
+            fwd.seq_len
+        );
 
         // RMSNorm backward for FFN: d_h_mid += rms_bwd(d_h_norm_ff, h_mid)
         rms_norm_backward(ws->d_h_norm_ff, fwd.h_mid, ws->d_h_mid);
@@ -501,21 +499,21 @@ namespace rllm
         ENDFOR;
 
         // Weight gradients for W_q, W_k, W_v
-        PARSECTIONS_BEGIN
-        matmul_AtB_acc(ws->d_Q, fwd.h_norm_attn, ws->dW_q, fwd.seq_len);
-        PARSECTION
-        matmul_AtB_acc(ws->d_K, fwd.h_norm_attn, ws->dW_k, fwd.seq_len);
-        PARSECTION
-        matmul_AtB_acc(ws->d_V, fwd.h_norm_attn, ws->dW_v, fwd.seq_len);
-        PARSECTIONS_END
+        matmul_AtB_acc_3_matrix(
+            ws->d_Q,
+            ws->d_K,
+            ws->d_V,
+            fwd.h_norm_attn,
+            ws->dW_q,
+            ws->dW_k,
+            ws->dW_v,
+            fwd.seq_len
+        );
 
         // d_h_norm_attn = d_Q @ W_q  +  d_K @ W_k  +  d_V @ W_v
-        matmul_AB(ws->d_Q, W_q, ws->tmp);
-        element_wise_add(ws->tmp, ws->d_h_norm_attn);
-        matmul_AB(ws->d_K, W_k, ws->tmp);
-        element_wise_add(ws->tmp, ws->d_h_norm_attn);
-        matmul_AB(ws->d_V, W_v, ws->tmp);
-        element_wise_add(ws->tmp, ws->d_h_norm_attn);
+        matmul_AB_add(ws->d_Q, W_q, ws->d_h_norm_attn);
+        matmul_AB_add(ws->d_K, W_k, ws->d_h_norm_attn);
+        matmul_AB_add(ws->d_V, W_v, ws->d_h_norm_attn);
 
         // ── d_h_in + weight updates ───────────────────────────────────────────
         // d_h_in (residual + RMSNorm backward) and all seven weight updates are
@@ -524,17 +522,19 @@ namespace rllm
         din = ws->d_h_mid;
         rms_norm_backward(ws->d_h_norm_attn, fwd.h_in, din);
         PARSECTION
-        sgd_update_Wqkvo_x_Vqkvo_dWqkvo(W_q, V_q, ws->dW_q, learning_rate);
+        sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(
+            W_q, V_q, ws->dW_q,
+            W_k, V_k, ws->dW_k,
+            W_v, V_v, ws->dW_v,
+            W_o, V_o, ws->dW_o,
+            learning_rate
+        );
         PARSECTION
-        sgd_update_Wqkvo_x_Vqkvo_dWqkvo(W_k, V_k, ws->dW_k, learning_rate);
-        PARSECTION
-        sgd_update_Wqkvo_x_Vqkvo_dWqkvo(W_v, V_v, ws->dW_v, learning_rate);
-        PARSECTION
-        sgd_update_Wqkvo_x_Vqkvo_dWqkvo(W_o, V_o, ws->dW_o, learning_rate);
-        PARSECTION
-        sgd_update_Wgateup_x_Vgateup_dWgateup(W_gate, V_gate, ws->dW_gate, learning_rate);
-        PARSECTION
-        sgd_update_Wgateup_x_Vgateup_dWgateup(W_up, V_up, ws->dW_up, learning_rate);
+        sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(
+            W_gate, V_gate, ws->dW_gate,
+            W_up, V_up, ws->dW_up,
+            learning_rate
+        );
         PARSECTION
         sgd_update_Wdown_x_Vdown_dWdown(W_down, V_down, ws->dW_down, learning_rate);
         PARSECTIONS_END

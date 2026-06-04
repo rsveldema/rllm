@@ -9,6 +9,7 @@ OUTPUT_MODEL_VULKAN="${OUTPUT_MODEL_VULKAN:-/tmp/rllm-profile-small-vulkan.json}
 LAYERS="${LAYERS:-1}"
 EPOCHS="${EPOCHS:-3}"
 PARALLEL_BACKEND="${PARALLEL_BACKEND:-fastfork}"
+ALLOW_SOFTWARE_VULKAN_PROFILE="${ALLOW_SOFTWARE_VULKAN_PROFILE:-0}"
 
 if [[ ! -d "$TRAIN_DIR" ]]; then
     echo "Training directory '$TRAIN_DIR' does not exist. Set TRAIN_DIR to an existing folder."
@@ -31,6 +32,36 @@ build_profiler() {
 
     echo "Building profiling target rllm_prof in '$build_dir'..."
     cmake --build "$build_dir" --parallel --target rllm_prof
+}
+
+check_vulkan_provider() {
+    local build_dir="$1"
+    local provider_output
+
+    provider_output="$("./$build_dir/rllm_prof" --help 2>&1)"
+    local provider_line
+    provider_line="$(awk '/Offload provider:/ { print; exit }' <<<"$provider_output")"
+
+    if [[ -n "$provider_line" ]]; then
+        echo "$provider_line"
+    fi
+
+    local provider_lower
+    provider_lower="$(tr '[:upper:]' '[:lower:]' <<<"$provider_line")"
+    if [[ "$ALLOW_SOFTWARE_VULKAN_PROFILE" != "1" ]] &&
+       [[ "$provider_lower" == *llvmpipe* || "$provider_lower" == *lavapipe* || "$provider_lower" == *software* ]]; then
+        cat <<EOF
+
+Refusing to run the Vulkan profile on a software Vulkan provider.
+This would compare the CPU backend against CPU-emulated Vulkan and is expected to be slower.
+
+Select a hardware Vulkan device with RLLM_VULKAN_DEVICE_INDEX, RLLM_VULKAN_VENDOR, or
+RLLM_VULKAN_DEVICE_SUBSTRING. To intentionally profile software Vulkan, rerun with:
+
+  ALLOW_SOFTWARE_VULKAN_PROFILE=1 $0
+EOF
+        exit 1
+    fi
 }
 
 run_training() {
@@ -62,6 +93,7 @@ build_profiler "$CPU_BUILD_DIR"
 
 configure_build "$VULKAN_BUILD_DIR" "vulkan"
 build_profiler "$VULKAN_BUILD_DIR"
+check_vulkan_provider "$VULKAN_BUILD_DIR"
 
 run_training "CPU-only" "$CPU_BUILD_DIR" "$OUTPUT_MODEL_CPU" "$cpu_elapsed_file"
 run_training "Vulkan" "$VULKAN_BUILD_DIR" "$OUTPUT_MODEL_VULKAN" "$vulkan_elapsed_file"
