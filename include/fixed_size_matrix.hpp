@@ -147,26 +147,6 @@ namespace rllm
                 ptr[i] = static_cast<ElementType>(get_random_value(lo, hi));
         }
 
-        inline void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
-        {
-            assert(static_cast<size_t>(x) < ROWS);
-            assert(static_cast<size_t>(y) < COLS);
-            auto& cell = m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
-            cell = math::clamp(cell + delta, range.lo, range.hi);
-        }
-
-        inline void add_with_clamp(const std::pair<const X, const Y>& indices, ElementType delta, Range<ElementType> range)
-        {
-            add_with_clamp(indices.first, indices.second, delta, range);
-        }
-
-        inline void add_no_clamp(const X x, const Y y, ElementType delta)
-        {
-            assert(static_cast<size_t>(x) < ROWS);
-            assert(static_cast<size_t>(y) < COLS);
-            m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] += delta;
-        }
-
         ElementType* data()
         {
             return m_data.staging_data();

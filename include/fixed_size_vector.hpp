@@ -242,18 +242,7 @@ namespace rllm
             m_data.zero();
         }
 
-        /** add a value to an element at index with clamping */
-        void add_with_clamp(LengthType index, T delta, Range<T> range)
-        {
-            auto& cell = m_data.get()[static_cast<size_t>(index)];
-            cell = math::clamp(cell + delta, range.lo, range.hi);
-        }
 
-        /** add a value to an element at index without clamping */
-        void add_no_clamp(LengthType index, T delta)
-        {
-            m_data.get()[static_cast<size_t>(index)] += delta;
-        }
 
         void clear()
         {

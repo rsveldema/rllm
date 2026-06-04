@@ -156,35 +156,6 @@ namespace rllm
             m_data.zero();
         }
 
-        // Adds each element of other (must have the same runtime dimensions) into this matrix.
-        void element_wise_add(const flexible_rows_matrix& other)
-        {
-            assert(m_rows == other.m_rows);
-            const size_t n = static_cast<size_t>(m_rows) * COLS;
-            RLLM_OMP_SIMD
-            for (size_t i = 0; i < n; ++i)
-                m_data.get()[i] += other.m_data.get()[i];
-        }
-
-        void add_with_clamp(const X x, const Y y, ElementType delta, Range<ElementType> range)
-        {
-            assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
-            assert(static_cast<size_t>(y) < COLS);
-            auto& cell = m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
-            cell = math::clamp(cell + delta, range.lo, range.hi);
-        }
-
-        void add_with_clamp(const std::pair<const X, const Y>& indices, ElementType delta, Range<ElementType> range)
-        {
-            add_with_clamp(indices.first, indices.second, delta, range);
-        }
-
-        void add_no_clamp(const X x, const Y y, ElementType delta)
-        {
-            assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
-            assert(static_cast<size_t>(y) < COLS);
-            m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] += delta;
-        }
 
         X num_rows() const
         {
