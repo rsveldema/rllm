@@ -89,7 +89,7 @@ namespace rllm
         static fixed_size_vector<ConflicingToken, ConflictIndex> conflicts; // count how many times each token appears in the input
 
         // count how many tokens appear more than once in the input
-        updated_tokens.fill(0);
+        updated_tokens.zero();
         ConflictIndex duplicate_count = ConflictIndex::START;
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
         {

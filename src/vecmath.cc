@@ -6,6 +6,58 @@
 
 namespace rllm
 {
+    void fill(
+        // OFFLOAD_PARAMETERS(dst, value, length)
+        fixed_size_vector<int, PositionIndex>& dst,
+        int value,
+        PositionIndex length
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(length), (dst, value))
+        dst[static_cast<size_t>(i)] = value;
+        ENDFOR
+    }
+
+    void fill(
+        // OFFLOAD_PARAMETERS(dst, value, length)
+        fixed_size_vector<rlmm_float, PositionIndex>& dst,
+        rlmm_float value,
+        PositionIndex length
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(length), (dst, value))
+        dst[static_cast<size_t>(i)] = value;
+        ENDFOR
+    }
+
+    void fill(
+        // OFFLOAD_PARAMETERS(dst, value)
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst,
+        rlmm_float value
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(dst.num_rows());
+        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (dst, value))
+        dst[r, c] = value;
+        ENDFOR
+    }
+
+    void fill(
+        // OFFLOAD_PARAMETERS(dst, value)
+        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dst,
+        rlmm_float value
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, PositionIndex>(dst.num_rows(), dst.num_cols());
+        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (dst, value))
+        dst[r, c] = value;
+        ENDFOR
+    }
+
     void copy_hidden_row_to_vector(
         // OFFLOAD_PARAMETERS(src, row, dst)
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,

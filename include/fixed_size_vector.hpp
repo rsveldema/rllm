@@ -212,37 +212,10 @@ namespace rllm
             return m_data.get()[index];
         }
 
-        void fill(T value)
-        {
-            std::fill_n(m_data.get(), CAPACITY, value);
-        }
-
-        void fill(T value, LengthType length)
-        {
-            assert(length <= LengthType::MAX);
-            auto* data = m_data.get();
-            for (const auto i : enum_iterator<LengthType>(length))
-            {
-                data[static_cast<size_t>(i)] = value;
-            }
-        }
-
-        void zero(LengthType length)
-        {
-            assert(length <= LengthType::MAX);
-            auto* data = m_data.get();
-            for (const auto i : enum_iterator<LengthType>(length))
-            {
-                data[static_cast<size_t>(i)] = 0;
-            }
-        }
-
         void zero()
         {
             m_data.zero();
         }
-
-
 
         void clear()
         {

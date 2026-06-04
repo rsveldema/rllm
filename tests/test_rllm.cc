@@ -8,6 +8,8 @@
 #include <enum_iterator.hpp>
 #include <enum_iterator2D.hpp>
 
+#include <vecmath.hpp>
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -252,7 +254,7 @@ TEST(TransformerBlockTest, ForwardOutputShape)
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
         static_cast<rllm::PositionIndex>(T)
     );
-    h.fill(0.1f);
+    fill(h, 0.1f);
 
     block->forward(h, static_cast<rllm::PositionIndex>(T));
 
@@ -272,13 +274,13 @@ TEST(TransformerBlockTest, BackwardOutputShape)
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
         static_cast<rllm::PositionIndex>(T)
     );
-    h.fill(0.05f);
+    fill(h, 0.05f);
     block->forward(h, static_cast<rllm::PositionIndex>(T));
 
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
         static_cast<rllm::PositionIndex>(T)
     );
-    dout.fill(0.01f);
+    fill(dout, 0.01f);
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
         static_cast<rllm::PositionIndex>(T)
     );
@@ -358,9 +360,9 @@ TEST(TransformerBlockTest, SoftmaxBackwardMatchesJacobianAndAccumulates)
     flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> p(T, T);
     flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> dscores(T, T);
 
-    dp.fill(0.0f);
-    p.fill(0.0f);
-    dscores.fill(0.1f); // Verify accumulation semantics: dscores += ...
+    dp.zero();
+    p.zero();
+    fill(dscores, 0.1f); // Verify accumulation semantics: dscores += ...
 
     // Row 0 (single active element)
     p.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 1.0f);
@@ -438,7 +440,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
         static_cast<rllm::PositionIndex>(T)
     );
-    h_template.fill(0.1f);
+    fill(h_template, 0.1f);
 
     // --- serial baseline (1 thread) ---
     parallel::set_num_threads(1);
@@ -501,11 +503,11 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
         static_cast<rllm::PositionIndex>(T)
     );
-    h_template.fill(0.1f);
+    fill(h_template, 0.1f);
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout_template(
         static_cast<rllm::PositionIndex>(T)
     );
-    dout_template.fill(0.01f);
+    fill(dout_template, 0.01f);
 
     // Prime the block with a forward pass so backward has valid cached state.
     {

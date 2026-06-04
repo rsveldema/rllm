@@ -4,6 +4,12 @@
 
 namespace rllm
 {
+    void fill(fixed_size_vector<int, PositionIndex>& dst, int value, PositionIndex length);
+    void fill(fixed_size_vector<rlmm_float, PositionIndex>& dst, rlmm_float value, PositionIndex length);
+
+    void fill(flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst, rlmm_float value);
+    void fill(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dst, rlmm_float value);
+
     void copy_hidden_row_to_vector(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
         PositionIndex row,

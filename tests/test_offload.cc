@@ -8,6 +8,7 @@
 #include <fixed_size_matrix.hpp>
 #include <fixed_size_vector.hpp>
 #include <parallel.hpp>
+#include <vecmath.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -237,7 +238,7 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFix
     rllm::fixed_size_vector<int, rllm::PositionIndex> visits;
     visits.set_size(static_cast<rllm::PositionIndex>(N));
     // END_OFFLOAD_PARAMETERS
-    visits.fill(0, static_cast<rllm::PositionIndex>(N));
+    fill(visits, 0, static_cast<rllm::PositionIndex>(N));
 
     OFFLOAD_PARFOR_1D_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (visits))
     visits[static_cast<size_t>(i)] = static_cast<int>(i) + 42;
@@ -259,7 +260,7 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamWritesFixedSizeFloatVector)
     rllm::fixed_size_vector<rllm::rlmm_float, rllm::PositionIndex> values;
     values.set_size(static_cast<rllm::PositionIndex>(N));
     // END_OFFLOAD_PARAMETERS
-    values.fill(0.0f, static_cast<rllm::PositionIndex>(N));
+    fill(values, 0.0f, static_cast<rllm::PositionIndex>(N));
 
     OFFLOAD_PARFOR_1D_PARAM(i, rllm::enum_iterator<rllm::PositionIndex>(static_cast<rllm::PositionIndex>(N)), (values))
     values[static_cast<size_t>(i)] = static_cast<rllm::rlmm_float>(static_cast<float>(i) + 0.5f);
@@ -274,7 +275,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
     // OFFLOAD_PARAMETERS(values)
     rllm::fixed_size_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
-    values.fill(0.0f);
+    values.zero();
 
     const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
@@ -341,7 +342,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
     rllm::fixed_size_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values;
     float scale = 0.25f;
     // END_OFFLOAD_PARAMETERS
-    values.fill(0.0f);
+    values.zero();
 
     const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values, scale))
@@ -408,9 +409,9 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     };
 
     // Warm both paths once so the timed run compares steady-state execution.
-    parfor_values.fill(0.0f);
+    parfor_values.zero();
     static_cast<void>(run_parfor());
-    offload_values.fill(0.0f);
+    offload_values.zero();
     static_cast<void>(run_offload());
 
     long long parfor_us = 0;
@@ -418,14 +419,14 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     for (int run = 0; run < BENCHMARK_RUNS; ++run)
     {
         if (run == BENCHMARK_RUNS - 1)
-            parfor_values.fill(0.0f);
+            parfor_values.zero();
         parfor_us += run_parfor();
     }
     for (int run = 0; run < BENCHMARK_RUNS; ++run)
     {
         if (run == BENCHMARK_RUNS - 1)
         {
-            offload_values.fill(0.0f);
+            offload_values.zero();
             parallel::statistics.reset_buffer_copy_counters();
         }
         offload_us += run_offload();
@@ -468,7 +469,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
     // OFFLOAD_PARAMETERS(values)
     rllm::flexible_rows_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values(static_cast<rllm::MultiTokenPredictionIndex>(3));
     // END_OFFLOAD_PARAMETERS
-    values.fill(0.0f);
+    values.zero();
 
     const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>(
         static_cast<rllm::MultiTokenPredictionIndex>(3)
@@ -498,7 +499,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
     // OFFLOAD_PARAMETERS(values)
     rllm::flexible_cols_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values(rllm::HeadsIndex::MAX);
     // END_OFFLOAD_PARAMETERS
-    values.fill(0.0f);
+    values.zero();
 
     const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
@@ -526,7 +527,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
     // OFFLOAD_PARAMETERS(values)
     rllm::flexible_rows_cols_matrix<float, rllm::MultiTokenPredictionIndex, rllm::HeadsIndex> values(static_cast<rllm::MultiTokenPredictionIndex>(3), rllm::HeadsIndex::MAX);
     // END_OFFLOAD_PARAMETERS
-    values.fill(0.0f);
+    values.zero();
 
     const auto grid = rllm::enum_iterator2D<rllm::MultiTokenPredictionIndex, rllm::HeadsIndex>(
         static_cast<rllm::MultiTokenPredictionIndex>(3)

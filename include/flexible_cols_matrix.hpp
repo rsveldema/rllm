@@ -109,11 +109,6 @@ namespace rllm
             return m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
         }
 
-        void fill(ElementType value)
-        {
-            std::fill_n(m_data.get(), ROWS * COLS, value);
-        }
-
         void zero()
         {
             m_data.zero();

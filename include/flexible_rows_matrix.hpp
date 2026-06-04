@@ -146,11 +146,6 @@ namespace rllm
             return (*this)[static_cast<X>(x), static_cast<Y>(y)];
         }
 
-        void fill(ElementType value)
-        {
-            std::fill_n(m_data.get(), ROWS * COLS, value);
-        }
-
         void zero()
         {
             m_data.zero();

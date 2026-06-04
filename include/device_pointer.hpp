@@ -154,6 +154,19 @@ public:
         m_pending_flush = nullptr;
     }
 
+    void fill(T value)
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        assert(m_bytes > 0);
+        assert(m_staging_ptr != nullptr);
+        assert(m_offload_ptr != nullptr);
+
+        fill_staging(value);
+        fill_offload(value);
+        m_memory_owner = DeviceMemoryOwner::REPLICATED;
+        m_pending_flush = nullptr;
+    }
+
     T* get() const
     {
         ensure_host_data();
@@ -439,6 +452,21 @@ private:
 
         m_memory_owner = DeviceMemoryOwner::INVALID;
         m_pending_flush = nullptr;
+    }
+
+    void fill_staging(T value)
+    {
+        assert(m_staging_ptr != nullptr);
+        std::fill_n(m_staging_ptr, m_count, value);
+    }
+
+    void fill_offload(T value)
+    {
+        (void)value;
+        assert(m_staging_ptr != nullptr);
+        assert(m_offload_ptr != nullptr);
+
+        m_memory_space->copy_staging_to_offload(m_offload_ptr, m_staging_ptr, m_bytes);
     }
 
     void zero_initialize_staging()

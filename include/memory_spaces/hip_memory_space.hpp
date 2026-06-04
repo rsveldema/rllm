@@ -53,8 +53,7 @@ public:
 
     void copy_staging_to_offload(void* offload_dst, const void* staging_src, size_t bytes) override
     {
-        if (bytes == 0)
-            return;
+        assert(bytes != 0);
         const hipError_t status = hipMemcpy(offload_dst, staging_src, bytes, hipMemcpyDefault);
         if (status != hipSuccess)
         {
@@ -65,8 +64,7 @@ public:
 
     void copy_offload_to_staging(void* staging_dst, const void* offload_src, size_t bytes) override
     {
-        if (bytes == 0)
-            return;
+        assert(bytes != 0);
         const hipError_t status = hipMemcpy(staging_dst, offload_src, bytes, hipMemcpyDefault);
         if (status != hipSuccess)
         {
@@ -77,8 +75,7 @@ public:
 
     void copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes) override
     {
-        if (bytes == 0)
-            return;
+        assert(bytes != 0);
         const hipError_t status = hipMemcpy(offload_dst, offload_src, bytes, hipMemcpyDefault);
         if (status != hipSuccess)
         {
@@ -89,8 +86,7 @@ public:
 
     void zero_offload(void* offload_dst, size_t bytes) override
     {
-        if (bytes == 0)
-            return;
+        assert(bytes != 0);
         const hipError_t status = hipMemset(offload_dst, 0, bytes);
         if (status != hipSuccess)
         {
