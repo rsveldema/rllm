@@ -590,7 +590,7 @@ namespace rllm::vulkan
 					const VkDeviceSize offset_alignment =
 						ctx.storage_buffer_offset_alignment == 0 ? 1 : ctx.storage_buffer_offset_alignment;
 					runtime_buffer.bind_offload_direct =
-						!view.on_device_ready && runtime_buffer.offload_source_offset % offset_alignment == 0;
+						runtime_buffer.offload_source_offset % offset_alignment == 0;
 					return;
 				}
 
@@ -926,10 +926,10 @@ namespace rllm::vulkan
 			offload_download_offsets.reserve(runtime_buffer_count);
 			for (size_t i = 0; i < runtime_buffer_count; ++i)
 			{
-				if (!runtime_buffers[i].view.on_device_ready)
+				if (!runtime_buffers[i].view.on_device_ready && !runtime_buffers[i].view.writes_to_buffer)
 					continue;
 
-				if (runtime_buffers[i].view.offload_ptr != nullptr)
+				if (runtime_buffers[i].view.offload_ptr != nullptr && !runtime_buffers[i].bind_offload_direct)
 				{
 					VkDeviceSize offload_dst_offset = 0;
 					if (!detail::resolve_offset(
@@ -953,7 +953,10 @@ namespace rllm::vulkan
 					offload_download_indices.push_back(i);
 					offload_download_offsets.push_back(offload_dst_offset);
 				}
-				host_download_indices.push_back(i);
+				if (runtime_buffers[i].view.on_device_ready)
+					host_download_indices.push_back(i);
+				if (runtime_buffers[i].bind_offload_direct && !runtime_buffers[i].view.on_device_ready)
+					continue;
 
 				VkBufferMemoryBarrier barrier{};
 				barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -1045,7 +1048,7 @@ namespace rllm::vulkan
 		for (size_t i = 0; i < runtime_buffer_count; ++i)
 		{
 			RuntimeBuffer& rb = runtime_buffers[i];
-			if (rb.view.on_device_ready)
+			if (rb.view.on_device_ready || rb.view.writes_to_buffer)
 				needs_immediate_wait = true;
 			if (!rb.cached)
 				needs_immediate_wait = true;
@@ -1056,10 +1059,13 @@ namespace rllm::vulkan
 		for (size_t i = 0; i < runtime_buffer_count; ++i)
 		{
 			RuntimeBuffer& rb = runtime_buffers[i];
-			const bool kernel_writes_buffer = static_cast<bool>(rb.view.on_device_ready);
+			const bool kernel_writes_buffer = rb.view.on_device_ready || rb.view.writes_to_buffer;
 			if (kernel_writes_buffer)
 			{
-				rb.view.on_device_ready(rb.mapped, rb.view.size_bytes, name(), rb.view.parameter_name);
+				if (rb.view.mark_device_latest)
+					rb.view.mark_device_latest();
+				if (rb.view.on_device_ready)
+					rb.view.on_device_ready(rb.mapped, rb.view.size_bytes, name(), rb.view.parameter_name);
 				rb.view.on_device_ready = nullptr;
 			}
 		}

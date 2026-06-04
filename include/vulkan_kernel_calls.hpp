@@ -40,6 +40,7 @@ namespace rllm::vulkan
             std::string_view parameter_name{};
             std::function<DeviceMemoryOwner()> memory_owner;
             std::function<void()> mark_device_latest;
+            bool writes_to_buffer = false;
             // Called with (mapped_ptr, size_bytes, kernel_name) once the Vulkan device buffer is ready.
             // Allows the caller to register deferred host synchronization or eager copy-back.
             std::function<void(void*, size_t, std::string_view, std::string_view)> on_device_ready;
@@ -149,18 +150,7 @@ namespace rllm::vulkan
 #endif
                 if constexpr (!std::is_const_v<ArgType>)
                 {
-                    auto* arg_ptr = std::addressof(arg);
-                    view.on_device_ready = [arg_ptr](
-                        void* mapped_ptr,
-                        size_t sz,
-                        std::string_view kernel_name,
-                        std::string_view parameter_name_value
-                    ) {
-                        arg_ptr->set_pending_flush([arg_ptr, mapped_ptr, sz, kernel_name, parameter_name_value]() {
-                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
-                            std::memcpy(arg_ptr->raw_staging_data(), mapped_ptr, sz);
-                        });
-                    };
+                    view.writes_to_buffer = true;
                 }
                 out.push_back(view);
             }
@@ -181,18 +171,7 @@ namespace rllm::vulkan
 #endif
                 if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
                 {
-                    auto* arg_ptr = std::addressof(arg);
-                    view.on_device_ready = [arg_ptr](
-                        void* mapped_ptr,
-                        size_t sz,
-                        std::string_view kernel_name,
-                        std::string_view parameter_name_value
-                    ) {
-                        arg_ptr->set_pending_flush([arg_ptr, mapped_ptr, sz, kernel_name, parameter_name_value]() {
-                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
-                            std::memcpy(arg_ptr->raw_staging_data(), mapped_ptr, sz);
-                        });
-                    };
+                    view.writes_to_buffer = true;
                 }
                 out.push_back(view);
             }
@@ -280,18 +259,7 @@ namespace rllm::vulkan
 #endif
                 if constexpr (!std::is_const_v<ArgType>)
                 {
-                    auto* arg_ptr = std::addressof(arg);
-                    view.on_device_ready = [arg_ptr](
-                        void* mapped_ptr,
-                        size_t sz,
-                        std::string_view kernel_name,
-                        std::string_view parameter_name_value
-                    ) {
-                        arg_ptr->set_pending_flush([arg_ptr, mapped_ptr, sz, kernel_name, parameter_name_value]() {
-                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
-                            std::memcpy(arg_ptr->raw_staging_data(), mapped_ptr, sz);
-                        });
-                    };
+                    view.writes_to_buffer = true;
                 }
                 out[out_count++] = view;
             }
@@ -320,18 +288,7 @@ namespace rllm::vulkan
 #endif
                 if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
                 {
-                    auto* arg_ptr = std::addressof(arg);
-                    view.on_device_ready = [arg_ptr](
-                        void* mapped_ptr,
-                        size_t sz,
-                        std::string_view kernel_name,
-                        std::string_view parameter_name_value
-                    ) {
-                        arg_ptr->set_pending_flush([arg_ptr, mapped_ptr, sz, kernel_name, parameter_name_value]() {
-                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
-                            std::memcpy(arg_ptr->raw_staging_data(), mapped_ptr, sz);
-                        });
-                    };
+                    view.writes_to_buffer = true;
                 }
                 out[out_count++] = view;
             }

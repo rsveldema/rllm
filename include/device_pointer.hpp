@@ -377,6 +377,22 @@ public:
         return m_staging_ptr[idx];
     }
 
+    T get_offload_synced(size_t idx) const
+    {
+        assert(idx < m_count);
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        if (device_data_is_current())
+        {
+            auto* staging_dst = reinterpret_cast<std::byte*>(m_staging_ptr) + idx * sizeof(T);
+            const auto* offload_src = static_cast<const std::byte*>(m_offload_ptr) + idx * sizeof(T);
+            m_memory_space->copy_offload_to_staging(staging_dst, offload_src, sizeof(T));
+            return m_staging_ptr[idx];
+        }
+#endif
+        ensure_host_data();
+        return m_staging_ptr[idx];
+    }
+
     void set(size_t idx, const T& value)
     {
         ensure_host_data();
@@ -435,6 +451,16 @@ private:
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         return m_memory_owner == DeviceMemoryOwner::ON_DEVICE || m_memory_owner == DeviceMemoryOwner::REPLICATED;
+#else
+        return false;
+#endif
+    }
+
+    bool device_data_is_current() const
+    {
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        return device_data_is_current_unlocked();
 #else
         return false;
 #endif

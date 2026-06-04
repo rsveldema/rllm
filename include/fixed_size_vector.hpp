@@ -222,6 +222,11 @@ namespace rllm
             return m_data.get()[index];
         }
 
+        T get_offload_synced(LengthType index) const
+        {
+            return m_data.get_offload_synced(static_cast<size_t>(index));
+        }
+
         void zero()
         {
             m_data.zero();

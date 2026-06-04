@@ -287,6 +287,7 @@ namespace rllm
 
         const float max_val = score.temp_values[TempStorage::START];
         const float sum_exp = score.temp_values[TempStorage::ONE];
+        const float expected_logit = m_inputs.get_offload_synced(expected_output_token);
 #else
         float max_val = -std::numeric_limits<float>::infinity();
         for (const auto token : enum_iterator<TokenID>())
@@ -298,8 +299,9 @@ namespace rllm
         finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
 
         const float sum_exp = score.temp_values[TempStorage::ONE];
+        const float expected_logit = m_inputs[expected_output_token];
 #endif
-        const float log_prob = m_inputs[expected_output_token] - max_val - std::log(sum_exp);
+        const float log_prob = expected_logit - max_val - std::log(sum_exp);
         return -log_prob;
     }
 } // namespace rllm
