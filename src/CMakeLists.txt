@@ -50,6 +50,18 @@ if(OFFLOAD_BACKEND STREQUAL "hip")
     message(STATUS "HIP runtime library: ${RLLM_HIP_RUNTIME_LIBRARY}")
 elseif(OFFLOAD_BACKEND STREQUAL "vulkan")
     find_package(Vulkan REQUIRED)
+    find_package(VulkanMemoryAllocator CONFIG QUIET)
+    if(NOT VulkanMemoryAllocator_FOUND)
+        FetchContent_Declare(
+            VulkanMemoryAllocator
+            GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+            GIT_TAG        v3.3.0
+        )
+        FetchContent_MakeAvailable(VulkanMemoryAllocator)
+    endif()
+    if(NOT TARGET GPUOpen::VulkanMemoryAllocator)
+        message(FATAL_ERROR "Failed to provide GPUOpen::VulkanMemoryAllocator from either find_package or FetchContent.")
+    endif()
     set(CMAKE_REQUIRED_INCLUDES "${Vulkan_INCLUDE_DIRS}")
     check_cxx_source_compiles(
         "#include <vulkan/vulkan.h>\nint main() { return VK_HEADER_VERSION; }"
@@ -170,7 +182,7 @@ function(rllm_define_lib target_name)
 
     # Warning flags common to all variants; optimization flags come from ARGN.
     target_compile_options(${target_name} PRIVATE
-        -Wall -Wextra -Wpedantic -Wstack-usage=10000 -fopenmp-simd -Wno-narrowing
+        -Wall -Wextra -Wpedantic -Wstack-usage=10000 -fopenmp-simd -Wno-narrowing -Wno-unused-parameter
         ${ARGN}
     )
     #target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_OVERFLOW_CHECK_ADD)
@@ -192,13 +204,16 @@ function(rllm_define_lib target_name)
         target_include_directories(${target_name} PUBLIC ${HIP_ROOT}/include)
         target_link_libraries(${target_name} PUBLIC ${RLLM_HIP_RUNTIME_LIBRARY})
     elseif(OFFLOAD_BACKEND STREQUAL "vulkan")
-        target_sources(${target_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_kernel_calls.cpp")
+        target_sources(${target_name} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_kernel_calls.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_memory_space.cpp"
+        )
         target_compile_definitions(
             ${target_name} PUBLIC
             USE_VULKAN_OFFLOAD
             RLLM_VULKAN_KERNEL_ROOT="${RLLM_VULKAN_KERNEL_DIR}"
         )
-        target_link_libraries(${target_name} PUBLIC Vulkan::Vulkan)
+        target_link_libraries(${target_name} PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
     endif()
 endfunction()
 

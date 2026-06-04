@@ -91,6 +91,7 @@ add_executable(rllm src/main.cc
 if(PARALLEL_BACKEND STREQUAL "fastfork")
     target_sources(rllm PRIVATE src/fastfork/fastfork.cc)
 endif()
+
 target_link_libraries(rllm PRIVATE rllm_lib)
 target_include_directories(rllm PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(rllm PRIVATE -O3 -march=native)

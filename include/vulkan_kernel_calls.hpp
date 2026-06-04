@@ -446,6 +446,8 @@ namespace rllm::vulkan
         {
             VkBuffer buffer = VK_NULL_HANDLE;
             VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkBuffer staging_buffer = VK_NULL_HANDLE;
+            VkDeviceMemory staging_memory = VK_NULL_HANDLE;
             void* mapped = nullptr;
             detail::HostBufferView view{};
             bool cached = false;  // true when buffer is kept alive for lazy-flush DevicePointer args

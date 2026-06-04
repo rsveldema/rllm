@@ -19,6 +19,8 @@ namespace rllm::vulkan
 			VkDevice device = VK_NULL_HANDLE;
 			VkBuffer buffer = VK_NULL_HANDLE;
 			VkDeviceMemory memory = VK_NULL_HANDLE;
+				VkBuffer staging_buffer = VK_NULL_HANDLE;
+				VkDeviceMemory staging_memory = VK_NULL_HANDLE;
 			void* mapped = nullptr;
 			size_t size_bytes = 0;
 		};
@@ -339,14 +341,26 @@ namespace rllm::vulkan
 				rb.view = {};
 				rb.buffer = VK_NULL_HANDLE;
 				rb.memory = VK_NULL_HANDLE;
+				rb.staging_buffer = VK_NULL_HANDLE;
+				rb.staging_memory = VK_NULL_HANDLE;
 				rb.mapped = nullptr;
 				rb.cached = false;
 				return;
 			}
 			if (rb.mapped != nullptr)
 			{
-				vkUnmapMemory(ctx.device, rb.memory);
+				vkUnmapMemory(ctx.device, rb.staging_memory);
 				rb.mapped = nullptr;
+			}
+			if (rb.staging_buffer != VK_NULL_HANDLE)
+			{
+				vkDestroyBuffer(ctx.device, rb.staging_buffer, nullptr);
+				rb.staging_buffer = VK_NULL_HANDLE;
+			}
+			if (rb.staging_memory != VK_NULL_HANDLE)
+			{
+				vkFreeMemory(ctx.device, rb.staging_memory, nullptr);
+				rb.staging_memory = VK_NULL_HANDLE;
 			}
 			if (rb.buffer != VK_NULL_HANDLE)
 			{
@@ -369,8 +383,18 @@ namespace rllm::vulkan
 					continue;  // cached runtime buffer — kept alive for deferred host sync
 				if (rb.mapped != nullptr)
 				{
-					vkUnmapMemory(ctx.device, rb.memory);
+					vkUnmapMemory(ctx.device, rb.staging_memory);
 					rb.mapped = nullptr;
+				}
+				if (rb.staging_buffer != VK_NULL_HANDLE)
+				{
+					vkDestroyBuffer(ctx.device, rb.staging_buffer, nullptr);
+					rb.staging_buffer = VK_NULL_HANDLE;
+				}
+				if (rb.staging_memory != VK_NULL_HANDLE)
+				{
+					vkFreeMemory(ctx.device, rb.staging_memory, nullptr);
+					rb.staging_memory = VK_NULL_HANDLE;
 				}
 				if (rb.buffer != VK_NULL_HANDLE)
 				{
@@ -398,6 +422,46 @@ namespace rllm::vulkan
 			}
 			LOG_ERROR("No compatible Vulkan memory type found for storage buffer allocation.");
 			std::abort();
+		};
+
+		auto create_runtime_buffer_resource = [&](VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& out_buffer, VkDeviceMemory& out_memory) {
+			VkBufferCreateInfo buffer_info{};
+			buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+			buffer_info.size = size;
+			buffer_info.usage = usage;
+			buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+			const VkResult create_buffer_result = vkCreateBuffer(ctx.device, &buffer_info, nullptr, &out_buffer);
+			if (create_buffer_result != VK_SUCCESS)
+			{
+				LOG_ERROR("vkCreateBuffer failed for kernel '{}': {}", name(), static_cast<int>(create_buffer_result));
+				cleanup_runtime_buffers();
+				std::abort();
+			}
+
+			VkMemoryRequirements mem_req{};
+			vkGetBufferMemoryRequirements(ctx.device, out_buffer, &mem_req);
+
+			VkMemoryAllocateInfo alloc_info{};
+			alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+			alloc_info.allocationSize = mem_req.size;
+			alloc_info.memoryTypeIndex = find_memory_type_index(mem_req.memoryTypeBits, properties);
+
+			const VkResult alloc_result = vkAllocateMemory(ctx.device, &alloc_info, nullptr, &out_memory);
+			if (alloc_result != VK_SUCCESS)
+			{
+				LOG_ERROR("vkAllocateMemory failed for kernel '{}': {}", name(), static_cast<int>(alloc_result));
+				cleanup_runtime_buffers();
+				std::abort();
+			}
+
+			const VkResult bind_result = vkBindBufferMemory(ctx.device, out_buffer, out_memory, 0);
+			if (bind_result != VK_SUCCESS)
+			{
+				LOG_ERROR("vkBindBufferMemory failed for kernel '{}': {}", name(), static_cast<int>(bind_result));
+				cleanup_runtime_buffers();
+				std::abort();
+			}
 		};
 
 		for (size_t buf_idx = 0; buf_idx < buffers.size(); ++buf_idx)
@@ -464,10 +528,13 @@ namespace rllm::vulkan
 				{
 					detail::LazyRuntimeBufferCacheEntry& cached = cached_it->second;
 					if (cached.device == ctx.device && cached.buffer != VK_NULL_HANDLE && cached.memory != VK_NULL_HANDLE &&
+						cached.staging_buffer != VK_NULL_HANDLE && cached.staging_memory != VK_NULL_HANDLE &&
 						cached.mapped != nullptr && cached.size_bytes >= view.size_bytes)
 					{
 						rb.buffer = cached.buffer;
 						rb.memory = cached.memory;
+						rb.staging_buffer = cached.staging_buffer;
+						rb.staging_memory = cached.staging_memory;
 						rb.mapped = cached.mapped;
 						rb.view = view;
 						rb.cached = true;
@@ -477,46 +544,24 @@ namespace rllm::vulkan
 				}
 			}
 
-			VkBufferCreateInfo buffer_info{};
-			buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-			buffer_info.size = static_cast<VkDeviceSize>(view.size_bytes);
-			buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-			buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			create_runtime_buffer_resource(
+				static_cast<VkDeviceSize>(view.size_bytes),
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				rb.buffer,
+				rb.memory
+			);
+			create_runtime_buffer_resource(
+				static_cast<VkDeviceSize>(view.size_bytes),
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				rb.staging_buffer,
+				rb.staging_memory
+			);
 
-			const VkResult create_buffer_result = vkCreateBuffer(ctx.device, &buffer_info, nullptr, &rb.buffer);
-			if (create_buffer_result != VK_SUCCESS)
-			{
-				LOG_ERROR("vkCreateBuffer failed for kernel '{}': {}", name(), static_cast<int>(create_buffer_result));
-				cleanup_runtime_buffers();
-				std::abort();
-			}
-
-			VkMemoryRequirements mem_req{};
-			vkGetBufferMemoryRequirements(ctx.device, rb.buffer, &mem_req);
-
-			VkMemoryAllocateInfo alloc_info{};
-			alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-			alloc_info.allocationSize = mem_req.size;
-			alloc_info.memoryTypeIndex =
-				find_memory_type_index(mem_req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-			const VkResult alloc_result = vkAllocateMemory(ctx.device, &alloc_info, nullptr, &rb.memory);
-			if (alloc_result != VK_SUCCESS)
-			{
-				LOG_ERROR("vkAllocateMemory failed for kernel '{}': {}", name(), static_cast<int>(alloc_result));
-				cleanup_runtime_buffers();
-				std::abort();
-			}
-
-			const VkResult bind_result = vkBindBufferMemory(ctx.device, rb.buffer, rb.memory, 0);
-			if (bind_result != VK_SUCCESS)
-			{
-				LOG_ERROR("vkBindBufferMemory failed for kernel '{}': {}", name(), static_cast<int>(bind_result));
-				cleanup_runtime_buffers();
-				std::abort();
-			}
-
-			const VkResult map_result = vkMapMemory(ctx.device, rb.memory, 0, alloc_info.allocationSize, 0, &rb.mapped);
+			VkMemoryRequirements staging_mem_req{};
+			vkGetBufferMemoryRequirements(ctx.device, rb.staging_buffer, &staging_mem_req);
+			const VkResult map_result = vkMapMemory(ctx.device, rb.staging_memory, 0, staging_mem_req.size, 0, &rb.mapped);
 			if (map_result != VK_SUCCESS)
 			{
 				LOG_ERROR("vkMapMemory failed for kernel '{}': {}", name(), static_cast<int>(map_result));
@@ -531,6 +576,8 @@ namespace rllm::vulkan
 					.device = ctx.device,
 					.buffer = rb.buffer,
 					.memory = rb.memory,
+					.staging_buffer = rb.staging_buffer,
+					.staging_memory = rb.staging_memory,
 					.mapped = rb.mapped,
 					.size_bytes = rb.view.size_bytes,
 				};
@@ -660,6 +707,37 @@ namespace rllm::vulkan
 
 		if (runtime_buffer_count > 0)
 		{
+			std::vector<VkBufferCopy> upload_regions(runtime_buffer_count);
+			std::vector<VkBufferMemoryBarrier> upload_barriers(runtime_buffer_count);
+			for (size_t i = 0; i < runtime_buffer_count; ++i)
+			{
+				upload_regions[i].srcOffset = 0;
+				upload_regions[i].dstOffset = 0;
+				upload_regions[i].size = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
+				vkCmdCopyBuffer(m_command_buffer, runtime_buffers[i].staging_buffer, runtime_buffers[i].buffer, 1, &upload_regions[i]);
+
+				upload_barriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+				upload_barriers[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+				upload_barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+				upload_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				upload_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				upload_barriers[i].buffer = runtime_buffers[i].buffer;
+				upload_barriers[i].offset = 0;
+				upload_barriers[i].size = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
+			}
+			vkCmdPipelineBarrier(
+				m_command_buffer,
+				VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+				0,
+				0,
+				nullptr,
+				static_cast<uint32_t>(upload_barriers.size()),
+				upload_barriers.data(),
+				0,
+				nullptr
+			);
+
 			std::vector<VkDescriptorBufferInfo> buffer_infos(runtime_buffer_count);
 			std::vector<VkWriteDescriptorSet> writes(runtime_buffer_count);
 
@@ -691,6 +769,54 @@ namespace rllm::vulkan
 			);
 		}
 		vkCmdDispatch(m_command_buffer, groups_x, groups_y, 1);
+
+		if (runtime_buffer_count > 0)
+		{
+			std::vector<VkBufferMemoryBarrier> download_source_barriers;
+			std::vector<size_t> download_indices;
+			download_source_barriers.reserve(runtime_buffer_count);
+			download_indices.reserve(runtime_buffer_count);
+			for (size_t i = 0; i < runtime_buffer_count; ++i)
+			{
+				if (!runtime_buffers[i].view.on_device_ready)
+					continue;
+
+				VkBufferMemoryBarrier barrier{};
+				barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+				barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+				barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+				barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				barrier.buffer = runtime_buffers[i].buffer;
+				barrier.offset = 0;
+				barrier.size = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
+				download_source_barriers.push_back(barrier);
+				download_indices.push_back(i);
+			}
+
+			if (!download_source_barriers.empty())
+			{
+				vkCmdPipelineBarrier(
+					m_command_buffer,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_PIPELINE_STAGE_TRANSFER_BIT,
+					0,
+					0,
+					nullptr,
+					static_cast<uint32_t>(download_source_barriers.size()),
+					download_source_barriers.data(),
+					0,
+					nullptr
+				);
+
+				for (size_t idx : download_indices)
+				{
+					VkBufferCopy region{};
+					region.size = static_cast<VkDeviceSize>(runtime_buffers[idx].view.size_bytes);
+					vkCmdCopyBuffer(m_command_buffer, runtime_buffers[idx].buffer, runtime_buffers[idx].staging_buffer, 1, &region);
+				}
+			}
+		}
 
 		const VkResult end_result = vkEndCommandBuffer(m_command_buffer);
 		if (end_result != VK_SUCCESS)
@@ -767,22 +893,22 @@ namespace rllm::vulkan
 		cleanup_runtime_buffers();
 	}
 
-	namespace detail
-	{
-		struct VulkanCandidate
+		namespace detail
+		{
+			struct [[maybe_unused]] VulkanCandidate
 		{
 			VkPhysicalDevice device = VK_NULL_HANDLE;
 			uint32_t queue_family_index = 0;
 			VkPhysicalDeviceProperties props{};
 		};
 
-		static std::string to_lower_copy(std::string s)
+			[[maybe_unused]] static std::string to_lower_copy(std::string s)
 		{
 			std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 			return s;
 		}
 
-		static uint32_t vendor_id_from_name(const std::string& name)
+			[[maybe_unused]] static uint32_t vendor_id_from_name(const std::string& name)
 		{
 			const std::string lowered = to_lower_copy(name);
 			if (lowered == "nvidia") return 0x10DE;
@@ -796,14 +922,14 @@ namespace rllm::vulkan
 			return 0;
 		}
 
-		static bool contains_case_insensitive(const std::string& haystack, const std::string& needle)
+			[[maybe_unused]] static bool contains_case_insensitive(const std::string& haystack, const std::string& needle)
 		{
 			if (needle.empty())
 				return true;
 			return to_lower_copy(haystack).find(to_lower_copy(needle)) != std::string::npos;
 		}
 
-		static int device_score(const VulkanCandidate& c)
+			[[maybe_unused]] static int device_score(const VulkanCandidate& c)
 		{
 			int score = 0;
 			if (c.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) score += 1000;
@@ -815,7 +941,7 @@ namespace rllm::vulkan
 			return score;
 		}
 
-		static const VulkanCandidate* pick_candidate(const std::vector<VulkanCandidate>& candidates)
+			[[maybe_unused]] static const VulkanCandidate* pick_candidate(const std::vector<VulkanCandidate>& candidates)
 		{
 			if (candidates.empty())
 				return nullptr;
@@ -915,158 +1041,15 @@ namespace rllm::vulkan
 
 		RuntimeContext create_runtime_context()
 		{
-			RuntimeContext ctx{};
-
-			VkApplicationInfo app_info{};
-			app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-			app_info.pApplicationName = "rllm";
-			app_info.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
-			app_info.pEngineName = "rllm";
-			app_info.engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
-			app_info.apiVersion = VK_API_VERSION_1_1;
-
-			VkInstanceCreateInfo instance_info{};
-			instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-			instance_info.pApplicationInfo = &app_info;
-
-			const VkResult instance_result = vkCreateInstance(&instance_info, nullptr, &ctx.instance);
-			if (instance_result != VK_SUCCESS)
-			{
-				LOG_ERROR("vkCreateInstance failed: {}", static_cast<int>(instance_result));
-				std::abort();
-			}
-
-			uint32_t physical_count = 0;
-			const VkResult enum_result = vkEnumeratePhysicalDevices(ctx.instance, &physical_count, nullptr);
-			if (enum_result != VK_SUCCESS || physical_count == 0)
-			{
-				LOG_ERROR("vkEnumeratePhysicalDevices failed or found no devices: {}", static_cast<int>(enum_result));
-				std::abort();
-			}
-
-			std::vector<VkPhysicalDevice> physical_devices(physical_count);
-			const VkResult enum_fill_result =
-				vkEnumeratePhysicalDevices(ctx.instance, &physical_count, physical_devices.data());
-			if (enum_fill_result != VK_SUCCESS)
-			{
-				LOG_ERROR("vkEnumeratePhysicalDevices (fill) failed: {}", static_cast<int>(enum_fill_result));
-				std::abort();
-			}
-
-			std::vector<VulkanCandidate> candidates;
-			for (const VkPhysicalDevice physical_device : physical_devices)
-			{
-				uint32_t queue_family_count = 0;
-				vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_family_count, nullptr);
-				if (queue_family_count == 0)
-				{
-					continue;
-				}
-
-				std::vector<VkQueueFamilyProperties> queue_props(queue_family_count);
-				vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_family_count, queue_props.data());
-
-				for (uint32_t i = 0; i < queue_family_count; ++i)
-				{
-					if ((queue_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0u)
-					{
-						VulkanCandidate c{};
-						c.device = physical_device;
-						c.queue_family_index = i;
-						vkGetPhysicalDeviceProperties(physical_device, &c.props);
-						candidates.push_back(c);
-						break;
-					}
-				}
-			}
-
-			const VulkanCandidate* chosen = pick_candidate(candidates);
-			if (chosen == nullptr)
-			{
-				LOG_ERROR("No Vulkan physical device with a compute-capable queue family was found.");
-				std::abort();
-			}
-
-			ctx.physical_device = chosen->device;
-			ctx.queue_family_index = chosen->queue_family_index;
-
-			const float queue_priority = 1.0f;
-			VkDeviceQueueCreateInfo queue_info{};
-			queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-			queue_info.queueFamilyIndex = ctx.queue_family_index;
-			queue_info.queueCount = 1;
-			queue_info.pQueuePriorities = &queue_priority;
-
-			VkPhysicalDeviceShaderAtomicFloat2FeaturesEXT supported_atomic_float2{};
-			supported_atomic_float2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_2_FEATURES_EXT;
-			VkPhysicalDeviceShaderAtomicFloatFeaturesEXT supported_atomic_float{};
-			supported_atomic_float.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
-			supported_atomic_float.pNext = &supported_atomic_float2;
-			VkPhysicalDeviceFeatures2 supported_features{};
-			supported_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-			supported_features.pNext = &supported_atomic_float;
-			vkGetPhysicalDeviceFeatures2(ctx.physical_device, &supported_features);
-
-			if (!supported_atomic_float.shaderBufferFloat32AtomicAdd
-				|| !supported_atomic_float.shaderSharedFloat32AtomicAdd
-				|| !supported_atomic_float2.shaderBufferFloat32AtomicMinMax
-				|| !supported_atomic_float2.shaderSharedFloat32AtomicMinMax)
-			{
-				LOG_ERROR("Selected Vulkan device does not support required float atomic add/minmax features.");
-				std::abort();
-			}
-
-			VkPhysicalDeviceShaderAtomicFloat2FeaturesEXT atomic_float2_features{};
-			atomic_float2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_2_FEATURES_EXT;
-			atomic_float2_features.shaderBufferFloat32AtomicMinMax = VK_TRUE;
-			atomic_float2_features.shaderSharedFloat32AtomicMinMax = VK_TRUE;
-
-			VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_features{};
-			atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
-			atomic_float_features.pNext = &atomic_float2_features;
-			atomic_float_features.shaderBufferFloat32AtomicAdd = VK_TRUE;
-			atomic_float_features.shaderSharedFloat32AtomicAdd = VK_TRUE;
-
-			const char* device_extensions[] = {
-				VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME,
-				VK_EXT_SHADER_ATOMIC_FLOAT_2_EXTENSION_NAME,
-			};
-
-			VkDeviceCreateInfo device_info{};
-			device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-			device_info.queueCreateInfoCount = 1;
-			device_info.pQueueCreateInfos = &queue_info;
-			device_info.enabledExtensionCount = 2;
-			device_info.ppEnabledExtensionNames = device_extensions;
-			device_info.pNext = &atomic_float_features;
-
-			const VkResult device_result = vkCreateDevice(ctx.physical_device, &device_info, nullptr, &ctx.device);
-			if (device_result != VK_SUCCESS)
-			{
-				LOG_ERROR("vkCreateDevice failed: {}", static_cast<int>(device_result));
-				std::abort();
-			}
-
-			vkGetDeviceQueue(ctx.device, ctx.queue_family_index, 0, &ctx.queue);
-			if (ctx.queue == VK_NULL_HANDLE)
-			{
-				LOG_ERROR("vkGetDeviceQueue returned a null queue handle.");
-				std::abort();
-			}
-
-			VkCommandPoolCreateInfo pool_info{};
-			pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-			pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-			pool_info.queueFamilyIndex = ctx.queue_family_index;
-
-			const VkResult pool_result = vkCreateCommandPool(ctx.device, &pool_info, nullptr, &ctx.command_pool);
-			if (pool_result != VK_SUCCESS)
-			{
-				LOG_ERROR("vkCreateCommandPool failed: {}", static_cast<int>(pool_result));
-				std::abort();
-			}
-
-			return ctx;
+				RuntimeContext ctx{};
+				auto& memory_space = static_cast<VulkanMemorySpace&>(*IMemorySpace::get_instance());
+				ctx.instance = memory_space.instance();
+				ctx.physical_device = memory_space.physical_device();
+				ctx.device = memory_space.device();
+				ctx.queue_family_index = memory_space.queue_family_index();
+				ctx.queue = memory_space.queue();
+				ctx.command_pool = memory_space.command_pool();
+				return ctx;
 		}
 
 		RuntimeContext& runtime_context()
