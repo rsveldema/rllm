@@ -454,6 +454,7 @@ namespace rllm::vulkan
             size_t& runtime_buffer_count
         );
         void ensure_pipeline(VkDevice device, uint32_t ssbo_binding_count);
+        void wait_for_in_flight_submit();
 
         struct RuntimeBuffer
         {
@@ -487,6 +488,7 @@ namespace rllm::vulkan
         VkCommandBuffer m_command_buffer = VK_NULL_HANDLE;
         VkDevice m_submit_fence_device = VK_NULL_HANDLE;
         VkFence m_submit_fence = VK_NULL_HANDLE;
+        bool m_submit_in_flight = false;
         std::mutex m_launch_mutex;
     };
 

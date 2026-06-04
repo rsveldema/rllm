@@ -5,8 +5,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <print>
 #include <regex>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <parallel.hpp>
 
@@ -48,6 +51,59 @@ namespace rllm::vulkan
 			static auto* cache = new std::unordered_map<const void*, LazyRuntimeBufferCacheEntry>();
 			return *cache;
 		}
+
+		struct KernelLaunchCounterRegistry
+		{
+			std::mutex mutex;
+			std::unordered_map<std::string, size_t> counts;
+			bool exit_printer_registered = false;
+		};
+
+		static KernelLaunchCounterRegistry& kernel_launch_counter_registry()
+		{
+			static auto* registry = new KernelLaunchCounterRegistry();
+			return *registry;
+		}
+
+		static void print_kernel_launch_counts()
+		{
+			auto& registry = kernel_launch_counter_registry();
+			std::vector<std::pair<std::string, size_t>> counts;
+			{
+				std::lock_guard<std::mutex> lock(registry.mutex);
+				counts.reserve(registry.counts.size());
+				for (const auto& item : registry.counts)
+					counts.push_back(item);
+			}
+
+			if (counts.empty())
+				return;
+
+			std::sort(counts.begin(), counts.end(), [](const auto& lhs, const auto& rhs) {
+				if (lhs.second != rhs.second)
+					return lhs.second > rhs.second;
+				return lhs.first < rhs.first;
+			});
+
+			if (counts.size() > 10)
+				counts.resize(10);
+
+			std::println("Top ComputeKernel launch counts:");
+			for (const auto& [kernel_name, count] : counts)
+				std::println("  {}: {}", kernel_name, count);
+		}
+
+		static void record_kernel_launch(std::string_view kernel_name)
+		{
+			auto& registry = kernel_launch_counter_registry();
+			std::lock_guard<std::mutex> lock(registry.mutex);
+			if (!registry.exit_printer_registered)
+			{
+				std::atexit(print_kernel_launch_counts);
+				registry.exit_printer_registered = true;
+			}
+			registry.counts[std::string(kernel_name)]++;
+		}
 	}
 
 	ComputeKernelRuntime::ComputeKernelRuntime(std::string_view kernel_name, std::filesystem::path spirv_path)
@@ -65,6 +121,8 @@ namespace rllm::vulkan
 
 	ComputeKernelRuntime::~ComputeKernelRuntime()
 	{
+		wait_for_in_flight_submit();
+
 		if (m_submit_fence != VK_NULL_HANDLE && m_submit_fence_device != VK_NULL_HANDLE)
 		{
 			vkDestroyFence(m_submit_fence_device, m_submit_fence, nullptr);
@@ -102,6 +160,31 @@ namespace rllm::vulkan
 			vkDestroyShaderModule(m_cached_device, m_shader_module, nullptr);
 			m_shader_module = VK_NULL_HANDLE;
 		}
+	}
+
+	void ComputeKernelRuntime::wait_for_in_flight_submit()
+	{
+		if (!m_submit_in_flight)
+			return;
+
+		if (m_submit_fence == VK_NULL_HANDLE || m_submit_fence_device == VK_NULL_HANDLE)
+		{
+			m_submit_in_flight = false;
+			return;
+		}
+
+		const VkResult wait_result = vkWaitForFences(m_submit_fence_device, 1, &m_submit_fence, VK_TRUE, UINT64_MAX);
+		if (wait_result != VK_SUCCESS)
+		{
+			LOG_ERROR(
+				"vkWaitForFences failed for kernel '{}' ({}): {}",
+				name(),
+				spirv_path().string(),
+				static_cast<int>(wait_result)
+			);
+			std::abort();
+		}
+		m_submit_in_flight = false;
 	}
 
 	void ComputeKernelRuntime::ensure_pipeline(VkDevice device, uint32_t ssbo_binding_count)
@@ -322,8 +405,11 @@ namespace rllm::vulkan
 			return;
 		}
 
+		detail::record_kernel_launch(name());
+
 		detail::RuntimeContext& ctx = detail::runtime_context();
 		std::lock_guard<std::mutex> runtime_lock(*ctx.launch_mutex);
+		wait_for_in_flight_submit();
 		const uint32_t ssbo_binding_count =
 			std::max<uint32_t>(m_parsed_ssbo_binding_count, static_cast<uint32_t>(buffers.size()));
 		if (buffers.size() != ssbo_binding_count)
@@ -760,6 +846,32 @@ namespace rllm::vulkan
 
 		if (runtime_buffer_count > 0)
 		{
+			if (ctx.offload_buffer != VK_NULL_HANDLE && ctx.offload_size != 0)
+			{
+				VkBufferMemoryBarrier offload_visibility_barrier{};
+				offload_visibility_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+				offload_visibility_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+				offload_visibility_barrier.dstAccessMask =
+					VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+				offload_visibility_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				offload_visibility_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				offload_visibility_barrier.buffer = ctx.offload_buffer;
+				offload_visibility_barrier.offset = 0;
+				offload_visibility_barrier.size = static_cast<VkDeviceSize>(ctx.offload_size);
+				vkCmdPipelineBarrier(
+					m_command_buffer,
+					VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					0,
+					0,
+					nullptr,
+					1,
+					&offload_visibility_barrier,
+					0,
+					nullptr
+				);
+			}
+
 			std::vector<VkBufferCopy> upload_regions;
 			std::vector<VkBufferMemoryBarrier> upload_barriers;
 			upload_regions.reserve(runtime_buffer_count);
@@ -840,13 +952,46 @@ namespace rllm::vulkan
 		if (runtime_buffer_count > 0)
 		{
 			std::vector<VkBufferMemoryBarrier> download_source_barriers;
-			std::vector<size_t> download_indices;
+			std::vector<size_t> host_download_indices;
+			std::vector<size_t> offload_download_indices;
+			std::vector<VkDeviceSize> offload_download_offsets;
 			download_source_barriers.reserve(runtime_buffer_count);
-			download_indices.reserve(runtime_buffer_count);
+			host_download_indices.reserve(runtime_buffer_count);
+			offload_download_indices.reserve(runtime_buffer_count);
+			offload_download_offsets.reserve(runtime_buffer_count);
 			for (size_t i = 0; i < runtime_buffer_count; ++i)
 			{
 				if (!runtime_buffers[i].view.on_device_ready)
 					continue;
+
+				if (runtime_buffers[i].view.offload_ptr != nullptr)
+				{
+					VkDeviceSize offload_dst_offset = 0;
+					if (!detail::resolve_offset(
+							ctx.offload_base,
+							ctx.offload_size,
+							runtime_buffers[i].view.offload_ptr,
+							runtime_buffers[i].view.size_bytes,
+							offload_dst_offset
+						))
+					{
+						LOG_ERROR(
+							"Unable to resolve persistent offload destination offset for kernel '{}' parameter '{}'.",
+							name(),
+							runtime_buffers[i].view.parameter_name.empty()
+								? std::string_view{"<unnamed>"}
+								: runtime_buffers[i].view.parameter_name
+						);
+						cleanup_runtime_buffers();
+						std::abort();
+					}
+					offload_download_indices.push_back(i);
+					offload_download_offsets.push_back(offload_dst_offset);
+				}
+				else
+				{
+					host_download_indices.push_back(i);
+				}
 
 				VkBufferMemoryBarrier barrier{};
 				barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -858,7 +1003,6 @@ namespace rllm::vulkan
 				barrier.offset = 0;
 				barrier.size = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
 				download_source_barriers.push_back(barrier);
-				download_indices.push_back(i);
 			}
 
 			if (!download_source_barriers.empty())
@@ -876,11 +1020,19 @@ namespace rllm::vulkan
 					nullptr
 				);
 
-				for (size_t idx : download_indices)
+				for (size_t idx : host_download_indices)
 				{
 					VkBufferCopy region{};
 					region.size = static_cast<VkDeviceSize>(runtime_buffers[idx].view.size_bytes);
 					vkCmdCopyBuffer(m_command_buffer, runtime_buffers[idx].buffer, runtime_buffers[idx].staging_buffer, 1, &region);
+				}
+				for (size_t copy_idx = 0; copy_idx < offload_download_indices.size(); ++copy_idx)
+				{
+					const size_t idx = offload_download_indices[copy_idx];
+					VkBufferCopy region{};
+					region.dstOffset = offload_download_offsets[copy_idx];
+					region.size = static_cast<VkDeviceSize>(runtime_buffers[idx].view.size_bytes);
+					vkCmdCopyBuffer(m_command_buffer, runtime_buffers[idx].buffer, ctx.offload_buffer, 1, &region);
 				}
 			}
 		}
@@ -925,32 +1077,31 @@ namespace rllm::vulkan
 			);
 			std::abort();
 		}
+		m_submit_in_flight = true;
 
-		const VkResult wait_result = vkWaitForFences(ctx.device, 1, &m_submit_fence, VK_TRUE, UINT64_MAX);
-		if (wait_result != VK_SUCCESS)
+		bool needs_immediate_wait = false;
+		for (size_t i = 0; i < runtime_buffer_count; ++i)
 		{
-			LOG_ERROR(
-				"vkWaitForFences failed for kernel '{}' ({}): {}",
-				name(),
-				spirv_path().string(),
-				static_cast<int>(wait_result)
-			);
-			std::abort();
+			RuntimeBuffer& rb = runtime_buffers[i];
+			if (rb.view.on_device_ready && rb.view.offload_ptr == nullptr)
+				needs_immediate_wait = true;
+			if (!rb.cached)
+				needs_immediate_wait = true;
 		}
+		if (needs_immediate_wait)
+			wait_for_in_flight_submit();
 
 		for (size_t i = 0; i < runtime_buffer_count; ++i)
 		{
 			RuntimeBuffer& rb = runtime_buffers[i];
 			const bool kernel_writes_buffer = static_cast<bool>(rb.view.on_device_ready);
-			if (kernel_writes_buffer && rb.view.offload_ptr != nullptr && rb.mapped != nullptr)
+			if (kernel_writes_buffer && rb.view.offload_ptr != nullptr)
 			{
-				get_offload_allocator().memory_space().copy_staging_to_offload(
-					const_cast<void*>(rb.view.offload_ptr),
-					rb.mapped,
-					rb.view.size_bytes
-				);
+				if (rb.view.mark_device_latest)
+					rb.view.mark_device_latest();
+				rb.view.on_device_ready = nullptr;
 			}
-			if (kernel_writes_buffer)
+			else if (kernel_writes_buffer)
 			{
 				rb.view.on_device_ready(rb.mapped, rb.view.size_bytes, name(), rb.view.parameter_name);
 				rb.view.on_device_ready = nullptr;

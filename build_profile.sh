@@ -7,7 +7,7 @@ TRAIN_DIR="${TRAIN_DIR:-profile_training_data}"
 OUTPUT_MODEL_CPU="${OUTPUT_MODEL_CPU:-/tmp/rllm-profile-small-cpu.json}"
 OUTPUT_MODEL_VULKAN="${OUTPUT_MODEL_VULKAN:-/tmp/rllm-profile-small-vulkan.json}"
 LAYERS="${LAYERS:-1}"
-EPOCHS="${EPOCHS:-10}"
+EPOCHS="${EPOCHS:-3}"
 PARALLEL_BACKEND="${PARALLEL_BACKEND:-fastfork}"
 
 if [[ ! -d "$TRAIN_DIR" ]]; then
