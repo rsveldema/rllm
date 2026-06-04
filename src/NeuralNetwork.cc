@@ -240,9 +240,11 @@ namespace rllm
         fixed_size_vector<rlmm_float, EmbeddingDimension> dh_last;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dh;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din;
+        BackwardWorkspace transformer_block;
         explicit BackwardPropWorkspace(PositionIndex seq_len)
             : dh(seq_len)
             , din(seq_len)
+            , transformer_block(seq_len)
         {
             output_layer_delta.set_size(TokenID::MAX);
             h_last_vec.set_size(EmbeddingDimension::MAX);
@@ -298,7 +300,7 @@ namespace rllm
 
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
-            m_transformer_blocks[i].backward(ws.dh, ws.din, learning_rate);
+            m_transformer_blocks[i].backward(ws.dh, ws.din, ws.transformer_block, learning_rate);
             ws.dh = ws.din;
         }
 

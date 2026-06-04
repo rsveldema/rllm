@@ -321,70 +321,6 @@ namespace rllm
         element_wise_sum(ws.h_mid, ws.ffn_out, h);
     }
 
-    // ── backward temporaries ──────────────────────────────────────────────────
-    // All large matrices live here so they are heap-allocated via unique_ptr and
-    // do not blow the stack (~21 MB combined).
-    struct BackwardWorkspace
-    {
-        // FFN backward
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_mid;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_ffn_act;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> dW_down;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_gate_pre;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_up_pre;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> dW_gate;
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> dW_up;
-        // Attention backward
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_attn_concat;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_o;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_Q;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_K;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_V;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_q;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_k;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_v;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
-        // Scratch buffer shared by both matmul accumulation loops
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> tmp;
-        // Per-head scratch: each head writes its own d_scores/d_raw so the hi loop is parallel.
-        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
-        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
-
-        explicit BackwardWorkspace(PositionIndex seq)
-            : d_h_mid(seq)
-            , d_ffn_act(seq)
-            , d_gate_pre(seq)
-            , d_up_pre(seq)
-            , d_h_norm_ff(seq)
-            , d_attn_concat(seq)
-            , d_Q(seq)
-            , d_K(seq)
-            , d_V(seq)
-            , d_h_norm_attn(seq)
-            , tmp(seq)
-        {}
-
-        // Zero only the fields that accumulate across the backward pass.
-        // Fields fully overwritten before use (d_h_mid, d_ffn_act, d_gate_pre,
-        // d_up_pre, d_attn_concat, tmp, d_scores, d_raw) are left untouched.
-        void reset()
-        {
-            dW_down.zero();
-            d_h_norm_ff.zero();
-            dW_gate.zero();
-            dW_up.zero();
-            dW_o.zero();
-            d_Q.zero();
-            d_K.zero();
-            d_V.zero();
-            dW_q.zero();
-            dW_k.zero();
-            dW_v.zero();
-            d_h_norm_attn.zero();
-        }
-    };
-
     // ── backward pass ─────────────────────────────────────────────────────────
 
     static void accumulate_attention_dq_for_head(
@@ -469,14 +405,13 @@ namespace rllm
     void TransformerBlock::backward(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din,
+        BackwardWorkspace& workspace,
         float learning_rate
     )
     {
         const PositionIndex seq = m_fwd_ws->seq_len;
-        if (!m_bwd_ws || m_bwd_ws->d_h_mid.num_rows() != seq)
-            m_bwd_ws = std::make_unique<BackwardWorkspace>(seq);
-        m_bwd_ws->reset();
-        auto* ws = m_bwd_ws.get();
+        workspace.reset(seq);
+        auto* ws = &workspace;
         auto& fwd = *m_fwd_ws;
 
         // ── FFN backward ──────────────────────────────────────────────────────

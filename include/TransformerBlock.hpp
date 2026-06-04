@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <fixed_size_obj_vector.hpp>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <parallel.hpp>
@@ -10,8 +11,80 @@ namespace rllm
 {
     // Forward declaration for heap-allocated forward-pass activation workspace.
     struct ForwardWorkspace;
-    // Forward declaration for heap-allocated backward-pass scratch workspace.
-    struct BackwardWorkspace;
+
+    // Shared scratch workspace for one TransformerBlock backward pass. Owned by
+    // the training backward workspace and reused for each block in reverse order.
+    struct BackwardWorkspace
+    {
+        // FFN backward
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_mid;
+        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_ffn_act;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> dW_down;
+        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_gate_pre;
+        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_up_pre;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
+        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> dW_gate;
+        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> dW_up;
+
+        // Attention backward
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_attn_concat;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_o;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_Q;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_K;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_V;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_q;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_k;
+        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_v;
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
+
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> tmp;
+        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>
+            d_scores;
+        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
+
+        explicit BackwardWorkspace(PositionIndex seq)
+            : d_h_mid(seq)
+            , d_ffn_act(seq)
+            , d_gate_pre(seq)
+            , d_up_pre(seq)
+            , d_h_norm_ff(seq)
+            , d_attn_concat(seq)
+            , d_Q(seq)
+            , d_K(seq)
+            , d_V(seq)
+            , d_h_norm_attn(seq)
+            , tmp(seq)
+        {}
+
+        void reset(PositionIndex seq)
+        {
+            d_h_mid.set_rows(seq);
+            d_ffn_act.set_rows(seq);
+            d_gate_pre.set_rows(seq);
+            d_up_pre.set_rows(seq);
+            d_h_norm_ff.set_rows(seq);
+            d_attn_concat.set_rows(seq);
+            d_Q.set_rows(seq);
+            d_K.set_rows(seq);
+            d_V.set_rows(seq);
+            d_h_norm_attn.set_rows(seq);
+            tmp.set_rows(seq);
+
+            dW_down.zero();
+            d_h_norm_ff.zero();
+            dW_gate.zero();
+            dW_up.zero();
+            dW_o.zero();
+            d_Q.zero();
+            d_K.zero();
+            d_V.zero();
+            dW_q.zero();
+            dW_k.zero();
+            dW_v.zero();
+            d_h_norm_attn.zero();
+        }
+    };
+
     // A single transformer decoder block:
     //   Pre-RMSNorm → causal multi-head self-attention → residual
     //   Pre-RMSNorm → SwiGLU feed-forward network       → residual
@@ -49,6 +122,7 @@ namespace rllm
         void backward(
             const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout,
             flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din,
+            BackwardWorkspace& workspace,
             float learning_rate
         );
 
@@ -101,8 +175,6 @@ namespace rllm
         // Activations cached during forward() for use in backward().
         // Heap-allocated to avoid blowing the stack (~21 MB of fixed-size arrays).
         std::unique_ptr<ForwardWorkspace> m_fwd_ws;
-        // Scratch workspace for backward(); cached to avoid per-call heap allocation.
-        std::unique_ptr<BackwardWorkspace> m_bwd_ws;
 
         void copy_weights_to_offload_buffer();
 
