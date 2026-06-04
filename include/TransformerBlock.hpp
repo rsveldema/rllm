@@ -104,6 +104,8 @@ namespace rllm
         // Scratch workspace for backward(); cached to avoid per-call heap allocation.
         std::unique_ptr<BackwardWorkspace> m_bwd_ws;
 
+        void copy_weights_to_offload_buffer();
+
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
         static void rms_norm(
             const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,

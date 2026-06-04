@@ -35,6 +35,7 @@ namespace rllm
         W_gate.fill_rand(-sd, sd);
         W_up.fill_rand(-sd, sd);
         W_down.fill_rand(-sf, sf);
+        copy_weights_to_offload_buffer();
 
         V_q.zero();
         V_k.zero();
@@ -43,6 +44,17 @@ namespace rllm
         V_gate.zero();
         V_up.zero();
         V_down.zero();
+    }
+
+    void TransformerBlock::copy_weights_to_offload_buffer()
+    {
+        W_q.copy_to_offload_buffer();
+        W_k.copy_to_offload_buffer();
+        W_v.copy_to_offload_buffer();
+        W_o.copy_to_offload_buffer();
+        W_gate.copy_to_offload_buffer();
+        W_up.copy_to_offload_buffer();
+        W_down.copy_to_offload_buffer();
     }
 
     // ── normalisation ──────────────────────────────────────────────────────────
@@ -619,6 +631,7 @@ namespace rllm
         deserialize_matrix(j.at("W_gate"), W_gate);
         deserialize_matrix(j.at("W_up"), W_up);
         deserialize_matrix(j.at("W_down"), W_down);
+        copy_weights_to_offload_buffer();
 
         // Reset momentum on load — do not persist transient training state
         V_q.zero();
