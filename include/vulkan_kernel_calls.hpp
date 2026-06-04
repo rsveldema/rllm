@@ -40,6 +40,7 @@ namespace rllm::vulkan
             size_t size_bytes = 0;
             std::string_view parameter_name{};
             std::function<DeviceMemoryOwner()> memory_owner;
+            std::function<void()> mark_device_latest;
             // Called with (mapped_ptr, size_bytes, kernel_name) once the Vulkan device buffer is ready.
             // Allows the caller to register deferred host synchronization or eager copy-back.
             std::function<void(void*, size_t, std::string_view, std::string_view)> on_device_ready;
@@ -139,6 +140,9 @@ namespace rllm::vulkan
                 view.size_bytes = arg.storage_size_bytes();
                 view.parameter_name = parameter_name;
                 view.memory_owner = [&arg]() { return arg.device_memory_owner(); };
+                view.mark_device_latest = [&arg]() {
+                    const_cast<std::remove_const_t<ArgType>&>(arg).mark_device_latest();
+                };
                 if constexpr (!std::is_const_v<ArgType>)
                 {
                     view.on_device_ready = [&arg](
@@ -164,6 +168,9 @@ namespace rllm::vulkan
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
                 view.parameter_name = parameter_name;
                 view.memory_owner = [&arg]() { return arg.device_memory_owner(); };
+                view.mark_device_latest = [&arg]() {
+                    const_cast<std::remove_const_t<ArgType>&>(arg).mark_device_latest();
+                };
                 if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
                 {
                     view.on_device_ready = [&arg](
@@ -259,6 +266,9 @@ namespace rllm::vulkan
                 view.size_bytes = arg.storage_size_bytes();
                 view.parameter_name = parameter_name;
                 view.memory_owner = [&arg]() { return arg.device_memory_owner(); };
+                view.mark_device_latest = [&arg]() {
+                    const_cast<std::remove_const_t<ArgType>&>(arg).mark_device_latest();
+                };
                 if constexpr (!std::is_const_v<ArgType>)
                 {
                     view.on_device_ready = [&arg](
@@ -292,6 +302,9 @@ namespace rllm::vulkan
                 view.size_bytes = static_cast<size_t>(arg.storage_size_bytes());
                 view.parameter_name = parameter_name;
                 view.memory_owner = [&arg]() { return arg.device_memory_owner(); };
+                view.mark_device_latest = [&arg]() {
+                    const_cast<std::remove_const_t<ArgType>&>(arg).mark_device_latest();
+                };
                 if constexpr (!std::is_const_v<ArgType> && is_lazy_host_buffer_arg_v<ArgType>)
                 {
                     view.on_device_ready = [&arg](

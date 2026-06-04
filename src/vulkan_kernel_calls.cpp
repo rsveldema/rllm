@@ -472,13 +472,16 @@ namespace rllm::vulkan
 			const bool keep_runtime_buffer = view.offload_ptr != nullptr;
 			auto seed_runtime_buffer = [&](RuntimeBuffer& runtime_buffer) {
 				const DeviceMemoryOwner owner = view.memory_owner ? view.memory_owner() : DeviceMemoryOwner::ON_HOST;
-				if (view.offload_ptr != nullptr && owner == DeviceMemoryOwner::ON_DEVICE)
+				if (view.offload_ptr != nullptr
+					&& (owner == DeviceMemoryOwner::ON_DEVICE || owner == DeviceMemoryOwner::REPLICATED))
 				{
 					get_offload_allocator().memory_space().copy_offload_to_staging(
 						runtime_buffer.mapped,
 						const_cast<void*>(view.offload_ptr),
 						view.size_bytes
 					);
+					if (owner == DeviceMemoryOwner::REPLICATED && view.mark_device_latest)
+						view.mark_device_latest();
 					return;
 				}
 
