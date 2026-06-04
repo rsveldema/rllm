@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -124,11 +126,34 @@ namespace
 
         return true;
     }
+
+    size_t effective_pool_bytes(size_t default_pool_bytes)
+    {
+        const char* value = std::getenv(VulkanMemorySpace::POOL_BYTES_ENV);
+        if (value == nullptr || *value == '\0')
+            return default_pool_bytes;
+
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long long parsed = std::strtoull(value, &end, 10);
+        if (errno != 0 || end == value || *end != '\0' || parsed == 0 ||
+            parsed > static_cast<unsigned long long>(std::numeric_limits<size_t>::max()))
+        {
+            LOG_ERROR(
+                "Invalid {}='{}'. Expected a positive byte count.",
+                VulkanMemorySpace::POOL_BYTES_ENV,
+                value
+            );
+            std::abort();
+        }
+
+        return static_cast<size_t>(parsed);
+    }
 }
 
 VulkanMemorySpace::VulkanMemorySpace(size_t pool_bytes)
-    : pool_bytes_(pool_bytes)
-    , offload_storage_(pool_bytes)
+    : pool_bytes_(effective_pool_bytes(pool_bytes))
+    , offload_storage_(pool_bytes_)
 {
     initialize_runtime();
 }

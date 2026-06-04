@@ -103,6 +103,7 @@ class VulkanKernelSpec:
 @dataclass
 class MatrixViewSpec:
     name: str
+    glsl_scalar: str
     rows: int
     cols: int
     is_const: bool
@@ -221,14 +222,16 @@ def _map_cpp_extra_param_to_vulkan(
     core_type = re.sub(r"\s*[&*]\s*$", "", core_type).strip()
     matrix_match = _MATRIX_TYPE_RE.match(t)
     if matrix_match:
+        glsl_scalar = _map_cpp_buffer_scalar_to_glsl(matrix_match.group("scalar"))
         rows_max = _resolve_enum_max(matrix_match.group("rows"), symbol_values)
         cols_max = _resolve_enum_max(matrix_match.group("cols"), symbol_values)
-        if rows_max is not None and cols_max is not None:
+        if glsl_scalar is not None and rows_max is not None and cols_max is not None:
             is_const = matrix_match.group("const") is not None
             # Matrix-like tensors are exposed as SSBO bindings, not copied into function-local arrays.
             flat_len = rows_max * cols_max
             return "", "", MatrixViewSpec(
                 name=name,
+                glsl_scalar=glsl_scalar,
                 rows=rows_max,
                 cols=cols_max,
                 is_const=is_const,
@@ -252,13 +255,15 @@ def _map_cpp_extra_param_to_vulkan(
 
     nested_fixed_size_vector_matrix_match = _NESTED_FIXED_SIZE_VECTOR_MATRIX_RE.match(t)
     if nested_fixed_size_vector_matrix_match:
+        glsl_scalar = _map_cpp_buffer_scalar_to_glsl(nested_fixed_size_vector_matrix_match.group("scalar"))
         rows_max = _resolve_enum_max(nested_fixed_size_vector_matrix_match.group("rows"), symbol_values)
         cols_max = _resolve_enum_max(nested_fixed_size_vector_matrix_match.group("cols"), symbol_values)
-        if rows_max is not None and cols_max is not None:
+        if glsl_scalar is not None and rows_max is not None and cols_max is not None:
             is_const = nested_fixed_size_vector_matrix_match.group("const") is not None
             flat_len = rows_max * cols_max
             return "", "", MatrixViewSpec(
                 name=name,
+                glsl_scalar=glsl_scalar,
                 rows=rows_max,
                 cols=cols_max,
                 is_const=is_const,
@@ -277,12 +282,14 @@ def _map_cpp_extra_param_to_vulkan(
         core_type,
     )
     if nested_core_match:
+        glsl_scalar = _map_cpp_buffer_scalar_to_glsl(nested_core_match.group("scalar"))
         rows_max = _resolve_enum_max(nested_core_match.group("rows"), symbol_values)
         cols_max = _resolve_enum_max(nested_core_match.group("cols"), symbol_values)
-        if rows_max is not None and cols_max is not None:
+        if glsl_scalar is not None and rows_max is not None and cols_max is not None:
             flat_len = rows_max * cols_max
             return "", "", MatrixViewSpec(
                 name=name,
+                glsl_scalar=glsl_scalar,
                 rows=rows_max,
                 cols=cols_max,
                 is_const=t.startswith("const "),
@@ -430,7 +437,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
                 readonly = "readonly " if matrix_view_spec.is_const else ""
                 block_name = f"RllmBuffer_{name}"
                 ssbo_decls.append(
-                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ float {name}[{matrix_view_spec.flat_len}]; }};"
+                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ {matrix_view_spec.glsl_scalar} {name}[{matrix_view_spec.flat_len}]; }};"
                 )
                 ssbo_binding += 1
             elif buffer_view_spec is not None:
@@ -505,13 +512,17 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
     if ssbo_block:
         ssbo_block = ssbo_block + "\n\n"
     
+    local_size_x = config.workgroup_size_x
+    local_size_y = config.workgroup_size_y if spec.is_2d else 1
+    local_size_z = config.workgroup_size_z if spec.is_2d else 1
+
     # Generate shared variable declarations. GLSL requires workgroup storage to
     # live at global scope, not inside function scope.
     shared_decls: list[str] = []
     if spec.shared_vars:
         for var_name, var_type in spec.shared_vars.items():
             glsl_type = _sanitize_cpp_type_to_glsl(var_type)
-            shared_decls.append(f"shared {glsl_type} {var_name}[{config.workgroup_size_x * config.workgroup_size_y * config.workgroup_size_z}];")
+            shared_decls.append(f"shared {glsl_type} {var_name}[{local_size_x * local_size_y * local_size_z}];")
     shared_block = "\n".join(shared_decls)
     if shared_block:
         shared_block = shared_block + "\n\n"
@@ -537,7 +548,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
         "#version 450\n"
         "\n"
         f"{extension_block}"
-        f"layout(local_size_x = {config.workgroup_size_x}, local_size_y = {config.workgroup_size_y}, local_size_z = {config.workgroup_size_z}) in;\n"
+        f"layout(local_size_x = {local_size_x}, local_size_y = {local_size_y}, local_size_z = {local_size_z}) in;\n"
         "\n"
         f"{const_block}"
         f"{push_constant_block}"

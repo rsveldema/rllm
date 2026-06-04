@@ -10,6 +10,8 @@
 #include <Range.hpp>
 #include <enum_iterator.hpp>
 #include <parallel.hpp>
+#include <IMemorySpace.hpp>
+
 
 namespace rllm
 {
@@ -160,10 +162,19 @@ namespace rllm
             return m_data.raw_staging_data();
         }
 
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         void* raw_offload_data() const
         {
             return m_data.raw_offload_data();
         }
+#endif
+
+#if defined(USE_VULKAN_OFFLOAD)
+        VulkanRuntimeBuffer& vulkan_runtime_buffer() const
+        {
+            return m_data.vulkan_runtime_buffer();
+        }
+#endif
 
         DeviceMemoryOwner device_memory_owner() const
         {

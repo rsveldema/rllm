@@ -35,23 +35,6 @@ namespace rllm::vulkan
 			return true;
 		}
 
-		struct LazyRuntimeBufferCacheEntry
-		{
-			VkDevice device = VK_NULL_HANDLE;
-			VkBuffer buffer = VK_NULL_HANDLE;
-			VkDeviceMemory memory = VK_NULL_HANDLE;
-			VkBuffer staging_buffer = VK_NULL_HANDLE;
-			VkDeviceMemory staging_memory = VK_NULL_HANDLE;
-			void* mapped = nullptr;
-			size_t size_bytes = 0;
-		};
-
-		static std::unordered_map<const void*, LazyRuntimeBufferCacheEntry>& lazy_runtime_buffer_cache()
-		{
-			static auto* cache = new std::unordered_map<const void*, LazyRuntimeBufferCacheEntry>();
-			return *cache;
-		}
-
 		struct KernelLaunchCounterRegistry
 		{
 			std::mutex mutex;
@@ -578,8 +561,7 @@ namespace rllm::vulkan
 		{
 			const detail::HostBufferView& view = buffers[buf_idx];
 			RuntimeBuffer& rb = runtime_buffers[buf_idx];
-			auto& lazy_cache = detail::lazy_runtime_buffer_cache();
-			const bool keep_runtime_buffer = view.offload_ptr != nullptr;
+			const bool keep_runtime_buffer = view.vulkan_runtime_buffer != nullptr;
 			auto seed_runtime_buffer = [&](RuntimeBuffer& runtime_buffer) {
 				runtime_buffer.use_offload_source = false;
 				runtime_buffer.bind_offload_direct = false;
@@ -662,25 +644,23 @@ namespace rllm::vulkan
 
 			if (keep_runtime_buffer)
 			{
-				auto cached_it = lazy_cache.find(view.cache_key);
-				if (cached_it != lazy_cache.end())
+				VulkanRuntimeBuffer& stored = *view.vulkan_runtime_buffer;
+				if (stored.device == ctx.device && stored.buffer != VK_NULL_HANDLE && stored.memory != VK_NULL_HANDLE &&
+					stored.staging_buffer != VK_NULL_HANDLE && stored.staging_memory != VK_NULL_HANDLE &&
+					stored.mapped != nullptr && stored.size_bytes >= view.size_bytes)
 				{
-					detail::LazyRuntimeBufferCacheEntry& cached = cached_it->second;
-					if (cached.device == ctx.device && cached.buffer != VK_NULL_HANDLE && cached.memory != VK_NULL_HANDLE &&
-						cached.staging_buffer != VK_NULL_HANDLE && cached.staging_memory != VK_NULL_HANDLE &&
-						cached.mapped != nullptr && cached.size_bytes >= view.size_bytes)
-					{
-						rb.buffer = cached.buffer;
-						rb.memory = cached.memory;
-						rb.staging_buffer = cached.staging_buffer;
-						rb.staging_memory = cached.staging_memory;
-						rb.mapped = cached.mapped;
-						rb.view = view;
-						rb.cached = true;
-						seed_runtime_buffer(rb);
-						continue;
-					}
+					rb.buffer = stored.buffer;
+					rb.memory = stored.memory;
+					rb.staging_buffer = stored.staging_buffer;
+					rb.staging_memory = stored.staging_memory;
+					rb.mapped = stored.mapped;
+					rb.view = view;
+					rb.cached = true;
+					seed_runtime_buffer(rb);
+					continue;
 				}
+
+				stored.release();
 			}
 
 			create_runtime_buffer_resource(
@@ -711,15 +691,14 @@ namespace rllm::vulkan
 			seed_runtime_buffer(rb);
 			if (keep_runtime_buffer)
 			{
-				lazy_cache[view.cache_key] = {
-					.device = ctx.device,
-					.buffer = rb.buffer,
-					.memory = rb.memory,
-					.staging_buffer = rb.staging_buffer,
-					.staging_memory = rb.staging_memory,
-					.mapped = rb.mapped,
-					.size_bytes = rb.view.size_bytes,
-				};
+				VulkanRuntimeBuffer& stored = *view.vulkan_runtime_buffer;
+				stored.device = ctx.device;
+				stored.buffer = rb.buffer;
+				stored.memory = rb.memory;
+				stored.staging_buffer = rb.staging_buffer;
+				stored.staging_memory = rb.staging_memory;
+				stored.mapped = rb.mapped;
+				stored.size_bytes = rb.view.size_bytes;
 				rb.cached = true;
 			}
 		}
@@ -988,10 +967,7 @@ namespace rllm::vulkan
 					offload_download_indices.push_back(i);
 					offload_download_offsets.push_back(offload_dst_offset);
 				}
-				else
-				{
-					host_download_indices.push_back(i);
-				}
+				host_download_indices.push_back(i);
 
 				VkBufferMemoryBarrier barrier{};
 				barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -1083,7 +1059,7 @@ namespace rllm::vulkan
 		for (size_t i = 0; i < runtime_buffer_count; ++i)
 		{
 			RuntimeBuffer& rb = runtime_buffers[i];
-			if (rb.view.on_device_ready && rb.view.offload_ptr == nullptr)
+			if (rb.view.on_device_ready)
 				needs_immediate_wait = true;
 			if (!rb.cached)
 				needs_immediate_wait = true;
@@ -1095,13 +1071,7 @@ namespace rllm::vulkan
 		{
 			RuntimeBuffer& rb = runtime_buffers[i];
 			const bool kernel_writes_buffer = static_cast<bool>(rb.view.on_device_ready);
-			if (kernel_writes_buffer && rb.view.offload_ptr != nullptr)
-			{
-				if (rb.view.mark_device_latest)
-					rb.view.mark_device_latest();
-				rb.view.on_device_ready = nullptr;
-			}
-			else if (kernel_writes_buffer)
+			if (kernel_writes_buffer)
 			{
 				rb.view.on_device_ready(rb.mapped, rb.view.size_bytes, name(), rb.view.parameter_name);
 				rb.view.on_device_ready = nullptr;

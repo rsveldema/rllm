@@ -2,6 +2,14 @@
 
 #include <cstddef>
 
+
+#if defined(USE_VULKAN_OFFLOAD) || defined(USE_HIP_OFFLOAD)
+#define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
+#else
+#define RLLM_DEVICE_POINTER_HAS_OFFLOAD 0
+#endif
+
+
 /** Allocate/deallocate memory in a specific memory space.
  *
  * When we have a GPU / accelerator backend, this abstracts over host vs device memory allocation.

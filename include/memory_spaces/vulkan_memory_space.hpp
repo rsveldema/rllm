@@ -16,6 +16,7 @@ class VulkanMemorySpace final : public IMemorySpace
 {
 public:
     static constexpr size_t DEFAULT_POOL_BYTES = 8ULL * 1024ULL * 1024ULL * 1024ULL;
+    static constexpr const char* POOL_BYTES_ENV = "RLLM_VULKAN_POOL_BYTES";
 
     struct TransferContext
     {

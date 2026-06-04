@@ -18,7 +18,7 @@
 
 #if defined(USE_VULKAN_OFFLOAD)
 #define ATOMIC_INC(x) ((x)++)
-constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES = 1u;
+constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES = 0u;
 constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ = 0u;
 constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ = 1u;
 #else
@@ -32,6 +32,9 @@ constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ = 0u;
 
 int main(int argc, char** argv)
 {
+#if defined(USE_VULKAN_OFFLOAD)
+    setenv("RLLM_VULKAN_POOL_BYTES", "268435456", 0);
+#endif
     parallel::init_parallel();
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
@@ -264,7 +267,7 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFix
     visits[static_cast<size_t>(i)] = static_cast<int>(i) + 42;
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < N; ++i)
@@ -302,7 +305,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
     values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 1);
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>())
@@ -369,7 +372,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
     values[i, j] = scale * static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 5);
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>())
@@ -471,7 +474,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
         speedup
     );
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (const auto i : rllm::enum_iterator<rllm::EmbeddingDimension>())
@@ -498,7 +501,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
     values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 2);
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>(rllm::MultiTokenPredictionIndex::THREE))
@@ -526,7 +529,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
     values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 3);
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>(static_cast<rllm::MultiTokenPredictionIndex>(3)))
@@ -556,7 +559,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
     values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 4);
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (const auto i : rllm::enum_iterator<rllm::MultiTokenPredictionIndex>(static_cast<rllm::MultiTokenPredictionIndex>(3)))

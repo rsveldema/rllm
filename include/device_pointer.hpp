@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <functional>
@@ -10,16 +11,15 @@
 #include <utility>
 #include <cassert>
 
+
 #include <IMemorySpace.hpp>
 #include <allocator.hpp>
 
-Allocator& get_offload_allocator();
-
-#if defined(USE_VULKAN_OFFLOAD) || defined(USE_HIP_OFFLOAD)
-#define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
-#else
-#define RLLM_DEVICE_POINTER_HAS_OFFLOAD 0
+#if defined(USE_VULKAN_OFFLOAD)
+#include <vulkan/vulkan.h>
 #endif
+
+Allocator& get_offload_allocator();
 
 enum class DeviceMemoryOwner {
     INVALID,
@@ -27,6 +27,94 @@ enum class DeviceMemoryOwner {
     ON_HOST,
     REPLICATED,
 };
+
+#if defined(USE_VULKAN_OFFLOAD)
+struct VulkanRuntimeBuffer
+{
+    VkDevice device = VK_NULL_HANDLE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkBuffer staging_buffer = VK_NULL_HANDLE;
+    VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+    void* mapped = nullptr;
+    size_t size_bytes = 0;
+
+    VulkanRuntimeBuffer() = default;
+    VulkanRuntimeBuffer(const VulkanRuntimeBuffer&) = delete;
+    VulkanRuntimeBuffer& operator=(const VulkanRuntimeBuffer&) = delete;
+
+    VulkanRuntimeBuffer(VulkanRuntimeBuffer&& other) noexcept
+    {
+        move_from(std::move(other));
+    }
+
+    VulkanRuntimeBuffer& operator=(VulkanRuntimeBuffer&& other) noexcept
+    {
+        if (this != &other)
+        {
+            release();
+            move_from(std::move(other));
+        }
+        return *this;
+    }
+
+    ~VulkanRuntimeBuffer()
+    {
+        release();
+    }
+
+    void release()
+    {
+        if (device == VK_NULL_HANDLE)
+        {
+            clear_handles();
+            return;
+        }
+
+        vkDeviceWaitIdle(device);
+
+        if (mapped != nullptr && staging_memory != VK_NULL_HANDLE)
+        {
+            vkUnmapMemory(device, staging_memory);
+            mapped = nullptr;
+        }
+        if (staging_buffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(device, staging_buffer, nullptr);
+        if (staging_memory != VK_NULL_HANDLE)
+            vkFreeMemory(device, staging_memory, nullptr);
+        if (buffer != VK_NULL_HANDLE)
+            vkDestroyBuffer(device, buffer, nullptr);
+        if (memory != VK_NULL_HANDLE)
+            vkFreeMemory(device, memory, nullptr);
+
+        clear_handles();
+    }
+
+private:
+    void move_from(VulkanRuntimeBuffer&& other)
+    {
+        device = other.device;
+        buffer = other.buffer;
+        memory = other.memory;
+        staging_buffer = other.staging_buffer;
+        staging_memory = other.staging_memory;
+        mapped = other.mapped;
+        size_bytes = other.size_bytes;
+        other.clear_handles();
+    }
+
+    void clear_handles()
+    {
+        device = VK_NULL_HANDLE;
+        buffer = VK_NULL_HANDLE;
+        memory = VK_NULL_HANDLE;
+        staging_buffer = VK_NULL_HANDLE;
+        staging_memory = VK_NULL_HANDLE;
+        mapped = nullptr;
+        size_bytes = 0;
+    }
+};
+#endif
 
 template<typename T>
 class DevicePointer
@@ -116,6 +204,10 @@ public:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         , m_offload_ptr(other.m_offload_ptr)
         , m_memory_owner(other.m_memory_owner)
+        , m_host_access_fast_path(other.m_host_access_fast_path.load(std::memory_order_acquire))
+#if defined(USE_VULKAN_OFFLOAD)
+        , m_vulkan_runtime_buffer(std::move(other.m_vulkan_runtime_buffer))
+#endif
         , m_pending_flush(std::move(other.m_pending_flush))
 #endif
     {
@@ -129,6 +221,7 @@ public:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         other.m_offload_ptr = nullptr;
         other.m_memory_owner = DeviceMemoryOwner::INVALID;
+        other.m_host_access_fast_path.store(false, std::memory_order_release);
         other.m_pending_flush = nullptr;
 #endif
 
@@ -152,7 +245,11 @@ public:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_offload_ptr = other.m_offload_ptr;
         m_memory_owner = other.m_memory_owner;
+        m_host_access_fast_path.store(other.m_host_access_fast_path.load(std::memory_order_acquire), std::memory_order_release);
         m_pending_flush = std::move(other.m_pending_flush);
+#if defined(USE_VULKAN_OFFLOAD)
+        m_vulkan_runtime_buffer = std::move(other.m_vulkan_runtime_buffer);
+#endif
 #endif
 
         other.m_allocator = nullptr;
@@ -165,6 +262,7 @@ public:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         other.m_offload_ptr = nullptr;
         other.m_memory_owner = DeviceMemoryOwner::INVALID;
+        other.m_host_access_fast_path.store(false, std::memory_order_release);
         other.m_pending_flush = nullptr;
 #endif
 
@@ -191,6 +289,7 @@ public:
         zero_initialize_offload();
         m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
         m_pending_flush = nullptr;
+        m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
     }
 
@@ -208,20 +307,29 @@ public:
         fill_offload(value);
         m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
         m_pending_flush = nullptr;
+        m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
     }
 
     T* get() const
     {
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        if (host_access_fast_path())
+            return m_staging_ptr;
         ensure_host_data();
         mark_host_modified();
+#endif
         return m_staging_ptr;
     }
 
     T* staging_data() const
     {
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        if (host_access_fast_path())
+            return m_staging_ptr;
         ensure_host_data();
         mark_host_modified();
+#endif
         return m_staging_ptr;
     }
 
@@ -230,14 +338,19 @@ public:
         return m_staging_ptr;
     }
 
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
     void* raw_offload_data() const
     {
-#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         return m_offload_ptr;
-#else
-        return nullptr;
-#endif
     }
+#endif
+
+#if defined(USE_VULKAN_OFFLOAD)
+    VulkanRuntimeBuffer& vulkan_runtime_buffer() const
+    {
+        return m_vulkan_runtime_buffer;
+    }
+#endif
 
     void* offload_data() const
     {
@@ -262,6 +375,8 @@ public:
 
     T* data()
     {
+        if (host_access_fast_path())
+            return m_staging_ptr;
         ensure_host_data();
         mark_host_modified();
         return m_staging_ptr;
@@ -279,6 +394,7 @@ public:
         std::lock_guard<std::mutex> lock(m_state_mutex);
         m_pending_flush = std::move(flush_fn);
         m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
+        m_host_access_fast_path.store(false, std::memory_order_release);
 #else
         static_cast<void>(flush_fn);
 #endif
@@ -290,6 +406,7 @@ public:
         std::lock_guard<std::mutex> lock(m_state_mutex);
         m_pending_flush = nullptr;
         m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
+        m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
     }
 
@@ -398,10 +515,13 @@ private:
     void mark_host_modified() const
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        if (m_host_access_fast_path.load(std::memory_order_acquire))
+            return;
         auto* self = const_cast<DevicePointer*>(this);
         std::lock_guard<std::mutex> lock(self->m_state_mutex);
         self->m_pending_flush = nullptr;
         self->m_memory_owner = DeviceMemoryOwner::ON_HOST;
+        self->m_host_access_fast_path.store(true, std::memory_order_release);
 #endif
     }
 
@@ -412,6 +532,16 @@ private:
         std::lock_guard<std::mutex> lock(self->m_state_mutex);
         self->m_pending_flush = nullptr;
         self->m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
+        self->m_host_access_fast_path.store(false, std::memory_order_release);
+#endif
+    }
+
+    bool host_access_fast_path() const
+    {
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        return m_host_access_fast_path.load(std::memory_order_acquire);
+#else
+        return false;
 #endif
     }
 
@@ -427,6 +557,7 @@ private:
 
         m_memory_space->copy_staging_to_offload(m_offload_ptr, m_staging_ptr, m_bytes);
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
+        m_host_access_fast_path.store(false, std::memory_order_release);
     }
 
     void copy_range_to_offload_buffer_unlocked(size_t start_element, size_t element_count)
@@ -446,6 +577,7 @@ private:
         const auto* staging_src = reinterpret_cast<const std::byte*>(m_staging_ptr) + byte_offset;
         m_memory_space->copy_staging_to_offload(offload_dst, staging_src, bytes);
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
+        m_host_access_fast_path.store(false, std::memory_order_release);
     }
 
     void copy_from_offload_buffer_unlocked()
@@ -459,6 +591,7 @@ private:
 
         m_memory_space->copy_offload_to_staging(m_staging_ptr, m_offload_ptr, m_bytes);
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
+        m_host_access_fast_path.store(false, std::memory_order_release);
     }
 #endif
 
@@ -473,6 +606,7 @@ private:
         {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
             m_pending_flush = nullptr;
+            m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
             return;
         }
@@ -490,6 +624,7 @@ private:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
             m_memory_owner = DeviceMemoryOwner::INVALID;
             m_pending_flush = nullptr;
+            m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
             return;
         }
@@ -509,6 +644,7 @@ private:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_memory_owner = DeviceMemoryOwner::INVALID;
         m_pending_flush = nullptr;
+        m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
     }
 
@@ -520,6 +656,7 @@ private:
         std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_memory_owner = DeviceMemoryOwner::ON_HOST;
+        m_host_access_fast_path.store(true, std::memory_order_release);
 #endif
     }
 
@@ -531,6 +668,7 @@ private:
 
         m_memory_space->copy_offload_to_offload(m_offload_ptr, other.m_offload_ptr, m_bytes);
         m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
+        m_host_access_fast_path.store(false, std::memory_order_release);
     }
 
     void copy_replicated_to_replicated(const DevicePointer& other)
@@ -543,6 +681,7 @@ private:
         std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
         m_memory_space->copy_offload_to_offload(m_offload_ptr, other.m_offload_ptr, m_bytes);
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
+        m_host_access_fast_path.store(false, std::memory_order_release);
     }
 #endif
 
@@ -550,6 +689,7 @@ private:
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_pending_flush = nullptr;
+        m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
 
         assert(m_bytes != 0);
@@ -603,6 +743,7 @@ private:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_memory_owner = DeviceMemoryOwner::INVALID;
         m_pending_flush = nullptr;
+        m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
     }
 
@@ -654,6 +795,7 @@ private:
                 self->m_pending_flush = nullptr;
                 fn();
                 self->m_memory_owner = DeviceMemoryOwner::REPLICATED;
+                self->m_host_access_fast_path.store(false, std::memory_order_release);
             }
             else
             {
@@ -677,6 +819,10 @@ private:
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_pending_flush = nullptr;
+        m_host_access_fast_path.store(false, std::memory_order_release);
+#if defined(USE_VULKAN_OFFLOAD)
+        m_vulkan_runtime_buffer.release();
+#endif
 #endif
 
         if (m_staging_ptr != nullptr)
@@ -691,6 +837,7 @@ private:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_offload_ptr = nullptr;
         m_memory_owner = DeviceMemoryOwner::INVALID;
+        m_host_access_fast_path.store(false, std::memory_order_release);
 #endif
     }
 
@@ -704,11 +851,13 @@ private:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
     void* m_offload_ptr = nullptr;
     mutable DeviceMemoryOwner m_memory_owner = DeviceMemoryOwner::INVALID;
+    mutable std::atomic_bool m_host_access_fast_path{false};
+#if defined(USE_VULKAN_OFFLOAD)
+    mutable VulkanRuntimeBuffer m_vulkan_runtime_buffer;
+#endif
 #endif
     mutable std::mutex m_state_mutex;
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
     std::function<void()> m_pending_flush;
 #endif
 };
-
-#undef RLLM_DEVICE_POINTER_HAS_OFFLOAD
