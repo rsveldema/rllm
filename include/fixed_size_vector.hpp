@@ -104,18 +104,17 @@ namespace rllm
             }
         }
 
-        fixed_size_vector sub_array(LengthType length) const
+        void sub_array(fixed_size_vector& result, LengthType length) const
         {
             assert(length <= len);
             const auto* data = m_data.get();
-            fixed_size_vector result;
+            result.clear();
             for (const auto i : enum_iterator<LengthType>(length))
             {
                 const auto tok = data[static_cast<size_t>(i)];
                 result.push_back(tok);
             }
             result.len = length;
-            return result;
         }
 
         void push_back(T value)

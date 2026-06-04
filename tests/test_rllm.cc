@@ -67,7 +67,10 @@ namespace
     top5_for_prompt(rllm::NeuralNetwork& nn, rllm::Corpus& corpus, const std::string& prompt)
     {
         const auto token_ids = corpus.get_token_ids(prompt);
-        nn.propagate_forward(token_ids);
+
+        nn.get_last_input() = token_ids; // set the input to the probe token(s) for tracing
+
+        nn.propagate_forward();
         const auto top5 = nn.get_best_output_token_ids(5, rllm::MultiTokenPredictionIndex::START);
 
         std::println("Prompt '{}', top-5:", prompt);
@@ -150,7 +153,8 @@ TEST(PredictorRegressionTest, MTP_HashPredictsInThenCluInParallel)
     // Single forward pass with '#' activates all MTP heads simultaneously.
     const auto hash_toks = corpus.get_token_ids("#");
     ASSERT_FALSE(hash_toks.empty());
-    nn->propagate_forward(hash_toks);
+    nn->get_last_input() = hash_toks;
+    nn->propagate_forward();
 
     // Head 0 (primary): predicts the next token after '#'.
     const auto head0_top = nn->get_best_output_token_ids(1, rllm::MultiTokenPredictionIndex::START);
@@ -186,7 +190,9 @@ TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
     // Head 3 (THREE) should predict "A" — the 4th token after "#".
     const auto hash_toks = corpus.get_token_ids("#");
     ASSERT_FALSE(hash_toks.empty());
-    nn->propagate_forward(hash_toks);
+
+    nn->get_last_input() = hash_toks; // set the input to the probe token(s) for tracing
+    nn->propagate_forward();
     const auto top1 = nn->get_best_output_token_ids(1, rllm::MultiTokenPredictionIndex::THREE);
     ASSERT_FALSE(top1.empty());
     EXPECT_EQ(corpus.get_token_from_id(top1.front().token_id), "A")
@@ -210,7 +216,8 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
     nn->train(false, 3, std::nullopt, std::nullopt);
 
     const auto prompt = corpus.get_token_ids("#");
-    nn->propagate_forward(prompt);
+    nn->get_last_input() = prompt;
+    nn->propagate_forward();
     const auto top5 = nn->get_best_output_token_ids(5, rllm::MultiTokenPredictionIndex::START);
     ASSERT_EQ(top5.size(), 5u);
 

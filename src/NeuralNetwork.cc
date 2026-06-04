@@ -122,18 +122,17 @@ namespace rllm
         }
     };
 
-    void NeuralNetwork::propagate_forward(const InputLine& input)
+    void NeuralNetwork::propagate_forward()
     {
         assert(!m_transformer_blocks.empty());
 
-        m_last_input = input;
-        m_seq_len = input.size();
+        m_seq_len = m_last_input.size();
 
         auto& ws = *m_forward_workspace;
         ws.h.set_rows(m_seq_len);
 
         // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
-        m_input_layer.propagate_forward(input, ws.h);
+        m_input_layer.propagate_forward(m_last_input, ws.h);
 
         // Pass through each transformer block in order
         for (auto& block : m_transformer_blocks)
@@ -344,7 +343,9 @@ namespace rllm
     {
         if (evaluation_lines.empty())
             return std::numeric_limits<float>::quiet_NaN();
-
+ 
+        Score score;
+ 
         double total_loss = 0.0;
         for (const auto& example : evaluation_lines)
         {
@@ -352,16 +353,18 @@ namespace rllm
             assert(seq_len >= 2);
             const int num_valid = std::min(seq_len - 1, static_cast<int>(MultiTokenPredictionIndex::MAX));
             const int input_len = seq_len - num_valid;
-            const auto train_input = example.sub_array(static_cast<PositionIndex>(input_len));
 
-            propagate_forward(train_input);
+            example.sub_array(get_last_input(), 
+                        static_cast<PositionIndex>(input_len));
+
+            propagate_forward();
 
             double example_loss = 0.0;
             for (int k = 0; k < num_valid; ++k)
             {
                 const auto head = static_cast<MultiTokenPredictionIndex>(k);
                 const auto target = example[static_cast<PositionIndex>(input_len + k)];
-                Score score;
+                score.reset();
                 example_loss += static_cast<double>(m_output_layers[head].compute_score(score, target));
             }
             total_loss += example_loss / static_cast<double>(num_valid);
@@ -376,9 +379,10 @@ namespace rllm
         size_t max_iterations
     )
     {
+        InputLine line;
         for (const auto& line_substring_length : enum_iterator<PositionIndex>(line_of_file.size()))
         {
-            const auto line = line_of_file.sub_array(line_substring_length);
+            line_of_file.sub_array(line, line_substring_length);
             if (line.empty())
                 continue; // skip empty lines that can't be used for training
 
@@ -391,7 +395,7 @@ namespace rllm
                 continue; // skip too-short lines that can't be used for training
             }
 
-            LOG_INFO("Training on line: '{}'", full_string);
+            LOG_INFO("Training on line[{}]: '{}'", (int)line_substring_length, full_string);
 
             do_training(line, verbose, max_iterations);
         }
@@ -415,13 +419,14 @@ namespace rllm
             return;
         }
 
-        const auto train_input = line_of_file.sub_array(static_cast<PositionIndex>(num_tokens));
+        InputLine train_input;
+        line_of_file.sub_array(train_input, static_cast<PositionIndex>(num_tokens));
 
         const auto full_string_opt = m_corpus.get_line(train_input);
         assert(full_string_opt.has_value());
         const auto& full_string = *full_string_opt;
 
-        LOG_INFO("Training on line: '{}'", full_string);
+        LOG_INFO("Training on line[{}]: '{}'", num_tokens, full_string);
 
         do_training(train_input, verbose, max_iterations);
     }
@@ -444,7 +449,8 @@ namespace rllm
         std::uniform_int_distribution<int> len_dist(min_len, line_len);
         const int random_len = len_dist(rng);
 
-        const auto train_input = line_of_file.sub_array(static_cast<PositionIndex>(random_len));
+        InputLine train_input;
+        line_of_file.sub_array(train_input, static_cast<PositionIndex>(random_len));
         const auto full_string_opt = m_corpus.get_line(train_input);
         assert(full_string_opt.has_value());
 
@@ -892,62 +898,6 @@ namespace rllm
         }
     }
 
-    bool NeuralNetwork::should_trace_example(const std::string& full_string) const
-    {
-        const char* v = std::getenv("RLLM_TRACE_INCLUDE");
-        const bool trace_enabled = v != nullptr && std::string(v) != "0";
-        return trace_enabled && (full_string.find("#include") != std::string::npos);
-    }
-
-    void NeuralNetwork::trace_example_probes(const char* phase, size_t iter, float loss_value, const std::string& full_string)
-    {
-        for (const char* probe : {"#", "#include"})
-        {
-            const auto probe_ids = m_corpus.get_token_ids(probe);
-            if (probe_ids.empty())
-                continue;
-
-            propagate_forward(probe_ids);
-            const auto top5 = get_best_output_token_ids(5, MultiTokenPredictionIndex::START);
-
-            if (top5.empty())
-            {
-                LOG_INFO(
-                    "[TRACE] phase='{}' iter={} train='{}' probe='{}' top1='<none>' loss={:.6f}",
-                    phase,
-                    iter,
-                    full_string,
-                    probe,
-                    loss_value
-                );
-                continue;
-            }
-
-            const auto top1_tok = m_corpus.get_token_from_id(top5.front().token_id);
-            LOG_INFO(
-                "[TRACE] phase='{}' iter={} train='{}' probe='{}' top1='{}' p={:.6f} loss={:.6f}",
-                phase,
-                iter,
-                full_string,
-                probe,
-                top1_tok,
-                top5.front().activation,
-                loss_value
-            );
-
-            for (size_t k = 0; k < top5.size(); ++k)
-            {
-                LOG_INFO(
-                    "[TRACE]   top{} token='{}' id={} p={:.6f}",
-                    k,
-                    m_corpus.get_token_from_id(top5[k].token_id),
-                    top5[k].token_id,
-                    top5[k].activation
-                );
-            }
-        }
-    }
-
 
     void NeuralNetwork::do_training(const InputLine& train_output, bool verbose, size_t max_iterations)
     {
@@ -959,7 +909,8 @@ namespace rllm
         const int _max_heads = static_cast<int>(MultiTokenPredictionIndex::MAX);
         const int _num_valid = std::min(_seq_len - 1, _max_heads);
         const int _input_len = _seq_len - _num_valid;
-        const auto train_input = train_output.sub_array(static_cast<PositionIndex>(_input_len));
+        InputLine train_input;
+        train_output.sub_array(train_input, static_cast<PositionIndex>(_input_len));
         const auto num_valid_heads = static_cast<MultiTokenPredictionIndex>(_num_valid);
         // Head-0 target is used for logging and convergence checks.
         const auto expected_output_token = train_output[static_cast<PositionIndex>(_input_len)];
@@ -967,7 +918,9 @@ namespace rllm
         const auto full_string_opt = m_corpus.get_line(train_output);
         assert(full_string_opt.has_value());
         const auto& full_string = *full_string_opt;
-        const bool trace_this_example = should_trace_example(full_string);
+ 
+        get_last_input() = train_input; // set the input to the train input for tracing
+
 
         // In multi-epoch training each call gets a small fixed budget (max_iterations).
         // We allow an early return once this example reaches a reasonable confidence target.
@@ -976,7 +929,7 @@ namespace rllm
         float loss = 0.0f;
         for (size_t i = 0; i < max_iterations; ++i)
         {
-            propagate_forward(train_input);
+            propagate_forward();
 
             scores_storage->set_size(num_valid_heads);
             for (const auto _k : enum_iterator<MultiTokenPredictionIndex>(num_valid_heads))
@@ -989,9 +942,6 @@ namespace rllm
             }
 
             propagate_backward_mtp(*scores_storage, num_valid_heads);
-
-            if (trace_this_example && i < 4)
-                trace_example_probes("post_step", i + 1, loss, full_string);
 
             if (loss < m_convergence_threshold)
             {

@@ -57,7 +57,7 @@ namespace rllm
         void set_training_method(TrainingMethod m) { m_training_method = m; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
 
-        void propagate_forward(const InputLine& input);
+        void propagate_forward();
 
         // Returns the top-K output tokens with the highest activation.
         std::vector<OutputToken> get_best_output_token_ids(size_t top_k, MultiTokenPredictionIndex head) const;
@@ -94,6 +94,14 @@ namespace rllm
             }
             return result;
         }
+
+        /** set the input for the neural network.
+         * Call this just before    propagate_forward() and then call propagate_backward_mtp() to train on this input.
+         */
+        InputLine& get_last_input() {
+            return m_last_input;
+        }
+        
 
       private:
                 static constexpr size_t VALIDATION_PERCENT = 20;
@@ -159,8 +167,6 @@ namespace rllm
             size_t num_epochs,
             const std::optional<std::chrono::seconds>& checkpointing_interval
         );
-        bool should_trace_example(const std::string& full_string) const;
-        void trace_example_probes(const char* phase, size_t iter, float loss_value, const std::string& full_string);
         void do_line_based_training(
             bool verbose,
             size_t num_epochs,

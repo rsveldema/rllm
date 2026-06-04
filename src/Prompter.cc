@@ -67,7 +67,10 @@ namespace rllm
                  const std::string arg = command.substr(space + 1);
                  const auto& corpus = nn.get_corpus();
                  const auto token_ids = corpus.get_token_ids(arg);
-                 nn.propagate_forward(token_ids);
+
+                 nn.get_last_input() = token_ids; // set the input to the probe token(s) for tracing
+
+                 nn.propagate_forward();
                  const auto mean_vec = nn.get_last_hidden_mean();
                  constexpr size_t D = static_cast<size_t>(EmbeddingDimension::MAX);
                  constexpr size_t COLS = 8;
@@ -198,7 +201,8 @@ namespace rllm
         bool stop = false;
         while (!stop && total_tokens_generated < MAX_NUM_ANSWER_TOKENS)
         {
-            nn.propagate_forward(token_id_list);
+            nn.get_last_input() = token_id_list; // set the input for tracing
+            nn.propagate_forward();
 
             bool appended_token = false;
             for (const auto head : enum_iterator<MultiTokenPredictionIndex>())

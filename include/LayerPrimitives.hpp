@@ -199,9 +199,9 @@ namespace rllm
             return *this;
         }
 
-        InputLine sub_array(PositionIndex length) const
+        void sub_array(InputLine& result, PositionIndex length) const
         {
-            return InputLine{Base::sub_array(length)};
+            Base::sub_array(result, length);
         }
 
         uint64_t hash() const
@@ -224,6 +224,34 @@ namespace rllm
         }
     };
 
+    class InputLineView
+    {
+        public:
+            InputLineView(const InputLine& data, 
+                PositionIndex start,    
+                PositionIndex length)
+                : m_data(data)
+                , m_start(start)
+                , m_length(length)
+            {}
+    
+            const TokenID& operator[](PositionIndex index) const
+            {
+                assert((index+m_start) < m_length);
+                return m_data[static_cast<size_t>(m_start) + static_cast<size_t>(index)];
+            }
+    
+            PositionIndex size() const
+            {
+                return m_length;
+            }
+    
+        private:
+            const InputLine& m_data;
+            PositionIndex m_start;
+            PositionIndex m_length;
+    };
+
 
     struct Score
     {
@@ -231,6 +259,12 @@ namespace rllm
         {
             values.set_size(TokenID::MAX);
             temp_values.set_size(TempStorage::MAX);
+        }
+
+        void reset()
+        {
+            values.zero();
+            temp_values.zero();
         }
 
         fixed_size_vector<rlmm_float, TokenID> values;

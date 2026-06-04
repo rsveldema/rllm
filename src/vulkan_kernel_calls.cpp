@@ -607,20 +607,6 @@ namespace rllm::vulkan
 				}
 			};
 
-			// Check if we can reuse a cached RuntimeBuffer for this slot.
-			const bool can_reuse = rb.cached
-				&& rb.buffer != VK_NULL_HANDLE
-				&& rb.mapped != nullptr
-				&& rb.view.host_ptr == view.host_ptr
-				&& rb.view.size_bytes >= view.size_bytes;
-
-			if (can_reuse)
-			{
-				rb.view = view;
-				seed_runtime_buffer(rb);
-				continue;
-			}
-
 			// Drop any previous binding for this slot before rebinding it.
 			if (rb.cached || rb.buffer != VK_NULL_HANDLE)
 			{
