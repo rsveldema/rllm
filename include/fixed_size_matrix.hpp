@@ -182,6 +182,12 @@ namespace rllm
             m_data.copy_to_offload_buffer();
         }
 
+        void copy_row_to_offload_buffer(X x)
+        {
+            assert(static_cast<size_t>(x) < ROWS);
+            m_data.copy_range_to_offload_buffer(static_cast<size_t>(x) * COLS, COLS);
+        }
+
         bool needs_offload_sync() const
         {
             return m_data.needs_offload_sync();

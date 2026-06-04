@@ -4,6 +4,8 @@ build_release_cpu
 build_release
 build_profile
 perf_fwd.data
+build_profile_cpu
+build_profile_vulkan
 build
 *.o
 *.a

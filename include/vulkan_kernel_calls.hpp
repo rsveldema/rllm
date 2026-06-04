@@ -152,7 +152,7 @@ namespace rllm::vulkan
                         std::string_view parameter_name_value
                     ) {
                         arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name, parameter_name_value]() {
-                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
                             std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                         });
                     };
@@ -180,7 +180,7 @@ namespace rllm::vulkan
                         std::string_view parameter_name_value
                     ) {
                         arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name, parameter_name_value]() {
-                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
                             std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                         });
                     };
@@ -202,7 +202,7 @@ namespace rllm::vulkan
                         std::string_view kernel_name,
                         std::string_view parameter_name_value
                     ) {
-                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
                         std::memcpy(arg.data(), mapped_ptr, sz);
                     };
                 }
@@ -226,7 +226,7 @@ namespace rllm::vulkan
                         std::string_view kernel_name,
                         std::string_view parameter_name_value
                     ) {
-                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
                         std::memcpy(ptr, mapped_ptr, sz);
                     };
                 }
@@ -278,7 +278,7 @@ namespace rllm::vulkan
                         std::string_view parameter_name_value
                     ) {
                         arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name, parameter_name_value]() {
-                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
                             std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                         });
                     };
@@ -314,7 +314,7 @@ namespace rllm::vulkan
                         std::string_view parameter_name_value
                     ) {
                         arg.set_pending_flush([&arg, mapped_ptr, sz, kernel_name, parameter_name_value]() {
-                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                            parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
                             std::memcpy(arg.raw_staging_data(), mapped_ptr, sz);
                         });
                     };
@@ -344,7 +344,7 @@ namespace rllm::vulkan
                         std::string_view kernel_name,
                         std::string_view parameter_name_value
                     ) {
-                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
                         std::memcpy(arg.data(), mapped_ptr, sz);
                     };
                 }
@@ -376,7 +376,7 @@ namespace rllm::vulkan
                         std::string_view kernel_name,
                         std::string_view parameter_name_value
                     ) {
-                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value);
+                        parallel::statistics.record_device_to_host_buffer_copy(kernel_name, parameter_name_value, sz);
                         std::memcpy(ptr, mapped_ptr, sz);
                     };
                 }
@@ -464,6 +464,9 @@ namespace rllm::vulkan
             void* mapped = nullptr;
             detail::HostBufferView view{};
             bool cached = false;  // true when buffer is kept alive for lazy-flush DevicePointer args
+            bool use_offload_source = false;
+            bool bind_offload_direct = false;
+            VkDeviceSize offload_source_offset = 0;
         };
 
         std::string m_name;
@@ -540,6 +543,10 @@ namespace rllm::vulkan
             uint32_t queue_family_index = 0;
             VkQueue queue = VK_NULL_HANDLE;
             VkCommandPool command_pool = VK_NULL_HANDLE;
+            VkBuffer offload_buffer = VK_NULL_HANDLE;
+            const void* offload_base = nullptr;
+            size_t offload_size = 0;
+            VkDeviceSize storage_buffer_offset_alignment = 1;
             std::shared_ptr<std::mutex> launch_mutex = std::make_shared<std::mutex>();
         };
 

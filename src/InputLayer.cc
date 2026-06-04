@@ -33,9 +33,7 @@ namespace rllm
 
     void InputLayer::reset_embeddings()
     {
-        for (const auto tok : enum_iterator<TokenID>())
-            for (const auto d : enum_iterator<EmbeddingDimension>())
-                m_embeddings[tok, d] = RLMM_ZERO;
+        m_embeddings.zero();
     }
 
     void InputLayer::set_random_embeddings()
@@ -43,6 +41,7 @@ namespace rllm
         for (const auto tok : enum_iterator<TokenID>())
             for (const auto d : enum_iterator<EmbeddingDimension>())
                 m_embeddings[tok, d] = static_cast<rlmm_float>(get_random_value(-0.1f, 0.1f));
+        m_embeddings.copy_to_offload_buffer();
     }
 
     // Fill h[T × D_MODEL] = token_embedding + sinusoidal positional encoding.
@@ -141,5 +140,14 @@ namespace rllm
         auto& e = m_embeddings[tok, di];
         e = math::clamp(e + learning_rate * dh[pos, di], RLMM_NEG_ONE, RLMM_ONE);
         ENDFOR
+
+        for (const auto pos : enum_iterator<PositionIndex>(input.size()))
+        {
+            const auto tok = input[pos];
+            if (updated_tokens[tok] == 0)
+                continue;
+            m_embeddings.copy_row_to_offload_buffer(tok);
+            updated_tokens[tok] = 0;
+        }
     }
 } // namespace rllm

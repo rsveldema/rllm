@@ -43,6 +43,7 @@ namespace rllm
         if (!j.contains("embeddings")) return; // backwards compat: skip if absent
 
         json_helpers::deserialize_matrix(j.at("embeddings"), m_embeddings);
+        m_embeddings.copy_to_offload_buffer();
     }
 
     nlohmann::json InputLayer::save() const

@@ -96,6 +96,8 @@ namespace parallel {
             std::string site;
             size_t host_to_device = 0;
             size_t device_to_host = 0;
+            size_t host_to_device_bytes = 0;
+            size_t device_to_host_bytes = 0;
         };
 
         struct CopyParameterBreakdown
@@ -104,20 +106,24 @@ namespace parallel {
             std::string parameter;
             size_t host_to_device = 0;
             size_t device_to_host = 0;
+            size_t host_to_device_bytes = 0;
+            size_t device_to_host_bytes = 0;
         };
 
-        void record_host_to_device_buffer_copy(std::string_view site = {}, std::string_view parameter = {})
+        void record_host_to_device_buffer_copy(std::string_view site = {}, std::string_view parameter = {}, size_t bytes = 0)
         {
             m_host_to_device_buffer_copies.fetch_add(1, std::memory_order_relaxed);
-            record_copy_site(site, true);
-            record_copy_parameter(site, parameter, true);
+            m_host_to_device_buffer_copy_bytes.fetch_add(bytes, std::memory_order_relaxed);
+            record_copy_site(site, true, bytes);
+            record_copy_parameter(site, parameter, true, bytes);
         }
 
-        void record_device_to_host_buffer_copy(std::string_view site = {}, std::string_view parameter = {})
+        void record_device_to_host_buffer_copy(std::string_view site = {}, std::string_view parameter = {}, size_t bytes = 0)
         {
             m_device_to_host_buffer_copies.fetch_add(1, std::memory_order_relaxed);
-            record_copy_site(site, false);
-            record_copy_parameter(site, parameter, false);
+            m_device_to_host_buffer_copy_bytes.fetch_add(bytes, std::memory_order_relaxed);
+            record_copy_site(site, false, bytes);
+            record_copy_parameter(site, parameter, false, bytes);
         }
 
         size_t host_to_device_buffer_copies() const
@@ -130,10 +136,22 @@ namespace parallel {
             return m_device_to_host_buffer_copies.load(std::memory_order_relaxed);
         }
 
+        size_t host_to_device_buffer_copy_bytes() const
+        {
+            return m_host_to_device_buffer_copy_bytes.load(std::memory_order_relaxed);
+        }
+
+        size_t device_to_host_buffer_copy_bytes() const
+        {
+            return m_device_to_host_buffer_copy_bytes.load(std::memory_order_relaxed);
+        }
+
         void reset_buffer_copy_counters()
         {
             m_host_to_device_buffer_copies.store(0, std::memory_order_relaxed);
             m_device_to_host_buffer_copies.store(0, std::memory_order_relaxed);
+            m_host_to_device_buffer_copy_bytes.store(0, std::memory_order_relaxed);
+            m_device_to_host_buffer_copy_bytes.store(0, std::memory_order_relaxed);
 
             std::lock_guard<std::mutex> lock(m_copy_site_mutex);
             m_copy_sites.clear();
@@ -143,8 +161,16 @@ namespace parallel {
         void print_statistics() const
         {
             std::println("Parallel statistics:");
-            std::println("  Host-to-device buffer copies: {}", host_to_device_buffer_copies());
-            std::println("  Device-to-host buffer copies: {}", device_to_host_buffer_copies());
+            std::println(
+                "  Host-to-device buffer copies: {} ({} bytes)",
+                host_to_device_buffer_copies(),
+                host_to_device_buffer_copy_bytes()
+            );
+            std::println(
+                "  Device-to-host buffer copies: {} ({} bytes)",
+                device_to_host_buffer_copies(),
+                device_to_host_buffer_copy_bytes()
+            );
 
             const auto top_sites = top_copy_sites();
             if (!top_sites.empty())
@@ -153,10 +179,12 @@ namespace parallel {
                 for (const auto& site : top_sites)
                 {
                     std::println(
-                        "    {}: H2D={}, D2H={}",
+                        "    {}: H2D={} ({} bytes), D2H={} ({} bytes)",
                         site.site,
                         site.host_to_device,
-                        site.device_to_host
+                        site.host_to_device_bytes,
+                        site.device_to_host,
+                        site.device_to_host_bytes
                     );
                 }
             }
@@ -168,11 +196,13 @@ namespace parallel {
                 for (const auto& item : top_parameters)
                 {
                     std::println(
-                        "    {} [{}]: H2D={}, D2H={}",
+                        "    {} [{}]: H2D={} ({} bytes), D2H={} ({} bytes)",
                         item.site,
                         item.parameter,
                         item.host_to_device,
-                        item.device_to_host
+                        item.host_to_device_bytes,
+                        item.device_to_host,
+                        item.device_to_host_bytes
                     );
                 }
             }
@@ -190,14 +220,20 @@ namespace parallel {
                     .site = site,
                     .host_to_device = counts.host_to_device,
                     .device_to_host = counts.device_to_host,
+                    .host_to_device_bytes = counts.host_to_device_bytes,
+                    .device_to_host_bytes = counts.device_to_host_bytes,
                 });
             }
 
             std::sort(sites.begin(), sites.end(), [](const auto& lhs, const auto& rhs) {
-                const size_t lhs_total = lhs.host_to_device + lhs.device_to_host;
-                const size_t rhs_total = rhs.host_to_device + rhs.device_to_host;
+                const size_t lhs_total = lhs.host_to_device_bytes + lhs.device_to_host_bytes;
+                const size_t rhs_total = rhs.host_to_device_bytes + rhs.device_to_host_bytes;
                 if (lhs_total != rhs_total)
                     return lhs_total > rhs_total;
+                const size_t lhs_count = lhs.host_to_device + lhs.device_to_host;
+                const size_t rhs_count = rhs.host_to_device + rhs.device_to_host;
+                if (lhs_count != rhs_count)
+                    return lhs_count > rhs_count;
                 return lhs.site < rhs.site;
             });
 
@@ -224,14 +260,20 @@ namespace parallel {
                     .parameter = key.substr(split + 1),
                     .host_to_device = counts.host_to_device,
                     .device_to_host = counts.device_to_host,
+                    .host_to_device_bytes = counts.host_to_device_bytes,
+                    .device_to_host_bytes = counts.device_to_host_bytes,
                 });
             }
 
             std::sort(items.begin(), items.end(), [](const auto& lhs, const auto& rhs) {
-                const size_t lhs_total = lhs.host_to_device + lhs.device_to_host;
-                const size_t rhs_total = rhs.host_to_device + rhs.device_to_host;
+                const size_t lhs_total = lhs.host_to_device_bytes + lhs.device_to_host_bytes;
+                const size_t rhs_total = rhs.host_to_device_bytes + rhs.device_to_host_bytes;
                 if (lhs_total != rhs_total)
                     return lhs_total > rhs_total;
+                const size_t lhs_count = lhs.host_to_device + lhs.device_to_host;
+                const size_t rhs_count = rhs.host_to_device + rhs.device_to_host;
+                if (lhs_count != rhs_count)
+                    return lhs_count > rhs_count;
                 if (lhs.site != rhs.site)
                     return lhs.site < rhs.site;
                 return lhs.parameter < rhs.parameter;
@@ -248,9 +290,11 @@ namespace parallel {
         {
             size_t host_to_device = 0;
             size_t device_to_host = 0;
+            size_t host_to_device_bytes = 0;
+            size_t device_to_host_bytes = 0;
         };
 
-        void record_copy_site(std::string_view site, bool host_to_device)
+        void record_copy_site(std::string_view site, bool host_to_device, size_t bytes)
         {
             if (site.empty())
                 return;
@@ -258,12 +302,18 @@ namespace parallel {
             std::lock_guard<std::mutex> lock(m_copy_site_mutex);
             auto& counts = m_copy_sites[std::string(site)];
             if (host_to_device)
+            {
                 counts.host_to_device++;
+                counts.host_to_device_bytes += bytes;
+            }
             else
+            {
                 counts.device_to_host++;
+                counts.device_to_host_bytes += bytes;
+            }
         }
 
-        void record_copy_parameter(std::string_view site, std::string_view parameter, bool host_to_device)
+        void record_copy_parameter(std::string_view site, std::string_view parameter, bool host_to_device, size_t bytes)
         {
             if (site.empty() || parameter.empty())
                 return;
@@ -277,13 +327,21 @@ namespace parallel {
 
             auto& counts = m_copy_parameters[key];
             if (host_to_device)
+            {
                 counts.host_to_device++;
+                counts.host_to_device_bytes += bytes;
+            }
             else
+            {
                 counts.device_to_host++;
+                counts.device_to_host_bytes += bytes;
+            }
         }
 
         std::atomic<size_t> m_host_to_device_buffer_copies{0};
         std::atomic<size_t> m_device_to_host_buffer_copies{0};
+        std::atomic<size_t> m_host_to_device_buffer_copy_bytes{0};
+        std::atomic<size_t> m_device_to_host_buffer_copy_bytes{0};
         mutable std::mutex m_copy_site_mutex;
         std::unordered_map<std::string, CopyCounts> m_copy_sites;
         std::unordered_map<std::string, CopyCounts> m_copy_parameters;

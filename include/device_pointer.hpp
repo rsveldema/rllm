@@ -347,6 +347,17 @@ public:
 #endif
     }
 
+    void copy_range_to_offload_buffer(size_t start_element, size_t element_count)
+    {
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        copy_range_to_offload_buffer_unlocked(start_element, element_count);
+#else
+        static_cast<void>(start_element);
+        static_cast<void>(element_count);
+#endif
+    }
+
     void copy_from_offload_buffer()
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
@@ -415,6 +426,25 @@ private:
             return;
 
         m_memory_space->copy_staging_to_offload(m_offload_ptr, m_staging_ptr, m_bytes);
+        m_memory_owner = DeviceMemoryOwner::REPLICATED;
+    }
+
+    void copy_range_to_offload_buffer_unlocked(size_t start_element, size_t element_count)
+    {
+        assert(m_bytes > 0);
+        assert(m_staging_ptr != nullptr);
+        assert(m_offload_ptr != nullptr);
+        assert(start_element <= m_count);
+        assert(element_count <= m_count - start_element);
+
+        if (element_count == 0)
+            return;
+
+        const size_t byte_offset = start_element * sizeof(T);
+        const size_t bytes = element_count * sizeof(T);
+        auto* offload_dst = static_cast<std::byte*>(m_offload_ptr) + byte_offset;
+        const auto* staging_src = reinterpret_cast<const std::byte*>(m_staging_ptr) + byte_offset;
+        m_memory_space->copy_staging_to_offload(offload_dst, staging_src, bytes);
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
     }
 

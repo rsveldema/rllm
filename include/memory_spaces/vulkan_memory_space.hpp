@@ -50,6 +50,9 @@ public:
     VkQueue queue() const;
     uint32_t queue_family_index() const;
     VkCommandPool command_pool() const;
+    VkBuffer offload_buffer() const;
+    const void* offload_base() const;
+    size_t offload_size() const;
 
     static void set_transfer_context(const TransferContext& ctx);
 

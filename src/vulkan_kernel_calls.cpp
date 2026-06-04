@@ -14,13 +14,31 @@ namespace rllm::vulkan
 {
 	namespace detail
 	{
+		static bool resolve_offset(const void* base, size_t total_size, const void* ptr, size_t bytes, VkDeviceSize& out_offset)
+		{
+			if (base == nullptr || ptr == nullptr || bytes > total_size)
+				return false;
+
+			const auto* base_bytes = static_cast<const std::byte*>(base);
+			const auto* ptr_bytes = static_cast<const std::byte*>(ptr);
+			if (ptr_bytes < base_bytes)
+				return false;
+
+			const auto offset = static_cast<size_t>(ptr_bytes - base_bytes);
+			if (offset > total_size || bytes > total_size - offset)
+				return false;
+
+			out_offset = static_cast<VkDeviceSize>(offset);
+			return true;
+		}
+
 		struct LazyRuntimeBufferCacheEntry
 		{
 			VkDevice device = VK_NULL_HANDLE;
 			VkBuffer buffer = VK_NULL_HANDLE;
 			VkDeviceMemory memory = VK_NULL_HANDLE;
-				VkBuffer staging_buffer = VK_NULL_HANDLE;
-				VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+			VkBuffer staging_buffer = VK_NULL_HANDLE;
+			VkDeviceMemory staging_memory = VK_NULL_HANDLE;
 			void* mapped = nullptr;
 			size_t size_bytes = 0;
 		};
@@ -345,6 +363,9 @@ namespace rllm::vulkan
 				rb.staging_memory = VK_NULL_HANDLE;
 				rb.mapped = nullptr;
 				rb.cached = false;
+				rb.use_offload_source = false;
+				rb.bind_offload_direct = false;
+				rb.offload_source_offset = 0;
 				return;
 			}
 			if (rb.mapped != nullptr)
@@ -373,6 +394,9 @@ namespace rllm::vulkan
 				rb.memory = VK_NULL_HANDLE;
 			}
 			rb.cached = false;
+			rb.use_offload_source = false;
+			rb.bind_offload_direct = false;
+			rb.offload_source_offset = 0;
 		};
 
 		auto cleanup_runtime_buffers = [&]() {
@@ -471,22 +495,48 @@ namespace rllm::vulkan
 			auto& lazy_cache = detail::lazy_runtime_buffer_cache();
 			const bool keep_runtime_buffer = view.offload_ptr != nullptr;
 			auto seed_runtime_buffer = [&](RuntimeBuffer& runtime_buffer) {
+				runtime_buffer.use_offload_source = false;
+				runtime_buffer.bind_offload_direct = false;
+				runtime_buffer.offload_source_offset = 0;
 				const DeviceMemoryOwner owner = view.memory_owner ? view.memory_owner() : DeviceMemoryOwner::ON_HOST;
 				if (view.offload_ptr != nullptr
 					&& (owner == DeviceMemoryOwner::ON_DEVICE || owner == DeviceMemoryOwner::REPLICATED))
 				{
-					get_offload_allocator().memory_space().copy_offload_to_staging(
-						runtime_buffer.mapped,
-						const_cast<void*>(view.offload_ptr),
-						view.size_bytes
-					);
-					if (owner == DeviceMemoryOwner::REPLICATED && view.mark_device_latest)
-						view.mark_device_latest();
+					if (!detail::resolve_offset(
+							ctx.offload_base,
+							ctx.offload_size,
+							view.offload_ptr,
+							view.size_bytes,
+							runtime_buffer.offload_source_offset
+						))
+					{
+						LOG_ERROR(
+							"Unable to resolve persistent offload offset for kernel '{}' parameter '{}'.",
+							name(),
+							view.parameter_name.empty() ? std::string_view{"<unnamed>"} : view.parameter_name
+						);
+						cleanup_runtime_buffers();
+						std::abort();
+					}
+					runtime_buffer.use_offload_source = true;
+					const VkDeviceSize offset_alignment =
+						ctx.storage_buffer_offset_alignment == 0 ? 1 : ctx.storage_buffer_offset_alignment;
+					runtime_buffer.bind_offload_direct =
+						!view.on_device_ready && runtime_buffer.offload_source_offset % offset_alignment == 0;
 					return;
 				}
 
-				parallel::statistics.record_host_to_device_buffer_copy(name(), view.parameter_name);
+				parallel::statistics.record_host_to_device_buffer_copy(name(), view.parameter_name, view.size_bytes);
 				std::memcpy(runtime_buffer.mapped, runtime_buffer.view.host_ptr, runtime_buffer.view.size_bytes);
+				if (view.offload_ptr != nullptr && view.mark_device_latest)
+				{
+					get_offload_allocator().memory_space().copy_staging_to_offload(
+						const_cast<void*>(view.offload_ptr),
+						runtime_buffer.view.host_ptr,
+						runtime_buffer.view.size_bytes
+					);
+					view.mark_device_latest();
+				}
 			};
 
 			// Check if we can reuse a cached RuntimeBuffer for this slot.
@@ -710,44 +760,58 @@ namespace rllm::vulkan
 
 		if (runtime_buffer_count > 0)
 		{
-			std::vector<VkBufferCopy> upload_regions(runtime_buffer_count);
-			std::vector<VkBufferMemoryBarrier> upload_barriers(runtime_buffer_count);
+			std::vector<VkBufferCopy> upload_regions;
+			std::vector<VkBufferMemoryBarrier> upload_barriers;
+			upload_regions.reserve(runtime_buffer_count);
+			upload_barriers.reserve(runtime_buffer_count);
 			for (size_t i = 0; i < runtime_buffer_count; ++i)
 			{
-				upload_regions[i].srcOffset = 0;
-				upload_regions[i].dstOffset = 0;
-				upload_regions[i].size = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
-				vkCmdCopyBuffer(m_command_buffer, runtime_buffers[i].staging_buffer, runtime_buffers[i].buffer, 1, &upload_regions[i]);
+				if (runtime_buffers[i].bind_offload_direct)
+					continue;
 
-				upload_barriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-				upload_barriers[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-				upload_barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-				upload_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				upload_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				upload_barriers[i].buffer = runtime_buffers[i].buffer;
-				upload_barriers[i].offset = 0;
-				upload_barriers[i].size = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
+				VkBufferCopy upload_region{};
+				upload_region.size = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
+				const VkBuffer upload_src_buffer =
+					runtime_buffers[i].use_offload_source ? ctx.offload_buffer : runtime_buffers[i].staging_buffer;
+				if (runtime_buffers[i].use_offload_source)
+					upload_region.srcOffset = runtime_buffers[i].offload_source_offset;
+				vkCmdCopyBuffer(m_command_buffer, upload_src_buffer, runtime_buffers[i].buffer, 1, &upload_region);
+				upload_regions.push_back(upload_region);
+
+				VkBufferMemoryBarrier upload_barrier{};
+				upload_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+				upload_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+				upload_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+				upload_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				upload_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				upload_barrier.buffer = runtime_buffers[i].buffer;
+				upload_barrier.offset = 0;
+				upload_barrier.size = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
+				upload_barriers.push_back(upload_barrier);
 			}
-			vkCmdPipelineBarrier(
-				m_command_buffer,
-				VK_PIPELINE_STAGE_TRANSFER_BIT,
-				VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-				0,
-				0,
-				nullptr,
-				static_cast<uint32_t>(upload_barriers.size()),
-				upload_barriers.data(),
-				0,
-				nullptr
-			);
+			if (!upload_barriers.empty())
+			{
+				vkCmdPipelineBarrier(
+					m_command_buffer,
+					VK_PIPELINE_STAGE_TRANSFER_BIT,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					0,
+					0,
+					nullptr,
+					static_cast<uint32_t>(upload_barriers.size()),
+					upload_barriers.data(),
+					0,
+					nullptr
+				);
+			}
 
 			std::vector<VkDescriptorBufferInfo> buffer_infos(runtime_buffer_count);
 			std::vector<VkWriteDescriptorSet> writes(runtime_buffer_count);
 
 			for (size_t i = 0; i < runtime_buffer_count; ++i)
 			{
-				buffer_infos[i].buffer = runtime_buffers[i].buffer;
-				buffer_infos[i].offset = 0;
+				buffer_infos[i].buffer = runtime_buffers[i].bind_offload_direct ? ctx.offload_buffer : runtime_buffers[i].buffer;
+				buffer_infos[i].offset = runtime_buffers[i].bind_offload_direct ? runtime_buffers[i].offload_source_offset : 0;
 				buffer_infos[i].range = static_cast<VkDeviceSize>(runtime_buffers[i].view.size_bytes);
 
 				writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1044,15 +1108,21 @@ namespace rllm::vulkan
 
 		RuntimeContext create_runtime_context()
 		{
-				RuntimeContext ctx{};
-				auto& memory_space = static_cast<VulkanMemorySpace&>(*IMemorySpace::get_instance());
-				ctx.instance = memory_space.instance();
-				ctx.physical_device = memory_space.physical_device();
-				ctx.device = memory_space.device();
-				ctx.queue_family_index = memory_space.queue_family_index();
-				ctx.queue = memory_space.queue();
-				ctx.command_pool = memory_space.command_pool();
-				return ctx;
+			RuntimeContext ctx{};
+			auto& memory_space = static_cast<VulkanMemorySpace&>(*IMemorySpace::get_instance());
+			ctx.instance = memory_space.instance();
+			ctx.physical_device = memory_space.physical_device();
+			ctx.device = memory_space.device();
+			ctx.queue_family_index = memory_space.queue_family_index();
+			ctx.queue = memory_space.queue();
+			ctx.command_pool = memory_space.command_pool();
+			ctx.offload_buffer = memory_space.offload_buffer();
+			ctx.offload_base = memory_space.offload_base();
+			ctx.offload_size = memory_space.offload_size();
+			VkPhysicalDeviceProperties props{};
+			vkGetPhysicalDeviceProperties(ctx.physical_device, &props);
+			ctx.storage_buffer_offset_alignment = props.limits.minStorageBufferOffsetAlignment;
+			return ctx;
 		}
 
 		RuntimeContext& runtime_context()

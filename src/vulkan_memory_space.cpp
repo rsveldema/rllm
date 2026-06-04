@@ -225,6 +225,21 @@ VkCommandPool VulkanMemorySpace::command_pool() const
     return command_pool_;
 }
 
+VkBuffer VulkanMemorySpace::offload_buffer() const
+{
+    return offload_buffer_;
+}
+
+const void* VulkanMemorySpace::offload_base() const
+{
+    return offload_storage_.data();
+}
+
+size_t VulkanMemorySpace::offload_size() const
+{
+    return offload_storage_.size();
+}
+
 void VulkanMemorySpace::set_transfer_context(const TransferContext& ctx)
 {
     transfer_context() = ctx;

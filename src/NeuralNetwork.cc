@@ -98,12 +98,14 @@ namespace rllm
     {
         std::println("Parallel statistics after epoch {}:", epoch);
         std::println(
-            "  Host-to-device buffer copies: {}",
-            parallel::statistics.host_to_device_buffer_copies()
+            "  Host-to-device buffer copies: {} ({} bytes)",
+            parallel::statistics.host_to_device_buffer_copies(),
+            parallel::statistics.host_to_device_buffer_copy_bytes()
         );
         std::println(
-            "  Device-to-host buffer copies: {}",
-            parallel::statistics.device_to_host_buffer_copies()
+            "  Device-to-host buffer copies: {} ({} bytes)",
+            parallel::statistics.device_to_host_buffer_copies(),
+            parallel::statistics.device_to_host_buffer_copy_bytes()
         );
     }
 

@@ -1,6 +1,6 @@
 #include <OutputLayer.hpp>
-#include <parallel.hpp>
 #include <RandomHelpers.hpp>
+#include <parallel.hpp>
 
 #include <enum_iterator2D.hpp>
 
@@ -95,15 +95,9 @@ namespace rllm
         OFFLOAD_PARFOR_2D_PARAM(v, d, grid, (delta, h_last, W, V, learning_rate))
         const float g = math::clamp(delta[v] * h_last[d], -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
         V[v, d] = math::clamp(
-            OutputLayer::MOMENTUM_BETA * V[v, d] + learning_rate * g,
-            -OutputLayer::VEL_CLIP,
-            OutputLayer::VEL_CLIP
+            OutputLayer::MOMENTUM_BETA * V[v, d] + learning_rate * g, -OutputLayer::VEL_CLIP, OutputLayer::VEL_CLIP
         );
-        W[v, d] = math::clamp(
-            W[v, d] + V[v, d],
-            -OutputLayer::WEIGHT_CLAMP,
-            OutputLayer::WEIGHT_CLAMP
-        );
+        W[v, d] = math::clamp(W[v, d] + V[v, d], -OutputLayer::WEIGHT_CLAMP, OutputLayer::WEIGHT_CLAMP);
         ENDFOR
     }
 
@@ -147,7 +141,8 @@ namespace rllm
         const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (int(i) < rllm_push.rllm_bound_x);
         workgroup_max[lid] = in_bounds ? inputs[i] : -3.402823e38f;
         barrier();
-        for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u; stride >>= 1u)
+        for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u;
+             stride >>= 1u)
         {
             if (lid < stride)
                 workgroup_max[lid] = math::max(workgroup_max[lid], workgroup_max[lid + stride]);
@@ -174,25 +169,28 @@ namespace rllm
 #endif
         // ENDPARFOR_SHARED_VARIABLES
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, values, temp_values))
-        const uint lid = gl_LocalInvocationIndex;
-        const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (int(i) < rllm_push.rllm_bound_x);
-        const float max_val = temp_values[0];
-        float exp_value = 0.0f;
-        if (in_bounds)
         {
-            exp_value = exp(inputs[i] - max_val);
-            values[i] = exp_value;
-        }
-        workgroup_sum[lid] = exp_value;
-        barrier();
-        for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u; stride >>= 1u)
-        {
-            if (lid < stride)
-                workgroup_sum[lid] += workgroup_sum[lid + stride];
+            const uint lid = gl_LocalInvocationIndex;
+            const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (int(i) < rllm_push.rllm_bound_x);
+            const float max_val = temp_values[0];
+            float exp_value = 0.0f;
+            if (in_bounds)
+            {
+                exp_value = exp(inputs[i] - max_val);
+                values[i] = exp_value;
+            }
+            workgroup_sum[lid] = exp_value;
             barrier();
+            for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u;
+                 stride >>= 1u)
+            {
+                if (lid < stride)
+                    workgroup_sum[lid] += workgroup_sum[lid + stride];
+                barrier();
+            }
+            if (lid == 0u)
+                atomicAdd(temp_values[1], workgroup_sum[0]);
         }
-        if (lid == 0u)
-            atomicAdd(temp_values[1], workgroup_sum[0]);
         ENDFOR
     }
 
@@ -218,7 +216,7 @@ namespace rllm
     OutputLayer::OutputLayer(const Corpus& corpus)
         : OutputLayer()
     {
-        (void)corpus;
+        (void) corpus;
     }
 
     void OutputLayer::set_random_weights()
@@ -252,7 +250,7 @@ namespace rllm
 
     std::vector<OutputToken> OutputLayer::get_top_k_by_logit(size_t k) const
     {
-        assert (k != 0);
+        assert(k != 0);
 
         std::vector<OutputToken> top_k;
         for (const auto i : enum_iterator<TokenID>())
@@ -281,6 +279,15 @@ namespace rllm
     // cross-entropy loss -log(softmax[target]) in a single pass over the logits.
     float OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
+#if defined(USE_VULKAN_OFFLOAD)
+        initialize_softmax_temp_values(score.temp_values);
+        reduce_logits_max_to_temp(m_inputs, score.temp_values);
+        compute_exp_and_accumulate_sum(m_inputs, score.values, score.temp_values);
+        finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
+
+        const float max_val = score.temp_values[TempStorage::START];
+        const float sum_exp = score.temp_values[TempStorage::ONE];
+#else
         float max_val = -std::numeric_limits<float>::infinity();
         for (const auto token : enum_iterator<TokenID>())
             max_val = math::max(max_val, m_inputs[token]);
@@ -291,6 +298,7 @@ namespace rllm
         finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
 
         const float sum_exp = score.temp_values[TempStorage::ONE];
+#endif
         const float log_prob = m_inputs[expected_output_token] - max_val - std::log(sum_exp);
         return -log_prob;
     }
