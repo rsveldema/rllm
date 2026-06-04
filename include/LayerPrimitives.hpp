@@ -59,7 +59,7 @@ namespace rllm
     enum class EmbeddingDimension : size_t
     {
         START = 0,
-        MAX = 512
+        MAX = 1024
     };
 
     // position of a token in the input sequence. For example, in the input "the cat sat", the token "cat" has
