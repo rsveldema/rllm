@@ -262,8 +262,8 @@ namespace rllm
         for (size_t i = 0; i < num_layers; ++i)
             m_transformer_blocks.emplace_back();
 
-        m_forward_workspace = std::make_unique<NeuralNetworkForwardWorkspace>(PositionIndex::MAX);
-        m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::MAX);
+        m_forward_workspace = std::make_unique<NeuralNetworkForwardWorkspace>(PositionIndex::START);
+        m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
     }
 
     NeuralNetwork::~NeuralNetwork() = default;

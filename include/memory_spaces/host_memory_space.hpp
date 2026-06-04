@@ -15,9 +15,15 @@ public:
     explicit HostMemorySpace(size_t pool_bytes = DEFAULT_POOL_BYTES)
         : storage_(pool_bytes)
         , staging_base_(storage_.data())
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         , offload_base_(storage_.data() + (pool_bytes / 2))
         , staging_size_(pool_bytes / 2)
         , offload_size_(pool_bytes / 2)
+#else
+        , offload_base_(storage_.data())
+        , staging_size_(pool_bytes)
+        , offload_size_(0)
+#endif
         , staging_offset_(0)
         , offload_offset_(0)
     {}

@@ -305,6 +305,20 @@ public:
         return m_bytes;
     }
 
+    void resize(size_t num_elements)
+    {
+        assert(num_elements > 0);
+        if (num_elements == m_count && m_staging_ptr != nullptr)
+            return;
+
+        release_internal();
+        m_memory_space = IMemorySpace::get_instance();
+        m_count = num_elements;
+        m_bytes = sizeof(T) * num_elements;
+        allocate_internal();
+        zero();
+    }
+
     T* data()
     {
         return get();

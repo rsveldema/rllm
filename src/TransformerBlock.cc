@@ -511,9 +511,12 @@ namespace rllm
         );
 
         // d_h_norm_attn = d_Q @ W_q  +  d_K @ W_k  +  d_V @ W_v
-        matmul_AB_add(ws->d_Q, W_q, ws->d_h_norm_attn);
-        matmul_AB_add(ws->d_K, W_k, ws->d_h_norm_attn);
-        matmul_AB_add(ws->d_V, W_v, ws->d_h_norm_attn);
+        matmul_AB_add_3_matrix_muls(
+            ws->d_Q, W_q,
+            ws->d_K, W_k,
+            ws->d_V, W_v,
+            ws->d_h_norm_attn
+        );
 
         // ── d_h_in + weight updates ───────────────────────────────────────────
         // d_h_in (residual + RMSNorm backward) and all seven weight updates are

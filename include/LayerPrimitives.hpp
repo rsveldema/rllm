@@ -67,7 +67,7 @@ namespace rllm
     enum class PositionIndex : size_t
     {
         START = 0,
-        MAX = 128,
+        MAX = 1024 * 16,
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
@@ -237,7 +237,7 @@ namespace rllm
     
             const TokenID& operator[](PositionIndex index) const
             {
-                assert((index+m_start) < m_length);
+                assert(((int)index+(int)m_start) < (int)m_length);
                 return m_data[static_cast<size_t>(m_start) + static_cast<size_t>(index)];
             }
     

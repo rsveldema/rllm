@@ -37,7 +37,6 @@ namespace rllm
         fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_v;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
 
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> tmp;
         fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>
             d_scores;
         fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
@@ -53,7 +52,6 @@ namespace rllm
             , d_K(seq)
             , d_V(seq)
             , d_h_norm_attn(seq)
-            , tmp(seq)
         {}
 
         void reset(PositionIndex seq)
@@ -68,7 +66,6 @@ namespace rllm
             d_K.set_rows(seq);
             d_V.set_rows(seq);
             d_h_norm_attn.set_rows(seq);
-            tmp.set_rows(seq);
 
             dW_down.zero();
             d_h_norm_ff.zero();

@@ -136,6 +136,18 @@ namespace rllm
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
     );
 
+    void matmul_AB_add_3_matrix_muls(
+        // OFFLOAD_PARAMETERS(A1, B1, A2, B2, A3, B3, C)
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A1,
+        const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& B1,
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A2,
+        const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& B2,
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A3,
+        const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& B3,
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
+        // END_OFFLOAD_PARAMETERS
+    );
+
     void matmul_AtB_acc(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A,
         const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& B,

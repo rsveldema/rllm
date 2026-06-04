@@ -23,18 +23,21 @@ namespace rllm
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         flexible_rows_matrix()
-            : m_data(ROWS * COLS)
-            , m_rows(X::MAX)
+            : m_data(COLS)
+            , m_rows(X::START)
+            , m_capacity_rows(1)
         {}
 
         flexible_rows_matrix(X rows)
-            : m_data(ROWS * COLS)
+            : m_data(element_count_for_rows(rows))
             , m_rows(rows)
+            , m_capacity_rows(std::max<size_t>(1, static_cast<size_t>(rows)))
         {}
 
         flexible_rows_matrix(const flexible_rows_matrix& other)
-            : m_data(ROWS * COLS)
+            : m_data(element_count_for_rows(other.m_rows))
             , m_rows(other.m_rows)
+            , m_capacity_rows(std::max<size_t>(1, static_cast<size_t>(other.m_rows)))
         {
             m_data = other.m_data;
         }
@@ -43,15 +46,18 @@ namespace rllm
         {
             if (this != &other)
             {
+                ensure_capacity(other.m_rows);
                 m_data = other.m_data;
                 m_rows = other.m_rows;
+                m_capacity_rows = std::max<size_t>(1, static_cast<size_t>(other.m_rows));
             }
             return *this;
         }
 
         flexible_rows_matrix(flexible_rows_matrix&& other)
-            : m_data(ROWS * COLS)
+            : m_data(element_count_for_rows(other.m_rows))
             , m_rows(other.m_rows)
+            , m_capacity_rows(std::max<size_t>(1, static_cast<size_t>(other.m_rows)))
         {
             m_data = other.m_data;
         }
@@ -60,8 +66,10 @@ namespace rllm
         {
             if (this != &other)
             {
+                ensure_capacity(other.m_rows);
                 m_data = other.m_data;
                 m_rows = other.m_rows;
+                m_capacity_rows = std::max<size_t>(1, static_cast<size_t>(other.m_rows));
             }
             return *this;
         }
@@ -71,6 +79,7 @@ namespace rllm
         void set_rows(X rows)
         {
             assert(static_cast<size_t>(rows) <= ROWS);
+            ensure_capacity(rows);
             m_rows = rows;
         }
 
@@ -215,12 +224,28 @@ namespace rllm
 
         size_t storage_size_bytes() const
         {
-            return ROWS * COLS * sizeof(ElementType);
+            return m_capacity_rows * COLS * sizeof(ElementType);
         }
 
       private:
+        static size_t element_count_for_rows(X rows)
+        {
+            assert(static_cast<size_t>(rows) <= ROWS);
+            return std::max<size_t>(1, static_cast<size_t>(rows)) * COLS;
+        }
+
+        void ensure_capacity(X rows)
+        {
+            const size_t requested_rows = std::max<size_t>(1, static_cast<size_t>(rows));
+            if (requested_rows <= m_capacity_rows)
+                return;
+            m_data.resize(requested_rows * COLS);
+            m_capacity_rows = requested_rows;
+        }
+
         DevicePointer<ElementType> m_data;
         X m_rows;
+        size_t m_capacity_rows;
     };
 
 } // namespace rllm

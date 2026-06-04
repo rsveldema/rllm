@@ -7,6 +7,8 @@ perf_fwd.data
 build_profile_cpu
 build_profile_vulkan
 build
+build_debug
+build_profile_cpu_seq
 *.o
 *.a
 ?
