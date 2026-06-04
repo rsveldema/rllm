@@ -16,15 +16,12 @@
 // CMake maps that to one of:
 //   USE_OPENMP, USE_FASTFORK, or neither (sequential fallback).
 
+#include <memory_spaces/host_memory_space.hpp>
 #if defined(USE_VULKAN_OFFLOAD)
 #include <memory_spaces/vulkan_memory_space.hpp>
 #elif defined(USE_HIP_OFFLOAD)
 #include <memory_spaces/hip_memory_space.hpp>
-#else
-#include <memory_spaces/host_memory_space.hpp>
 #endif
-#include <allocator.hpp>
-
 inline IMemorySpace* IMemorySpace::get_instance()
 {
 #if defined(USE_VULKAN_OFFLOAD)
@@ -37,10 +34,46 @@ inline IMemorySpace* IMemorySpace::get_instance()
     return &instance;
 }
 
-inline Allocator& get_offload_allocator()
+inline IMemorySpace* IMemorySpace::get_instance(IMemorySpaceType type)
 {
-    static thread_local Allocator allocator(*IMemorySpace::get_instance());
-    return allocator;
+    static HostMemorySpace host_instance;
+#if defined(USE_VULKAN_OFFLOAD)
+    static VulkanMemorySpace vulkan_instance;
+#elif defined(USE_HIP_OFFLOAD)
+    static HipMemorySpace hip_instance;
+#endif
+
+    switch (type)
+    {
+        case IMemorySpaceType::HOST:
+            return &host_instance;
+        case IMemorySpaceType::VULKAN:
+#if defined(USE_VULKAN_OFFLOAD)
+            return &vulkan_instance;
+#else
+            return get_instance();
+#endif
+        case IMemorySpaceType::HIP:
+#if defined(USE_HIP_OFFLOAD)
+            return &hip_instance;
+#else
+            return get_instance();
+#endif
+    }
+
+    return get_instance();
+}
+
+template <typename T>
+T* allocate_aligned(IMemorySpace& mem_space, std::size_t count)
+{
+    return reinterpret_cast<T*>(mem_space.allocate_staging(count * sizeof(T)));
+}
+
+template <typename T>
+void deallocate_aligned(IMemorySpace& mem_space, T* ptr, std::size_t count)
+{
+    mem_space.release_staging(ptr, count * sizeof(T));
 }
 
 #if !defined(USE_VULKAN_OFFLOAD)

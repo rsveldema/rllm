@@ -2,12 +2,17 @@
 
 #include <cstddef>
 
-
 #if defined(USE_VULKAN_OFFLOAD) || defined(USE_HIP_OFFLOAD)
 #define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
 #else
 #define RLLM_DEVICE_POINTER_HAS_OFFLOAD 0
 #endif
+
+enum class IMemorySpaceType {
+    HOST,
+    VULKAN,
+    HIP
+};
 
 
 /** Allocate/deallocate memory in a specific memory space.
@@ -34,10 +39,18 @@ public:
     virtual void copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes) = 0;
     virtual void zero_offload(void* offload_dst, size_t bytes) = 0;
 
+    // Allocation methods for sub-allocation from memory pools
+    virtual void* allocate_staging(size_t bytes) = 0;
+    virtual void* allocate_offload(size_t bytes) = 0;
+    virtual void release_staging(void* ptr, size_t bytes) = 0;
+    virtual void release_offload(void* ptr, size_t bytes) = 0;
+    virtual void reset() = 0;
+
     /** returns the memory space for a given offload engine, for example,
      * for Vulkan offload this would return a VulkanMemorySpace that allocates
      * from the appropriate Vulkan heap and manages staging buffers as needed.
      * For CPU-only builds this can return a simple HostMemorySpace that wraps standard heap allocation.
      */
     static IMemorySpace* get_instance();
+    static IMemorySpace* get_instance(IMemorySpaceType type);
 };

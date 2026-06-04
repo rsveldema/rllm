@@ -15,7 +15,7 @@ using VmaAllocation = VmaAllocation_T*;
 class VulkanMemorySpace final : public IMemorySpace
 {
 public:
-    static constexpr size_t DEFAULT_POOL_BYTES = 8ULL * 1024ULL * 1024ULL * 1024ULL;
+    static constexpr size_t DEFAULT_POOL_BYTES = 512ULL * 1024ULL * 1024ULL;
     static constexpr const char* POOL_BYTES_ENV = "RLLM_VULKAN_POOL_BYTES";
 
     struct TransferContext
@@ -44,6 +44,12 @@ public:
     void copy_offload_to_staging(void* staging_dst, const void* offload_src, size_t bytes) override;
     void copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes) override;
     void zero_offload(void* offload_dst, size_t bytes) override;
+
+    void* allocate_staging(size_t bytes) override;
+    void* allocate_offload(size_t bytes) override;
+    void release_staging(void* ptr, size_t bytes) override;
+    void release_offload(void* ptr, size_t bytes) override;
+    void reset() override;
 
     VkInstance instance() const;
     VkPhysicalDevice physical_device() const;
@@ -79,7 +85,9 @@ private:
     VkBuffer staging_buffer_ = VK_NULL_HANDLE;
     VmaAllocation staging_allocation_ = nullptr;
     void* mapped_staging_base_ = nullptr;
+    size_t staging_offset_ = 0;
     VkBuffer offload_buffer_ = VK_NULL_HANDLE;
     VmaAllocation offload_allocation_ = nullptr;
     std::vector<std::byte> offload_storage_;
+    size_t offload_offset_ = 0;
 };

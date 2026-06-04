@@ -598,7 +598,7 @@ namespace rllm::vulkan
 				std::memcpy(runtime_buffer.mapped, runtime_buffer.view.host_ptr, runtime_buffer.view.size_bytes);
 				if (view.offload_ptr != nullptr && view.mark_device_latest)
 				{
-					get_offload_allocator().memory_space().copy_staging_to_offload(
+					IMemorySpace::get_instance()->copy_staging_to_offload(
 						const_cast<void*>(view.offload_ptr),
 						runtime_buffer.view.host_ptr,
 						runtime_buffer.view.size_bytes

@@ -568,6 +568,52 @@ void VulkanMemorySpace::zero_vulkan_offload(void* offload_dst, size_t bytes)
     std::abort();
 }
 
+void* VulkanMemorySpace::allocate_staging(size_t bytes)
+{
+    if (bytes == 0)
+        return mapped_staging_base_;
+
+    constexpr size_t alignment = alignof(std::max_align_t);
+    const size_t aligned = (bytes + alignment - 1) & ~(alignment - 1);
+    if (staging_offset_ + aligned < staging_offset_ || staging_offset_ + aligned > pool_bytes_)
+        return nullptr;
+
+    auto* ptr = static_cast<std::byte*>(mapped_staging_base_) + staging_offset_;
+    staging_offset_ += aligned;
+    return ptr;
+}
+
+void* VulkanMemorySpace::allocate_offload(size_t bytes)
+{
+    if (bytes == 0)
+        return offload_storage_.data();
+
+    constexpr size_t alignment = alignof(std::max_align_t);
+    const size_t aligned = (bytes + alignment - 1) & ~(alignment - 1);
+    if (offload_offset_ + aligned < offload_offset_ || offload_offset_ + aligned > offload_storage_.size())
+        return nullptr;
+
+    void* ptr = offload_storage_.data() + offload_offset_;
+    offload_offset_ += aligned;
+    return ptr;
+}
+
+void VulkanMemorySpace::release_staging(void*, size_t)
+{
+    // Pool allocations are reclaimed by reset() or destruction.
+}
+
+void VulkanMemorySpace::release_offload(void*, size_t)
+{
+    // Pool allocations are reclaimed by reset() or destruction.
+}
+
+void VulkanMemorySpace::reset()
+{
+    staging_offset_ = 0;
+    offload_offset_ = 0;
+}
+
 void VulkanMemorySpace::initialize_runtime()
 {
     VkApplicationInfo app_info{};
