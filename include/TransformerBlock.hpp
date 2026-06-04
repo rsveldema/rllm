@@ -26,6 +26,13 @@ namespace rllm
     class TransformerBlock
     {
       public:
+        // Optimizer hyper-parameters
+        static constexpr float MOMENTUM_BETA = 0.9f;
+        static constexpr float GRAD_CLIP = 1.0f;
+        static constexpr float VEL_CLIP = 0.1f;
+        static constexpr float WEIGHT_CLAMP = 2.0f;
+
+      public:
         TransformerBlock(); // defined in .cc after ForwardWorkspace is complete
         ~TransformerBlock(); // defined in .cc after ForwardWorkspace is complete
         TransformerBlock(TransformerBlock&&) noexcept; // defined in .cc
@@ -77,11 +84,6 @@ namespace rllm
             softmax_backward(dp, p, dscores, T);
         }
 
-                // Optimizer hyper-parameters
-                static constexpr float MOMENTUM_BETA = 0.9f;
-                static constexpr float GRAD_CLIP = 1.0f;
-                static constexpr float VEL_CLIP = 0.1f;
-                static constexpr float WEIGHT_CLAMP = 2.0f;
 
       private:
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major

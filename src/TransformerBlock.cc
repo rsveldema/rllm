@@ -375,6 +375,85 @@ namespace rllm
 
     // ── backward pass ─────────────────────────────────────────────────────────
 
+    static void accumulate_attention_dq_for_head(
+        // OFFLOAD_PARAMETERS(d_Q, d_raw_h, K, hStart, head_scale, seq_len)
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_Q,
+        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h,
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K,
+        EmbeddingDimension hStart,
+        float head_scale,
+        PositionIndex seq_len
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto head_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
+        OFFLOAD_PARFOR_2D_PARAM(i, d_head, head_grid, (d_Q, d_raw_h, K, hStart, head_scale, seq_len))
+        const int d = int(hStart) + int(d_head);
+        float sum_q = 0.f;
+        for (const auto j : enum_iterator<PositionIndex>(inc(i)))
+            sum_q += d_raw_h[i, j] * head_scale * K[j, d];
+        d_Q[i, d] = sum_q;
+        ENDFOR
+    }
+
+    static void accumulate_attention_dk_for_head(
+        // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, hStart, head_scale, seq_len)
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K,
+        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h,
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q,
+        EmbeddingDimension hStart,
+        float head_scale,
+        PositionIndex seq_len
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto head_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
+        OFFLOAD_PARFOR_2D_PARAM(j, d_head, head_grid, (d_K, d_raw_h, Q, hStart, head_scale, seq_len))
+        const int d = int(hStart) + int(d_head);
+        float sum_k = 0.f;
+        for (const auto i : enum_iterator<PositionIndex>(j, seq_len))
+            sum_k += d_raw_h[i, j] * head_scale * Q[i, d];
+        d_K[j, d] = sum_k;
+        ENDFOR
+    }
+
+    static void accumulate_attention_dv_for_head(
+        // OFFLOAD_PARAMETERS(d_V, scores_mat, d_attn_concat, hStart, hEnd, seq_len)
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_V,
+        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat,
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat,
+        EmbeddingDimension hStart,
+        EmbeddingDimension hEnd,
+        PositionIndex seq_len
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(j, i, seq_len, (d_V, scores_mat, d_attn_concat, hStart, hEnd))
+        const float w = scores_mat[i, j];
+        for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+            d_V[j, d] += w * d_attn_concat[i, d];
+        ENDFOR
+    }
+
+    static void compute_attention_dscores_for_head(
+        // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, hStart, hEnd, seq_len)
+        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h,
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat,
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V,
+        EmbeddingDimension hStart,
+        EmbeddingDimension hEnd,
+        PositionIndex seq_len
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (d_scores_h, d_attn_concat, V, hStart, hEnd))
+        float dot = 0.f;
+        for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
+            dot += d_attn_concat[i, d] * V[j, d];
+        d_scores_h[i, j] = dot;
+        ENDFOR
+    }
+
     void TransformerBlock::backward(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din,
@@ -408,11 +487,11 @@ namespace rllm
         element_wise_add(ws->tmp, ws->d_h_norm_ff);
 
         // weight gradients for gate, up
-        PARSECTIONS_BEGIN
+        PARSECTIONS_BEGIN;
         matmul_AtB_acc(ws->d_gate_pre, fwd.h_norm_ff, ws->dW_gate, fwd.seq_len);
         PARSECTION
         matmul_AtB_acc(ws->d_up_pre, fwd.h_norm_ff, ws->dW_up, fwd.seq_len);
-        PARSECTIONS_END
+        PARSECTIONS_END;
 
         // RMSNorm backward for FFN: d_h_mid += rms_bwd(d_h_norm_ff, h_mid)
         rms_norm_backward(ws->d_h_norm_ff, fwd.h_mid, ws->d_h_mid);
@@ -429,68 +508,50 @@ namespace rllm
         constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
 
         PARFOR(hi, enum_iterator<HeadsIndex>())
-        const auto hi_int = static_cast<size_t>(hi);
-        // Each head owns its own d_scores_h / d_raw_h so parallel heads never conflict.
-        // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, d_V, d_Q, d_K, d_attn_concat, Q, K, V, scores_mat, hStart, hEnd, head_scale, seq_len)
-        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h = ws->d_scores[hi];
-        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws->d_raw[hi];
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_V = ws->d_V;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_Q = ws->d_Q;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K = ws->d_K;
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws->d_attn_concat;
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = fwd.K;
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V = fwd.V;
-        const PositionIndex seq_len = fwd.seq_len;
-        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat = fwd.attn_w[hi];
-        EmbeddingDimension hStart = static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
-        EmbeddingDimension hEnd = static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
-        const float head_scale = scale;
-        // END_OFFLOAD_PARAMETERS
-        d_scores_h.set_size(fwd.seq_len, fwd.seq_len);
-        d_raw_h.set_size(fwd.seq_len, fwd.seq_len);
-        d_raw_h.zero();
+        {
+            const auto hi_int = static_cast<size_t>(hi);
+            // Each head owns its own d_scores_h / d_raw_h so parallel heads never conflict.
+            // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, d_V, d_Q, d_K, d_attn_concat, Q, K, V, scores_mat, hStart, hEnd,
+            // head_scale, seq_len)
+            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h = ws->d_scores[hi];
+            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws->d_raw[hi];
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_V = ws->d_V;
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_Q = ws->d_Q;
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K = ws->d_K;
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat =
+                ws->d_attn_concat;
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = fwd.K;
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V = fwd.V;
+            const PositionIndex seq_len = fwd.seq_len;
+            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat = fwd.attn_w[hi];
+            EmbeddingDimension hStart =
+                static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
+            EmbeddingDimension hEnd =
+                static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
+            const float head_scale = scale;
+            // END_OFFLOAD_PARAMETERS
+            d_scores_h.set_size(fwd.seq_len, fwd.seq_len);
+            d_raw_h.set_size(fwd.seq_len, fwd.seq_len);
+            d_raw_h.zero();
 
-        // d_V_h[j, d] += sum_i scores_mat[i,j] * d_attn_concat[i, d]
-        // Safe across heads: each head writes its own [hStart, hEnd) columns of d_V.
-        OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(j, i, seq_len, (d_V, scores_mat, d_attn_concat, hStart, hEnd))
-        const float w = scores_mat[i, j];
-        for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-            d_V[j, d] += w * d_attn_concat[i, d];
-        ENDFOR
+            // d_V_h[j, d] += sum_i scores_mat[i,j] * d_attn_concat[i, d]
+            // Safe across heads: each head writes its own [hStart, hEnd) columns of d_V.
+            accumulate_attention_dv_for_head(d_V, scores_mat, d_attn_concat, hStart, hEnd, seq_len);
 
-        // d_scores_h[i,j] = d_attn_concat[i, d] · V[j, d]
-        // Safe for offload because each triangular cell writes a unique output element.
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (d_scores_h, d_attn_concat, V, hStart, hEnd))
-        float dot = 0.f;
-        for (const auto d : enum_iterator<EmbeddingDimension>(hStart, hEnd))
-            dot += d_attn_concat[i, d] * V[j, d];
-        d_scores_h[i, j] = dot;
-        ENDFOR
+            // d_scores_h[i,j] = d_attn_concat[i, d] · V[j, d]
+            // Safe for offload because each triangular cell writes a unique output element.
+            compute_attention_dscores_for_head(d_scores_h, d_attn_concat, V, hStart, hEnd, seq_len);
 
-        // Backward through causal softmax
-        softmax_backward(d_scores_h, scores_mat, d_raw_h, seq_len);
+            // Backward through causal softmax
+            softmax_backward(d_scores_h, scores_mat, d_raw_h, seq_len);
 
-        // d_Q and d_K are triangular reductions over j/i respectively.
-        // Offload per output cell to avoid cross-thread accumulation races.
-        const auto head_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
-
-        OFFLOAD_PARFOR_2D_PARAM(i, d_head, head_grid, (d_Q, d_raw_h, K, hStart, head_scale, seq_len))
-        const int d = int(hStart) + int(d_head);
-        float sum_q = 0.f;
-        for (const auto j : enum_iterator<PositionIndex>(inc(i)))
-            sum_q += d_raw_h[i, j] * head_scale * K[j, d];
-        d_Q[i, d] = sum_q;
-        ENDFOR
-
-        OFFLOAD_PARFOR_2D_PARAM(j, d_head, head_grid, (d_K, d_raw_h, Q, hStart, head_scale, seq_len))
-        const int d = int(hStart) + int(d_head);
-        float sum_k = 0.f;
-        for (const auto i : enum_iterator<PositionIndex>(j, seq_len))
-            sum_k += d_raw_h[i, j] * head_scale * Q[i, d];
-        d_K[j, d] = sum_k;
-        ENDFOR
-        ENDFOR
+            // d_Q and d_K are triangular reductions over j/i respectively.
+            // Offload per output cell to avoid cross-thread accumulation races.
+            accumulate_attention_dq_for_head(d_Q, d_raw_h, K, hStart, head_scale, seq_len);
+            accumulate_attention_dk_for_head(d_K, d_raw_h, Q, hStart, head_scale, seq_len);
+        }
+        ENDFOR;
 
         // Weight gradients for W_q, W_k, W_v
         PARSECTIONS_BEGIN

@@ -46,6 +46,30 @@ class OffloadParForTest : public ::testing::Test
     }
 };
 
+static void visit_lower_triangle(
+    // OFFLOAD_PARAMETERS(visits, n)
+    rllm::fixed_size_matrix<int, rllm::PositionIndex, rllm::PositionIndex>& visits,
+    rllm::PositionIndex n
+    // END_OFFLOAD_PARAMETERS
+)
+{
+    OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, n, (visits))
+    ATOMIC_INC((visits[i, j]));
+    ENDFOR
+}
+
+static void visit_upper_triangle(
+    // OFFLOAD_PARAMETERS(visits, n)
+    rllm::fixed_size_matrix<int, rllm::PositionIndex, rllm::PositionIndex>& visits,
+    rllm::PositionIndex n
+    // END_OFFLOAD_PARAMETERS
+)
+{
+    OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(i, j, n, (visits))
+    ATOMIC_INC((visits[i, j]));
+    ENDFOR
+}
+
 TEST_F(OffloadParForTest, OffloadParForVisitsEachIndexExactlyOnce)
 {
     constexpr size_t N = 17;
@@ -143,9 +167,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DTriangularParamVisitsLowerTriangle)
     rllm::fixed_size_matrix<int, rllm::PositionIndex, rllm::PositionIndex> visits;
     // END_OFFLOAD_PARAMETERS
 
-    OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, static_cast<rllm::PositionIndex>(N), (visits))
-    ATOMIC_INC((visits[i, j]));
-    ENDFOR
+    visit_lower_triangle(visits, static_cast<rllm::PositionIndex>(N));
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
@@ -168,9 +190,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DUpperTriangularParamVisitsUpperTriangle
     rllm::fixed_size_matrix<int, rllm::PositionIndex, rllm::PositionIndex> visits;
     // END_OFFLOAD_PARAMETERS
 
-    OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(i, j, static_cast<rllm::PositionIndex>(N), (visits))
-    ATOMIC_INC((visits[i, j]));
-    ENDFOR
+    visit_upper_triangle(visits, static_cast<rllm::PositionIndex>(N));
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
