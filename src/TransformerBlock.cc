@@ -6,6 +6,8 @@
 #include <parallel.hpp>
 #include <vecmath.hpp>
 
+#include <fixed_size_obj_vector.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -200,7 +202,7 @@ namespace rllm
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_norm_attn;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> Q, K, V;
         // Per-head softmax weight matrices; only the top-left [T × T] block is live.
-        fixed_size_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> attn_w;
+        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> attn_w;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> attn_concat;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_mid;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_norm_ff;
@@ -334,8 +336,8 @@ namespace rllm
         // Scratch buffer shared by both matmul accumulation loops
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> tmp;
         // Per-head scratch: each head writes its own d_scores/d_raw so the hi loop is parallel.
-        fixed_size_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
-        fixed_size_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
+        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
+        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
 
         explicit BackwardWorkspace(PositionIndex seq)
             : d_h_mid(seq)
@@ -424,7 +426,8 @@ namespace rllm
         matmul_AtB_acc(ws->d_h_mid, fwd.attn_concat, ws->dW_o, fwd.seq_len);
 
         // Per-head backward
-        const float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
+        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
+
         PARFOR(hi, enum_iterator<HeadsIndex>())
         const auto hi_int = static_cast<size_t>(hi);
         // Each head owns its own d_scores_h / d_raw_h so parallel heads never conflict.

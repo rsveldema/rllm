@@ -266,7 +266,7 @@ namespace rllm
     NeuralNetwork::~NeuralNetwork() = default;
 
     void NeuralNetwork::propagate_backward_mtp(
-        const fixed_size_vector<Score, MultiTokenPredictionIndex>& scores,
+        const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
         MultiTokenPredictionIndex num_valid
     )
     {
@@ -968,7 +968,7 @@ namespace rllm
         // In multi-epoch training each call gets a small fixed budget (max_iterations).
         // We allow an early return once this example reaches a reasonable confidence target.
         // Heap-allocate the MTP score array: MAX_HEADS × Score ≈ 4 × 2.4 KB = ~9.6 KB.
-        const auto scores_storage = std::make_unique<fixed_size_vector<Score, MultiTokenPredictionIndex>>();
+        const auto scores_storage = std::make_unique<fixed_size_obj_vector<Score, MultiTokenPredictionIndex>>();
         float loss = 0.0f;
         for (size_t i = 0; i < max_iterations; ++i)
         {

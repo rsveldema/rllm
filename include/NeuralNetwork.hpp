@@ -7,6 +7,8 @@
 #include <OutputLayer.hpp>
 #include <Statistics.hpp>
 
+#include <fixed_size_obj_vector.hpp>
+
 #include <nlohmann/json_fwd.hpp>
 #include <chrono>
 #include <memory>
@@ -47,7 +49,7 @@ namespace rllm
 
         const Corpus& get_corpus() const { return m_corpus; }
         Statistics&   get_statistics() const { return m_stats; }
-        const fixed_size_vector<OutputLayer, MultiTokenPredictionIndex>& get_output_layers() const { return m_output_layers; }
+        const fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex>& get_output_layers() const { return m_output_layers; }
         const OutputLayer& get_output_layer(MultiTokenPredictionIndex idx) const { return m_output_layers[idx]; }
         const InputLayer& get_input_layer() const { return m_input_layer; }
         size_t get_transformer_block_count() const { return m_transformer_blocks.size(); }
@@ -103,7 +105,7 @@ namespace rllm
         InputLayer  m_input_layer;
         InputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
         std::vector<TransformerBlock> m_transformer_blocks;
-        fixed_size_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
+        fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
 
         // Hidden state at the final position after the last transformer block.
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> m_last_hidden;
@@ -120,7 +122,7 @@ namespace rllm
         void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
         // Accumulates gradients from all valid MTP heads and backpropagates once.
         void propagate_backward_mtp(
-            const fixed_size_vector<Score, MultiTokenPredictionIndex>& scores,
+            const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
             MultiTokenPredictionIndex num_valid
         );
         float evaluate_average_loss(const std::vector<InputLine>& evaluation_lines);

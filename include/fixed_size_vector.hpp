@@ -13,6 +13,7 @@
 
 namespace rllm
 {
+
     template <typename T, typename LengthType>
     class fixed_size_vector
     {

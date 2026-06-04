@@ -444,7 +444,7 @@ private:
     void zero_initialize_staging()
     {
         assert(m_staging_ptr != nullptr);
-        std::memset((void*)m_staging_ptr, 0, m_bytes);
+        std::memset(m_staging_ptr, 0, m_bytes);
     }
 
     void zero_initialize_offload()
