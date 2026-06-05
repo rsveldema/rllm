@@ -575,11 +575,27 @@ void VulkanMemorySpace::zero_vulkan_offload(void* offload_dst, size_t bytes)
 {
     TransferContext& ctx = transfer_context();
     VkDeviceSize dst_offset = 0;
-    if ((bytes % 4u) == 0u
-        && resolve_offset(ctx.offload_base, ctx.offload_size, offload_dst, bytes, dst_offset)
-        && submit_buffer_fill(ctx.offload_buffer, dst_offset, bytes, 0u))
+    const bool dst_ok = resolve_offset(ctx.offload_base, ctx.offload_size, offload_dst, bytes, dst_offset);
+    if ((bytes % 4u) == 0u && dst_ok && submit_buffer_fill(ctx.offload_buffer, dst_offset, bytes, 0u))
     {
         return;
+    }
+
+    if (dst_ok && ctx.allocator != nullptr)
+    {
+        VkBuffer temp_buffer = VK_NULL_HANDLE;
+        VmaAllocation temp_allocation = nullptr;
+        void* mapped = nullptr;
+        if (create_transfer_staging_buffer(ctx.allocator, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, temp_buffer, temp_allocation, mapped))
+        {
+            std::memset(mapped, 0, bytes);
+            if (submit_buffer_copy(temp_buffer, ctx.offload_buffer, 0, dst_offset, bytes))
+            {
+                vmaDestroyBuffer(ctx.allocator, temp_buffer, temp_allocation);
+                return;
+            }
+            vmaDestroyBuffer(ctx.allocator, temp_buffer, temp_allocation);
+        }
     }
 
     LOG_ERROR("Fatal: Vulkan offload zero failed and fallback is disabled.");

@@ -23,12 +23,12 @@ namespace rllm
         static constexpr size_t CAPACITY = static_cast<size_t>(LengthType::MAX);
 
         fixed_size_vector()
-            : m_data(*IMemorySpace::get_instance(IMemorySpaceType::HOST), 1)
+            : m_data(1)
             , m_capacity(1)
         {}
 
         fixed_size_vector(const fixed_size_vector& other)
-            : m_data(*IMemorySpace::get_instance(IMemorySpaceType::HOST), std::max<size_t>(1, static_cast<size_t>(other.len)))
+            : m_data(std::max<size_t>(1, static_cast<size_t>(other.len)))
             , len(other.len)
             , m_capacity(other.m_data.size())
         {
@@ -49,7 +49,7 @@ namespace rllm
         }
 
         fixed_size_vector(fixed_size_vector&& other)
-            : m_data(*IMemorySpace::get_instance(IMemorySpaceType::HOST), std::max<size_t>(1, static_cast<size_t>(other.len)))
+            : m_data(std::max<size_t>(1, static_cast<size_t>(other.len)))
             , len(other.len)
             , m_capacity(other.m_data.size())
         {
@@ -171,6 +171,45 @@ namespace rllm
         T* raw_staging_data() const
         {
             return m_data.raw_staging_data();
+        }
+
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        void* raw_offload_data() const
+        {
+            return m_data.raw_offload_data();
+        }
+#endif
+
+#if defined(USE_VULKAN_OFFLOAD)
+        VulkanRuntimeBuffer& vulkan_runtime_buffer() const
+        {
+            return m_data.vulkan_runtime_buffer();
+        }
+#endif
+
+        DeviceMemoryOwner device_memory_owner() const
+        {
+            return m_data.device_memory_owner();
+        }
+
+        void set_pending_flush(std::function<void()> flush_fn)
+        {
+            m_data.set_pending_flush(std::move(flush_fn));
+        }
+
+        void mark_device_latest()
+        {
+            m_data.mark_device_latest();
+        }
+
+        void copy_to_offload_buffer()
+        {
+            m_data.copy_to_offload_buffer();
+        }
+
+        bool needs_offload_sync() const
+        {
+            return m_data.needs_offload_sync();
         }
 
         size_t storage_size_bytes() const
