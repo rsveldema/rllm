@@ -216,6 +216,11 @@ namespace rllm
         void apply_causal_softmax_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void compute_attention_values_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_compute_attention_dscores_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_softmax_attention_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_accumulate_attention_dq_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_accumulate_attention_dk_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
     };
 
 } // namespace rllm

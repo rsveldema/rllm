@@ -491,10 +491,8 @@ namespace rllm
         ENDFOR
     }
 
-    void TransformerBlock::backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    void TransformerBlock::backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
     {
-        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
-
         PARFOR(hi, enum_iterator<HeadsIndex>())
         {
             const auto hi_int = static_cast<size_t>(hi);
@@ -522,7 +520,10 @@ namespace rllm
             accumulate_attention_dv_for_head(d_V, attn_w, d_attn_concat, static_cast<int>(hi), attn_w_rows, attn_w_cols, hStart, hEnd, seq_len);
         }
         ENDFOR;
+    }
 
+    void TransformerBlock::backward_compute_attention_dscores_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    {
         PARFOR(hi, enum_iterator<HeadsIndex>())
         {
             const auto hi_int = static_cast<size_t>(hi);
@@ -541,7 +542,10 @@ namespace rllm
             compute_attention_dscores_for_head(d_scores_h, d_attn_concat, V, hStart, hEnd, seq_len);
         }
         ENDFOR;
+    }
 
+    void TransformerBlock::backward_softmax_attention_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    {
         PARFOR(hi, enum_iterator<HeadsIndex>())
         {
             // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, attn_w, head_scale, seq_len, attn_w_rows, attn_w_cols)
@@ -557,6 +561,11 @@ namespace rllm
             softmax_backward_for_attention_head(d_scores_h, attn_w, d_raw_h, static_cast<int>(hi), attn_w_rows, attn_w_cols, seq_len);
         }
         ENDFOR;
+    }
+
+    void TransformerBlock::backward_accumulate_attention_dq_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    {
+        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
 
         PARFOR(hi, enum_iterator<HeadsIndex>())
         {
@@ -576,6 +585,11 @@ namespace rllm
             accumulate_attention_dq_for_head(d_Q, d_raw_h, K, hStart, head_scale, seq_len);
         }
         ENDFOR;
+    }
+
+    void TransformerBlock::backward_accumulate_attention_dk_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    {
+        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
 
         PARFOR(hi, enum_iterator<HeadsIndex>())
         {
@@ -593,6 +607,15 @@ namespace rllm
             accumulate_attention_dk_for_head(d_K, d_raw_h, Q, hStart, head_scale, seq_len);
         }
         ENDFOR;
+    }
+
+    void TransformerBlock::backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    {
+        backward_accumulate_attention_dv_for_heads(ws, fwd);
+        backward_compute_attention_dscores_for_heads(ws, fwd);
+        backward_softmax_attention_for_heads(ws, fwd);
+        backward_accumulate_attention_dq_for_heads(ws, fwd);
+        backward_accumulate_attention_dk_for_heads(ws, fwd);
     }
 
     void TransformerBlock::backward(const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate)
