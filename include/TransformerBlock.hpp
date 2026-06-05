@@ -1,7 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
-#include <fixed_size_obj_vector.hpp>
+#include <fixed_size_levels_rows_cols_matrix.hpp>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <parallel.hpp>
@@ -37,9 +37,8 @@ namespace rllm
         fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_v;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
 
-        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>
-            d_scores;
-        fixed_size_obj_vector<flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
+        fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex> d_scores;
+        fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex> d_raw;
 
         explicit BackwardWorkspace(PositionIndex seq)
             : d_h_mid(seq)
@@ -66,6 +65,8 @@ namespace rllm
             d_K.set_rows(seq);
             d_V.set_rows(seq);
             d_h_norm_attn.set_rows(seq);
+            d_scores.set_size(seq, seq);
+            d_raw.set_size(seq, seq);
 
             dW_down.zero();
             d_h_norm_ff.zero();
@@ -79,6 +80,7 @@ namespace rllm
             dW_k.zero();
             dW_v.zero();
             d_h_norm_attn.zero();
+            d_raw.zero();
         }
     };
 

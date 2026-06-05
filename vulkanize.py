@@ -141,7 +141,7 @@ _MATRIX_TYPE_RE = re.compile(
     r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:fixed_size_matrix|flexible_rows_matrix|flexible_cols_matrix|flexible_rows_cols_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _MATRIX_3D_TYPE_RE = re.compile(
-    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*flexible_rows_cols_levels_matrix\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<levels>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:flexible_rows_cols_levels_matrix|fixed_size_levels_rows_cols_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<levels>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _STD_VECTOR_ATOMIC_INT_RE = re.compile(
     r"^(?P<const>const\s+)?std::vector\s*<\s*std::atomic\s*<\s*int\s*>\s*>\s*(?P<ref>[&*])?\s*$"
