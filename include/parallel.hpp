@@ -145,42 +145,71 @@ namespace parallel {
 
         void record_host_to_device_buffer_copy(std::string_view site = {}, std::string_view parameter = {}, size_t bytes = 0)
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             m_host_to_device_buffer_copies.fetch_add(1, std::memory_order_relaxed);
             m_host_to_device_buffer_copy_bytes.fetch_add(bytes, std::memory_order_relaxed);
             record_copy_site(site, true, bytes);
             record_copy_parameter(site, parameter, true, bytes);
+#else
+            static_cast<void>(site);
+            static_cast<void>(parameter);
+            static_cast<void>(bytes);
+#endif
         }
 
         void record_device_to_host_buffer_copy(std::string_view site = {}, std::string_view parameter = {}, size_t bytes = 0)
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             m_device_to_host_buffer_copies.fetch_add(1, std::memory_order_relaxed);
             m_device_to_host_buffer_copy_bytes.fetch_add(bytes, std::memory_order_relaxed);
             record_copy_site(site, false, bytes);
             record_copy_parameter(site, parameter, false, bytes);
+#else
+            static_cast<void>(site);
+            static_cast<void>(parameter);
+            static_cast<void>(bytes);
+#endif
         }
 
         size_t host_to_device_buffer_copies() const
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             return m_host_to_device_buffer_copies.load(std::memory_order_relaxed);
+#else
+            return 0;
+#endif
         }
 
         size_t device_to_host_buffer_copies() const
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             return m_device_to_host_buffer_copies.load(std::memory_order_relaxed);
+#else
+            return 0;
+#endif
         }
 
         size_t host_to_device_buffer_copy_bytes() const
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             return m_host_to_device_buffer_copy_bytes.load(std::memory_order_relaxed);
+#else
+            return 0;
+#endif
         }
 
         size_t device_to_host_buffer_copy_bytes() const
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             return m_device_to_host_buffer_copy_bytes.load(std::memory_order_relaxed);
+#else
+            return 0;
+#endif
         }
 
         void reset_buffer_copy_counters()
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             m_host_to_device_buffer_copies.store(0, std::memory_order_relaxed);
             m_device_to_host_buffer_copies.store(0, std::memory_order_relaxed);
             m_host_to_device_buffer_copy_bytes.store(0, std::memory_order_relaxed);
@@ -189,10 +218,12 @@ namespace parallel {
             std::lock_guard<std::mutex> lock(m_copy_site_mutex);
             m_copy_sites.clear();
             m_copy_parameters.clear();
+#endif
         }
 
         void print_statistics() const
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             std::println("Parallel statistics:");
             std::println(
                 "  Host-to-device buffer copies: {} ({} bytes)",
@@ -239,10 +270,14 @@ namespace parallel {
                     );
                 }
             }
+#else
+            std::println("Parallel statistics: disabled");
+#endif
         }
 
         std::vector<CopySiteBreakdown> top_copy_sites(size_t limit = 10) const
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             std::lock_guard<std::mutex> lock(m_copy_site_mutex);
 
             std::vector<CopySiteBreakdown> sites;
@@ -274,10 +309,15 @@ namespace parallel {
                 sites.resize(limit);
 
             return sites;
+#else
+            static_cast<void>(limit);
+            return {};
+#endif
         }
 
         std::vector<CopyParameterBreakdown> top_copy_parameters(size_t limit = 10) const
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             std::lock_guard<std::mutex> lock(m_copy_site_mutex);
 
             std::vector<CopyParameterBreakdown> items;
@@ -316,6 +356,10 @@ namespace parallel {
                 items.resize(limit);
 
             return items;
+#else
+            static_cast<void>(limit);
+            return {};
+#endif
         }
 
       private:
@@ -329,6 +373,7 @@ namespace parallel {
 
         void record_copy_site(std::string_view site, bool host_to_device, size_t bytes)
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             if (site.empty())
                 return;
 
@@ -344,10 +389,16 @@ namespace parallel {
                 counts.device_to_host++;
                 counts.device_to_host_bytes += bytes;
             }
+#else
+            static_cast<void>(site);
+            static_cast<void>(host_to_device);
+            static_cast<void>(bytes);
+#endif
         }
 
         void record_copy_parameter(std::string_view site, std::string_view parameter, bool host_to_device, size_t bytes)
         {
+#if defined(RLLM_ENABLE_STATISTICS)
             if (site.empty() || parameter.empty())
                 return;
 
@@ -369,6 +420,12 @@ namespace parallel {
                 counts.device_to_host++;
                 counts.device_to_host_bytes += bytes;
             }
+#else
+            static_cast<void>(site);
+            static_cast<void>(parameter);
+            static_cast<void>(host_to_device);
+            static_cast<void>(bytes);
+#endif
         }
 
         std::atomic<size_t> m_host_to_device_buffer_copies{0};

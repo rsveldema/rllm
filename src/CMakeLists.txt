@@ -5,6 +5,7 @@ set_property(CACHE PARALLEL_BACKEND PROPERTY STRINGS openmp fastfork sequential)
 set(OFFLOAD_BACKEND "none" CACHE STRING "Offload backend: none, hip, or vulkan")
 set_property(CACHE OFFLOAD_BACKEND PROPERTY STRINGS none hip vulkan)
 set(HIP_ROOT "/opt/rocm" CACHE PATH "HIP installation root")
+option(RLLM_ENABLE_STATISTICS "Enable runtime statistics gathering and reporting" ON)
 
 include(CheckCXXSourceCompiles)
 
@@ -24,6 +25,7 @@ elseif(PARALLEL_BACKEND STREQUAL "openmp")
 else()
     message(STATUS "Parallel backend: sequential (single-threaded)")
 endif()
+message(STATUS "Runtime statistics: ${RLLM_ENABLE_STATISTICS}")
 
 if(OFFLOAD_BACKEND STREQUAL "hip")
     if(NOT EXISTS "${HIP_ROOT}/include")
@@ -186,6 +188,9 @@ function(rllm_define_lib target_name)
         ${ARGN}
     )
     #target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_OVERFLOW_CHECK_ADD)
+    if(RLLM_ENABLE_STATISTICS)
+        target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_STATISTICS)
+    endif()
 
     add_dependencies(${target_name} generate_tokenizer_map)
     target_link_libraries(${target_name} PUBLIC nlohmann_json::nlohmann_json)

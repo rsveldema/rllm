@@ -3,9 +3,11 @@ set -euo pipefail
 
 CPU_BUILD_DIR="${CPU_BUILD_DIR:-${BUILD_DIR:-build_profile_cpu}}"
 VULKAN_BUILD_DIR="${VULKAN_BUILD_DIR:-build_profile_vulkan}"
+VULKAN_STATS_BUILD_DIR="${VULKAN_STATS_BUILD_DIR:-build_profile_vulkan_stats}"
 TRAIN_DIR="${TRAIN_DIR:-profile_training_data}"
 OUTPUT_MODEL_CPU="${OUTPUT_MODEL_CPU:-/tmp/rllm-profile-small-cpu.json}"
 OUTPUT_MODEL_VULKAN="${OUTPUT_MODEL_VULKAN:-/tmp/rllm-profile-small-vulkan.json}"
+OUTPUT_MODEL_VULKAN_STATS="${OUTPUT_MODEL_VULKAN_STATS:-/tmp/rllm-profile-small-vulkan-stats.json}"
 LAYERS="${LAYERS:-4}"
 EPOCHS="${EPOCHS:-3}"
 PARALLEL_BACKEND="${PARALLEL_BACKEND:-fastfork}"
@@ -20,12 +22,14 @@ fi
 configure_build() {
     local build_dir="$1"
     local offload_backend="$2"
+    local statistics="$3"
 
-    echo "Configuring $offload_backend profiling build in '$build_dir'..."
+    echo "Configuring $offload_backend profiling build in '$build_dir' (statistics: $statistics)..."
     cmake -B "$build_dir" \
         -DCMAKE_BUILD_TYPE=Release \
         -DPARALLEL_BACKEND="$PARALLEL_BACKEND" \
-        -DOFFLOAD_BACKEND="$offload_backend"
+        -DOFFLOAD_BACKEND="$offload_backend" \
+        -DRLLM_ENABLE_STATISTICS="$statistics"
 }
 
 build_profiler() {
@@ -84,27 +88,35 @@ run_training() {
 
 cpu_elapsed_file="$(mktemp)"
 vulkan_elapsed_file="$(mktemp)"
+vulkan_stats_elapsed_file="$(mktemp)"
 cleanup() {
-    rm -f "$cpu_elapsed_file" "$vulkan_elapsed_file"
+    rm -f "$cpu_elapsed_file" "$vulkan_elapsed_file" "$vulkan_stats_elapsed_file"
 }
 trap cleanup EXIT
 
-configure_build "$CPU_BUILD_DIR" "none"
+configure_build "$CPU_BUILD_DIR" "none" "OFF"
 build_profiler "$CPU_BUILD_DIR"
 
-configure_build "$VULKAN_BUILD_DIR" "vulkan"
+configure_build "$VULKAN_BUILD_DIR" "vulkan" "OFF"
 build_profiler "$VULKAN_BUILD_DIR"
 check_vulkan_provider "$VULKAN_BUILD_DIR"
 
-run_training "CPU-only" "$CPU_BUILD_DIR" "$OUTPUT_MODEL_CPU" "$cpu_elapsed_file"
-run_training "Vulkan" "$VULKAN_BUILD_DIR" "$OUTPUT_MODEL_VULKAN" "$vulkan_elapsed_file"
+configure_build "$VULKAN_STATS_BUILD_DIR" "vulkan" "ON"
+build_profiler "$VULKAN_STATS_BUILD_DIR"
+check_vulkan_provider "$VULKAN_STATS_BUILD_DIR"
+
+run_training "CPU-only runtime" "$CPU_BUILD_DIR" "$OUTPUT_MODEL_CPU" "$cpu_elapsed_file"
+run_training "Vulkan runtime" "$VULKAN_BUILD_DIR" "$OUTPUT_MODEL_VULKAN" "$vulkan_elapsed_file"
+run_training "Vulkan statistics" "$VULKAN_STATS_BUILD_DIR" "$OUTPUT_MODEL_VULKAN_STATS" "$vulkan_stats_elapsed_file"
 
 cpu_elapsed="$(<"$cpu_elapsed_file")"
 vulkan_elapsed="$(<"$vulkan_elapsed_file")"
+vulkan_stats_elapsed="$(<"$vulkan_stats_elapsed_file")"
 speedup="$(awk -v cpu="$cpu_elapsed" -v vulkan="$vulkan_elapsed" 'BEGIN { if (vulkan > 0) printf "%.3f", cpu / vulkan; else printf "inf" }')"
 
 echo
 echo "Training profile comparison:"
-echo "  CPU-only elapsed: ${cpu_elapsed}s"
-echo "  Vulkan elapsed:   ${vulkan_elapsed}s"
-echo "  Vulkan speedup:   ${speedup}x"
+echo "  CPU-only runtime elapsed:     ${cpu_elapsed}s (statistics disabled)"
+echo "  Vulkan runtime elapsed:       ${vulkan_elapsed}s (statistics disabled)"
+echo "  Vulkan runtime speedup:       ${speedup}x"
+echo "  Vulkan statistics elapsed:    ${vulkan_stats_elapsed}s (statistics enabled)"

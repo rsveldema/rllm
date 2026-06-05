@@ -638,29 +638,33 @@ void* VulkanMemorySpace::allocate_offload(size_t bytes)
     if (bytes == 0)
         return offload_storage_.data();
 
-    constexpr size_t alignment = alignof(std::max_align_t);
+    const size_t alignment = std::max<size_t>(alignof(std::max_align_t), storage_buffer_offset_alignment_);
     if (bytes > std::numeric_limits<size_t>::max() - (alignment - 1))
     {
         LOG_ERROR("Vulkan offload allocation size overflow: requested={} alignment={}", bytes, alignment);
         return nullptr;
     }
 
+    const size_t aligned_offset = (offload_offset_ + alignment - 1) & ~(alignment - 1);
     const size_t aligned = (bytes + alignment - 1) & ~(alignment - 1);
-    if (offload_offset_ + aligned < offload_offset_ || offload_offset_ + aligned > offload_storage_.size())
+    if (aligned_offset < offload_offset_ ||
+        aligned_offset + aligned < aligned_offset ||
+        aligned_offset + aligned > offload_storage_.size())
     {
         LOG_ERROR(
-            "Vulkan offload pool exhausted: requested={} aligned={} used={} capacity={} remaining={}",
+            "Vulkan offload pool exhausted: requested={} aligned={} used={} aligned_used={} capacity={} remaining={}",
             bytes,
             aligned,
             offload_offset_,
+            aligned_offset,
             offload_storage_.size(),
             offload_storage_.size() >= offload_offset_ ? offload_storage_.size() - offload_offset_ : 0
         );
         return nullptr;
     }
 
-    void* ptr = offload_storage_.data() + offload_offset_;
-    offload_offset_ += aligned;
+    void* ptr = offload_storage_.data() + aligned_offset;
+    offload_offset_ = aligned_offset + aligned;
     return ptr;
 }
 
@@ -818,6 +822,8 @@ void VulkanMemorySpace::initialize_runtime()
         LOG_ERROR("vkCreateDevice failed: result={} device='{}'", static_cast<int>(create_device_result), chosen->props.deviceName);
         std::abort();
     }
+    storage_buffer_offset_alignment_ =
+        std::max<size_t>(1, static_cast<size_t>(chosen->props.limits.minStorageBufferOffsetAlignment));
 
     vkGetDeviceQueue(device_, queue_family_index_, 0, &queue_);
 

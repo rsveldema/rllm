@@ -215,7 +215,9 @@ void print_vulkan_provider() {}
 
 namespace parallel {
     void init_parallel() {
-          // OMP initialises its thread pool automatically
+        // Construct the active memory/offload backend before worker setup.
+        (void)IMemorySpace::get_instance();
+        // OMP initialises its thread pool automatically
         std::println("Using OpenMP with {} threads", get_max_threads());
     }
 }
@@ -224,6 +226,8 @@ namespace parallel {
 
 namespace parallel {
     void init_parallel() {
+        // Construct the active memory/offload backend before worker setup.
+        (void)IMemorySpace::get_instance();
         fastfork::init();
         std::println("Using FastFork with {} threads", get_max_threads());
     }
@@ -233,6 +237,8 @@ namespace parallel {
 
 namespace parallel {
     void init_parallel() {
+        // Construct the active memory/offload backend before worker setup.
+        (void)IMemorySpace::get_instance();
         std::println("Using sequential execution");
     }
 }

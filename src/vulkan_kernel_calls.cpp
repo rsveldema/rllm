@@ -35,6 +35,7 @@ namespace rllm::vulkan
 			return true;
 		}
 
+#if defined(RLLM_ENABLE_STATISTICS)
 		struct KernelLaunchCounterRegistry
 		{
 			std::mutex mutex;
@@ -47,7 +48,9 @@ namespace rllm::vulkan
 			static auto* registry = new KernelLaunchCounterRegistry();
 			return *registry;
 		}
+#endif
 
+#if defined(RLLM_ENABLE_STATISTICS)
 		static void print_kernel_launch_counts()
 		{
 			auto& registry = kernel_launch_counter_registry();
@@ -75,9 +78,11 @@ namespace rllm::vulkan
 			for (const auto& [kernel_name, count] : counts)
 				std::println("  {}: {}", kernel_name, count);
 		}
+#endif
 
 		static void record_kernel_launch(std::string_view kernel_name)
 		{
+#if defined(RLLM_ENABLE_STATISTICS)
 			auto& registry = kernel_launch_counter_registry();
 			std::lock_guard<std::mutex> lock(registry.mutex);
 			if (!registry.exit_printer_registered)
@@ -86,6 +91,9 @@ namespace rllm::vulkan
 				registry.exit_printer_registered = true;
 			}
 			registry.counts[std::string(kernel_name)]++;
+#else
+			static_cast<void>(kernel_name);
+#endif
 		}
 	}
 

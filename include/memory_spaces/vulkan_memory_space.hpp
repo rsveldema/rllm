@@ -91,4 +91,5 @@ private:
     VmaAllocation offload_allocation_ = nullptr;
     std::vector<std::byte> offload_storage_;
     size_t offload_offset_ = 0;
+    size_t storage_buffer_offset_alignment_ = alignof(std::max_align_t);
 };

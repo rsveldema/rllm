@@ -19,3 +19,4 @@ staged/*.json
 *.bin
 cmake_test_discovery*
 perf*.data
+build_profile_vulkan_stats
