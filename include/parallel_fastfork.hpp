@@ -22,6 +22,11 @@ namespace parallel {
       fastfork::Context _ff_ctx_; \
       for (auto v : _ff_rng_) \
           fastfork::fork_task(_ff_ctx_, [&, v]() { {
+#define PARFOR_3D(v1, v2, v3, ...) \
+    { auto _ff_rng_ = (__VA_ARGS__); \
+      fastfork::Context _ff_ctx_; \
+      for (auto [v1, v2, v3] : _ff_rng_) \
+          fastfork::fork_task(_ff_ctx_, [&, v1, v2, v3]() { {
 // PARFOR_2D partitions the 2D space into dynamically-sized blocks so that
 // the total task count ~= FF_PARFOR_2D_TASKS_PER_THREAD x n_threads for large
 // iteration spaces, or ~= n_threads for small ones (< FF_PARFOR_2D_SMALL_THRESH
@@ -93,6 +98,18 @@ namespace parallel {
               for (size_t _tri_j_ = 0; _tri_j_ <= _tri_i_; ++_tri_j_) { \
                     const auto v1 = static_cast<std::remove_cvref_t<decltype(N)>>(_tri_i_); \
                     const auto v2 = static_cast<std::remove_cvref_t<decltype(N)>>(_tri_j_);
+#define PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2) \
+    { const size_t _tri3_hn_ = static_cast<size_t>(N1); \
+      const size_t _tri3_n_ = static_cast<size_t>(N2); \
+      fastfork::Context _tri3_ctx_; \
+      for (size_t _tri3_flat_ = 0; _tri3_flat_ < _tri3_hn_ * _tri3_n_; ++_tri3_flat_) \
+          fastfork::fork_task(_tri3_ctx_, [&, _tri3_flat_]() { \
+              const size_t _tri3_h_ = _tri3_flat_ / _tri3_n_; \
+              const size_t _tri3_i_ = _tri3_flat_ % _tri3_n_; \
+              for (size_t _tri3_j_ = 0; _tri3_j_ <= _tri3_i_; ++_tri3_j_) { \
+                    const auto v1 = static_cast<std::remove_cvref_t<decltype(N1)>>(_tri3_h_); \
+                    const auto v2 = static_cast<std::remove_cvref_t<decltype(N2)>>(_tri3_i_); \
+                    const auto v3 = static_cast<std::remove_cvref_t<decltype(N2)>>(_tri3_j_);
 // Parallelises the upper-triangular iteration space { (v1,v2) | 0 <= v1 <= v2 < N }.
 // Same interleaved-striping strategy and cell-count-based task cap as the lower
 // triangular variant above.
@@ -136,6 +153,8 @@ namespace parallel {
 // Keep header-time uses valid by falling back to the CPU PARFOR forms.
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) PARFOR_3D(v1, v2, v3, N)
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
 #define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
 #define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 #else
@@ -148,6 +167,10 @@ namespace parallel {
     PARFOR(v, n)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+
+#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) PARFOR_3D(v1, v2, v3, N)
+
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
 
 #define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
 

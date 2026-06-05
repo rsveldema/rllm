@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -412,11 +413,16 @@ namespace rllm::vulkan
         {
             return m_local_size.y;
         }
+        uint32_t local_size_z() const
+        {
+            return m_local_size.z;
+        }
 
       protected:
         void dispatch_kernel(
             uint32_t groups_x,
             uint32_t groups_y,
+            uint32_t groups_z,
             std::span<const detail::HostBufferView> buffers,
             std::span<const std::byte> push_constants,
             std::span<RuntimeBuffer> runtime_buffers,
@@ -483,6 +489,13 @@ namespace rllm::vulkan
                         KernelArgs... args
                 );
 
+        template <typename Range3D>
+        void launch_3d_named(
+            Range3D&& range,
+            std::initializer_list<std::string_view> parameter_names,
+            KernelArgs... args
+        );
+
       private:
                 template <size_t... I>
                 void append_named_buffer_views(
@@ -495,7 +508,7 @@ namespace rllm::vulkan
                 }
 
         static constexpr size_t kLaunchBufferCount = sizeof...(KernelArgs);
-                static constexpr size_t kLaunchScalarBytes = (sizeof...(KernelArgs) + 2) * sizeof(uint32_t);
+                static constexpr size_t kLaunchScalarBytes = (sizeof...(KernelArgs) + 3) * sizeof(uint32_t);
         std::array<detail::HostBufferView, kLaunchBufferCount> m_buffers{};
         size_t m_buffer_count = 0;
                 std::array<std::byte, kLaunchScalarBytes> m_push_constant_bytes{};
@@ -606,6 +619,24 @@ namespace rllm::vulkan
             return {static_cast<uint32_t>(x), static_cast<uint32_t>(y)};
         }
 
+        template <typename Range3D>
+        inline std::tuple<uint32_t, uint32_t, uint32_t> range_size_3d(const Range3D& range)
+        {
+            const size_t x = to_size(range.middle_size());
+            const size_t y = to_size(range.inner_size());
+            const size_t z = to_size(range.outer_size());
+
+            if (x > static_cast<size_t>(std::numeric_limits<uint32_t>::max()) ||
+                y > static_cast<size_t>(std::numeric_limits<uint32_t>::max()) ||
+                z > static_cast<size_t>(std::numeric_limits<uint32_t>::max()))
+            {
+                LOG_ERROR("Vulkan 3D dispatch size ({}, {}, {}) exceeds uint32_t limits.", x, y, z);
+                std::abort();
+            }
+
+            return {static_cast<uint32_t>(x), static_cast<uint32_t>(y), static_cast<uint32_t>(z)};
+        }
+
         RuntimeContext create_runtime_context();
 
         RuntimeContext& runtime_context();
@@ -637,6 +668,7 @@ namespace rllm::vulkan
 
         dispatch_kernel(
             groups_x,
+            1,
             1,
             std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
             std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
@@ -672,6 +704,7 @@ namespace rllm::vulkan
         dispatch_kernel(
             groups_x,
             groups_y,
+            1,
             std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
             std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
             std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),
@@ -721,6 +754,7 @@ namespace rllm::vulkan
 
         dispatch_kernel(
             groups_x,
+            1,
             1,
             std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
             std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
@@ -773,6 +807,61 @@ namespace rllm::vulkan
         dispatch_kernel(
             groups_x,
             groups_y,
+            1,
+            std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
+            std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
+            std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),
+            m_runtime_buffer_count
+        );
+    }
+
+    template <typename... KernelArgs>
+    template <typename Range3D>
+    inline void ComputeKernel<KernelArgs...>::launch_3d_named(
+        Range3D&& range,
+        std::initializer_list<std::string_view> parameter_names_list,
+        KernelArgs... args
+    )
+    {
+        std::lock_guard<std::mutex> lock(m_launch_mutex);
+
+        if (!std::filesystem::exists(spirv_path()))
+        {
+            LOG_ERROR("Missing generated Vulkan kernel artifact '{}' for kernel '{}'.", spirv_path().string(), name());
+            std::abort();
+        }
+
+        if (parameter_names_list.size() != sizeof...(KernelArgs))
+        {
+            LOG_ERROR(
+                "Kernel '{}' expected {} parameter names, but launch provided {}.",
+                name(),
+                sizeof...(KernelArgs),
+                parameter_names_list.size()
+            );
+            std::abort();
+        }
+
+        std::array<std::string_view, sizeof...(KernelArgs)> parameter_names{};
+        std::copy(parameter_names_list.begin(), parameter_names_list.end(), parameter_names.begin());
+
+        const auto [x_items, y_items, z_items] = detail::range_size_3d(range);
+        const uint32_t groups_x = detail::ceil_div_u32(x_items, local_size_x());
+        const uint32_t groups_y = detail::ceil_div_u32(y_items, local_size_y());
+        const uint32_t groups_z = detail::ceil_div_u32(z_items, local_size_z());
+
+        m_buffer_count = 0;
+        m_push_constant_size = 0;
+        append_named_buffer_views(std::index_sequence_for<KernelArgs...>{}, parameter_names, args...);
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(x_items));
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(y_items));
+        detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, static_cast<int32_t>(z_items));
+        (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), ...);
+
+        dispatch_kernel(
+            groups_x,
+            groups_y,
+            groups_z,
             std::span<const detail::HostBufferView>(m_buffers.data(), m_buffer_count),
             std::span<const std::byte>(m_push_constant_bytes.data(), m_push_constant_size),
             std::span<typename ComputeKernelRuntime::RuntimeBuffer>(m_runtime_buffers.data(), m_runtime_buffers.size()),

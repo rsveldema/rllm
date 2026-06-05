@@ -13,12 +13,16 @@ from typing import Callable
 OFFLOAD_1D_PARAM_MACROS = {"OFFLOAD_PARFOR_1D_PARAM"}
 OFFLOAD_2D_MACROS = {"OFFLOAD_PARFOR_2D"}
 OFFLOAD_2D_PARAM_MACROS = {"OFFLOAD_PARFOR_2D_PARAM"}
+OFFLOAD_3D_PARAM_MACROS = {"OFFLOAD_PARFOR_3D_PARAM"}
+OFFLOAD_3D_TRIANGULAR_PARAM_MACROS = {"OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM"}
 OFFLOAD_2D_TRIANGULAR_PARAM_MACROS = {"OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM"}
 OFFLOAD_2D_UPPER_TRIANGULAR_PARAM_MACROS = {"OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM"}
 OFFLOAD_ALL_MACROS = (
     OFFLOAD_1D_PARAM_MACROS
     | OFFLOAD_2D_MACROS
     | OFFLOAD_2D_PARAM_MACROS
+    | OFFLOAD_3D_PARAM_MACROS
+    | OFFLOAD_3D_TRIANGULAR_PARAM_MACROS
     | OFFLOAD_2D_TRIANGULAR_PARAM_MACROS
     | OFFLOAD_2D_UPPER_TRIANGULAR_PARAM_MACROS
 )
@@ -31,6 +35,7 @@ class LoopContext:
     rel_path: str
     lineno: int
     is_2d: bool
+    is_3d: bool
     vars: list[str]
     range_expr: str
     kernel_guard_expr: str | None
@@ -417,7 +422,7 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
 
     if ctx.backend_namespace == "vulkan":
         kernel_symbol, rel_spv = _vulkan_kernel_symbol_and_rel_spv(ctx.rel_path, ctx.lineno)
-        launch_name = "launch_2d_named" if ctx.is_2d else "launch_1d_named"
+        launch_name = "launch_3d_named" if ctx.is_3d else ("launch_2d_named" if ctx.is_2d else "launch_1d_named")
         extra_param_names = parse_extra_param_names(ctx.extra_params)
         if extra_param_names:
             kernel_template_args = ", ".join(f"decltype(({name}))" for name in extra_param_names)
@@ -442,7 +447,11 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
 
     if ctx.emit_named_kernel:
         kernel_name = f"__rllm_{ctx.backend_namespace}_kernel_{ctx.lineno}"
-        if ctx.is_2d:
+        if ctx.is_3d:
+            lines.append(
+                f"{ctx.indent}auto {kernel_name} = [&](auto {ctx.vars[0]}, auto {ctx.vars[1]}, auto {ctx.vars[2]}) {{"
+            )
+        elif ctx.is_2d:
             lines.append(f"{ctx.indent}auto {kernel_name} = [&](auto {ctx.vars[0]}, auto {ctx.vars[1]}) {{")
         else:
             lines.append(f"{ctx.indent}auto {kernel_name} = [&](auto {ctx.vars[0]}) {{")
@@ -450,7 +459,11 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
         lines.append(f"{ctx.indent}}};")
         launch_arg = kernel_name
     else:
-        if ctx.is_2d:
+        if ctx.is_3d:
+            lines.append(
+                f"{ctx.indent}rllm::{ctx.backend_namespace}::launch_kernel_3d("
+            )
+        elif ctx.is_2d:
             lines.append(
                 f"{ctx.indent}rllm::{ctx.backend_namespace}::launch_kernel_2d("
             )
@@ -769,6 +782,7 @@ def transform_source(
                     rel_path=rel_path,
                     lineno=lineno,
                     is_2d=False,
+                    is_3d=False,
                     vars=[args[0]],
                     range_expr=apply_symbol_values(args[1], symbol_values),
                     kernel_guard_expr=None,
@@ -792,6 +806,7 @@ def transform_source(
                     rel_path=rel_path,
                     lineno=lineno,
                     is_2d=True,
+                    is_3d=False,
                     vars=[args[0], args[1]],
                     range_expr=apply_symbol_values(", ".join(args[2:]), symbol_values),
                     kernel_guard_expr=None,
@@ -821,10 +836,88 @@ def transform_source(
                     rel_path=rel_path,
                     lineno=lineno,
                     is_2d=True,
+                    is_3d=False,
                     vars=[args[0], args[1]],
                     range_expr=apply_symbol_values(args[2], symbol_values),
                     kernel_guard_expr=None,
                     extra_params=", ".join(args[3:]),
+                    extra_param_types=extra_param_types,
+                    offload_param_lines=list(active_offload_param_lines),
+                    body_lines=[],
+                    emit_named_kernel=emit_named_kernels,
+                    shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
+                )
+            )
+            pending_shared_vars = None
+            changed = True
+            continue
+
+        if macro in OFFLOAD_3D_PARAM_MACROS and len(args) >= 5:
+            extra_param_names = parse_extra_param_names(", ".join(args[4:]))
+            extra_param_types = {
+                name: active_offload_param_types[name]
+                for name in extra_param_names
+                if name in active_offload_param_types
+            }
+            loop_stack.append(
+                LoopContext(
+                    indent=indent,
+                    backend_namespace=backend_namespace,
+                    rel_path=rel_path,
+                    lineno=lineno,
+                    is_2d=False,
+                    is_3d=True,
+                    vars=[args[0], args[1], args[2]],
+                    range_expr=apply_symbol_values(args[3], symbol_values),
+                    kernel_guard_expr=None,
+                    extra_params=", ".join(args[4:]),
+                    extra_param_types=extra_param_types,
+                    offload_param_lines=list(active_offload_param_lines),
+                    body_lines=[],
+                    emit_named_kernel=emit_named_kernels,
+                    shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
+                )
+            )
+            pending_shared_vars = None
+            changed = True
+            continue
+
+        if macro in OFFLOAD_3D_TRIANGULAR_PARAM_MACROS and len(args) >= 6:
+            extra_param_names = parse_extra_param_names(", ".join(args[5:]))
+            head_bound_expr = apply_symbol_values(args[3], symbol_values)
+            seq_bound_expr = apply_symbol_values(args[4], symbol_values)
+            head_bound_param_name = None if "::" in args[3] else parse_bound_param_name(args[3])
+            seq_bound_param_name = None if "::" in args[4] else parse_bound_param_name(args[4])
+            for bound_param_name in (head_bound_param_name, seq_bound_param_name):
+                if bound_param_name and bound_param_name not in extra_param_names:
+                    extra_param_names.append(bound_param_name)
+            extra_param_types = {
+                name: active_offload_param_types[name]
+                for name in extra_param_names
+                if name in active_offload_param_types
+            }
+            guard_terms = [f"{args[2]} > {args[1]}"]
+            if head_bound_param_name:
+                guard_terms.append(f"{args[0]} >= int({head_bound_param_name})")
+            if seq_bound_param_name:
+                guard_terms.append(f"{args[1]} >= int({seq_bound_param_name})")
+                guard_terms.append(f"{args[2]} >= int({seq_bound_param_name})")
+            loop_stack.append(
+                LoopContext(
+                    indent=indent,
+                    backend_namespace=backend_namespace,
+                    rel_path=rel_path,
+                    lineno=lineno,
+                    is_2d=False,
+                    is_3d=True,
+                    vars=[args[0], args[1], args[2]],
+                    range_expr=(
+                        f"rllm::enum_iterator3D<decltype({head_bound_expr}), "
+                        f"decltype({seq_bound_expr}), decltype({seq_bound_expr})>"
+                        f"({head_bound_expr}, {seq_bound_expr}, {seq_bound_expr})"
+                    ),
+                    kernel_guard_expr=" || ".join(guard_terms),
+                    extra_params=", ".join(extra_param_names),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
                     body_lines=[],
@@ -861,6 +954,7 @@ def transform_source(
                     rel_path=rel_path,
                     lineno=lineno,
                     is_2d=True,
+                    is_3d=False,
                     vars=[args[0], args[1]],
                     range_expr=f"rllm::enum_iterator2D<decltype({bound_expr}), decltype({bound_expr})>({bound_expr})",
                     kernel_guard_expr=guard_expr,
@@ -901,6 +995,7 @@ def transform_source(
                     rel_path=rel_path,
                     lineno=lineno,
                     is_2d=True,
+                    is_3d=False,
                     vars=[args[0], args[1]],
                     range_expr=f"rllm::enum_iterator2D<decltype({bound_expr}), decltype({bound_expr})>({bound_expr})",
                     kernel_guard_expr=guard_expr,

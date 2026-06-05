@@ -377,13 +377,14 @@ namespace rllm::vulkan
 	void ComputeKernelRuntime::dispatch_kernel(
 		uint32_t groups_x,
 		uint32_t groups_y,
+		uint32_t groups_z,
 		std::span<const detail::HostBufferView> buffers,
 		std::span<const std::byte> push_constants,
 		std::span<ComputeKernelRuntime::RuntimeBuffer> runtime_buffers,
 		size_t& runtime_buffer_count
 	)
 	{
-		if (groups_x == 0 || groups_y == 0)
+		if (groups_x == 0 || groups_y == 0 || groups_z == 0)
 		{
 			return;
 		}
@@ -912,7 +913,7 @@ namespace rllm::vulkan
 				nullptr
 			);
 		}
-		vkCmdDispatch(m_command_buffer, groups_x, groups_y, 1);
+		vkCmdDispatch(m_command_buffer, groups_x, groups_y, groups_z);
 
 		if (runtime_buffer_count > 0)
 		{

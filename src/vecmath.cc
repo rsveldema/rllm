@@ -684,46 +684,6 @@ namespace rllm
         ENDFOR
     }
 
-    void attention_scores_for_head(
-        // OFFLOAD_PARAMETERS(scores_mat, Q, K, h_start, h_end, head_scale, seq_len)
-        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K,
-        int h_start,
-        int h_end,
-        float head_scale,
-        PositionIndex seq_len
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<PositionIndex, PositionIndex>(seq_len, seq_len);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (scores_mat, Q, K, h_start, h_end, head_scale, seq_len))
-        float dot = 0.f;
-        RLLM_OMP_SIMD_REDUCTION_PLUS(dot)
-        for (int d = h_start; d < h_end; ++d)
-            dot += Q[i, d] * K[j, d];
-        scores_mat[i, j] = dot * head_scale;
-        ENDFOR
-    }
-
-    void attention_values_for_head(
-        // OFFLOAD_PARAMETERS(attn_concat, scores_mat, V, h_start, h_end, seq_len)
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& attn_concat,
-        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V,
-        int h_start,
-        int h_end,
-        PositionIndex seq_len
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (attn_concat, scores_mat, V, h_start, h_end))
-        const float w = scores_mat[i, j];
-        for (int d = h_start; d < h_end; ++d)
-            attn_concat[i, d] += w * V[j, d];
-        ENDFOR
-    }
-
     void element_wise_sum(
         // OFFLOAD_PARAMETERS(lhs, rhs, dst)
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& lhs,

@@ -30,6 +30,7 @@ _CSTYLE_INT_CAST_RE = re.compile(r"\(\s*int\s*\)\s*\(")
 _QUALIFIED_GLSL_SCALAR_RE = re.compile(r"\b(?:[A-Za-z_]\w*::)+(float|int|uint)\b")
 _ATOMIC_INC_CALL_RE = re.compile(r"\bATOMIC_INC\s*\((.+)\)\s*;\s*$")
 _OVERFLOW_CHECK_ADD_RE = re.compile(r"^\s*OVERFLOW_CHECK_ADD\s*\([^;]*\)\s*;?\s*$")
+_COMMA_INDEX3_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
 _COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
 # Scalar kernel args are passed via push constants, so we only match by-value
 # float aliases here and leave reference/pointer forms on the buffer path.
@@ -70,6 +71,8 @@ def _sanitize_kernel_line_for_glsl(line: str) -> str:
         target = atomic_inc.group(1).strip()
         line = _ATOMIC_INC_CALL_RE.sub(f"{target}++;", line)
     # GLSL array indexing is nested: a[i][j], not a[i, j].
+    while _COMMA_INDEX3_RE.search(line):
+        line = _COMMA_INDEX3_RE.sub(r"[\1][\2][\3]", line)
     while _COMMA_INDEX_RE.search(line):
         line = _COMMA_INDEX_RE.sub(r"[\1][\2]", line)
     return line
@@ -90,6 +93,7 @@ class VulkanKernelSpec:
     rel_path: str
     lineno: int
     is_2d: bool
+    is_3d: bool
     vars: list[str]
     kernel_guard_expr: str | None
     extra_params: str | None
@@ -108,6 +112,9 @@ class MatrixViewSpec:
     cols: int
     is_const: bool
     flat_len: int
+    levels: int | None = None
+    dynamic_rows_name: str | None = None
+    dynamic_cols_name: str | None = None
 
 
 @dataclass
@@ -132,6 +139,9 @@ class VulkanConfig:
 
 _MATRIX_TYPE_RE = re.compile(
     r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:fixed_size_matrix|flexible_rows_matrix|flexible_cols_matrix|flexible_rows_cols_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
+)
+_MATRIX_3D_TYPE_RE = re.compile(
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*flexible_rows_cols_levels_matrix\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<levels>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _STD_VECTOR_ATOMIC_INT_RE = re.compile(
     r"^(?P<const>const\s+)?std::vector\s*<\s*std::atomic\s*<\s*int\s*>\s*>\s*(?P<ref>[&*])?\s*$"
@@ -220,6 +230,25 @@ def _map_cpp_extra_param_to_vulkan(
     t = cpp_type.strip()
     core_type = re.sub(r"^const\s+", "", t)
     core_type = re.sub(r"\s*[&*]\s*$", "", core_type).strip()
+    matrix_3d_match = _MATRIX_3D_TYPE_RE.match(t)
+    if matrix_3d_match:
+        glsl_scalar = _map_cpp_buffer_scalar_to_glsl(matrix_3d_match.group("scalar"))
+        levels_max = _resolve_enum_max(matrix_3d_match.group("levels"), symbol_values)
+        rows_max = _resolve_enum_max(matrix_3d_match.group("rows"), symbol_values)
+        cols_max = _resolve_enum_max(matrix_3d_match.group("cols"), symbol_values)
+        if glsl_scalar is not None and levels_max is not None and rows_max is not None and cols_max is not None:
+            is_const = matrix_3d_match.group("const") is not None
+            flat_len = levels_max * rows_max * cols_max
+            return "", "", MatrixViewSpec(
+                name=name,
+                glsl_scalar=glsl_scalar,
+                rows=rows_max,
+                cols=cols_max,
+                is_const=is_const,
+                flat_len=flat_len,
+                levels=levels_max,
+            ), None, None
+
     matrix_match = _MATRIX_TYPE_RE.match(t)
     if matrix_match:
         glsl_scalar = _map_cpp_buffer_scalar_to_glsl(matrix_match.group("scalar"))
@@ -313,6 +342,22 @@ def _map_cpp_extra_param_to_vulkan(
 def _rewrite_matrix_view_indexing(line: str, specs: dict[str, MatrixViewSpec]) -> str:
     out = line
     for name, spec in specs.items():
+        if spec.levels is not None:
+            pattern = re.compile(
+                rf"\b{re.escape(name)}\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]"
+            )
+
+            def repl3(match: re.Match[str]) -> str:
+                level = match.group(1).strip()
+                row = match.group(2).strip()
+                col = match.group(3).strip()
+                row_stride = spec.dynamic_rows_name or str(spec.rows)
+                col_stride = spec.dynamic_cols_name or str(spec.cols)
+                return f"{name}[((({level}) * {row_stride}) + ({row})) * {col_stride} + ({col})]"
+
+            out = pattern.sub(repl3, out)
+            continue
+
         pattern = re.compile(
             rf"\b{re.escape(name)}\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]"
         )
@@ -436,8 +481,9 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
                 matrix_view_specs[name] = matrix_view_spec
                 readonly = "readonly " if matrix_view_spec.is_const else ""
                 block_name = f"RllmBuffer_{name}"
+                array_extent = "" if matrix_view_spec.flat_len >= (1 << 31) else str(matrix_view_spec.flat_len)
                 ssbo_decls.append(
-                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ {matrix_view_spec.glsl_scalar} {name}[{matrix_view_spec.flat_len}]; }};"
+                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ {matrix_view_spec.glsl_scalar} {name}[{array_extent}]; }};"
                 )
                 ssbo_binding += 1
             elif buffer_view_spec is not None:
@@ -462,12 +508,27 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
             extra_setup_decls.append(f"int {name} = 0;")
     param_list = ", ".join(typed_params)
 
+    for matrix_name, matrix_view_spec in matrix_view_specs.items():
+        rows_name = f"{matrix_name}_rows"
+        cols_name = f"{matrix_name}_cols"
+        if rows_name in extra_param_names:
+            matrix_view_spec.dynamic_rows_name = rows_name
+        if cols_name in extra_param_names:
+            matrix_view_spec.dynamic_cols_name = cols_name
+
     # Re-render body once matrix view specs are known.
     body_text = "\n".join(
         f"    {_rewrite_matrix_view_indexing(line.lstrip(), matrix_view_specs)}" if line.strip() else ""
         for line in filtered_body_lines
     )
-    if spec.is_2d and len(spec.vars) >= 2:
+    if spec.is_3d and len(spec.vars) >= 3:
+        arg_setup = (
+            f"    int {spec.vars[0]} = int(gl_GlobalInvocationID.z);\n"
+            f"    int {spec.vars[1]} = int(gl_GlobalInvocationID.x);\n"
+            f"    int {spec.vars[2]} = int(gl_GlobalInvocationID.y);"
+        )
+        call_arg_names = [spec.vars[0], spec.vars[1], spec.vars[2]]
+    elif spec.is_2d and len(spec.vars) >= 2:
         if spec.kernel_guard_expr is not None:
             arg_setup = (
                 f"    int {spec.vars[0]} = int(gl_GlobalInvocationID.y);\n"
@@ -494,7 +555,13 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
             arg_setup = "\n".join(extra_arg_setup_lines)
     guard_terms: list[str] = []
     if not spec.shared_vars:
-        if spec.is_2d and len(spec.vars) >= 2:
+        if spec.is_3d and len(spec.vars) >= 3:
+            guard_terms.append(
+                f"{spec.vars[1]} >= rllm_push.rllm_bound_x || "
+                f"{spec.vars[2]} >= rllm_push.rllm_bound_y || "
+                f"{spec.vars[0]} >= rllm_push.rllm_bound_z"
+            )
+        elif spec.is_2d and len(spec.vars) >= 2:
             guard_terms.append(f"{spec.vars[0]} >= rllm_push.rllm_bound_x || {spec.vars[1]} >= rllm_push.rllm_bound_y")
         elif spec.vars:
             guard_terms.append(f"{spec.vars[0]} >= rllm_push.rllm_bound_x")
@@ -513,8 +580,8 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
         ssbo_block = ssbo_block + "\n\n"
     
     local_size_x = config.workgroup_size_x
-    local_size_y = config.workgroup_size_y if spec.is_2d else 1
-    local_size_z = config.workgroup_size_z if spec.is_2d else 1
+    local_size_y = config.workgroup_size_y if (spec.is_2d or spec.is_3d) else 1
+    local_size_z = config.workgroup_size_z if spec.is_3d else (config.workgroup_size_z if spec.is_2d else 1)
 
     # Generate shared variable declarations. GLSL requires workgroup storage to
     # live at global scope, not inside function scope.
@@ -538,6 +605,8 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
         "    int rllm_bound_x;",
         "    int rllm_bound_y;",
     ]
+    if spec.is_3d:
+        push_constant_fields.append("    int rllm_bound_z;")
     if scalar_param_specs:
         # Vulkan gives us a compact scalar-argument path without inventing a
         # one-off SSBO for values like learning rates.
@@ -650,6 +719,7 @@ def main() -> int:
                 rel_path=ctx.rel_path,
                 lineno=ctx.lineno,
                 is_2d=ctx.is_2d,
+                is_3d=ctx.is_3d,
                 vars=list(ctx.vars),
                 kernel_guard_expr=ctx.kernel_guard_expr,
                 extra_params=ctx.extra_params,

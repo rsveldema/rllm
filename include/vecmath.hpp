@@ -193,25 +193,6 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     );
 
-    void attention_scores_for_head(
-        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K,
-        int h_start,
-        int h_end,
-        float head_scale,
-        PositionIndex seq_len
-    );
-
-    void attention_values_for_head(
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& attn_concat,
-        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V,
-        int h_start,
-        int h_end,
-        PositionIndex seq_len
-    );
-
     void element_wise_sum(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& lhs,
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& rhs,

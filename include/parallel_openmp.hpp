@@ -14,6 +14,8 @@ namespace parallel {
                                 for (auto v : (__VA_ARGS__)) {
 #define PARFOR_2D(v1, v2, ...)  _Pragma("omp parallel for schedule(static)") \
                                 for (auto [v1, v2] : (__VA_ARGS__)) {
+#define PARFOR_3D(v1, v2, v3, ...)  _Pragma("omp parallel for schedule(static)") \
+                                    for (auto [v1, v2, v3] : (__VA_ARGS__)) {
 // Parallelises the lower-triangular iteration space { (v1,v2) | 0 <= v2 <= v1 < N }.
 // Parallelism is over the outer (v1) dimension; v2 iterates sequentially inside
 // each parallel task, so accumulations into [v1,...] are race-free.
@@ -24,6 +26,15 @@ namespace parallel {
         for (long long _tri_j_ = 0; _tri_j_ <= _tri_i_; ++_tri_j_) { \
             const auto v1 = static_cast<decltype(N)>(_tri_i_); \
             const auto v2 = static_cast<decltype(N)>(_tri_j_);
+#define PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2) \
+    _Pragma("omp parallel for schedule(dynamic)") \
+    for (long long _tri3_flat_ = 0, _tri3_hn_ = static_cast<long long>(N1), _tri3_n_ = static_cast<long long>(N2); \
+         _tri3_flat_ < _tri3_hn_ * _tri3_n_; \
+         ++_tri3_flat_) \
+        for (long long _tri3_j_ = 0; _tri3_j_ <= (_tri3_flat_ % _tri3_n_); ++_tri3_j_) { \
+            const auto v1 = static_cast<decltype(N1)>(_tri3_flat_ / _tri3_n_); \
+            const auto v2 = static_cast<decltype(N2)>(_tri3_flat_ % _tri3_n_); \
+            const auto v3 = static_cast<decltype(N2)>(_tri3_j_);
 // Parallelises the upper-triangular iteration space { (v1,v2) | 0 <= v1 <= v2 < N }.
 // Parallelism is over the outer (v1) dimension; v2 iterates sequentially inside
 // each parallel task, so accumulations into [v1,...] are race-free.
@@ -50,6 +61,8 @@ namespace parallel {
 // macros; the distinct name marks the intent without changing behaviour.
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) PARFOR_3D(v1, v2, v3, N)
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
 #define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
 #define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 
@@ -58,6 +71,8 @@ namespace parallel {
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) PARFOR_3D(v1, v2, v3, N)
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
 #define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
 #define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 #elif defined(USE_VULKAN_OFFLOAD)
@@ -65,12 +80,16 @@ namespace parallel {
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) PARFOR_3D(v1, v2, v3, N)
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
 #define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
 #define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 #else
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) PARFOR_3D(v1, v2, v3, N)
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
 #define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
 #define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 #endif
