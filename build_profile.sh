@@ -6,10 +6,11 @@ VULKAN_BUILD_DIR="${VULKAN_BUILD_DIR:-build_profile_vulkan}"
 TRAIN_DIR="${TRAIN_DIR:-profile_training_data}"
 OUTPUT_MODEL_CPU="${OUTPUT_MODEL_CPU:-/tmp/rllm-profile-small-cpu.json}"
 OUTPUT_MODEL_VULKAN="${OUTPUT_MODEL_VULKAN:-/tmp/rllm-profile-small-vulkan.json}"
-LAYERS="${LAYERS:-1}"
+LAYERS="${LAYERS:-4}"
 EPOCHS="${EPOCHS:-3}"
 PARALLEL_BACKEND="${PARALLEL_BACKEND:-fastfork}"
 ALLOW_SOFTWARE_VULKAN_PROFILE="${ALLOW_SOFTWARE_VULKAN_PROFILE:-0}"
+export RLLM_HOST_POOL_BYTES="${RLLM_HOST_POOL_BYTES:-2147483648}"
 
 if [[ ! -d "$TRAIN_DIR" ]]; then
     echo "Training directory '$TRAIN_DIR' does not exist. Set TRAIN_DIR to an existing folder."

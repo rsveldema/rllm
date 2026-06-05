@@ -23,38 +23,48 @@ namespace rllm
         static constexpr size_t CAPACITY = static_cast<size_t>(LengthType::MAX);
 
         fixed_size_vector()
-            : m_data(CAPACITY)
+            : m_data(*IMemorySpace::get_instance(IMemorySpaceType::HOST), 1)
+            , m_capacity(1)
         {}
 
         fixed_size_vector(const fixed_size_vector& other)
-            : m_data(other.m_data)
+            : m_data(*IMemorySpace::get_instance(IMemorySpaceType::HOST), std::max<size_t>(1, static_cast<size_t>(other.len)))
             , len(other.len)
+            , m_capacity(other.m_data.size())
         {
+            m_data = other.m_data;
+            m_capacity = m_data.size();
         }
 
         fixed_size_vector& operator=(const fixed_size_vector& other)
         {
             if (this != &other)
             {
+                ensure_capacity(static_cast<size_t>(other.len));
                 m_data = other.m_data;
                 len = other.len;
+                m_capacity = m_data.size();
             }
             return *this;
         }
 
         fixed_size_vector(fixed_size_vector&& other)
-            : m_data(CAPACITY)
+            : m_data(*IMemorySpace::get_instance(IMemorySpaceType::HOST), std::max<size_t>(1, static_cast<size_t>(other.len)))
             , len(other.len)
+            , m_capacity(other.m_data.size())
         {
             m_data = other.m_data;
+            m_capacity = m_data.size();
         }
 
         fixed_size_vector& operator=(fixed_size_vector&& other)
         {
             if (this != &other)
             {
+                ensure_capacity(static_cast<size_t>(other.len));
                 m_data = other.m_data;
                 len = other.len;
+                m_capacity = m_data.size();
             }
             return *this;
         }
@@ -64,6 +74,7 @@ namespace rllm
         void set_size(LengthType new_size)
         {
             assert(new_size <= LengthType::MAX);
+            ensure_capacity(static_cast<size_t>(new_size));
             len = new_size;
         }
 
@@ -120,6 +131,7 @@ namespace rllm
         void push_back(T value)
         {
             assert(len < LengthType::MAX);
+            ensure_capacity(static_cast<size_t>(len) + 1);
             m_data.get()[static_cast<size_t>(len)] = value;
             len = static_cast<LengthType>(static_cast<size_t>(len) + 1);
         }
@@ -159,40 +171,6 @@ namespace rllm
         T* raw_staging_data() const
         {
             return m_data.raw_staging_data();
-        }
-
-#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        void* raw_offload_data() const
-        {
-            return m_data.raw_offload_data();
-        }
-#endif
-
-#if defined(USE_VULKAN_OFFLOAD)
-        VulkanRuntimeBuffer& vulkan_runtime_buffer() const
-        {
-            return m_data.vulkan_runtime_buffer();
-        }
-#endif
-
-        DeviceMemoryOwner device_memory_owner() const
-        {
-            return m_data.device_memory_owner();
-        }
-
-        void set_pending_flush(std::function<void()> flush_fn)
-        {
-            m_data.set_pending_flush(std::move(flush_fn));
-        }
-
-        void mark_device_latest()
-        {
-            m_data.mark_device_latest();
-        }
-
-        bool needs_offload_sync() const
-        {
-            return m_data.needs_offload_sync();
         }
 
         size_t storage_size_bytes() const
@@ -238,7 +216,21 @@ namespace rllm
         }
 
       private:
+        void ensure_capacity(size_t requested)
+        {
+            requested = std::max<size_t>(1, requested);
+            if (requested <= m_capacity)
+                return;
+
+            size_t new_capacity = m_capacity;
+            while (new_capacity < requested)
+                new_capacity = std::min(CAPACITY, new_capacity * 2);
+            m_data.resize(new_capacity);
+            m_capacity = new_capacity;
+        }
+
         DevicePointer<T> m_data;
         LengthType len = LengthType::START;
+        size_t m_capacity;
     };
 } // namespace rllm

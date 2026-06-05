@@ -210,6 +210,9 @@ namespace rllm
             flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_gate_pre,
             flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_up_pre
         );
+
+        void forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len);
+        void backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
     };
 
 } // namespace rllm

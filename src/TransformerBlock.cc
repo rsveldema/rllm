@@ -252,32 +252,10 @@ namespace rllm
 
     // ── forward pass ──────────────────────────────────────────────────────────
 
-    void TransformerBlock::forward(
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h,
-        PositionIndex seq_len
-    )
+    void TransformerBlock::forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len)
     {
         constexpr int Dh = static_cast<int>(HeadDimension::MAX);
-
-        if (!m_fwd_ws || m_fwd_ws->seq_len != seq_len)
-            m_fwd_ws = std::make_unique<ForwardWorkspace>(seq_len);
-        auto& ws = *m_fwd_ws;
-
-        ws.h_in = h;
-
-        // ── 1. Pre-norm (attention) ──────────────────────────────────────────
-        rms_norm(h, ws.h_norm_attn);
-
-        // ── 2. Q / K / V projections ─────────────────────────────────────────
-        matmul_ABt_3_matrix_muls(
-            ws.h_norm_attn, W_q, ws.Q,
-            W_k, ws.K,
-            W_v, ws.V
-        );
-
-        // ── 3. Multi-head causal self-attention ──────────────────────────────
-        const float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
-        ws.attn_concat.zero();
+        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
 
         PARFOR(hi, enum_iterator<HeadsIndex>())
         const auto hi_int = static_cast<size_t>(hi);
@@ -295,6 +273,32 @@ namespace rllm
         // attn_concat[i, d] = sum_j scores_mat[i,j] * V[j, d]  (causal: j ≤ i)
         attention_values_for_head(ws.attn_concat, scores_mat, ws.V, h_start, h_end, seq_len);
         ENDFOR
+    }
+
+    void TransformerBlock::forward(
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h,
+        PositionIndex seq_len
+    )
+    {
+        if (!m_fwd_ws || m_fwd_ws->seq_len != seq_len)
+            m_fwd_ws = std::make_unique<ForwardWorkspace>(seq_len);
+        auto& ws = *m_fwd_ws;
+
+        ws.h_in = h;
+
+        // ── 1. Pre-norm (attention) ──────────────────────────────────────────
+        rms_norm(h, ws.h_norm_attn);
+
+        // ── 2. Q / K / V projections ─────────────────────────────────────────
+        matmul_ABt_3_matrix_muls(
+            ws.h_norm_attn, W_q, ws.Q,
+            W_k, ws.K,
+            W_v, ws.V
+        );
+
+        // ── 3. Multi-head causal self-attention ──────────────────────────────
+        ws.attn_concat.zero();
+        forward_attention_heads(ws, seq_len);
 
         // ── 4. Output projection + residual ──────────────────────────────────
         matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
@@ -399,6 +403,57 @@ namespace rllm
         ENDFOR
     }
 
+    void TransformerBlock::backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    {
+        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
+
+        PARFOR(hi, enum_iterator<HeadsIndex>())
+        {
+            const auto hi_int = static_cast<size_t>(hi);
+            // Each head owns its own d_scores_h / d_raw_h so parallel heads never conflict.
+            // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, d_V, d_Q, d_K, d_attn_concat, Q, K, V, scores_mat, hStart, hEnd,
+            // head_scale, seq_len)
+            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h = ws.d_scores[hi];
+            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws.d_raw[hi];
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_V = ws.d_V;
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_Q = ws.d_Q;
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K = ws.d_K;
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat =
+                ws.d_attn_concat;
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = fwd.K;
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V = fwd.V;
+            const PositionIndex seq_len = fwd.seq_len;
+            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat = fwd.attn_w[hi];
+            EmbeddingDimension hStart =
+                static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
+            EmbeddingDimension hEnd =
+                static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
+            const float head_scale = scale;
+            // END_OFFLOAD_PARAMETERS
+            d_scores_h.set_size(fwd.seq_len, fwd.seq_len);
+            d_raw_h.set_size(fwd.seq_len, fwd.seq_len);
+            d_raw_h.zero();
+
+            // d_V_h[j, d] += sum_i scores_mat[i,j] * d_attn_concat[i, d]
+            // Safe across heads: each head writes its own [hStart, hEnd) columns of d_V.
+            accumulate_attention_dv_for_head(d_V, scores_mat, d_attn_concat, hStart, hEnd, seq_len);
+
+            // d_scores_h[i,j] = d_attn_concat[i, d] · V[j, d]
+            // Safe for offload because each triangular cell writes a unique output element.
+            compute_attention_dscores_for_head(d_scores_h, d_attn_concat, V, hStart, hEnd, seq_len);
+
+            // Backward through causal softmax
+            softmax_backward(d_scores_h, scores_mat, d_raw_h, seq_len);
+
+            // d_Q and d_K are triangular reductions over j/i respectively.
+            // Offload per output cell to avoid cross-thread accumulation races.
+            accumulate_attention_dq_for_head(d_Q, d_raw_h, K, hStart, head_scale, seq_len);
+            accumulate_attention_dk_for_head(d_K, d_raw_h, Q, hStart, head_scale, seq_len);
+        }
+        ENDFOR;
+    }
+
     void TransformerBlock::backward(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din,
@@ -450,53 +505,7 @@ namespace rllm
         matmul_AtB_acc(ws->d_h_mid, fwd.attn_concat, ws->dW_o, fwd.seq_len);
 
         // Per-head backward
-        constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
-
-        PARFOR(hi, enum_iterator<HeadsIndex>())
-        {
-            const auto hi_int = static_cast<size_t>(hi);
-            // Each head owns its own d_scores_h / d_raw_h so parallel heads never conflict.
-            // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, d_V, d_Q, d_K, d_attn_concat, Q, K, V, scores_mat, hStart, hEnd,
-            // head_scale, seq_len)
-            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h = ws->d_scores[hi];
-            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws->d_raw[hi];
-            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_V = ws->d_V;
-            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_Q = ws->d_Q;
-            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K = ws->d_K;
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat =
-                ws->d_attn_concat;
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = fwd.K;
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V = fwd.V;
-            const PositionIndex seq_len = fwd.seq_len;
-            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& scores_mat = fwd.attn_w[hi];
-            EmbeddingDimension hStart =
-                static_cast<EmbeddingDimension>(hi_int * static_cast<size_t>(HeadDimension::MAX));
-            EmbeddingDimension hEnd =
-                static_cast<EmbeddingDimension>((hi_int + 1) * static_cast<size_t>(HeadDimension::MAX));
-            const float head_scale = scale;
-            // END_OFFLOAD_PARAMETERS
-            d_scores_h.set_size(fwd.seq_len, fwd.seq_len);
-            d_raw_h.set_size(fwd.seq_len, fwd.seq_len);
-            d_raw_h.zero();
-
-            // d_V_h[j, d] += sum_i scores_mat[i,j] * d_attn_concat[i, d]
-            // Safe across heads: each head writes its own [hStart, hEnd) columns of d_V.
-            accumulate_attention_dv_for_head(d_V, scores_mat, d_attn_concat, hStart, hEnd, seq_len);
-
-            // d_scores_h[i,j] = d_attn_concat[i, d] · V[j, d]
-            // Safe for offload because each triangular cell writes a unique output element.
-            compute_attention_dscores_for_head(d_scores_h, d_attn_concat, V, hStart, hEnd, seq_len);
-
-            // Backward through causal softmax
-            softmax_backward(d_scores_h, scores_mat, d_raw_h, seq_len);
-
-            // d_Q and d_K are triangular reductions over j/i respectively.
-            // Offload per output cell to avoid cross-thread accumulation races.
-            accumulate_attention_dq_for_head(d_Q, d_raw_h, K, hStart, head_scale, seq_len);
-            accumulate_attention_dk_for_head(d_K, d_raw_h, Q, hStart, head_scale, seq_len);
-        }
-        ENDFOR;
+        backward_attention_heads(*ws, fwd);
 
         // Weight gradients for W_q, W_k, W_v
         matmul_AtB_acc_3_matrix(

@@ -15,7 +15,8 @@ using VmaAllocation = VmaAllocation_T*;
 class VulkanMemorySpace final : public IMemorySpace
 {
 public:
-    static constexpr size_t DEFAULT_POOL_BYTES = 512ULL * 1024ULL * 1024ULL;
+    static constexpr size_t GIGABYTE = 1024LL * 1024ULL * 1024ULL;
+    static constexpr size_t DEFAULT_POOL_BYTES = 4ULL * GIGABYTE;
     static constexpr const char* POOL_BYTES_ENV = "RLLM_VULKAN_POOL_BYTES";
 
     struct TransferContext

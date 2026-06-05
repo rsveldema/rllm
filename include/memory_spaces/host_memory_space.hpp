@@ -1,8 +1,12 @@
 #pragma once
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include <IMemorySpace.hpp>
@@ -11,17 +15,18 @@ class HostMemorySpace final : public IMemorySpace
 {
 public:
     static constexpr size_t DEFAULT_POOL_BYTES = 256ULL * 1024ULL * 1024ULL;
+    static constexpr const char* POOL_BYTES_ENV = "RLLM_HOST_POOL_BYTES";
 
     explicit HostMemorySpace(size_t pool_bytes = DEFAULT_POOL_BYTES)
-        : storage_(pool_bytes)
+        : storage_(effective_pool_bytes(pool_bytes))
         , staging_base_(storage_.data())
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        , offload_base_(storage_.data() + (pool_bytes / 2))
-        , staging_size_(pool_bytes / 2)
-        , offload_size_(pool_bytes / 2)
+        , offload_base_(storage_.data() + (storage_.size() / 2))
+        , staging_size_(storage_.size() / 2)
+        , offload_size_(storage_.size() / 2)
 #else
         , offload_base_(storage_.data())
-        , staging_size_(pool_bytes)
+        , staging_size_(storage_.size())
         , offload_size_(0)
 #endif
         , staging_offset_(0)
@@ -112,6 +117,25 @@ public:
     }
 
 private:
+    static size_t effective_pool_bytes(size_t default_pool_bytes)
+    {
+        const char* value = std::getenv(POOL_BYTES_ENV);
+        if (value == nullptr || *value == '\0')
+            return default_pool_bytes;
+
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long long parsed = std::strtoull(value, &end, 10);
+        if (errno != 0 || end == value || *end != '\0' || parsed == 0 ||
+            parsed > static_cast<unsigned long long>(std::numeric_limits<size_t>::max()))
+        {
+            std::fprintf(stderr, "Invalid %s='%s'. Expected a positive byte count.\n", POOL_BYTES_ENV, value);
+            std::abort();
+        }
+
+        return static_cast<size_t>(parsed);
+    }
+
     std::vector<std::byte> storage_;
     std::byte* staging_base_ = nullptr;
     std::byte* offload_base_ = nullptr;

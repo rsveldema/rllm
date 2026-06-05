@@ -135,7 +135,7 @@ public:
     }
 
     DevicePointer(const DevicePointer& other)
-        : m_memory_space(IMemorySpace::get_instance())
+        : m_memory_space(other.m_memory_space != nullptr ? other.m_memory_space : IMemorySpace::get_instance())
         , m_count(other.m_count)
         , m_bytes(other.m_bytes)
     {
@@ -311,12 +311,19 @@ public:
         if (num_elements == m_count && m_staging_ptr != nullptr)
             return;
 
-        release_internal();
-        m_memory_space = IMemorySpace::get_instance();
-        m_count = num_elements;
-        m_bytes = sizeof(T) * num_elements;
-        allocate_internal();
-        zero();
+        IMemorySpace* target_memory_space = m_memory_space != nullptr ? m_memory_space : IMemorySpace::get_instance();
+        DevicePointer resized(*target_memory_space, num_elements);
+        const size_t copy_count = std::min(m_count, num_elements);
+        if (m_staging_ptr != nullptr && copy_count > 0)
+        {
+            ensure_host_data();
+            std::memcpy(resized.m_staging_ptr, m_staging_ptr, copy_count * sizeof(T));
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+            resized.m_memory_owner = DeviceMemoryOwner::ON_HOST;
+            resized.m_host_access_fast_path.store(true, std::memory_order_release);
+#endif
+        }
+        *this = std::move(resized);
     }
 
     T* data()
@@ -577,7 +584,7 @@ private:
         }
 
         release_internal();
-        m_memory_space = IMemorySpace::get_instance();
+        m_memory_space = other.m_memory_space != nullptr ? other.m_memory_space : IMemorySpace::get_instance();
         m_count = other.m_count;
         m_bytes = other.m_bytes;
         allocate_internal();

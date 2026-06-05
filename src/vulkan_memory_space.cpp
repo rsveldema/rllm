@@ -112,16 +112,34 @@ namespace
         alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VmaAllocationInfo allocation_info{};
-        if (vmaCreateBuffer(allocator, &buffer_info, &alloc_info, &buffer, &allocation, &allocation_info) != VK_SUCCESS)
+        const VkResult create_result = vmaCreateBuffer(allocator, &buffer_info, &alloc_info, &buffer, &allocation, &allocation_info);
+        if (create_result != VK_SUCCESS)
+        {
+            LOG_ERROR(
+                "vmaCreateBuffer failed for temporary Vulkan transfer staging buffer: result={} bytes={} usage=0x{:x}",
+                static_cast<int>(create_result),
+                bytes,
+                static_cast<unsigned int>(usage)
+            );
             return false;
+        }
 
         mapped = allocation_info.pMappedData;
-        if (mapped == nullptr && vmaMapMemory(allocator, allocation, &mapped) != VK_SUCCESS)
+        if (mapped == nullptr)
         {
-            vmaDestroyBuffer(allocator, buffer, allocation);
-            buffer = VK_NULL_HANDLE;
-            allocation = nullptr;
-            return false;
+            const VkResult map_result = vmaMapMemory(allocator, allocation, &mapped);
+            if (map_result != VK_SUCCESS)
+            {
+                LOG_ERROR(
+                    "vmaMapMemory failed for temporary Vulkan transfer staging buffer: result={} bytes={}",
+                    static_cast<int>(map_result),
+                    bytes
+                );
+                vmaDestroyBuffer(allocator, buffer, allocation);
+                buffer = VK_NULL_HANDLE;
+                allocation = nullptr;
+                return false;
+            }
         }
 
         return true;
@@ -574,9 +592,25 @@ void* VulkanMemorySpace::allocate_staging(size_t bytes)
         return mapped_staging_base_;
 
     constexpr size_t alignment = alignof(std::max_align_t);
+    if (bytes > std::numeric_limits<size_t>::max() - (alignment - 1))
+    {
+        LOG_ERROR("Vulkan staging allocation size overflow: requested={} alignment={}", bytes, alignment);
+        return nullptr;
+    }
+
     const size_t aligned = (bytes + alignment - 1) & ~(alignment - 1);
     if (staging_offset_ + aligned < staging_offset_ || staging_offset_ + aligned > pool_bytes_)
+    {
+        LOG_ERROR(
+            "Vulkan staging pool exhausted: requested={} aligned={} used={} capacity={} remaining={}",
+            bytes,
+            aligned,
+            staging_offset_,
+            pool_bytes_,
+            pool_bytes_ >= staging_offset_ ? pool_bytes_ - staging_offset_ : 0
+        );
         return nullptr;
+    }
 
     auto* ptr = static_cast<std::byte*>(mapped_staging_base_) + staging_offset_;
     staging_offset_ += aligned;
@@ -589,9 +623,25 @@ void* VulkanMemorySpace::allocate_offload(size_t bytes)
         return offload_storage_.data();
 
     constexpr size_t alignment = alignof(std::max_align_t);
+    if (bytes > std::numeric_limits<size_t>::max() - (alignment - 1))
+    {
+        LOG_ERROR("Vulkan offload allocation size overflow: requested={} alignment={}", bytes, alignment);
+        return nullptr;
+    }
+
     const size_t aligned = (bytes + alignment - 1) & ~(alignment - 1);
     if (offload_offset_ + aligned < offload_offset_ || offload_offset_ + aligned > offload_storage_.size())
+    {
+        LOG_ERROR(
+            "Vulkan offload pool exhausted: requested={} aligned={} used={} capacity={} remaining={}",
+            bytes,
+            aligned,
+            offload_offset_,
+            offload_storage_.size(),
+            offload_storage_.size() >= offload_offset_ ? offload_storage_.size() - offload_offset_ : 0
+        );
         return nullptr;
+    }
 
     void* ptr = offload_storage_.data() + offload_offset_;
     offload_offset_ += aligned;
@@ -627,23 +677,30 @@ void VulkanMemorySpace::initialize_runtime()
     VkInstanceCreateInfo instance_info{};
     instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instance_info.pApplicationInfo = &app_info;
-    if (vkCreateInstance(&instance_info, nullptr, &instance_) != VK_SUCCESS)
+    const VkResult create_instance_result = vkCreateInstance(&instance_info, nullptr, &instance_);
+    if (create_instance_result != VK_SUCCESS)
     {
-        LOG_ERROR("vkCreateInstance failed.");
+        LOG_ERROR("vkCreateInstance failed: result={}", static_cast<int>(create_instance_result));
         std::abort();
     }
 
     uint32_t physical_count = 0;
-    if (vkEnumeratePhysicalDevices(instance_, &physical_count, nullptr) != VK_SUCCESS || physical_count == 0)
+    const VkResult enumerate_count_result = vkEnumeratePhysicalDevices(instance_, &physical_count, nullptr);
+    if (enumerate_count_result != VK_SUCCESS || physical_count == 0)
     {
-        LOG_ERROR("vkEnumeratePhysicalDevices failed or found no devices.");
+        LOG_ERROR(
+            "vkEnumeratePhysicalDevices failed or found no devices: result={} physical_count={}",
+            static_cast<int>(enumerate_count_result),
+            physical_count
+        );
         std::abort();
     }
 
     std::vector<VkPhysicalDevice> physical_devices(physical_count);
-    if (vkEnumeratePhysicalDevices(instance_, &physical_count, physical_devices.data()) != VK_SUCCESS)
+    const VkResult enumerate_fill_result = vkEnumeratePhysicalDevices(instance_, &physical_count, physical_devices.data());
+    if (enumerate_fill_result != VK_SUCCESS)
     {
-        LOG_ERROR("vkEnumeratePhysicalDevices (fill) failed.");
+        LOG_ERROR("vkEnumeratePhysicalDevices (fill) failed: result={}", static_cast<int>(enumerate_fill_result));
         std::abort();
     }
 
@@ -671,7 +728,11 @@ void VulkanMemorySpace::initialize_runtime()
     const VulkanCandidate* chosen = pick_candidate(candidates);
     if (chosen == nullptr)
     {
-        LOG_ERROR("No Vulkan physical device with a compute-capable queue family was found.");
+        LOG_ERROR(
+            "No Vulkan physical device with a compute-capable queue family was found. physical_count={} candidates={}",
+            physical_count,
+            candidates.size()
+        );
         std::abort();
     }
 
@@ -693,7 +754,15 @@ void VulkanMemorySpace::initialize_runtime()
         || !supported_atomic_float2.shaderBufferFloat32AtomicMinMax
         || !supported_atomic_float2.shaderSharedFloat32AtomicMinMax)
     {
-        LOG_ERROR("Selected Vulkan device does not support required float atomic features.");
+        LOG_ERROR(
+            "Selected Vulkan device '{}' does not support required float atomic features: "
+            "buffer_add={} shared_add={} buffer_minmax={} shared_minmax={}",
+            chosen->props.deviceName,
+            static_cast<bool>(supported_atomic_float.shaderBufferFloat32AtomicAdd),
+            static_cast<bool>(supported_atomic_float.shaderSharedFloat32AtomicAdd),
+            static_cast<bool>(supported_atomic_float2.shaderBufferFloat32AtomicMinMax),
+            static_cast<bool>(supported_atomic_float2.shaderSharedFloat32AtomicMinMax)
+        );
         std::abort();
     }
 
@@ -727,9 +796,10 @@ void VulkanMemorySpace::initialize_runtime()
     device_info.enabledExtensionCount = 2;
     device_info.ppEnabledExtensionNames = device_extensions;
     device_info.pNext = &atomic_float_features;
-    if (vkCreateDevice(physical_device_, &device_info, nullptr, &device_) != VK_SUCCESS)
+    const VkResult create_device_result = vkCreateDevice(physical_device_, &device_info, nullptr, &device_);
+    if (create_device_result != VK_SUCCESS)
     {
-        LOG_ERROR("vkCreateDevice failed.");
+        LOG_ERROR("vkCreateDevice failed: result={} device='{}'", static_cast<int>(create_device_result), chosen->props.deviceName);
         std::abort();
     }
 
@@ -739,9 +809,10 @@ void VulkanMemorySpace::initialize_runtime()
     pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pool_info.queueFamilyIndex = queue_family_index_;
-    if (vkCreateCommandPool(device_, &pool_info, nullptr, &command_pool_) != VK_SUCCESS)
+    const VkResult create_pool_result = vkCreateCommandPool(device_, &pool_info, nullptr, &command_pool_);
+    if (create_pool_result != VK_SUCCESS)
     {
-        LOG_ERROR("vkCreateCommandPool failed.");
+        LOG_ERROR("vkCreateCommandPool failed: result={} queue_family={}", static_cast<int>(create_pool_result), queue_family_index_);
         std::abort();
     }
 
@@ -750,9 +821,10 @@ void VulkanMemorySpace::initialize_runtime()
     allocator_info.physicalDevice = physical_device_;
     allocator_info.device = device_;
     allocator_info.vulkanApiVersion = VK_API_VERSION_1_1;
-    if (vmaCreateAllocator(&allocator_info, &allocator_) != VK_SUCCESS)
+    const VkResult create_allocator_result = vmaCreateAllocator(&allocator_info, &allocator_);
+    if (create_allocator_result != VK_SUCCESS)
     {
-        LOG_ERROR("vmaCreateAllocator failed.");
+        LOG_ERROR("vmaCreateAllocator failed: result={}", static_cast<int>(create_allocator_result));
         std::abort();
     }
 
@@ -767,16 +839,29 @@ void VulkanMemorySpace::initialize_runtime()
     staging_alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
     VmaAllocationInfo staging_info{};
-    if (vmaCreateBuffer(allocator_, &staging_buffer_info, &staging_alloc_info, &staging_buffer_, &staging_allocation_, &staging_info) != VK_SUCCESS)
+    const VkResult create_staging_result = vmaCreateBuffer(allocator_, &staging_buffer_info, &staging_alloc_info, &staging_buffer_, &staging_allocation_, &staging_info);
+    if (create_staging_result != VK_SUCCESS)
     {
-        LOG_ERROR("vmaCreateBuffer failed for staging buffer.");
+        LOG_ERROR(
+            "vmaCreateBuffer failed for Vulkan staging pool: result={} bytes={}",
+            static_cast<int>(create_staging_result),
+            pool_bytes_
+        );
         std::abort();
     }
     mapped_staging_base_ = staging_info.pMappedData;
-    if (mapped_staging_base_ == nullptr && vmaMapMemory(allocator_, staging_allocation_, &mapped_staging_base_) != VK_SUCCESS)
+    if (mapped_staging_base_ == nullptr)
     {
-        LOG_ERROR("vmaMapMemory failed for staging buffer.");
-        std::abort();
+        const VkResult map_staging_result = vmaMapMemory(allocator_, staging_allocation_, &mapped_staging_base_);
+        if (map_staging_result != VK_SUCCESS)
+        {
+            LOG_ERROR(
+                "vmaMapMemory failed for Vulkan staging pool: result={} bytes={}",
+                static_cast<int>(map_staging_result),
+                pool_bytes_
+            );
+            std::abort();
+        }
     }
 
     VkBufferCreateInfo offload_buffer_info{};
@@ -788,9 +873,14 @@ void VulkanMemorySpace::initialize_runtime()
     VmaAllocationCreateInfo offload_alloc_info{};
     offload_alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
-    if (vmaCreateBuffer(allocator_, &offload_buffer_info, &offload_alloc_info, &offload_buffer_, &offload_allocation_, nullptr) != VK_SUCCESS)
+    const VkResult create_offload_result = vmaCreateBuffer(allocator_, &offload_buffer_info, &offload_alloc_info, &offload_buffer_, &offload_allocation_, nullptr);
+    if (create_offload_result != VK_SUCCESS)
     {
-        LOG_ERROR("vmaCreateBuffer failed for offload buffer.");
+        LOG_ERROR(
+            "vmaCreateBuffer failed for Vulkan offload pool: result={} bytes={}",
+            static_cast<int>(create_offload_result),
+            pool_bytes_
+        );
         std::abort();
     }
 
