@@ -71,31 +71,6 @@ namespace rllm
         ENDFOR
     }
 
-    void sgd_update_Wqkvo_x_Vqkvo_dWqkvo(
-        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& W,
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& vel,
-        const fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& grad,
-        float lr
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
-        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel[r, c] = math::clamp(
-            TransformerBlock::MOMENTUM_BETA * vel[r, c] + lr * g,
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W[r, c] = math::clamp(
-            W[r, c] + vel[r, c],
-            -TransformerBlock::WEIGHT_CLAMP,
-            TransformerBlock::WEIGHT_CLAMP
-        );
-        ENDFOR
-    }
-
     void sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(
         // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr)
         fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& W1,
@@ -147,31 +122,6 @@ namespace rllm
             TransformerBlock::VEL_CLIP
         );
         W4[r, c] = math::clamp(W4[r, c] + vel4[r, c], -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
-        ENDFOR
-    }
-
-    void sgd_update_Wgateup_x_Vgateup_dWgateup(
-        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
-        fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& W,
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& vel,
-        const fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& grad,
-        float lr
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
-        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel[r, c] = math::clamp(
-            TransformerBlock::MOMENTUM_BETA * vel[r, c] + lr * g,
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W[r, c] = math::clamp(
-            W[r, c] + vel[r, c],
-            -TransformerBlock::WEIGHT_CLAMP,
-            TransformerBlock::WEIGHT_CLAMP
-        );
         ENDFOR
     }
 
@@ -336,30 +286,6 @@ namespace rllm
 
     void matmul_ABt(
         // OFFLOAD_PARAMETERS(A, B, C)
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A,
-        const fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& B,
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& C
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const PositionIndex m = A.num_rows();
-        const auto grid = enum_iterator2D<PositionIndex, FFDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
-            float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
-            for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
-            {
-                const int k = int(l_idx);
-                const float term = A[i, k] * B[j, k];
-                OVERFLOW_CHECK_ADD(sum, term);
-                sum += term;
-            }
-            C[i, j] = static_cast<rlmm_float>(sum);
-        ENDFOR
-    }
-
-    void matmul_ABt(
-        // OFFLOAD_PARAMETERS(A, B, C)
         const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& A,
         const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension>& B,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
@@ -408,30 +334,6 @@ namespace rllm
 
     void matmul_AB(
         // OFFLOAD_PARAMETERS(A, B, C)
-        const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& A,
-        const fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& B,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const PositionIndex m = A.num_rows();
-        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
-            float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
-            for (size_t l_idx = 0; l_idx < static_cast<size_t>(FFDimension::MAX); ++l_idx)
-            {
-                const int k = int(l_idx);
-                const float term = A[i, k] * B[k, j];
-                OVERFLOW_CHECK_ADD(sum, term);
-                sum += term;
-            }
-            C[i, j] = static_cast<rlmm_float>(sum);
-        ENDFOR
-    }
-
-    void matmul_AB(
-        // OFFLOAD_PARAMETERS(A, B, C)
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A,
         const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& B,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
@@ -468,30 +370,6 @@ namespace rllm
             float sum = 0.f;
             RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(FFDimension::MAX); ++l_idx)
-            {
-                const int k = int(l_idx);
-                const float term = A[i, k] * B[k, j];
-                OVERFLOW_CHECK_ADD(sum, term);
-                sum += term;
-            }
-            C[i, j] += static_cast<rlmm_float>(sum);
-        ENDFOR
-    }
-
-    void matmul_AB_add(
-        // OFFLOAD_PARAMETERS(A, B, C)
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A,
-        const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& B,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const PositionIndex m = A.num_rows();
-        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
-            float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
-            for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
             {
                 const int k = int(l_idx);
                 const float term = A[i, k] * B[k, j];
@@ -550,30 +428,6 @@ namespace rllm
     )
     {
         const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C, k_count))
-            float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
-            for (size_t l_idx = 0; l_idx < static_cast<size_t>(k_count); ++l_idx)
-            {
-                const int k = int(l_idx);
-                const float term = A[k, i] * B[k, j];
-                OVERFLOW_CHECK_ADD(sum, term);
-                sum += term;
-            }
-            C[i, j] += static_cast<rlmm_float>(sum);
-        ENDFOR
-    }
-
-    void matmul_AtB_acc(
-        // OFFLOAD_PARAMETERS(A, B, C, k_count)
-        const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& A,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& B,
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& C,
-        PositionIndex k_count
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C, k_count))
             float sum = 0.f;
             RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
@@ -695,19 +549,6 @@ namespace rllm
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(lhs.num_rows());
         OFFLOAD_PARFOR_2D_PARAM(t, d, grid, (lhs, rhs, dst))
         dst[t, d] = lhs[t, d] + rhs[t, d];
-        ENDFOR
-    }
-
-    void element_wise_add(
-        // OFFLOAD_PARAMETERS(src, dst)
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(src.num_rows(), src.num_cols());
-        OFFLOAD_PARFOR_2D_PARAM(t, d, grid, (src, dst))
-        dst[t, d] += src[t, d];
         ENDFOR
     }
 

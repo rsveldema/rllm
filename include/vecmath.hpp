@@ -16,13 +16,6 @@ namespace rllm
         fixed_size_vector<rlmm_float, EmbeddingDimension>& dst
     );
 
-    void sgd_update_Wqkvo_x_Vqkvo_dWqkvo(
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& W,
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& vel,
-        const fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& grad,
-        float lr
-    );
-
     void sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(
         // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr)
         fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& W1,
@@ -39,13 +32,6 @@ namespace rllm
         const fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension>& grad4,
         float lr
         // END_OFFLOAD_PARAMETERS
-    );
-
-    void sgd_update_Wgateup_x_Vgateup_dWgateup(
-        fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& W,
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& vel,
-        const fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& grad,
-        float lr
     );
 
     void sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(
@@ -95,12 +81,6 @@ namespace rllm
     );
 
     void matmul_ABt(
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A,
-        const fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& B,
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& C
-    );
-
-    void matmul_ABt(
         const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& A,
         const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension>& B,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
@@ -113,12 +93,6 @@ namespace rllm
     );
 
     void matmul_AB(
-        const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& A,
-        const fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& B,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
-    );
-
-    void matmul_AB(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A,
         const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& B,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
@@ -127,12 +101,6 @@ namespace rllm
     void matmul_AB_add(
         const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& A,
         const fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension>& B,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
-    );
-
-    void matmul_AB_add(
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A,
-        const fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension>& B,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& C
     );
 
@@ -152,13 +120,6 @@ namespace rllm
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& A,
         const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& B,
         fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension>& C,
-        PositionIndex k_count
-    );
-
-    void matmul_AtB_acc(
-        const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& A,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& B,
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension>& C,
         PositionIndex k_count
     );
 
@@ -196,11 +157,6 @@ namespace rllm
     void element_wise_sum(
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& lhs,
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& rhs,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst
-    );
-
-    void element_wise_add(
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& src,
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dst
     );
 

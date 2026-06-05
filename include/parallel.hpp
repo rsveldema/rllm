@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <print>
 #include <string>
@@ -143,6 +146,55 @@ namespace parallel {
             size_t device_to_host_bytes = 0;
         };
 
+        struct KernelTimingBreakdown
+        {
+            std::string kernel;
+            size_t calls = 0;
+            uint64_t total_ns = 0;
+        };
+
+        class KernelTimerScope
+        {
+          public:
+            KernelTimerScope(Statistics& statistics, std::string_view kernel)
+#if defined(RLLM_ENABLE_STATISTICS)
+                : m_statistics(&statistics)
+                , m_kernel(kernel)
+                , m_start(std::chrono::steady_clock::now())
+#endif
+            {
+#if !defined(RLLM_ENABLE_STATISTICS)
+                static_cast<void>(statistics);
+                static_cast<void>(kernel);
+#endif
+            }
+
+            KernelTimerScope(const KernelTimerScope&) = delete;
+            KernelTimerScope& operator=(const KernelTimerScope&) = delete;
+
+            bool keep_running() const { return m_running; }
+
+            void stop()
+            {
+#if defined(RLLM_ENABLE_STATISTICS)
+                if (m_running && m_statistics != nullptr)
+                {
+                    const auto elapsed = std::chrono::steady_clock::now() - m_start;
+                    m_statistics->record_kernel_timing(m_kernel, std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed));
+                }
+#endif
+                m_running = false;
+            }
+
+          private:
+            bool m_running = true;
+#if defined(RLLM_ENABLE_STATISTICS)
+            Statistics* m_statistics = nullptr;
+            std::string_view m_kernel;
+            std::chrono::steady_clock::time_point m_start;
+#endif
+        };
+
         void record_host_to_device_buffer_copy(std::string_view site = {}, std::string_view parameter = {}, size_t bytes = 0)
         {
 #if defined(RLLM_ENABLE_STATISTICS)
@@ -168,6 +220,28 @@ namespace parallel {
             static_cast<void>(site);
             static_cast<void>(parameter);
             static_cast<void>(bytes);
+#endif
+        }
+
+        void record_kernel_timing(std::string_view kernel, std::chrono::nanoseconds elapsed)
+        {
+#if defined(RLLM_ENABLE_STATISTICS)
+            if (kernel.empty())
+                return;
+
+            std::lock_guard<std::mutex> lock(m_kernel_timing_mutex);
+            if (!exit_statistics_instance())
+            {
+                exit_statistics_instance() = this;
+                std::atexit(print_kernel_timings_at_exit);
+            }
+
+            auto& timing = m_kernel_timings[std::string(kernel)];
+            timing.calls++;
+            timing.total_ns += static_cast<uint64_t>(elapsed.count());
+#else
+            static_cast<void>(kernel);
+            static_cast<void>(elapsed);
 #endif
         }
 
@@ -362,6 +436,67 @@ namespace parallel {
 #endif
         }
 
+        std::vector<KernelTimingBreakdown> top_kernel_timings(size_t limit = 5) const
+        {
+#if defined(RLLM_ENABLE_STATISTICS)
+            std::lock_guard<std::mutex> lock(m_kernel_timing_mutex);
+
+            std::vector<KernelTimingBreakdown> timings;
+            timings.reserve(m_kernel_timings.size());
+            for (const auto& [kernel, counts] : m_kernel_timings)
+            {
+                timings.push_back(KernelTimingBreakdown{
+                    .kernel = kernel,
+                    .calls = counts.calls,
+                    .total_ns = counts.total_ns,
+                });
+            }
+
+            std::sort(timings.begin(), timings.end(), [](const auto& lhs, const auto& rhs) {
+                if (lhs.total_ns != rhs.total_ns)
+                    return lhs.total_ns > rhs.total_ns;
+                if (lhs.calls != rhs.calls)
+                    return lhs.calls > rhs.calls;
+                return lhs.kernel < rhs.kernel;
+            });
+
+            if (timings.size() > limit)
+                timings.resize(limit);
+
+            return timings;
+#else
+            static_cast<void>(limit);
+            return {};
+#endif
+        }
+
+        void print_top_kernel_timings(size_t limit = 5) const
+        {
+#if defined(RLLM_ENABLE_STATISTICS)
+            const auto timings = top_kernel_timings(limit);
+            if (timings.empty())
+                return;
+
+            std::println("Top-{} kernel execution times:", limit);
+            for (const auto& timing : timings)
+            {
+                const double total_ms = static_cast<double>(timing.total_ns) / 1'000'000.0;
+                const double avg_us = timing.calls == 0
+                    ? 0.0
+                    : (static_cast<double>(timing.total_ns) / 1'000.0) / static_cast<double>(timing.calls);
+                std::println(
+                    "  {}: {:.3f} ms total, {} calls, {:.3f} us avg",
+                    timing.kernel,
+                    total_ms,
+                    timing.calls,
+                    avg_us
+                );
+            }
+#else
+            static_cast<void>(limit);
+#endif
+        }
+
       private:
         struct CopyCounts
         {
@@ -370,6 +505,26 @@ namespace parallel {
             size_t host_to_device_bytes = 0;
             size_t device_to_host_bytes = 0;
         };
+
+        struct KernelTimingCounts
+        {
+            size_t calls = 0;
+            uint64_t total_ns = 0;
+        };
+
+        static Statistics*& exit_statistics_instance()
+        {
+            static Statistics* instance = nullptr;
+            return instance;
+        }
+
+        static void print_kernel_timings_at_exit()
+        {
+#if defined(RLLM_ENABLE_STATISTICS)
+            if (auto* statistics = exit_statistics_instance())
+                statistics->print_top_kernel_timings(5);
+#endif
+        }
 
         void record_copy_site(std::string_view site, bool host_to_device, size_t bytes)
         {
@@ -435,10 +590,21 @@ namespace parallel {
         mutable std::mutex m_copy_site_mutex;
         std::unordered_map<std::string, CopyCounts> m_copy_sites;
         std::unordered_map<std::string, CopyCounts> m_copy_parameters;
+        mutable std::mutex m_kernel_timing_mutex;
+        std::unordered_map<std::string, KernelTimingCounts> m_kernel_timings;
     };
 
     extern Statistics statistics;
 }
+
+#if defined(RLLM_ENABLE_STATISTICS)
+#define RLLM_TIMED_KERNEL(kernel_name) \
+    for (::parallel::Statistics::KernelTimerScope _rllm_kernel_timer_scope_(::parallel::statistics, (kernel_name)); \
+         _rllm_kernel_timer_scope_.keep_running(); \
+         _rllm_kernel_timer_scope_.stop())
+#else
+#define RLLM_TIMED_KERNEL(kernel_name) if (true)
+#endif
 
 #include <device_pointer.hpp>
 

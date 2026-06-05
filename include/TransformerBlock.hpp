@@ -139,6 +139,14 @@ namespace rllm
             rms_norm(x, y);
         }
 
+        static void apply_rms_norm_vulkan_optimized(
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y
+        )
+        {
+            rms_norm_vulkan_optimized(x, y);
+        }
+
         // Test helper: expose causal softmax without exposing internals broadly.
         static void
         causal_softmax_for_test(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T)
@@ -179,6 +187,11 @@ namespace rllm
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
         static void rms_norm(
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y
+        );
+
+        static void rms_norm_vulkan_optimized(
             const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
             flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y
         );

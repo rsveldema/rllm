@@ -273,7 +273,7 @@ def _defined_macros_for_backend(backend_namespace: str) -> set[str]:
 
 
 def _eval_preprocessor_expr(expr: str, defined_macros: set[str]) -> bool:
-    text = expr.strip()
+    text = expr.split("//", 1)[0].strip()
     if not text:
         return False
 
@@ -693,7 +693,7 @@ def transform_source(
         if collecting_offload_params:
             if _OFFLOAD_PARAMETERS_END_RE.match(line.strip()):
                 collecting_offload_params = False
-                active_offload_param_types = dict(collecting_param_types)
+                active_offload_param_types.update(collecting_param_types)
                 active_offload_param_lines = list(collecting_param_lines)
                 collecting_param_names = []
                 collecting_param_types = {}

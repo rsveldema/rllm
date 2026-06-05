@@ -9,7 +9,14 @@ from pathlib import Path
 import re
 import subprocess
 
-from offloadize_common import LoopContext, resolve_symbol_values, transform_tree, write_manifest
+from offloadize_common import (
+    LoopContext,
+    apply_symbol_values,
+    resolve_symbol_values,
+    split_top_level_args,
+    transform_tree,
+    write_manifest,
+)
 
 
 _SIMD_REDUCTION_PLUS_RE = re.compile(r"^\s*RLLM_OMP_SIMD_REDUCTION_PLUS\s*\([^)]*\)\s*;?\s*$")
@@ -37,6 +44,7 @@ _COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
 _FLOAT_SCALAR_RE = re.compile(
     r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:float|rlmm_float(?:_small)?)\s*(?P<ref>[&*])?\s*$"
 )
+_OFFLOAD_SHARED_MEMORY_RE = re.compile(r"^\s*OFFLOAD_SHARED_MEMORY\s*\((?P<args>.*)\)\s*;?\s*$")
 
 
 def _sanitize_kernel_line_for_glsl(line: str) -> str:
@@ -444,7 +452,57 @@ def _requires_atomic_float_extensions(lines: list[str]) -> bool:
     return "atomicAdd(" in joined or "atomicMax(" in joined or "atomicMin(" in joined
 
 
+def _extract_offload_shared_memory_decls(
+    body_lines: list[str],
+    default_count: int,
+    symbol_values: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    shared_decls: list[str] = []
+    filtered_body_lines: list[str] = []
+
+    for line in body_lines:
+        match = _OFFLOAD_SHARED_MEMORY_RE.match(line)
+        if match is None:
+            filtered_body_lines.append(line)
+            continue
+
+        args = split_top_level_args(match.group("args"))
+        if len(args) not in {2, 3}:
+            raise ValueError(
+                "OFFLOAD_SHARED_MEMORY expects (type, name) or (type, name, count); "
+                f"got {len(args)} argument(s): {line.strip()}"
+            )
+
+        count = str(default_count)
+        if len(args) == 2:
+            type_arg = args[0].strip()
+            name = args[1].strip()
+        elif re.match(r"^[A-Za-z_]\w*$", args[2].strip()):
+            count = _sanitize_kernel_line_for_glsl(apply_symbol_values(args[0].strip(), symbol_values))
+            type_arg = args[1].strip()
+            name = args[2].strip()
+        else:
+            type_arg = args[0].strip()
+            name = args[1].strip()
+            count = _sanitize_kernel_line_for_glsl(apply_symbol_values(args[2].strip(), symbol_values))
+        if "gl_" in count and "gl_WorkGroupSize" not in count:
+            count = str(default_count)
+
+        glsl_type = _sanitize_cpp_type_to_glsl(type_arg)
+
+        if not re.match(r"^[A-Za-z_]\w*$", name):
+            raise ValueError(f"OFFLOAD_SHARED_MEMORY has invalid shared variable name '{name}' in: {line.strip()}")
+
+        shared_decls.append(f"shared {glsl_type} {name}[{count}];")
+
+    return shared_decls, filtered_body_lines
+
+
 def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], config: VulkanConfig) -> str:
+    local_size_x = config.workgroup_size_x
+    local_size_y = config.workgroup_size_y if (spec.is_2d or spec.is_3d) else 1
+    local_size_z = config.workgroup_size_z if spec.is_3d else (config.workgroup_size_z if spec.is_2d else 1)
+
     const_preamble: list[str] = []
     for line in spec.offload_param_lines or []:
         rendered = _sanitize_offload_param_line_for_glsl(line)
@@ -453,6 +511,15 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
     const_block = ("\n".join(const_preamble) + "\n\n") if const_preamble else ""
 
     filtered_body_lines = [line for line in spec.body_lines if not _SIMD_REDUCTION_PLUS_RE.match(line)]
+    if spec.is_2d and any("subgroup" in line or "gl_Subgroup" in line for line in filtered_body_lines):
+        local_size_y = 1
+        local_size_z = 1
+    default_shared_count = local_size_x * local_size_y * local_size_z
+    offload_shared_decls, filtered_body_lines = _extract_offload_shared_memory_decls(
+        filtered_body_lines,
+        default_shared_count,
+        symbol_values,
+    )
     filtered_body_lines = [_sanitize_kernel_line_for_glsl(line) for line in filtered_body_lines]
     matrix_view_specs: dict[str, MatrixViewSpec] = {}
     buffer_view_specs: dict[str, BufferViewSpec] = {}
@@ -579,17 +646,13 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
     if ssbo_block:
         ssbo_block = ssbo_block + "\n\n"
     
-    local_size_x = config.workgroup_size_x
-    local_size_y = config.workgroup_size_y if (spec.is_2d or spec.is_3d) else 1
-    local_size_z = config.workgroup_size_z if spec.is_3d else (config.workgroup_size_z if spec.is_2d else 1)
-
     # Generate shared variable declarations. GLSL requires workgroup storage to
     # live at global scope, not inside function scope.
-    shared_decls: list[str] = []
+    shared_decls: list[str] = list(offload_shared_decls)
     if spec.shared_vars:
         for var_name, var_type in spec.shared_vars.items():
             glsl_type = _sanitize_cpp_type_to_glsl(var_type)
-            shared_decls.append(f"shared {glsl_type} {var_name}[{local_size_x * local_size_y * local_size_z}];")
+            shared_decls.append(f"shared {glsl_type} {var_name}[{default_shared_count}];")
     shared_block = "\n".join(shared_decls)
     if shared_block:
         shared_block = shared_block + "\n\n"
@@ -614,7 +677,10 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
     fields = "\n".join(push_constant_fields)
     push_constant_block = f"layout(push_constant) uniform RllmPushConstants {{\n{fields}\n}} rllm_push;\n\n"
     return (
-        "#version 450\n"
+        "#version 460\n"
+        "#define USE_VULKAN_OFFLOAD 1\n"
+        "#extension GL_KHR_shader_subgroup_arithmetic : require\n"
+        "#extension GL_KHR_shader_subgroup_clustered : require\n"
         "\n"
         f"{extension_block}"
         f"layout(local_size_x = {local_size_x}, local_size_y = {local_size_y}, local_size_z = {local_size_z}) in;\n"
@@ -654,9 +720,9 @@ def _write_kernel_stubs(
 
 def _compile_to_spirv(compiler: str, input_path: Path, output_path: Path) -> None:
     if Path(compiler).name == "glslangValidator":
-        cmd = [compiler, "-V", input_path.as_posix(), "-o", output_path.as_posix()]
+        cmd = [compiler, "-V", "--target-env", "vulkan1.1", input_path.as_posix(), "-o", output_path.as_posix()]
     else:
-        cmd = [compiler, input_path.as_posix(), "-o", output_path.as_posix()]
+        cmd = [compiler, "--target-env=vulkan1.1", input_path.as_posix(), "-o", output_path.as_posix()]
     proc = subprocess.run(cmd, text=True, capture_output=True)
     if proc.returncode != 0:
         raise RuntimeError(

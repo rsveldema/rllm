@@ -626,11 +626,14 @@ private:
     {
         if (m_memory_space == nullptr)
             m_memory_space = IMemorySpace::get_instance();
-        if (m_bytes == 0)
-            return;
+        assert(m_bytes != 0);
+
+        assert(m_memory_space != nullptr);
+        assert(m_staging_ptr == nullptr);
 
         m_staging_ptr = static_cast<T*>(m_memory_space->allocate_staging(m_bytes));
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        assert(m_offload_ptr == nullptr);
         m_offload_ptr = m_memory_space->allocate_offload(m_bytes);
         if (m_staging_ptr == nullptr || m_offload_ptr == nullptr)
 #else
@@ -638,6 +641,11 @@ private:
 #endif
         {
             release_internal();
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+            std::println("Failed to allocate DevicePointer storage: bytes={} staging_allocated={} offload_allocated={}", m_bytes, m_staging_ptr != nullptr, m_offload_ptr != nullptr);
+#else
+            std::println("Failed to allocate DevicePointer storage: bytes={} staging_allocated={}", m_bytes, m_staging_ptr != nullptr);
+#endif
             std::abort();
         }
 
@@ -683,8 +691,12 @@ private:
 
     void release_internal()
     {
-        if (m_memory_space != nullptr && m_staging_ptr != nullptr)
+        if (m_staging_ptr != nullptr) 
+        {
+            assert(m_memory_space != nullptr);
             m_memory_space->release_staging(m_staging_ptr, m_bytes);
+            m_staging_ptr = nullptr;
+        }
 
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_pending_flush = nullptr;
@@ -692,13 +704,14 @@ private:
 #if defined(USE_VULKAN_OFFLOAD)
         m_vulkan_runtime_buffer.release();
 #endif
-        if (m_memory_space != nullptr && m_offload_ptr != nullptr)
+        if (m_memory_space != nullptr)
+        {
+            assert(m_offload_ptr != nullptr);
             m_memory_space->release_offload(m_offload_ptr, m_bytes);
-        m_offload_ptr = nullptr;
+            m_offload_ptr = nullptr;
+        }
         m_memory_owner = DeviceMemoryOwner::INVALID;
 #endif
-
-        m_staging_ptr = nullptr;
     }
 
     IMemorySpace* m_memory_space = nullptr;

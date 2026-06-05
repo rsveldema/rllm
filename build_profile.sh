@@ -94,29 +94,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# build version with CPU-only runtime / no stats
 configure_build "$CPU_BUILD_DIR" "none" "OFF"
 build_profiler "$CPU_BUILD_DIR"
 
-configure_build "$VULKAN_BUILD_DIR" "vulkan" "OFF"
-build_profiler "$VULKAN_BUILD_DIR"
-check_vulkan_provider "$VULKAN_BUILD_DIR"
+# build version with vulkan / no stats
+#configure_build "$VULKAN_BUILD_DIR" "vulkan" "OFF"
+#build_profiler "$VULKAN_BUILD_DIR"
+#check_vulkan_provider "$VULKAN_BUILD_DIR"
 
+# build version with vulkan / stats
 configure_build "$VULKAN_STATS_BUILD_DIR" "vulkan" "ON"
 build_profiler "$VULKAN_STATS_BUILD_DIR"
 check_vulkan_provider "$VULKAN_STATS_BUILD_DIR"
 
 run_training "CPU-only runtime" "$CPU_BUILD_DIR" "$OUTPUT_MODEL_CPU" "$cpu_elapsed_file"
-run_training "Vulkan runtime" "$VULKAN_BUILD_DIR" "$OUTPUT_MODEL_VULKAN" "$vulkan_elapsed_file"
+run_training "Vulkan runtime" "$VULKAN_BUILD_DIR" "$OUTPUT_MODEL_VULKAN" "$vulkan_stats_elapsed_file"
 run_training "Vulkan statistics" "$VULKAN_STATS_BUILD_DIR" "$OUTPUT_MODEL_VULKAN_STATS" "$vulkan_stats_elapsed_file"
 
 cpu_elapsed="$(<"$cpu_elapsed_file")"
-vulkan_elapsed="$(<"$vulkan_elapsed_file")"
+vulkan_elapsed="$(<"$vulkan_stats_elapsed_file")"
 vulkan_stats_elapsed="$(<"$vulkan_stats_elapsed_file")"
 speedup="$(awk -v cpu="$cpu_elapsed" -v vulkan="$vulkan_elapsed" 'BEGIN { if (vulkan > 0) printf "%.3f", cpu / vulkan; else printf "inf" }')"
 
 echo
 echo "Training profile comparison:"
 echo "  CPU-only runtime elapsed:     ${cpu_elapsed}s (statistics disabled)"
-echo "  Vulkan runtime elapsed:       ${vulkan_elapsed}s (statistics disabled)"
+echo "  Vulkan runtime elapsed:       ${vulkan_elapsed}s (statistics enabled)"
 echo "  Vulkan runtime speedup:       ${speedup}x"
 echo "  Vulkan statistics elapsed:    ${vulkan_stats_elapsed}s (statistics enabled)"

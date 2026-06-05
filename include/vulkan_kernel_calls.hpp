@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <cstdint>
@@ -464,6 +465,7 @@ namespace rllm::vulkan
         VkDevice m_submit_fence_device = VK_NULL_HANDLE;
         VkFence m_submit_fence = VK_NULL_HANDLE;
         bool m_submit_in_flight = false;
+        std::chrono::steady_clock::time_point m_submit_start{};
         std::mutex m_launch_mutex;
     };
 

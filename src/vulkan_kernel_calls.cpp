@@ -1,6 +1,7 @@
 #include <vulkan_kernel_calls.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -8,7 +9,6 @@
 #include <print>
 #include <regex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <parallel.hpp>
@@ -33,67 +33,6 @@ namespace rllm::vulkan
 
 			out_offset = static_cast<VkDeviceSize>(offset);
 			return true;
-		}
-
-#if defined(RLLM_ENABLE_STATISTICS)
-		struct KernelLaunchCounterRegistry
-		{
-			std::mutex mutex;
-			std::unordered_map<std::string, size_t> counts;
-			bool exit_printer_registered = false;
-		};
-
-		static KernelLaunchCounterRegistry& kernel_launch_counter_registry()
-		{
-			static auto* registry = new KernelLaunchCounterRegistry();
-			return *registry;
-		}
-#endif
-
-#if defined(RLLM_ENABLE_STATISTICS)
-		static void print_kernel_launch_counts()
-		{
-			auto& registry = kernel_launch_counter_registry();
-			std::vector<std::pair<std::string, size_t>> counts;
-			{
-				std::lock_guard<std::mutex> lock(registry.mutex);
-				counts.reserve(registry.counts.size());
-				for (const auto& item : registry.counts)
-					counts.push_back(item);
-			}
-
-			if (counts.empty())
-				return;
-
-			std::sort(counts.begin(), counts.end(), [](const auto& lhs, const auto& rhs) {
-				if (lhs.second != rhs.second)
-					return lhs.second > rhs.second;
-				return lhs.first < rhs.first;
-			});
-
-			if (counts.size() > 10)
-				counts.resize(10);
-
-			std::println("Top ComputeKernel launch counts:");
-			for (const auto& [kernel_name, count] : counts)
-				std::println("  {}: {}", kernel_name, count);
-		}
-#endif
-
-		static void record_kernel_launch(std::string_view kernel_name)
-		{
-#if defined(RLLM_ENABLE_STATISTICS)
-			auto& registry = kernel_launch_counter_registry();
-			std::lock_guard<std::mutex> lock(registry.mutex);
-			if (!registry.exit_printer_registered)
-			{
-				std::atexit(print_kernel_launch_counts);
-				registry.exit_printer_registered = true;
-			}
-			registry.counts[std::string(kernel_name)]++;
-#else
-			static_cast<void>(kernel_name);
-#endif
 		}
 	}
 
@@ -176,6 +115,17 @@ namespace rllm::vulkan
 			std::abort();
 		}
 		m_submit_in_flight = false;
+#if defined(RLLM_ENABLE_STATISTICS)
+		if (m_submit_start != std::chrono::steady_clock::time_point{})
+		{
+			const auto elapsed = std::chrono::steady_clock::now() - m_submit_start;
+			parallel::statistics.record_kernel_timing(
+				name(),
+				std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed)
+			);
+			m_submit_start = {};
+		}
+#endif
 	}
 
 	void ComputeKernelRuntime::ensure_pipeline(VkDevice device, uint32_t ssbo_binding_count)
@@ -396,8 +346,6 @@ namespace rllm::vulkan
 		{
 			return;
 		}
-
-		detail::record_kernel_launch(name());
 
 		detail::RuntimeContext& ctx = detail::runtime_context();
 		std::lock_guard<std::mutex> runtime_lock(*ctx.launch_mutex);
@@ -1040,6 +988,9 @@ namespace rllm::vulkan
 			std::abort();
 		}
 
+#if defined(RLLM_ENABLE_STATISTICS)
+		m_submit_start = std::chrono::steady_clock::now();
+#endif
 		const VkResult submit_result = vkQueueSubmit(ctx.queue, 1, &submit_info, m_submit_fence);
 		if (submit_result != VK_SUCCESS)
 		{

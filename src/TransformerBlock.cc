@@ -18,6 +18,39 @@ namespace rllm
 {
     static_assert(static_cast<int>(EmbeddingDimension::MAX) % static_cast<int>(HeadsIndex::MAX) == 0, "EmbeddingDimension::MAX must be divisible by HeadsIndex::MAX");
 
+    enum class RmsNormPartialSumIndex : size_t
+    {
+        START = 0,
+        MAX = static_cast<size_t>(PositionIndex::MAX) * static_cast<size_t>(EmbeddingDimension::MAX)
+    };
+
+#if !defined(USE_VULKAN_OFFLOAD)
+    namespace detail
+    {
+        struct CpuInvocationId
+        {
+            int x;
+            int y;
+            int z;
+        };
+
+        template <typename T>
+        T cpu_subgroup_clustered_add(T value, int)
+        {
+            return value;
+        }
+    }
+
+    static constexpr detail::CpuInvocationId gl_LocalInvocationID{0, 0, 0};
+    static constexpr detail::CpuInvocationId gl_WorkGroupSize{1, 1, 1};
+    static constexpr int gl_SubgroupInvocationID = 0;
+    static constexpr int gl_SubgroupSize = 32;
+
+#define OFFLOAD_SHARED_MEMORY(type, name, count) type name[1];
+#define subgroupAdd(value) (value)
+#define subgroupClusteredAdd(value, width) ::rllm::detail::cpu_subgroup_clustered_add((value), (width))
+#endif
+
     // ── randomize ─────────────────────────────────────────────────────────────
 
     void TransformerBlock::randomize()
@@ -56,7 +89,72 @@ namespace rllm
 
     // ── normalisation ──────────────────────────────────────────────────────────
 
+    static void rms_norm_vulkan_optimized_with_workspace(
+        // OFFLOAD_PARAMETERS(x, y, row_sums, inv_rms)
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y,
+        fixed_size_vector<rlmm_float, RmsNormPartialSumIndex>& row_sums,
+        fixed_size_vector<rlmm_float, PositionIndex>& inv_rms
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        constexpr int partial_sum_count = static_cast<int>(EmbeddingDimension::MAX);
+        
+        row_sums.set_size(static_cast<RmsNormPartialSumIndex>(static_cast<size_t>(x.num_rows()) * static_cast<size_t>(partial_sum_count)));
+        row_sums.zero();
+        inv_rms.set_size(x.num_rows());
+
+        const auto partial_grid = enum_iterator2D<EmbeddingDimension, PositionIndex>(EmbeddingDimension::MAX, x.num_rows());
+        OFFLOAD_PARFOR_2D_PARAM(i, t, partial_grid, (x, row_sums))
+            OFFLOAD_SHARED_MEMORY(float, partial_sums, gl_WorkGroupSize.x)
+            const rlmm_float myVal = x[t, i];
+            constexpr int partial_sum_count = static_cast<int>(EmbeddingDimension::MAX);
+            const float valSquared = myVal * myVal;
+            const int subgroup_width = int(gl_SubgroupSize);
+            const float partial = subgroupAdd(valSquared);
+            if (int(gl_SubgroupInvocationID) == 0)
+            {
+                partial_sums[gl_LocalInvocationID.x] = partial;
+#if defined(USE_VULKAN_OFFLOAD)
+                row_sums[(static_cast<size_t>(t) * partial_sum_count) + (static_cast<size_t>(i) / subgroup_width)] =
+                    partial_sums[gl_LocalInvocationID.x];
+#else
+                atomicAdd(
+                    row_sums[(static_cast<size_t>(t) * partial_sum_count) + (static_cast<size_t>(i) / subgroup_width)],
+                    partial_sums[gl_LocalInvocationID.x]
+                );
+#endif
+            }
+        ENDFOR
+
+        // step 2: compute the final inverse rms per row.
+        OFFLOAD_PARFOR_1D_PARAM(t, enum_iterator<PositionIndex>(x.num_rows()), (row_sums, inv_rms))
+            constexpr float eps = 1e-6f;
+            constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
+            constexpr int partial_sum_count = static_cast<int>(EmbeddingDimension::MAX);
+            float sq = 0.0f;
+            for (int part = 0; part < partial_sum_count; ++part)
+                sq += row_sums[(static_cast<size_t>(t) * partial_sum_count) + part];
+            inv_rms[t] = 1.0f / std::sqrt(sq / fd + eps);
+        ENDFOR
+
+        const auto normalize_grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(x.num_rows(), EmbeddingDimension::MAX);
+        OFFLOAD_PARFOR_2D_PARAM(t, i, normalize_grid, (x, y, inv_rms))
+            y[t, i] = x[t, i] * inv_rms[t];
+        ENDFOR
+    }
+
     // y_t = x_t / rms(x_t)  for each row t
+    void TransformerBlock::rms_norm_vulkan_optimized(
+        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y
+    )
+    {
+        fixed_size_vector<rlmm_float, RmsNormPartialSumIndex> row_sums;
+        fixed_size_vector<rlmm_float, PositionIndex> inv_rms;
+        rms_norm_vulkan_optimized_with_workspace(x, y, row_sums, inv_rms);
+    }
+
     void TransformerBlock::rms_norm(
         // OFFLOAD_PARAMETERS(x, y)
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
@@ -80,6 +178,8 @@ namespace rllm
             y[t, i] = x[t, i] * inv;
         ENDFOR
     }
+
+
 
     // dx += dL/dx  given dy = dL/dy and the original x (not the normalised y).
     // Per row:  dx_j += (1/rms) * (dy_j  -  y_j * mean(dy · y))
@@ -221,6 +321,8 @@ namespace rllm
         // Temporaries used only within forward() itself
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> attn_proj;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> ffn_out;
+        fixed_size_vector<rlmm_float, RmsNormPartialSumIndex> rms_norm_row_sums;
+        fixed_size_vector<rlmm_float, PositionIndex> rms_norm_inv_rms;
 
         explicit ForwardWorkspace(PositionIndex seq)
             : seq_len(seq)
@@ -353,7 +455,7 @@ namespace rllm
         ws.h_in = h;
 
         // ── 1. Pre-norm (attention) ──────────────────────────────────────────
-        rms_norm(h, ws.h_norm_attn);
+        rms_norm_vulkan_optimized_with_workspace(h, ws.h_norm_attn, ws.rms_norm_row_sums, ws.rms_norm_inv_rms);
 
         // ── 2. Q / K / V projections ─────────────────────────────────────────
         matmul_ABt_3_matrix_muls(ws.h_norm_attn, W_q, ws.Q, W_k, ws.K, W_v, ws.V);
@@ -368,7 +470,7 @@ namespace rllm
         element_wise_sum(h, ws.attn_proj, ws.h_mid);
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
-        rms_norm(ws.h_mid, ws.h_norm_ff);
+        rms_norm_vulkan_optimized_with_workspace(ws.h_mid, ws.h_norm_ff, ws.rms_norm_row_sums, ws.rms_norm_inv_rms);
 
         // ── 6. SwiGLU FFN ─────────────────────────────────────────────────────
         matmul_ABt_2_matrix_muls(ws.h_norm_ff, W_gate, ws.gate_pre, W_up, ws.up_pre);

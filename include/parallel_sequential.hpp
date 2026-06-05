@@ -44,9 +44,9 @@ namespace parallel {
 // Top-level (non-nested) parallel loops that are candidates for future GPU /
 // accelerator offload. Currently they expand identically to the CPU PARFOR*
 // macros; the distinct name marks the intent without changing behaviour.
-#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) PARFOR(v, n)
-#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) PARFOR_2D(v1, v2, N)
-#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) PARFOR_3D(v1, v2, v3, N)
-#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
-#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_TRIANGULAR(v1, v2, N)
-#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
+#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
+#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_TRIANGULAR(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
