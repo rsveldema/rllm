@@ -97,145 +97,15 @@ namespace
         });
     }
 
-    bool create_transfer_staging_buffer(VmaAllocator allocator, size_t bytes, VkBufferUsageFlags usage, VkBuffer& buffer, VmaAllocation& allocation, void*& mapped)
-    {
-        mapped = nullptr;
-
-        VkBufferCreateInfo buffer_info{};
-        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer_info.size = static_cast<VkDeviceSize>(bytes);
-        buffer_info.usage = usage;
-        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-        VmaAllocationCreateInfo alloc_info{};
-        alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-        VmaAllocationInfo allocation_info{};
-        const VkResult create_result = vmaCreateBuffer(allocator, &buffer_info, &alloc_info, &buffer, &allocation, &allocation_info);
-        if (create_result != VK_SUCCESS)
-        {
-            LOG_ERROR(
-                "vmaCreateBuffer failed for temporary Vulkan transfer staging buffer: result={} bytes={} usage=0x{:x}",
-                static_cast<int>(create_result),
-                bytes,
-                static_cast<unsigned int>(usage)
-            );
-            return false;
-        }
-
-        mapped = allocation_info.pMappedData;
-        if (mapped == nullptr)
-        {
-            const VkResult map_result = vmaMapMemory(allocator, allocation, &mapped);
-            if (map_result != VK_SUCCESS)
-            {
-                LOG_ERROR(
-                    "vmaMapMemory failed for temporary Vulkan transfer staging buffer: result={} bytes={}",
-                    static_cast<int>(map_result),
-                    bytes
-                );
-                vmaDestroyBuffer(allocator, buffer, allocation);
-                buffer = VK_NULL_HANDLE;
-                allocation = nullptr;
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    size_t effective_pool_bytes(size_t default_pool_bytes)
-    {
-        const char* value = std::getenv(VulkanMemorySpace::POOL_BYTES_ENV);
-        if (value == nullptr || *value == '\0')
-            return default_pool_bytes;
-
-        errno = 0;
-        char* end = nullptr;
-        const unsigned long long parsed = std::strtoull(value, &end, 10);
-        if (errno != 0 || end == value || *end != '\0' || parsed == 0 ||
-            parsed > static_cast<unsigned long long>(std::numeric_limits<size_t>::max()))
-        {
-            LOG_ERROR(
-                "Invalid {}='{}'. Expected a positive byte count.",
-                VulkanMemorySpace::POOL_BYTES_ENV,
-                value
-            );
-            std::abort();
-        }
-
-        return static_cast<size_t>(parsed);
-    }
 }
 
 VulkanMemorySpace::VulkanMemorySpace(size_t pool_bytes)
-    : pool_bytes_(effective_pool_bytes(pool_bytes))
-    , offload_storage_(pool_bytes_)
 {
     initialize_runtime();
 }
 
 VulkanMemorySpace::~VulkanMemorySpace()
 {
-    transfer_context() = TransferContext{};
-
-    if (mapped_staging_base_ != nullptr && allocator_ != nullptr && staging_allocation_ != nullptr)
-    {
-        vmaUnmapMemory(allocator_, staging_allocation_);
-        mapped_staging_base_ = nullptr;
-    }
-    if (allocator_ != nullptr && offload_buffer_ != VK_NULL_HANDLE && offload_allocation_ != nullptr)
-        vmaDestroyBuffer(allocator_, offload_buffer_, offload_allocation_);
-    if (allocator_ != nullptr && staging_buffer_ != VK_NULL_HANDLE && staging_allocation_ != nullptr)
-        vmaDestroyBuffer(allocator_, staging_buffer_, staging_allocation_);
-    if (allocator_ != nullptr)
-        vmaDestroyAllocator(allocator_);
-    if (command_pool_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE)
-        vkDestroyCommandPool(device_, command_pool_, nullptr);
-    if (device_ != VK_NULL_HANDLE)
-        vkDestroyDevice(device_, nullptr);
-    if (instance_ != VK_NULL_HANDLE)
-        vkDestroyInstance(instance_, nullptr);
-}
-
-size_t VulkanMemorySpace::get_total_size() const
-{
-    return pool_bytes_;
-}
-
-void* VulkanMemorySpace::getMemory()
-{
-    return mapped_staging_base_;
-}
-
-void* VulkanMemorySpace::get_offload_memory()
-{
-    return offload_storage_.data();
-}
-
-void VulkanMemorySpace::copy_staging_to_offload(void* offload_dst, const void* staging_src, size_t bytes)
-{
-    assert(bytes != 0);
-    copy_vulkan_upload(offload_dst, staging_src, bytes);
-}
-
-void VulkanMemorySpace::copy_offload_to_staging(void* staging_dst, const void* offload_src, size_t bytes)
-{
-    assert(bytes != 0);
-    copy_vulkan_download(staging_dst, offload_src, bytes);
-}
-
-void VulkanMemorySpace::copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes)
-{
-    assert(bytes != 0);
-    copy_vulkan_device_copy(offload_dst, offload_src, bytes);
-}
-
-void VulkanMemorySpace::zero_offload(void* offload_dst, size_t bytes)
-{
-    assert(bytes != 0);
-    zero_vulkan_offload(offload_dst, bytes);
 }
 
 VkInstance VulkanMemorySpace::instance() const
@@ -268,25 +138,6 @@ VkCommandPool VulkanMemorySpace::command_pool() const
     return command_pool_;
 }
 
-VkBuffer VulkanMemorySpace::offload_buffer() const
-{
-    return offload_buffer_;
-}
-
-const void* VulkanMemorySpace::offload_base() const
-{
-    return offload_storage_.data();
-}
-
-size_t VulkanMemorySpace::offload_size() const
-{
-    return offload_storage_.size();
-}
-
-void VulkanMemorySpace::set_transfer_context(const TransferContext& ctx)
-{
-    transfer_context() = ctx;
-}
 
 VulkanMemorySpace::TransferContext& VulkanMemorySpace::transfer_context()
 {

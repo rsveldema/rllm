@@ -22,93 +22,6 @@ enum class DeviceMemoryOwner {
     REPLICATED,
 };
 
-#if defined(USE_VULKAN_OFFLOAD)
-struct VulkanRuntimeBuffer
-{
-    VkDevice device = VK_NULL_HANDLE;
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    VkBuffer staging_buffer = VK_NULL_HANDLE;
-    VkDeviceMemory staging_memory = VK_NULL_HANDLE;
-    void* mapped = nullptr;
-    size_t size_bytes = 0;
-
-    VulkanRuntimeBuffer() = default;
-    VulkanRuntimeBuffer(const VulkanRuntimeBuffer&) = delete;
-    VulkanRuntimeBuffer& operator=(const VulkanRuntimeBuffer&) = delete;
-
-    VulkanRuntimeBuffer(VulkanRuntimeBuffer&& other) noexcept
-    {
-        move_from(std::move(other));
-    }
-
-    VulkanRuntimeBuffer& operator=(VulkanRuntimeBuffer&& other) noexcept
-    {
-        if (this != &other)
-        {
-            release();
-            move_from(std::move(other));
-        }
-        return *this;
-    }
-
-    ~VulkanRuntimeBuffer()
-    {
-        release();
-    }
-
-    void release()
-    {
-        if (device == VK_NULL_HANDLE)
-        {
-            clear_handles();
-            return;
-        }
-
-        vkDeviceWaitIdle(device);
-
-        if (mapped != nullptr && staging_memory != VK_NULL_HANDLE)
-        {
-            vkUnmapMemory(device, staging_memory);
-            mapped = nullptr;
-        }
-        if (staging_buffer != VK_NULL_HANDLE)
-            vkDestroyBuffer(device, staging_buffer, nullptr);
-        if (staging_memory != VK_NULL_HANDLE)
-            vkFreeMemory(device, staging_memory, nullptr);
-        if (buffer != VK_NULL_HANDLE)
-            vkDestroyBuffer(device, buffer, nullptr);
-        if (memory != VK_NULL_HANDLE)
-            vkFreeMemory(device, memory, nullptr);
-
-        clear_handles();
-    }
-
-private:
-    void move_from(VulkanRuntimeBuffer&& other)
-    {
-        device = other.device;
-        buffer = other.buffer;
-        memory = other.memory;
-        staging_buffer = other.staging_buffer;
-        staging_memory = other.staging_memory;
-        mapped = other.mapped;
-        size_bytes = other.size_bytes;
-        other.clear_handles();
-    }
-
-    void clear_handles()
-    {
-        device = VK_NULL_HANDLE;
-        buffer = VK_NULL_HANDLE;
-        memory = VK_NULL_HANDLE;
-        staging_buffer = VK_NULL_HANDLE;
-        staging_memory = VK_NULL_HANDLE;
-        mapped = nullptr;
-        size_bytes = 0;
-    }
-};
-#endif
 
 template <typename T>
 class DevicePointer
@@ -171,9 +84,9 @@ public:
         other.m_memory_space = nullptr;
         other.m_count = 0;
         other.m_bytes = 0;
-        other.m_staging_ptr = nullptr;
+        other.m_staging_ptr.invalidate();
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        other.m_offload_ptr = nullptr;
+        other.m_offload_ptr.invalidate();
         other.m_memory_owner = DeviceMemoryOwner::INVALID;
         other.m_host_access_fast_path.store(false, std::memory_order_release);
         other.m_pending_flush = nullptr;
@@ -203,9 +116,9 @@ public:
         other.m_memory_space = nullptr;
         other.m_count = 0;
         other.m_bytes = 0;
-        other.m_staging_ptr = nullptr;
+        other.m_staging_ptr.invalidate();
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        other.m_offload_ptr = nullptr;
+        other.m_offload_ptr.invalidate();
         other.m_memory_owner = DeviceMemoryOwner::INVALID;
         other.m_host_access_fast_path.store(false, std::memory_order_release);
         other.m_pending_flush = nullptr;
@@ -222,11 +135,11 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         assert(m_bytes > 0);
-        assert(m_staging_ptr != nullptr);
+        assert(m_staging_ptr.get() != nullptr);
 
-        std::memset(m_staging_ptr, 0, m_bytes);
+        std::memset(m_staging_ptr.get(), 0, m_bytes);
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        assert(m_offload_ptr != nullptr);
+        assert(m_offload_ptr.is_valid());
         m_memory_space->zero_offload(m_offload_ptr, m_bytes);
         m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
         m_pending_flush = nullptr;
@@ -237,11 +150,11 @@ public:
     void fill(T value)
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
-        assert(m_staging_ptr != nullptr);
+        assert(m_staging_ptr.is_valid());
 
         std::fill_n(m_staging_ptr, m_count, value);
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        assert(m_offload_ptr != nullptr);
+        assert(m_offload_ptr.is_valid());
         m_memory_space->copy_staging_to_offload(m_offload_ptr, m_staging_ptr, m_bytes);
         m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
         m_pending_flush = nullptr;
@@ -253,11 +166,11 @@ public:
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         if (host_access_fast_path())
-            return m_staging_ptr;
+            return m_staging_ptr.get();
         ensure_host_data();
         mark_host_modified();
 #endif
-        return m_staging_ptr;
+        return (T*) m_staging_ptr.get();
     }
 
     T* staging_data() const
@@ -270,30 +183,16 @@ public:
         return m_staging_ptr;
     }
 
-    void* offload_data() const
+    OffloadMemoryBuffer offload_data() const
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         ensure_device_data();
         mark_device_modified();
         return m_offload_ptr;
 #else
-        return nullptr;
+        return {};
 #endif
     }
-
-#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-    void* raw_offload_data() const
-    {
-        return m_offload_ptr;
-    }
-#endif
-
-#if defined(USE_VULKAN_OFFLOAD)
-    VulkanRuntimeBuffer& vulkan_runtime_buffer() const
-    {
-        return m_vulkan_runtime_buffer;
-    }
-#endif
 
     size_t size() const
     {
@@ -308,16 +207,16 @@ public:
     void resize(size_t num_elements)
     {
         assert(num_elements > 0);
-        if (num_elements == m_count && m_staging_ptr != nullptr)
+        if (num_elements == m_count && m_staging_ptr.is_valid())
             return;
 
         IMemorySpace* target_memory_space = m_memory_space != nullptr ? m_memory_space : IMemorySpace::get_instance();
         DevicePointer resized(*target_memory_space, num_elements);
         const size_t copy_count = std::min(m_count, num_elements);
-        if (m_staging_ptr != nullptr && copy_count > 0)
+        if (m_staging_ptr.is_valid() && copy_count > 0)
         {
             ensure_host_data();
-            std::memcpy(resized.m_staging_ptr, m_staging_ptr, copy_count * sizeof(T));
+            std::memcpy(resized.m_staging_ptr.get(), m_staging_ptr.get(), copy_count * sizeof(T));
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
             resized.m_memory_owner = DeviceMemoryOwner::ON_HOST;
             resized.m_host_access_fast_path.store(true, std::memory_order_release);
@@ -383,19 +282,22 @@ public:
     {
         ensure_host_data();
         mark_host_modified();
-        return m_staging_ptr[idx];
+        T* ptr = static_cast<T*>(m_staging_ptr.get());
+        return ptr[idx];
     }
 
     const T& operator[](size_t idx) const
     {
         ensure_host_data();
-        return m_staging_ptr[idx];
+        const T* ptr = static_cast<T*>(m_staging_ptr.get());
+        return ptr[idx];
     }
 
     T get(size_t idx) const
     {
         ensure_host_data();
-        return m_staging_ptr[idx];
+        const T* ptr = static_cast<T*>(m_staging_ptr.get());
+        return ptr[idx];
     }
 
     T get_offload_synced(size_t idx) const
@@ -411,13 +313,15 @@ public:
         }
 #endif
         ensure_host_data();
-        return m_staging_ptr[idx];
+        const T* ptr = static_cast<T*>(m_staging_ptr.get());
+        return ptr[idx];
     }
 
     void set(size_t idx, const T& value)
     {
         ensure_host_data();
-        m_staging_ptr[idx] = value;
+        const T* ptr = static_cast<T*>(m_staging_ptr.get());
+        ptr[idx] = value;
         mark_host_modified();
     }
 
@@ -524,8 +428,8 @@ private:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
     void copy_to_offload_buffer_unlocked()
     {
-        assert(m_staging_ptr != nullptr);
-        assert(m_offload_ptr != nullptr);
+        assert(m_staging_ptr.is_valid());
+        assert(m_offload_ptr.is_valid());
 
         if (device_data_is_current_unlocked() && m_memory_owner != DeviceMemoryOwner::ON_HOST)
             return;
@@ -537,8 +441,8 @@ private:
 
     void copy_range_to_offload_buffer_unlocked(size_t start_element, size_t element_count)
     {
-        assert(m_staging_ptr != nullptr);
-        assert(m_offload_ptr != nullptr);
+        assert(m_staging_ptr.is_valid());
+        assert(m_offload_ptr.is_valid());
         assert(start_element <= m_count);
         assert(element_count <= m_count - start_element);
 
@@ -556,8 +460,8 @@ private:
 
     void copy_from_offload_buffer_unlocked()
     {
-        assert(m_staging_ptr != nullptr);
-        assert(m_offload_ptr != nullptr);
+        assert(m_staging_ptr.is_valid());
+        assert(m_offload_ptr.is_valid());
 
         if (host_data_is_current_unlocked() && m_memory_owner != DeviceMemoryOwner::ON_DEVICE)
             return;
@@ -571,9 +475,9 @@ private:
     void assign_storage_like(const DevicePointer& other)
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        if (m_count == other.m_count && m_bytes == other.m_bytes && m_staging_ptr != nullptr && m_offload_ptr != nullptr)
+        if (m_count == other.m_count && m_bytes == other.m_bytes && m_staging_ptr.is_valid() && m_offload_ptr.is_valid())
 #else
-        if (m_count == other.m_count && m_bytes == other.m_bytes && m_staging_ptr != nullptr)
+        if (m_count == other.m_count && m_bytes == other.m_bytes && m_staging_ptr.is_valid())
 #endif
         {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
@@ -603,7 +507,7 @@ private:
             case DeviceMemoryOwner::INVALID:
                 std::abort();
             case DeviceMemoryOwner::ON_HOST:
-                std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
+                std::memcpy(m_staging_ptr.get(), other.m_staging_ptr.get(), m_bytes);
                 m_memory_owner = DeviceMemoryOwner::ON_HOST;
                 m_host_access_fast_path.store(true, std::memory_order_release);
                 break;
@@ -612,13 +516,13 @@ private:
                 m_memory_owner = DeviceMemoryOwner::ON_DEVICE;
                 break;
             case DeviceMemoryOwner::REPLICATED:
-                std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
+                std::memcpy(m_staging_ptr.get(), other.m_staging_ptr.get(), m_bytes);
                 m_memory_space->copy_offload_to_offload(m_offload_ptr, other.m_offload_ptr, m_bytes);
                 m_memory_owner = DeviceMemoryOwner::REPLICATED;
                 break;
         }
 #else
-        std::memcpy(m_staging_ptr, other.m_staging_ptr, m_bytes);
+        std::memcpy(m_staging_ptr.get(), other.m_staging_ptr.get(), m_bytes);
 #endif
     }
 
@@ -629,22 +533,22 @@ private:
         assert(m_bytes != 0);
 
         assert(m_memory_space != nullptr);
-        assert(m_staging_ptr == nullptr);
+        assert(m_staging_ptr.is_invalid());
 
-        m_staging_ptr = static_cast<T*>(m_memory_space->allocate_staging(m_bytes));
+        m_staging_ptr = m_memory_space->allocate_staging(m_bytes);
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         assert(m_offload_ptr == nullptr);
         m_offload_ptr = m_memory_space->allocate_offload(m_bytes);
-        if (m_staging_ptr == nullptr || m_offload_ptr == nullptr)
+        if (m_staging_ptr.is_invalid() || m_offload_ptr == nullptr)
 #else
-        if (m_staging_ptr == nullptr)
+        if (m_staging_ptr.is_invalid())
 #endif
         {
             release_internal();
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-            std::println("Failed to allocate DevicePointer storage: bytes={} staging_allocated={} offload_allocated={}", m_bytes, m_staging_ptr != nullptr, m_offload_ptr != nullptr);
+            std::println("Failed to allocate DevicePointer storage: bytes={} staging_allocated={} offload_allocated={}", m_bytes, m_staging_ptr.is_valid(), m_offload_ptr.is_valid());
 #else
-            std::println("Failed to allocate DevicePointer storage: bytes={} staging_allocated={}", m_bytes, m_staging_ptr != nullptr);
+            std::println("Failed to allocate DevicePointer storage: bytes={} staging_allocated={}", m_bytes, m_staging_ptr.is_valid());
 #endif
             std::abort();
         }
@@ -691,11 +595,10 @@ private:
 
     void release_internal()
     {
-        if (m_staging_ptr != nullptr) 
+        if (m_staging_ptr.is_valid()) 
         {
             assert(m_memory_space != nullptr);
-            m_memory_space->release_staging(m_staging_ptr, m_bytes);
-            m_staging_ptr = nullptr;
+            m_memory_space->release_staging(m_staging_ptr);
         }
 
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
@@ -706,9 +609,8 @@ private:
 #endif
         if (m_memory_space != nullptr)
         {
-            assert(m_offload_ptr != nullptr);
-            m_memory_space->release_offload(m_offload_ptr, m_bytes);
-            m_offload_ptr = nullptr;
+            assert(m_offload_ptr.is_valid());
+            m_memory_space->release_offload(m_offload_ptr);
         }
         m_memory_owner = DeviceMemoryOwner::INVALID;
 #endif
@@ -717,14 +619,10 @@ private:
     IMemorySpace* m_memory_space = nullptr;
     size_t m_count = 0;
     size_t m_bytes = 0;
-    T* m_staging_ptr = nullptr;
+    OnHostStagingBuffer m_staging_ptr{nullptr};
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-    void* m_offload_ptr = nullptr;
+    OffloadMemoryBuffer m_offload_ptr{};
     mutable DeviceMemoryOwner m_memory_owner = DeviceMemoryOwner::INVALID;
-    mutable std::atomic_bool m_host_access_fast_path{false};
-#if defined(USE_VULKAN_OFFLOAD)
-    mutable VulkanRuntimeBuffer m_vulkan_runtime_buffer;
-#endif
     std::function<void()> m_pending_flush;
 #endif
     mutable std::mutex m_state_mutex;

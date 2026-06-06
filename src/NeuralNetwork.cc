@@ -286,7 +286,7 @@ namespace rllm
         MultiTokenPredictionIndex num_valid
     )
     {
-        assert(m_seq_len > 0);
+        assert(m_seq_len > PositionIndex::START);
 
         m_backward_workspace->reset(m_seq_len);
         

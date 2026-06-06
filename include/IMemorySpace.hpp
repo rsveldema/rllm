@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 
 #if defined(USE_VULKAN_OFFLOAD) || defined(USE_HIP_OFFLOAD)
 #define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
@@ -14,6 +16,39 @@ enum class IMemorySpaceType {
     HIP
 };
 
+
+class OffloadMemoryBuffer
+{
+public:
+    OffloadMemoryBuffer() = default;
+
+    void invalidate() { std::memset(storage, 0, sizeof(storage)); }
+    bool is_valid() const;
+
+    bool is_invalid() const { return ! is_valid(); }
+
+private:
+    /** Storage for a Vulkan buffer handle or a HIP device pointer, depending on the memory space type.
+     * The actual type and usage will be determined by the specific memory space implementation.
+     */
+    char storage[32] = {};
+};
+
+class OnHostStagingBuffer
+{
+public:
+    explicit OnHostStagingBuffer(void *p) { m_data = p; }
+
+    void *get() { return m_data; }
+    void *get() const { return m_data; }
+
+    bool is_valid() const { return m_data != nullptr; }
+    bool is_invalid() const { return ! is_valid(); }
+
+    void invalidate() { m_data = nullptr; }
+private:
+    void* m_data = nullptr;
+};
 
 /** Allocate/deallocate memory in a specific memory space.
  *
@@ -31,20 +66,18 @@ class IMemorySpace
 public:
     virtual ~IMemorySpace() = default;
 
-    virtual size_t get_total_size() const = 0;
-    virtual void* getMemory() = 0;
-    virtual void* get_offload_memory() = 0;
-    virtual void copy_staging_to_offload(void* offload_dst, const void* staging_src, size_t bytes) = 0;
-    virtual void copy_offload_to_staging(void* staging_dst, const void* offload_src, size_t bytes) = 0;
-    virtual void copy_offload_to_offload(void* offload_dst, const void* offload_src, size_t bytes) = 0;
-    virtual void zero_offload(void* offload_dst, size_t bytes) = 0;
+    virtual void copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, const OnHostStagingBuffer& staging_src, size_t bytes) = 0;
+    virtual void copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, const OffloadMemoryBuffer& offload_src, size_t bytes) = 0;
+    virtual void copy_offload_to_offload(const OffloadMemoryBuffer& offload_dst, const OffloadMemoryBuffer& offload_src, size_t bytes) = 0;
+    virtual void zero_offload(const OffloadMemoryBuffer& offload_dst, size_t bytes) = 0;
 
-    // Allocation methods for sub-allocation from memory pools
-    virtual void* allocate_staging(size_t bytes) = 0;
-    virtual void* allocate_offload(size_t bytes) = 0;
-    virtual void release_staging(void* ptr, size_t bytes) = 0;
-    virtual void release_offload(void* ptr, size_t bytes) = 0;
-    virtual void reset() = 0;
+
+    virtual OnHostStagingBuffer allocate_staging(size_t bytes) = 0;
+    virtual OffloadMemoryBuffer allocate_offload(size_t bytes) = 0;
+
+    virtual void release_staging(OnHostStagingBuffer& ref) = 0;
+    virtual void release_offload(OffloadMemoryBuffer& ref) = 0;
+
 
     /** returns the memory space for a given offload engine, for example,
      * for Vulkan offload this would return a VulkanMemorySpace that allocates
