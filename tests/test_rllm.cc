@@ -268,7 +268,8 @@ TEST(TransformerBlockTest, ForwardOutputShape)
     );
     fill(h, 0.1f);
 
-    block->forward(h, static_cast<rllm::PositionIndex>(T));
+    auto forward_workspace = std::make_unique<rllm::ForwardWorkspace>(static_cast<rllm::PositionIndex>(T));
+    block->forward(h, static_cast<rllm::PositionIndex>(T), *forward_workspace);
 
     ASSERT_EQ(static_cast<size_t>(h.num_rows()), static_cast<size_t>(T));
 }
@@ -287,7 +288,8 @@ TEST(TransformerBlockTest, BackwardOutputShape)
         static_cast<rllm::PositionIndex>(T)
     );
     fill(h, 0.05f);
-    block->forward(h, static_cast<rllm::PositionIndex>(T));
+    auto forward_workspace = std::make_unique<rllm::ForwardWorkspace>(static_cast<rllm::PositionIndex>(T));
+    block->forward(h, static_cast<rllm::PositionIndex>(T), *forward_workspace);
 
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
         static_cast<rllm::PositionIndex>(T)
@@ -296,8 +298,8 @@ TEST(TransformerBlockTest, BackwardOutputShape)
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
         static_cast<rllm::PositionIndex>(T)
     );
-    rllm::BackwardWorkspace backward_workspace(static_cast<rllm::PositionIndex>(T));
-    block->backward(dout, din, backward_workspace, 0.01f);
+    auto backward_workspace = std::make_unique<rllm::BackwardWorkspace>(static_cast<rllm::PositionIndex>(T));
+    block->backward(dout, din, *backward_workspace, 0.01f, *forward_workspace);
 
     ASSERT_EQ(static_cast<int>(din.num_rows()) * static_cast<int>(din.num_cols()), T * D)
         << "backward() must return a gradient of the same size as the input";
@@ -522,6 +524,8 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     );
     fill(h_template, 0.1f);
 
+    rllm::ForwardWorkspace forward_workspace(static_cast<rllm::PositionIndex>(T));
+
     // --- serial baseline (1 thread) ---
     parallel::set_num_threads(1);
     const auto t0 = std::chrono::steady_clock::now();
@@ -529,7 +533,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     {
         std::println("Forward seq iter {}/{}", iter + 1, BENCH_FORWARD_ITERS);
         auto h = h_template;
-        block->forward(h, static_cast<rllm::PositionIndex>(T));
+        block->forward(h, static_cast<rllm::PositionIndex>(T), forward_workspace);
     }
     const auto t1 = std::chrono::steady_clock::now();
 
@@ -540,7 +544,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     {
         std::println("Forward par iter {}/{}", iter + 1, BENCH_FORWARD_ITERS);
         auto h = h_template;
-        block->forward(h, static_cast<rllm::PositionIndex>(T));
+        block->forward(h, static_cast<rllm::PositionIndex>(T), forward_workspace);
     }
     const auto t3 = std::chrono::steady_clock::now();
 
@@ -578,8 +582,13 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
 
     auto block = std::make_unique<rllm::TransformerBlock>();
     block->randomize();
-
+    
     const int T = BENCH_SEQ_LEN;
+
+
+    auto forward_workspace = std::make_unique<rllm::ForwardWorkspace>(static_cast<rllm::PositionIndex>(BENCH_SEQ_LEN));
+    auto backward_workspace = std::make_unique<rllm::BackwardWorkspace>(static_cast<rllm::PositionIndex>(T));
+
     rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
         static_cast<rllm::PositionIndex>(T)
     );
@@ -592,11 +601,10 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     // Prime the block with a forward pass so backward has valid cached state.
     {
         auto h = h_template;
-        block->forward(h, static_cast<rllm::PositionIndex>(T));
+        block->forward(h, static_cast<rllm::PositionIndex>(T), *forward_workspace);
     }
 
     // --- serial baseline (1 thread) ---
-    rllm::BackwardWorkspace backward_workspace(static_cast<rllm::PositionIndex>(T));
     parallel::set_num_threads(1);
     const auto t0 = std::chrono::steady_clock::now();
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
@@ -605,7 +613,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
         rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
             static_cast<rllm::PositionIndex>(T)
         );
-        block->backward(dout_template, din, backward_workspace, 0.01f);
+        block->backward(dout_template, din, *backward_workspace, 0.01f, *forward_workspace);
     }
     const auto t1 = std::chrono::steady_clock::now();
 
@@ -618,7 +626,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
         rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
             static_cast<rllm::PositionIndex>(T)
         );
-        block->backward(dout_template, din, backward_workspace, 0.01f);
+        block->backward(dout_template, din, *backward_workspace, 0.01f, *forward_workspace);
     }
     const auto t3 = std::chrono::steady_clock::now();
 

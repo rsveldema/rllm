@@ -90,6 +90,12 @@ namespace rllm
         MAX   = 4
     };
 
+    enum class RmsNormPartialSumIndex : size_t
+    {
+        START = 0,
+        MAX = static_cast<size_t>(PositionIndex::MAX) * static_cast<size_t>(EmbeddingDimension::MAX)
+    };
+
     static inline MultiTokenPredictionIndex inc(MultiTokenPredictionIndex id)
     {
         assert(id < MultiTokenPredictionIndex::MAX);

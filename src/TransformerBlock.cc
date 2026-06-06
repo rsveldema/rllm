@@ -18,12 +18,6 @@ namespace rllm
 {
     static_assert(static_cast<int>(EmbeddingDimension::MAX) % static_cast<int>(HeadsIndex::MAX) == 0, "EmbeddingDimension::MAX must be divisible by HeadsIndex::MAX");
 
-    enum class RmsNormPartialSumIndex : size_t
-    {
-        START = 0,
-        MAX = static_cast<size_t>(PositionIndex::MAX) * static_cast<size_t>(EmbeddingDimension::MAX)
-    };
-
 #if !defined(USE_VULKAN_OFFLOAD)
     namespace detail
     {
@@ -300,48 +294,6 @@ namespace rllm
 
     // ── SGD + momentum ─────────────────────────────────────────────────────────
 
-    // ── forward workspace ─────────────────────────────────────────────────────
-    // All large fixed-size matrices live here so they are heap-allocated via
-    // unique_ptr and do not blow the stack (~21 MB of combined fixed-size arrays).
-    struct ForwardWorkspace
-    {
-        PositionIndex seq_len;
-        // Activations cached for the backward pass
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_in;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_norm_attn;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> Q, K, V;
-        // Per-head softmax weight matrices; only the [H x T x T] block is live.
-        flexible_rows_cols_levels_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex> attn_w;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> attn_concat;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_mid;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_norm_ff;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> gate_pre;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> up_pre;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> ffn_act;
-        // Temporaries used only within forward() itself
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> attn_proj;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> ffn_out;
-        fixed_size_vector<rlmm_float, RmsNormPartialSumIndex> rms_norm_row_sums;
-        fixed_size_vector<rlmm_float, PositionIndex> rms_norm_inv_rms;
-
-        explicit ForwardWorkspace(PositionIndex seq)
-            : seq_len(seq)
-            , h_in(seq)
-            , h_norm_attn(seq)
-            , Q(seq)
-            , K(seq)
-            , V(seq)
-            , attn_concat(seq)
-            , h_mid(seq)
-            , h_norm_ff(seq)
-            , gate_pre(seq)
-            , up_pre(seq)
-            , ffn_act(seq)
-            , attn_proj(seq)
-            , ffn_out(seq)
-        {}
-    };
-
     // ── destructor ────────────────────────────────────────────────────────────
     // Defined here so ForwardWorkspace is complete when unique_ptr deleter fires.
     TransformerBlock::TransformerBlock() = default;
@@ -446,16 +398,16 @@ namespace rllm
         compute_attention_values_for_heads(ws, seq_len);
     }
 
-    void TransformerBlock::forward(flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len)
+    void TransformerBlock::forward(flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, 
+        ForwardWorkspace& workspace)
     {
-        if (!m_fwd_ws || m_fwd_ws->seq_len != seq_len)
-            m_fwd_ws = std::make_unique<ForwardWorkspace>(seq_len);
-        auto& ws = *m_fwd_ws;
+        auto& ws = workspace;
 
         ws.h_in = h;
 
         // ── 1. Pre-norm (attention) ──────────────────────────────────────────
-        rms_norm_vulkan_optimized_with_workspace(h, ws.h_norm_attn, ws.rms_norm_row_sums, ws.rms_norm_inv_rms);
+        //rms_norm_vulkan_optimized_with_workspace(h, ws.h_norm_attn, ws.rms_norm_row_sums, ws.rms_norm_inv_rms);
+        rms_norm(h, ws.h_norm_attn);
 
         // ── 2. Q / K / V projections ─────────────────────────────────────────
         matmul_ABt_3_matrix_muls(ws.h_norm_attn, W_q, ws.Q, W_k, ws.K, W_v, ws.V);
@@ -470,7 +422,8 @@ namespace rllm
         element_wise_sum(h, ws.attn_proj, ws.h_mid);
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
-        rms_norm_vulkan_optimized_with_workspace(ws.h_mid, ws.h_norm_ff, ws.rms_norm_row_sums, ws.rms_norm_inv_rms);
+        //rms_norm_vulkan_optimized_with_workspace(ws.h_mid, ws.h_norm_ff, ws.rms_norm_row_sums, ws.rms_norm_inv_rms);
+        rms_norm(ws.h_mid, ws.h_norm_ff);
 
         // ── 6. SwiGLU FFN ─────────────────────────────────────────────────────
         matmul_ABt_2_matrix_muls(ws.h_norm_ff, W_gate, ws.gate_pre, W_up, ws.up_pre);
@@ -675,12 +628,13 @@ namespace rllm
         backward_accumulate_attention_dk_for_heads(ws, fwd);
     }
 
-    void TransformerBlock::backward(const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate)
+    void TransformerBlock::backward(const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate,
+        ForwardWorkspace& fwd_workspace)
     {
-        const PositionIndex seq = m_fwd_ws->seq_len;
+        const PositionIndex seq = fwd_workspace.seq_len;
         workspace.reset(seq);
         auto* ws = &workspace;
-        auto& fwd = *m_fwd_ws;
+        auto& fwd = fwd_workspace;
 
         // ── FFN backward ──────────────────────────────────────────────────────
         // h_out = h_mid + ffn_out  → d_h_mid += dout,  d_ffn_out = dout (same buffer)

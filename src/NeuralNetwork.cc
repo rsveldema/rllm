@@ -106,10 +106,20 @@ namespace rllm
     {
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h;
         fixed_size_vector<rlmm_float, EmbeddingDimension> h_last;
+
+        ForwardWorkspace workspace;
+
         explicit NeuralNetworkForwardWorkspace(PositionIndex seq_len)
-            : h(seq_len)
+            : h(seq_len),
+              workspace(seq_len)
         {
             h_last.set_size(EmbeddingDimension::MAX);
+        }
+
+        void reset(PositionIndex seq_len)
+        {
+            h.set_rows(seq_len);
+            workspace.reset(seq_len);
         }
     };
 
@@ -127,7 +137,7 @@ namespace rllm
 
         // Pass through each transformer block in order
         for (auto& block : m_transformer_blocks)
-            block.forward(ws.h, m_seq_len);
+            block.forward(ws.h, m_seq_len, ws.workspace);
 
         // Keep full hidden state for backward pass
         m_last_hidden = ws.h;
@@ -231,6 +241,7 @@ namespace rllm
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dh;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din;
         BackwardWorkspace transformer_block;
+        
         explicit BackwardPropWorkspace(PositionIndex seq_len)
             : dh(seq_len)
             , din(seq_len)
@@ -239,6 +250,16 @@ namespace rllm
             output_layer_delta.set_size(TokenID::MAX);
             h_last_vec.set_size(EmbeddingDimension::MAX);
             dh_last.set_size(EmbeddingDimension::MAX);
+        }
+
+        void reset(PositionIndex seq_len)
+        {
+            dh.set_rows(seq_len);
+            din.set_rows(seq_len);
+            transformer_block.reset(seq_len);
+            output_layer_delta.zero();
+            h_last_vec.zero();
+            dh_last.zero();
         }
     };
 
@@ -290,7 +311,7 @@ namespace rllm
 
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
-            m_transformer_blocks[i].backward(ws.dh, ws.din, ws.transformer_block, learning_rate);
+            m_transformer_blocks[i].backward(ws.dh, ws.din, ws.transformer_block, learning_rate, m_forward_workspace->workspace);
             ws.dh = ws.din;
         }
 
@@ -911,6 +932,10 @@ namespace rllm
         const auto& full_string = *full_string_opt;
  
         get_last_input() = train_input; // set the input to the train input for tracing
+
+
+        m_backward_workspace->reset(train_input.size());
+        m_forward_workspace->reset(train_input.size());
 
 
         // In multi-epoch training each call gets a small fixed budget (max_iterations).
