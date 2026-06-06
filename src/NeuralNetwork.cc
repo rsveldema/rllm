@@ -128,6 +128,7 @@ namespace rllm
         assert(!m_transformer_blocks.empty());
 
         m_seq_len = m_last_input.size();
+        m_forward_workspace->reset(m_seq_len);
 
         auto& ws = *m_forward_workspace;
         ws.h.set_rows(m_seq_len);
@@ -285,6 +286,10 @@ namespace rllm
         MultiTokenPredictionIndex num_valid
     )
     {
+        assert(m_seq_len > 0);
+
+        m_backward_workspace->reset(m_seq_len);
+        
         static constexpr float BASE_LEARNING_RATE = 0.003f;
         const float learning_rate =
             BASE_LEARNING_RATE / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
@@ -932,10 +937,6 @@ namespace rllm
         const auto& full_string = *full_string_opt;
  
         get_last_input() = train_input; // set the input to the train input for tracing
-
-
-        m_backward_workspace->reset(train_input.size());
-        m_forward_workspace->reset(train_input.size());
 
 
         // In multi-epoch training each call gets a small fixed budget (max_iterations).
