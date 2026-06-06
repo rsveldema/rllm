@@ -34,7 +34,7 @@ private:
     VkInstance m_instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
-    uint32_t m_queue_family_index override;
+    uint32_t m_queue_family_index = 0;
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool m_command_pool = VK_NULL_HANDLE;
     VmaAllocator m_allocator = nullptr;

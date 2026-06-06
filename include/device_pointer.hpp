@@ -166,7 +166,7 @@ public:
     {
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         if (host_access_fast_path())
-            return m_staging_ptr.get();
+            return (T*)m_staging_ptr.get();
         ensure_host_data();
         mark_host_modified();
 #endif
@@ -180,7 +180,7 @@ public:
 
     T* raw_staging_data() const
     {
-        return m_staging_ptr;
+        return staging_data();
     }
 
     OffloadMemoryBuffer offload_data() const
@@ -539,7 +539,7 @@ private:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         assert(m_offload_ptr == nullptr);
         m_offload_ptr = m_memory_space->allocate_offload(m_bytes);
-        if (m_staging_ptr.is_invalid() || m_offload_ptr == nullptr)
+        if (m_staging_ptr.is_invalid() || m_offload_ptr.is_invalid())
 #else
         if (m_staging_ptr.is_invalid())
 #endif
@@ -624,6 +624,7 @@ private:
     OffloadMemoryBuffer m_offload_ptr{};
     mutable DeviceMemoryOwner m_memory_owner = DeviceMemoryOwner::INVALID;
     std::function<void()> m_pending_flush;
+    std::atomic<bool> m_host_access_fast_path;
 #endif
     mutable std::mutex m_state_mutex;
 };
