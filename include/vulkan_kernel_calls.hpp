@@ -464,8 +464,13 @@ namespace rllm::vulkan
         VkCommandBuffer m_command_buffer = VK_NULL_HANDLE;
         VkDevice m_submit_fence_device = VK_NULL_HANDLE;
         VkFence m_submit_fence = VK_NULL_HANDLE;
+        VkDevice m_timestamp_query_pool_device = VK_NULL_HANDLE;
+        VkQueryPool m_timestamp_query_pool = VK_NULL_HANDLE;
+        float m_timestamp_period_ns = 0.0f;
+        uint32_t m_timestamp_valid_bits = 0;
+        bool m_pending_submit_has_timestamps = false;
         bool m_submit_in_flight = false;
-        std::chrono::steady_clock::time_point m_submit_start{};
+        std::string m_pending_submit_kernel_name;  // kernel name for the in-flight submit being waited on
         std::mutex m_launch_mutex;
     };
 

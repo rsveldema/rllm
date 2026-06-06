@@ -460,7 +460,7 @@ namespace parallel {
                 return lhs.kernel < rhs.kernel;
             });
 
-            if (timings.size() > limit)
+            if (limit != 0 && timings.size() > limit)
                 timings.resize(limit);
 
             return timings;
@@ -477,7 +477,10 @@ namespace parallel {
             if (timings.empty())
                 return;
 
-            std::println("Top-{} kernel execution times:", limit);
+            if (limit == 0)
+                std::println("Kernel execution times:");
+            else
+                std::println("Top-{} kernel execution times:", limit);
             for (const auto& timing : timings)
             {
                 const double total_ms = static_cast<double>(timing.total_ns) / 1'000'000.0;
@@ -522,7 +525,7 @@ namespace parallel {
         {
 #if defined(RLLM_ENABLE_STATISTICS)
             if (auto* statistics = exit_statistics_instance())
-                statistics->print_top_kernel_timings(5);
+                statistics->print_top_kernel_timings(0);
 #endif
         }
 
