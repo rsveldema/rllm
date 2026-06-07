@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <string_view>
 #include <cstddef>
 #include <cstring>
 #include <functional>
@@ -314,16 +315,24 @@ public:
         mark_host_modified();
     }
 
-    void copy_to_offload_buffer()
+    void copy_to_offload_buffer(std::string_view site = {}, std::string_view parameter = {})
     {
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        m_copy_site = site;
+        m_copy_parameter = parameter;
+#endif
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         std::lock_guard<std::mutex> lock(m_state_mutex);
         copy_to_offload_buffer_unlocked();
 #endif
     }
 
-    void copy_range_to_offload_buffer(size_t start_element, size_t element_count)
+    void copy_range_to_offload_buffer(size_t start_element, size_t element_count, std::string_view site = {}, std::string_view parameter = {})
     {
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        m_copy_site = site;
+        m_copy_parameter = parameter;
+#endif
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         std::lock_guard<std::mutex> lock(m_state_mutex);
         copy_range_to_offload_buffer_unlocked(start_element, element_count);
@@ -333,8 +342,12 @@ public:
 #endif
     }
 
-    void copy_from_offload_buffer()
+    void copy_from_offload_buffer(std::string_view site = {}, std::string_view parameter = {})
     {
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+        m_copy_site = site;
+        m_copy_parameter = parameter;
+#endif
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         std::lock_guard<std::mutex> lock(m_state_mutex);
         copy_from_offload_buffer_unlocked();
@@ -430,7 +443,7 @@ private:
         if (device_data_is_current_unlocked() && m_memory_owner != DeviceMemoryOwner::ON_HOST)
             return;
 
-        m_memory_space.copy_staging_to_offload(m_offload_ptr, 0, m_staging_ptr, 0, m_bytes);
+        m_memory_space.copy_staging_to_offload(m_offload_ptr, 0, m_staging_ptr, 0, m_bytes, m_copy_site, m_copy_parameter);
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
         m_host_access_fast_path.store(false, std::memory_order_release);
     }
@@ -445,7 +458,7 @@ private:
 
         const size_t byte_offset = start_element * sizeof(T);
         const size_t bytes = element_count * sizeof(T);
-        m_memory_space.copy_staging_to_offload(m_offload_ptr, byte_offset, m_staging_ptr, byte_offset, bytes);
+        m_memory_space.copy_staging_to_offload(m_offload_ptr, byte_offset, m_staging_ptr, byte_offset, bytes, m_copy_site, m_copy_parameter);
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
         m_host_access_fast_path.store(false, std::memory_order_release);
     }
@@ -458,7 +471,7 @@ private:
         if (host_data_is_current_unlocked() && m_memory_owner != DeviceMemoryOwner::ON_DEVICE)
             return;
 
-        m_memory_space.copy_offload_to_staging(m_staging_ptr, 0, m_offload_ptr, 0, m_bytes);
+        m_memory_space.copy_offload_to_staging(m_staging_ptr, 0, m_offload_ptr, 0, m_bytes, m_copy_site, m_copy_parameter);
         m_memory_owner = DeviceMemoryOwner::REPLICATED;
         m_host_access_fast_path.store(false, std::memory_order_release);
     }
@@ -548,6 +561,8 @@ private:
         m_memory_owner = DeviceMemoryOwner::INVALID;
         m_pending_flush = nullptr;
         m_host_access_fast_path.store(false, std::memory_order_release);
+        m_copy_site.clear();
+        m_copy_parameter.clear();
 #endif
     }
 
@@ -594,6 +609,8 @@ private:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_pending_flush = nullptr;
         m_host_access_fast_path.store(false, std::memory_order_release);
+        m_copy_site.clear();
+        m_copy_parameter.clear();
         if (m_offload_ptr.is_valid())
         {
             m_memory_space.release_offload(m_offload_ptr);
@@ -611,6 +628,10 @@ private:
     mutable DeviceMemoryOwner m_memory_owner = DeviceMemoryOwner::INVALID;
     std::function<void()> m_pending_flush;
     std::atomic<bool> m_host_access_fast_path;
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+    std::string m_copy_site;
+    std::string m_copy_parameter;
+#endif
 #endif
     mutable std::mutex m_state_mutex;
 };

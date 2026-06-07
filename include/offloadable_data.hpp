@@ -57,9 +57,9 @@ namespace rllm
             m_data.mark_device_latest();
         }
 
-        void copy_to_offload_buffer()
+        void copy_to_offload_buffer(std::string_view site = {}, std::string_view parameter = {})
         {
-            m_data.copy_to_offload_buffer();
+            m_data.copy_to_offload_buffer(site, parameter);
         }
 
         bool needs_offload_sync() const

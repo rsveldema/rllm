@@ -14,6 +14,7 @@
 #include <mutex>
 
 #include <logging.hpp>
+#include <parallel.hpp>
 
 namespace
 {
@@ -302,11 +303,16 @@ namespace
 // their own m_sync_mutex locking internally. Therefore the caller must NOT
 // acquire m_sync_mutex first (that would cause a recursive-lock deadlock).
 
-void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OnHostStagingBuffer& staging_src, size_t src_offset, size_t bytes)
+void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OnHostStagingBuffer& staging_src, size_t src_offset, size_t bytes, std::string_view site, std::string_view parameter)
 {
     assert(bytes != 0);
     assert(offload_dst.is_valid());
     assert(staging_src.is_valid());
+
+#if defined(RLLM_ENABLE_STATISTICS)
+    if (!site.empty())
+        parallel::statistics.record_host_to_device_buffer_copy(site, parameter, bytes);
+#endif
 
     VkBuffer staging_buffer = VK_NULL_HANDLE;
     VmaAllocation staging_allocation = VK_NULL_HANDLE;
@@ -329,11 +335,16 @@ void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offlo
 }
 
 
-void VulkanMemorySpace::copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes)
+void VulkanMemorySpace::copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes, std::string_view site, std::string_view parameter)
 {
     assert(bytes != 0);
     assert(offload_src.is_valid());
     assert(staging_dst.is_valid());
+
+#if defined(RLLM_ENABLE_STATISTICS)
+    if (!site.empty())
+        parallel::statistics.record_device_to_host_buffer_copy(site, parameter, bytes);
+#endif
 
     VkBuffer staging_buffer = VK_NULL_HANDLE;
     VmaAllocation staging_allocation = VK_NULL_HANDLE;
