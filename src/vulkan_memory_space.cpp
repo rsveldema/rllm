@@ -486,3 +486,14 @@ VulkanMemorySpace::VulkanMemorySpace()
 }
 
 
+VkCommandBuffer VulkanMemorySpace::begin_one_time_command()
+{
+    return ::begin_one_time_command(m_device, m_command_pool);
+}
+
+void VulkanMemorySpace::end_one_time_command(VkCommandBuffer command_buffer)
+{
+    ::end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+}
+
+

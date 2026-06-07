@@ -352,6 +352,13 @@ public:
 #endif
     }
 
+#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
+    OffloadMemoryBuffer raw_offload_data() const
+    {
+        return m_offload_ptr;
+    }
+#endif
+
 private:
     bool host_data_is_current_unlocked() const
     {
@@ -416,11 +423,6 @@ private:
     }
 
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-    OffloadMemoryBuffer raw_offload_data() 
-    {
-        return m_offload_ptr;
-    }
-
     void copy_to_offload_buffer_unlocked()
     {
         assert(m_staging_ptr.is_valid());

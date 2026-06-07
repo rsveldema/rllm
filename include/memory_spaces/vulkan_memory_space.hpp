@@ -32,6 +32,9 @@ public:
     uint32_t queue_family_index() const { return m_queue_family_index; }
     VkCommandPool command_pool() const { return m_command_pool; }
 
+    VkCommandBuffer begin_one_time_command();
+    void end_one_time_command(VkCommandBuffer cmd);
+
     static VulkanMemorySpace& get_instance();
 
 private:
