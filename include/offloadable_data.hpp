@@ -1,5 +1,9 @@
 #pragma once
 
+#include <functional>
+#include <IMemorySpace.hpp>
+#include <device_pointer.hpp>
+
 namespace rllm
 {
     template <typename T>

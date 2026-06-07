@@ -33,6 +33,12 @@
 
 namespace rllm::vulkan
 {
+        template <typename T>
+    inline constexpr bool is_scalar_kernel_arg_v = 
+             (std::is_enum_v<std::remove_cv_t<std::remove_reference_t<T>>> 
+             || std::is_integral_v<std::remove_cv_t<std::remove_reference_t<T>>>
+             || std::is_floating_point_v<std::remove_cv_t<std::remove_reference_t<T>>>);
+
     namespace detail
     {
 
@@ -42,14 +48,39 @@ namespace rllm::vulkan
             uint32_t y = 1;
             uint32_t z = 1;
         };
+
+        template <typename Arg>
+        inline void append_scalar_arg(std::vector<uint32_t>& out, size_t& out_size, Arg&& arg)
+        {
+            using ArgType = std::remove_cv_t<std::remove_reference_t<Arg>>;
+            if constexpr (is_scalar_kernel_arg_v<ArgType>)
+            {
+                if (out_size >= out.size())
+                {
+                    LOG_ERROR("Vulkan launch scalar buffer overflow: capacity={}, attempted to append one more scalar argument.", out.size());
+                    std::abort();
+                }
+
+                const auto value = arg;
+                std::memcpy(&out[out_size], &value, sizeof(value));
+                out_size++;
+            }
+            else
+            {
+                static_cast<void>(out);
+                static_cast<void>(out_size);
+                static_cast<void>(arg);
+            }
+        }
     } // namespace detail
 
+
+    // append_scalar_arg is defined inside the detail namespace below
 
     class ComputeKernelRuntime
     {
       public:
-        ComputeKernelRuntime(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path,
-            size_t num_buffer_args, size_t num_constant_args);
+        ComputeKernelRuntime(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path, size_t num_buffer_args, size_t num_constant_args);
 
         ~ComputeKernelRuntime()
         {
@@ -137,45 +168,46 @@ namespace rllm::vulkan
         std::vector<VkDescriptorSetLayoutBinding> m_bindings; //(binding_count);
         std::vector<VkDescriptorBufferInfo> m_buffer_infos; //(binding_count);
         std::vector<VkWriteDescriptorSet> m_writes; //(binding_count);
-        std::vector<uint32_t> m_scalar_data;
+        std::vector<uint32_t> m_push_constant_bytes;
+        size_t m_push_constant_size = 0;
     };
+
+
+    // Determine scalar (int/float) arguments that should be passed via push constants.
+    template <typename... KernelArgs>
+    static constexpr size_t get_num_buffer_args()
+    {
+        size_t idx = 0;
+        int buffer_info_loop[] = {1, (
+            [&] {
+                if constexpr (!is_scalar_kernel_arg_v<KernelArgs>)
+                {
+                    idx++;
+                }
+            }(),
+            0
+        )...};
+        (void) buffer_info_loop;
+        return idx;
+    }
+
+    template <typename... KernelArgs>
+    constexpr size_t get_num_constant_args()
+    {
+        size_t scalar_count = 0;
+        int scalar_count_loop[] = {1, ((scalar_count += static_cast<size_t>(is_scalar_kernel_arg_v<KernelArgs>)), 0)...};
+        (void) scalar_count_loop;
+        return scalar_count;
+    }
+
 
     template <typename... KernelArgs>
     class ComputeKernel : public ComputeKernelRuntime
     {
       public:
-        ComputeKernel(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path,
-            size_t num_buffer_args, size_t num_constant_args)
-        : ComputeKernelRuntime(space, kernel_name, spirv_path, get_num_buffer_args(), get_num_constant_args())
-        {            
-        }
-
-        // Determine scalar (int/float) arguments that should be passed via push constants.
-        template <typename T>
-        struct is_scalar_arg : std::bool_constant<std::is_same_v<std::decay_t<T>, int> || 
-                                                  std::is_same_v<std::decay_t<T>, float> >
-        {};
-
-        static constexpr size_t get_num_buffer_args()
-        {
-            size_t idx = 0;
-            int buffer_info_loop[] = {([&] {
-                if constexpr (!is_scalar_arg<KernelArgs>::value)
-                {
-                    idx++;
-                }
-            }(), 0)...};
-            (void)buffer_info_loop;
-            return idx;
-        }
-
-        static constexpr size_t get_num_constant_args()
-        {
-            size_t scalar_count = 0;
-            int scalar_count_loop[] = {((scalar_count += static_cast<size_t>(is_scalar_arg<KernelArgs>::value)), 0)...};
-            (void)scalar_count_loop;
-            return scalar_count;
-        }
+        ComputeKernel(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path)
+            : ComputeKernelRuntime(space, kernel_name, spirv_path, get_num_buffer_args(), get_num_constant_args())
+        {}
 
 
         template <typename Range>
@@ -276,15 +308,12 @@ namespace rllm::vulkan
             {
                 return a.raw_offload_data().get();
             }
-            else if constexpr (requires(const A& x) { x.offload_data(); })
+            else
             {
                 return a.offload_data().get();
             }
-            else
-            {
-                static_assert(sizeof(A) == 0, "Kernel argument does not provide offload buffer accessor");
-            }
         }
+
 
         // Core dispatch implementation: creates shader, pipeline, descriptor sets, and dispatches.
         template <typename... Args>
@@ -323,7 +352,7 @@ namespace rllm::vulkan
                 m_descriptor_set_layout = descriptor_set_layout;
             }
 
-            constexpr size_t scalar_count = get_num_constant_args();
+            constexpr size_t scalar_count = get_num_constant_args<Args...>();
 
             VkPushConstantRange push_range{};
             if (scalar_count > 0)
@@ -424,14 +453,17 @@ namespace rllm::vulkan
             // prepare buffer infos from args (map by order). Skip scalar args.
             {
                 size_t idx = 0;
-                int buffer_info_loop[] = {([&] {
-                    if constexpr (!is_scalar_arg<Args>::value)
-                    {
-                        if (idx < m_buffer_infos.size())
+                int buffer_info_loop[] = {(
+                    [&] {
+                        if constexpr (!is_scalar_kernel_arg_v<Args>)
+                        {
+                            assert(idx < m_buffer_infos.size());
                             m_buffer_infos[idx++].buffer = buffer_from_arg(args);
-                    }
-                }(), 0)...};
-                (void)buffer_info_loop;
+                        }
+                    }(),
+                    0
+                )...};
+                (void) buffer_info_loop;
             }
             for (auto& bi : m_buffer_infos)
             {
@@ -451,28 +483,13 @@ namespace rllm::vulkan
             }
             vkUpdateDescriptorSets(m_space.device(), static_cast<uint32_t>(m_writes.size()), m_writes.data(), 0, nullptr);
 
-            // Pack scalar args (int/float) into a uint32_t vector and push as push-constants
+            // Pack scalar args (int/float) into the cached push-constant buffer and push as push-constants
             if (scalar_count > 0)
             {
-                m_scalar_data.resize(scalar_count);
-                size_t sidx = 0;
-                int scalar_loop[] = {([&] {
-                    if constexpr (is_scalar_arg<Args>::value)
-                    {
-                        using Dec = std::decay_t<Args>;
-                        if constexpr (std::is_same_v<Dec, int>)
-                        {
-                            m_scalar_data[sidx++] = static_cast<uint32_t>(args);
-                        }
-                        else if constexpr (std::is_same_v<Dec, float>)
-                        {
-                            uint32_t tmp = 0;
-                            std::memcpy(&tmp, &args, sizeof(uint32_t));
-                            m_scalar_data[sidx++] = tmp;
-                        }
-                    }
-                }(), 0)...};
-                (void)scalar_loop;
+                m_push_constant_bytes.resize(scalar_count);
+                m_push_constant_size = 0;
+                int scalar_loop[] = { (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), 0)... };
+                (void) scalar_loop;
             }
 
             // allocate the cached command buffer if needed
@@ -505,9 +522,9 @@ namespace rllm::vulkan
 
             vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
             vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
-            if (!m_scalar_data.empty())
+            if (m_push_constant_size > 0)
             {
-                vkCmdPushConstants(m_command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, static_cast<uint32_t>(m_scalar_data.size() * sizeof(uint32_t)), m_scalar_data.data());
+                vkCmdPushConstants(m_command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, static_cast<uint32_t>(m_push_constant_size * sizeof(uint32_t)), m_push_constant_bytes.data());
             }
             vkCmdDispatch(m_command_buffer, gx, gy, gz);
 

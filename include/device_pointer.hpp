@@ -56,8 +56,7 @@ public:
 
     DevicePointer& operator=(const DevicePointer& other)
     {
-        if (this == &other)
-            return *this;
+        assert(this != &other);
 
         assign_storage_like(other);
         copy_contents_from(other);
@@ -489,6 +488,7 @@ private:
     void copy_contents_from(const DevicePointer& other)
     {
         assert(m_bytes != 0);
+        assert(this != &other);
 
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
         m_pending_flush = nullptr;
@@ -514,6 +514,7 @@ private:
                 break;
         }
 #else
+        assert(m_staging_ptr.get() != other.m_staging_ptr.get());
         std::memcpy(m_staging_ptr.get(), other.m_staging_ptr.get(), m_bytes);
 #endif
     }

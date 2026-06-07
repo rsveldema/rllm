@@ -25,21 +25,31 @@ namespace
 
     std::string to_lower_copy(std::string s)
     {
-        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
         return s;
     }
 
     uint32_t vendor_id_from_name(const std::string& name)
     {
         const std::string lowered = to_lower_copy(name);
-        if (lowered == "nvidia") return 0x10DE;
-        if (lowered == "amd") return 0x1002;
-        if (lowered == "intel") return 0x8086;
-        if (lowered == "arm") return 0x13B5;
-        if (lowered == "qualcomm") return 0x5143;
-        if (lowered == "apple") return 0x106B;
-        if (lowered == "google") return 0x1AE0;
-        if (lowered == "mesa") return 0x10005;
+        if (lowered == "nvidia")
+            return 0x10DE;
+        if (lowered == "amd")
+            return 0x1002;
+        if (lowered == "intel")
+            return 0x8086;
+        if (lowered == "arm")
+            return 0x13B5;
+        if (lowered == "qualcomm")
+            return 0x5143;
+        if (lowered == "apple")
+            return 0x106B;
+        if (lowered == "google")
+            return 0x1AE0;
+        if (lowered == "mesa")
+            return 0x10005;
         return 0;
     }
 
@@ -53,9 +63,12 @@ namespace
     int device_score(const VulkanCandidate& c)
     {
         int score = 0;
-        if (c.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) score += 1000;
-        if (c.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) score += 500;
-        if (c.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU) score += 250;
+        if (c.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+            score += 1000;
+        if (c.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+            score += 500;
+        if (c.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU)
+            score += 250;
         const std::string name = to_lower_copy(c.props.deviceName);
         if (name.find("llvmpipe") != std::string::npos || name.find("lavapipe") != std::string::npos || name.find("software") != std::string::npos)
             score -= 10000;
@@ -97,8 +110,7 @@ namespace
         });
     }
 
-}
-
+} // namespace
 
 
 void VulkanMemorySpace::initialize_runtime()
@@ -125,11 +137,7 @@ void VulkanMemorySpace::initialize_runtime()
     const VkResult enumerate_count_result = vkEnumeratePhysicalDevices(m_instance, &physical_count, nullptr);
     if (enumerate_count_result != VK_SUCCESS || physical_count == 0)
     {
-        LOG_ERROR(
-            "vkEnumeratePhysicalDevices failed or found no devices: result={} physical_count={}",
-            static_cast<int>(enumerate_count_result),
-            physical_count
-        );
+        LOG_ERROR("vkEnumeratePhysicalDevices failed or found no devices: result={} physical_count={}", static_cast<int>(enumerate_count_result), physical_count);
         std::abort();
     }
 
@@ -165,11 +173,7 @@ void VulkanMemorySpace::initialize_runtime()
     const VulkanCandidate* chosen = pick_candidate(candidates);
     if (chosen == nullptr)
     {
-        LOG_ERROR(
-            "No Vulkan physical device with a compute-capable queue family was found. physical_count={} candidates={}",
-            physical_count,
-            candidates.size()
-        );
+        LOG_ERROR("No Vulkan physical device with a compute-capable queue family was found. physical_count={} candidates={}", physical_count, candidates.size());
         std::abort();
     }
 
@@ -186,10 +190,7 @@ void VulkanMemorySpace::initialize_runtime()
     supported_features.pNext = &supported_atomic_float;
     vkGetPhysicalDeviceFeatures2(m_physical_device, &supported_features);
 
-    if (!supported_atomic_float.shaderBufferFloat32AtomicAdd
-        || !supported_atomic_float.shaderSharedFloat32AtomicAdd
-        || !supported_atomic_float2.shaderBufferFloat32AtomicMinMax
-        || !supported_atomic_float2.shaderSharedFloat32AtomicMinMax)
+    if (!supported_atomic_float.shaderBufferFloat32AtomicAdd || !supported_atomic_float.shaderSharedFloat32AtomicAdd || !supported_atomic_float2.shaderBufferFloat32AtomicMinMax || !supported_atomic_float2.shaderSharedFloat32AtomicMinMax)
     {
         LOG_ERROR(
             "Selected Vulkan device '{}' does not support required float atomic features: "
@@ -267,67 +268,6 @@ void VulkanMemorySpace::initialize_runtime()
 
 namespace
 {
-    VkCommandBuffer begin_one_time_command(VkDevice device, VkCommandPool command_pool)
-    {
-        VkCommandBufferAllocateInfo allocate_info{};
-        allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocate_info.commandPool = command_pool;
-        allocate_info.commandBufferCount = 1;
-
-        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-        VkResult result = vkAllocateCommandBuffers(device, &allocate_info, &command_buffer);
-        if (result != VK_SUCCESS)
-        {
-            LOG_ERROR("vkAllocateCommandBuffers failed: result={}", static_cast<int>(result));
-            std::abort();
-        }
-
-        VkCommandBufferBeginInfo begin_info{};
-        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        result = vkBeginCommandBuffer(command_buffer, &begin_info);
-        if (result != VK_SUCCESS)
-        {
-            LOG_ERROR("vkBeginCommandBuffer failed: result={}", static_cast<int>(result));
-            std::abort();
-        }
-
-        return command_buffer;
-    }
-
-    void end_one_time_command(VkDevice device, VkQueue queue, VkCommandPool command_pool, VkCommandBuffer command_buffer)
-    {
-        VkResult result = vkEndCommandBuffer(command_buffer);
-        if (result != VK_SUCCESS)
-        {
-            LOG_ERROR("vkEndCommandBuffer failed: result={}", static_cast<int>(result));
-            std::abort();
-        }
-
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-
-        result = vkQueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
-        if (result != VK_SUCCESS)
-        {
-            LOG_ERROR("vkQueueSubmit failed: result={}", static_cast<int>(result));
-            std::abort();
-        }
-
-        result = vkQueueWaitIdle(queue);
-        if (result != VK_SUCCESS)
-        {
-            LOG_ERROR("vkQueueWaitIdle failed: result={}", static_cast<int>(result));
-            std::abort();
-        }
-
-        vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
-    }
-
     void create_vulkan_buffer(VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VkBuffer& buffer, VmaAllocation& allocation)
     {
         VkBufferCreateInfo buffer_info{};
@@ -354,7 +294,7 @@ namespace
             vmaDestroyBuffer(allocator, buffer, allocation);
         }
     }
-}
+} // namespace
 
 
 void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OnHostStagingBuffer& staging_src, size_t src_offset, size_t bytes)
@@ -372,13 +312,13 @@ void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offlo
     std::memcpy(static_cast<std::uint8_t*>(mapped), static_cast<const std::uint8_t*>(staging_src.get()) + src_offset, bytes);
     vmaUnmapMemory(m_allocator, staging_allocation);
 
-    VkCommandBuffer command_buffer = begin_one_time_command(m_device, m_command_pool);
+    VkCommandBuffer command_buffer = begin_one_time_command();
     VkBufferCopy copy_region{};
     copy_region.srcOffset = 0;
     copy_region.dstOffset = dst_offset;
     copy_region.size = bytes;
     vkCmdCopyBuffer(command_buffer, staging_buffer, offload_dst.get(), 1, &copy_region);
-    end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+    end_one_time_command(command_buffer);
 
     destroy_vulkan_buffer(m_allocator, staging_buffer, staging_allocation);
 }
@@ -394,13 +334,13 @@ void VulkanMemorySpace::copy_offload_to_staging(const OnHostStagingBuffer& stagi
     VmaAllocation staging_allocation = VK_NULL_HANDLE;
     create_vulkan_buffer(m_allocator, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging_buffer, staging_allocation);
 
-    VkCommandBuffer command_buffer = begin_one_time_command(m_device, m_command_pool);
+    VkCommandBuffer command_buffer = begin_one_time_command();
     VkBufferCopy copy_region{};
     copy_region.srcOffset = src_offset;
     copy_region.dstOffset = 0;
     copy_region.size = bytes;
     vkCmdCopyBuffer(command_buffer, offload_src.get(), staging_buffer, 1, &copy_region);
-    end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+    end_one_time_command(command_buffer);
 
     void* mapped = nullptr;
     vmaMapMemory(m_allocator, staging_allocation, &mapped);
@@ -417,13 +357,13 @@ void VulkanMemorySpace::copy_offload_to_offload(const OffloadMemoryBuffer& offlo
     assert(offload_dst.is_valid());
     assert(offload_src.is_valid());
 
-    VkCommandBuffer command_buffer = begin_one_time_command(m_device, m_command_pool);
+    VkCommandBuffer command_buffer = begin_one_time_command();
     VkBufferCopy copy_region{};
     copy_region.srcOffset = src_offset;
     copy_region.dstOffset = dst_offset;
     copy_region.size = bytes;
     vkCmdCopyBuffer(command_buffer, offload_src.get(), offload_dst.get(), 1, &copy_region);
-    end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+    end_one_time_command(command_buffer);
 }
 
 
@@ -432,9 +372,9 @@ void VulkanMemorySpace::zero_offload(const OffloadMemoryBuffer& offload_dst, siz
     assert(bytes != 0);
     assert(offload_dst.is_valid());
 
-    VkCommandBuffer command_buffer = begin_one_time_command(m_device, m_command_pool);
+    VkCommandBuffer command_buffer = begin_one_time_command();
     vkCmdFillBuffer(command_buffer, offload_dst.get(), offset, bytes, 0);
-    end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+    end_one_time_command(command_buffer);
 }
 
 
@@ -448,7 +388,7 @@ OnHostStagingBuffer VulkanMemorySpace::allocate_staging(size_t bytes)
         std::abort();
     }
     memset(buffer, 0, bytes);
-    return OnHostStagingBuffer { buffer };
+    return OnHostStagingBuffer{buffer};
 }
 
 
@@ -458,7 +398,7 @@ OffloadMemoryBuffer VulkanMemorySpace::allocate_offload(size_t bytes)
     VmaAllocation allocation = VK_NULL_HANDLE;
     const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     create_vulkan_buffer(m_allocator, bytes, usage, VMA_MEMORY_USAGE_GPU_ONLY, buffer, allocation);
-    return OffloadMemoryBuffer { buffer, allocation };
+    return OffloadMemoryBuffer{buffer, allocation};
 }
 
 
@@ -488,12 +428,68 @@ VulkanMemorySpace::VulkanMemorySpace()
 
 VkCommandBuffer VulkanMemorySpace::begin_one_time_command()
 {
-    return ::begin_one_time_command(m_device, m_command_pool);
+    auto device = m_device;
+    auto command_pool = m_command_pool;
+
+    VkCommandBufferAllocateInfo allocate_info{};
+    allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocate_info.commandPool = command_pool;
+    allocate_info.commandBufferCount = 1;
+
+    VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+    VkResult result = vkAllocateCommandBuffers(device, &allocate_info, &command_buffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR("vkAllocateCommandBuffers failed: result={}", static_cast<int>(result));
+        std::abort();
+    }
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    result = vkBeginCommandBuffer(command_buffer, &begin_info);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR("vkBeginCommandBuffer failed: result={}", static_cast<int>(result));
+        std::abort();
+    }
+
+    return command_buffer;
 }
 
 void VulkanMemorySpace::end_one_time_command(VkCommandBuffer command_buffer)
 {
-    ::end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+    const auto device = m_device;
+    const auto queue = m_queue;
+    const auto command_pool = m_command_pool;
+
+    VkResult result = vkEndCommandBuffer(command_buffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR("vkEndCommandBuffer failed: result={}", static_cast<int>(result));
+        std::abort();
+    }
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer;
+
+    result = vkQueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR("vkQueueSubmit failed: result={}", static_cast<int>(result));
+        std::abort();
+    }
+
+    result = vkQueueWaitIdle(queue);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR("vkQueueWaitIdle failed: result={}", static_cast<int>(result));
+        std::abort();
+    }
+
+    vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
 }
-
-

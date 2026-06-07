@@ -107,7 +107,7 @@ namespace rllm::vulkan
     } // namespace detail
 
 
-    ComputeKernelRuntime::ComputeKernelRuntime(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path)
+    ComputeKernelRuntime::ComputeKernelRuntime(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path, size_t num_buffer_args, size_t num_constant_args)
         : m_space(space)
         , m_name(kernel_name)
         , m_spirv_path(std::move(spirv_path))
