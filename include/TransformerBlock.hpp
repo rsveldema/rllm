@@ -55,6 +55,7 @@ namespace rllm
         void reset(PositionIndex seq)
         {
             h_in.set_rows(seq);
+            seq_len = seq;
             h_norm_attn.set_rows(seq);
             Q.set_rows(seq);
             K.set_rows(seq);
