@@ -36,21 +36,21 @@ namespace rllm
         void push_back(const T& value)
         {
             assert(len < LengthType::MAX);
-            m_data[static_cast<size_t>(len)] = value;
+            this->m_data[static_cast<size_t>(len)] = value;
             len = static_cast<LengthType>(static_cast<size_t>(len) + 1);
         }
 
         void push_back(T&& value)
         {
             assert(len < LengthType::MAX);
-            m_data[static_cast<size_t>(len)] = std::move(value);
+            this->m_data[static_cast<size_t>(len)] = std::move(value);
             len = static_cast<LengthType>(static_cast<size_t>(len) + 1);
         }
 
         const T& back() const
         {
             assert(len > LengthType::START);
-            return m_data[static_cast<size_t>(len) - 1];
+            return this->m_data[static_cast<size_t>(len) - 1];
         }
 
         void pop_back()
@@ -71,34 +71,34 @@ namespace rllm
 
         T* data()
         {
-            return m_data.data();
+            return this->m_data.data();
         }
 
         const T* data() const
         {
-            return m_data.data();
+            return this->m_data.data();
         }
 
         T& operator[](LengthType index)
         {
-            return m_data[static_cast<size_t>(index)];
+            return this->m_data[static_cast<size_t>(index)];
         }
 
         T& operator[](size_t index)
         {
             assert(index < static_cast<size_t>(len));
-            return m_data[index];
+            return this->m_data[index];
         }
 
         const T& operator[](LengthType index) const
         {
-            return m_data[static_cast<size_t>(index)];
+            return this->m_data[static_cast<size_t>(index)];
         }
 
         const T& operator[](size_t index) const
         {
             assert(index < static_cast<size_t>(len));
-            return m_data[index];
+            return this->m_data[index];
         }
 
         void clear()

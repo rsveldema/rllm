@@ -10,6 +10,7 @@
 #include <Range.hpp>
 #include <RandomHelpers.hpp>
 #include <IMemorySpace.hpp>
+#include <offloadable_data.hpp>
 
 namespace rllm
 {
@@ -19,18 +20,18 @@ namespace rllm
      * and provide type safety for indexing.
      */
     template <typename ElementType, typename X, typename Y>
-    class fixed_size_matrix
+    class fixed_size_matrix : public offloadable_data<ElementType>
     {
       public:
         static constexpr size_t ROWS = static_cast<size_t>(X::MAX);
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         fixed_size_matrix()
-            : m_data(ROWS * COLS)
+            : offloadable_data<ElementType>(ROWS * COLS)
         {}
 
         fixed_size_matrix(const fixed_size_matrix& other)
-            : m_data(ROWS * COLS)
+            : offloadable_data<ElementType>(ROWS * COLS)
         {
             assign_from(other);
         }
@@ -43,7 +44,7 @@ namespace rllm
         }
 
         fixed_size_matrix(fixed_size_matrix&& other)
-            : m_data(ROWS * COLS)
+            : offloadable_data<ElementType>(ROWS * COLS)
         {
             assign_from(other);
         }
@@ -61,7 +62,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
-            m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] = value;
+            this->m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] = value;
         }
 
         inline void set(const std::pair<const X, const Y>& indices, ElementType value)
@@ -73,7 +74,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
-            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return this->m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         inline const ElementType& get(const std::pair<const X, const Y>& indices) const
@@ -85,7 +86,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
-            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return this->m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         template <std::integral XIndex>
@@ -110,7 +111,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < ROWS);
             assert(static_cast<size_t>(y) < COLS);
-            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return this->m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         template <std::integral XIndex>
@@ -131,63 +132,17 @@ namespace rllm
             return (*this)[static_cast<X>(x), static_cast<Y>(y)];
         }
 
-        inline void zero()
-        {
-            m_data.zero();
-        }
-
         inline void fill_rand(ElementType lo, ElementType hi)
         {
-            auto* ptr = m_data.get();
+            auto* ptr = this->m_data.get();
             for (size_t i = 0; i < ROWS * COLS; ++i)
                 ptr[i] = static_cast<ElementType>(get_random_value(lo, hi));
-        }
-
-        ElementType* data()
-        {
-            return m_data.staging_data();
-        }
-
-        const ElementType* data() const
-        {
-            return m_data.staging_data();
-        }
-
-        ElementType* raw_staging_data() const
-        {
-            return m_data.raw_staging_data();
-        }
-
-
-        DeviceMemoryOwner device_memory_owner() const
-        {
-            return m_data.device_memory_owner();
-        }
-
-        void set_pending_flush(std::function<void()> flush_fn)
-        {
-            m_data.set_pending_flush(std::move(flush_fn));
-        }
-
-        void mark_device_latest()
-        {
-            m_data.mark_device_latest();
-        }
-
-        void copy_to_offload_buffer()
-        {
-            m_data.copy_to_offload_buffer();
         }
 
         void copy_row_to_offload_buffer(X x)
         {
             assert(static_cast<size_t>(x) < ROWS);
-            m_data.copy_range_to_offload_buffer(static_cast<size_t>(x) * COLS, COLS);
-        }
-
-        bool needs_offload_sync() const
-        {
-            return m_data.needs_offload_sync();
+            this->m_data.copy_range_to_offload_buffer(static_cast<size_t>(x) * COLS, COLS);
         }
 
         size_t storage_size_bytes() const
@@ -196,11 +151,9 @@ namespace rllm
         }
 
       private:
-                void assign_from(const fixed_size_matrix& other)
-                {
-                    m_data = other.m_data;
-                }
-
-        DevicePointer<ElementType> m_data;
+        void assign_from(const fixed_size_matrix& other)
+        {
+            this->m_data = other.m_data;
+        }
     };
 } // namespace rllm

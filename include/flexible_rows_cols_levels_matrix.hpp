@@ -9,12 +9,14 @@
 
 #include <IMemorySpace.hpp>
 #include <parallel.hpp>
+#include <offloadable_data.hpp>
+
 
 namespace rllm
 {
     /** the number of levels, rows, and columns can vary */
     template <typename ElementType, typename L, typename X, typename Y>
-    class flexible_rows_cols_levels_matrix
+    class flexible_rows_cols_levels_matrix: public offloadable_data<ElementType>
     {
       public:
         static constexpr size_t LEVELS = static_cast<size_t>(L::MAX);
@@ -22,7 +24,7 @@ namespace rllm
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         flexible_rows_cols_levels_matrix()
-            : m_data(1)
+            : offloadable_data<ElementType>(1)
             , m_levels(L::START)
             , m_rows(X::START)
             , m_cols(Y::START)
@@ -30,7 +32,7 @@ namespace rllm
         {}
 
         flexible_rows_cols_levels_matrix(L levels, X rows, Y cols)
-            : m_data(element_count_for_size(levels, rows, cols))
+            : offloadable_data<ElementType>(element_count_for_size(levels, rows, cols))
             , m_levels(levels)
             , m_rows(rows)
             , m_cols(cols)
@@ -38,13 +40,13 @@ namespace rllm
         {}
 
         flexible_rows_cols_levels_matrix(const flexible_rows_cols_levels_matrix& other)
-            : m_data(element_count_for_size(other.m_levels, other.m_rows, other.m_cols))
+            : offloadable_data<ElementType>(element_count_for_size(other.m_levels, other.m_rows, other.m_cols))
             , m_levels(other.m_levels)
             , m_rows(other.m_rows)
             , m_cols(other.m_cols)
             , m_capacity_elements(element_count_for_size(other.m_levels, other.m_rows, other.m_cols))
         {
-            m_data = other.m_data;
+            this->m_data = other.m_data;
         }
 
         flexible_rows_cols_levels_matrix& operator=(const flexible_rows_cols_levels_matrix& other)
@@ -52,7 +54,7 @@ namespace rllm
             if (this != &other)
             {
                 ensure_capacity(other.m_levels, other.m_rows, other.m_cols);
-                m_data = other.m_data;
+                this->m_data = other.m_data;
                 m_levels = other.m_levels;
                 m_rows = other.m_rows;
                 m_cols = other.m_cols;
@@ -62,13 +64,13 @@ namespace rllm
         }
 
         flexible_rows_cols_levels_matrix(flexible_rows_cols_levels_matrix&& other)
-            : m_data(element_count_for_size(other.m_levels, other.m_rows, other.m_cols))
+            : offloadable_data<ElementType>(element_count_for_size(other.m_levels, other.m_rows, other.m_cols))
             , m_levels(other.m_levels)
             , m_rows(other.m_rows)
             , m_cols(other.m_cols)
             , m_capacity_elements(element_count_for_size(other.m_levels, other.m_rows, other.m_cols))
         {
-            m_data = other.m_data;
+            this->m_data = other.m_data;
         }
 
         flexible_rows_cols_levels_matrix& operator=(flexible_rows_cols_levels_matrix&& other)
@@ -76,7 +78,7 @@ namespace rllm
             if (this != &other)
             {
                 ensure_capacity(other.m_levels, other.m_rows, other.m_cols);
-                m_data = other.m_data;
+                this->m_data = other.m_data;
                 m_levels = other.m_levels;
                 m_rows = other.m_rows;
                 m_cols = other.m_cols;
@@ -101,30 +103,25 @@ namespace rllm
         template <typename LevelIndex, typename RowIndex, typename ColIndex>
         void set(LevelIndex level, RowIndex row, ColIndex col, ElementType value)
         {
-            m_data.get()[flat_index(level, row, col)] = value;
+            this->m_data.get()[flat_index(level, row, col)] = value;
         }
 
         template <typename LevelIndex, typename RowIndex, typename ColIndex>
         const ElementType& get(LevelIndex level, RowIndex row, ColIndex col) const
         {
-            return m_data.get()[flat_index(level, row, col)];
+            return this->m_data.get()[flat_index(level, row, col)];
         }
 
         template <typename LevelIndex, typename RowIndex, typename ColIndex>
         ElementType& operator[](LevelIndex level, RowIndex row, ColIndex col)
         {
-            return m_data.get()[flat_index(level, row, col)];
+            return this->m_data.get()[flat_index(level, row, col)];
         }
 
         template <typename LevelIndex, typename RowIndex, typename ColIndex>
         const ElementType& operator[](LevelIndex level, RowIndex row, ColIndex col) const
         {
-            return m_data.get()[flat_index(level, row, col)];
-        }
-
-        void zero()
-        {
-            m_data.zero();
+            return this->m_data.get()[flat_index(level, row, col)];
         }
 
         L num_levels() const
@@ -140,42 +137,6 @@ namespace rllm
         Y num_cols() const
         {
             return m_cols;
-        }
-
-        ElementType* data()
-        {
-            return m_data.staging_data();
-        }
-
-        const ElementType* data() const
-        {
-            return m_data.staging_data();
-        }
-
-        ElementType* raw_staging_data() const
-        {
-            return m_data.raw_staging_data();
-        }
-
-
-        DeviceMemoryOwner device_memory_owner() const
-        {
-            return m_data.device_memory_owner();
-        }
-
-        void set_pending_flush(std::function<void()> flush_fn)
-        {
-            m_data.set_pending_flush(std::move(flush_fn));
-        }
-
-        void mark_device_latest()
-        {
-            m_data.mark_device_latest();
-        }
-
-        bool needs_offload_sync() const
-        {
-            return m_data.needs_offload_sync();
         }
 
         size_t storage_size_bytes() const
@@ -221,11 +182,10 @@ namespace rllm
             const size_t requested_elements = element_count_for_size(levels, rows, cols);
             if (requested_elements <= m_capacity_elements)
                 return;
-            m_data.resize(requested_elements);
+            this->m_data.resize(requested_elements);
             m_capacity_elements = requested_elements;
         }
 
-        DevicePointer<ElementType> m_data;
         L m_levels;
         X m_rows;
         Y m_cols;

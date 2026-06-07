@@ -48,7 +48,7 @@ namespace rllm::vulkan
 
             return found ? (max_binding + 1u) : 0u;
         }
-        
+
         detail::LocalSize parse_local_size_from_glsl(const std::filesystem::path& spirv_path)
         {
             std::filesystem::path comp_path = spirv_path;
@@ -119,6 +119,34 @@ namespace rllm::vulkan
         m_spirv_words = detail::load_spirv_words(m_spirv_path, m_name.c_str());
         m_parsed_ssbo_binding_count = detail::count_ssbo_bindings_in_glsl(m_spirv_path);
         m_local_size = detail::parse_local_size_from_glsl(m_spirv_path);
+
+
+        m_binding_count = std::max<uint32_t>(1u, m_parsed_ssbo_binding_count);
+        m_bindings = std::vector<VkDescriptorSetLayoutBinding>(m_binding_count);
+
+        for (uint32_t i = 0; i < static_cast<uint32_t>(m_binding_count); ++i)
+        {
+            m_bindings[i].binding = i;
+            m_bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            m_bindings[i].descriptorCount = 1;
+            m_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            m_bindings[i].pImmutableSamplers = nullptr;
+        }
+
+        m_buffer_infos = std::vector<VkDescriptorBufferInfo>(m_binding_count);
+
+        m_writes = std::vector<VkWriteDescriptorSet>(m_binding_count);
+        for (uint32_t i = 0; i < static_cast<uint32_t>(m_binding_count); ++i)
+        {
+            m_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            m_writes[i].dstSet = VK_NULL_HANDLE;
+            m_writes[i].dstBinding = i;
+            m_writes[i].dstArrayElement = 0;
+            m_writes[i].descriptorCount = 1;
+            m_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            m_writes[i].pBufferInfo = nullptr;
+        }
+
     }
 
 } // namespace rllm::vulkan

@@ -10,36 +10,37 @@
 #include <parallel.hpp>
 #include <Range.hpp>
 #include <IMemorySpace.hpp>
+#include <offloadable_data.hpp>
 
 
 namespace rllm
 {
     /** the number of rows can vary, the number of columns are fixed */
     template <typename ElementType, typename X, typename Y>
-    class flexible_rows_matrix
+    class flexible_rows_matrix: public offloadable_data<ElementType>
     {
       public:
         static constexpr size_t ROWS = static_cast<size_t>(X::MAX);
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         flexible_rows_matrix()
-            : m_data(COLS)
+            : offloadable_data<ElementType>(COLS)
             , m_rows(X::START)
             , m_capacity_rows(1)
         {}
 
         flexible_rows_matrix(X rows)
-            : m_data(element_count_for_rows(rows))
+            : offloadable_data<ElementType>(element_count_for_rows(rows))
             , m_rows(rows)
             , m_capacity_rows(std::max<size_t>(1, static_cast<size_t>(rows)))
         {}
 
         flexible_rows_matrix(const flexible_rows_matrix& other)
-            : m_data(element_count_for_rows(other.m_rows))
+            : offloadable_data<ElementType>(element_count_for_rows(other.m_rows))
             , m_rows(other.m_rows)
             , m_capacity_rows(std::max<size_t>(1, static_cast<size_t>(other.m_rows)))
         {
-            m_data = other.m_data;
+            this->m_data = other.m_data;
         }
 
         flexible_rows_matrix& operator=(const flexible_rows_matrix& other)
@@ -47,7 +48,7 @@ namespace rllm
             if (this != &other)
             {
                 ensure_capacity(other.m_rows);
-                m_data = other.m_data;
+                this->m_data = other.m_data;
                 m_rows = other.m_rows;
                 m_capacity_rows = std::max<size_t>(1, static_cast<size_t>(other.m_rows));
             }
@@ -55,11 +56,11 @@ namespace rllm
         }
 
         flexible_rows_matrix(flexible_rows_matrix&& other)
-            : m_data(element_count_for_rows(other.m_rows))
+            : offloadable_data<ElementType>(element_count_for_rows(other.m_rows))
             , m_rows(other.m_rows)
             , m_capacity_rows(std::max<size_t>(1, static_cast<size_t>(other.m_rows)))
         {
-            m_data = other.m_data;
+            this->m_data = other.m_data;
         }
 
         flexible_rows_matrix& operator=(flexible_rows_matrix&& other)
@@ -67,7 +68,7 @@ namespace rllm
             if (this != &other)
             {
                 ensure_capacity(other.m_rows);
-                m_data = other.m_data;
+                this->m_data = other.m_data;
                 m_rows = other.m_rows;
                 m_capacity_rows = std::max<size_t>(1, static_cast<size_t>(other.m_rows));
             }
@@ -87,7 +88,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] = value;
+            this->m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)] = value;
         }
 
         void set(const std::pair<const X, const Y>& indices, ElementType value)
@@ -99,7 +100,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return this->m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         const ElementType& get(const std::pair<const X, const Y>& indices) const
@@ -111,7 +112,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return this->m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         template <std::integral YIndex>
@@ -136,7 +137,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < COLS);
-            return m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
+            return this->m_data.get()[static_cast<size_t>(x) * COLS + static_cast<size_t>(y)];
         }
 
         template <std::integral YIndex>
@@ -157,12 +158,6 @@ namespace rllm
             return (*this)[static_cast<X>(x), static_cast<Y>(y)];
         }
 
-        void zero()
-        {
-            m_data.zero();
-        }
-
-
         X num_rows() const
         {
             return m_rows;
@@ -173,40 +168,6 @@ namespace rllm
             return Y::MAX;
         }
 
-        ElementType* data()
-        {
-            return m_data.staging_data();
-        }
-
-        const ElementType* data() const
-        {
-            return m_data.staging_data();
-        }
-
-        ElementType* raw_staging_data() const
-        {
-            return m_data.raw_staging_data();
-        }
-
-        DeviceMemoryOwner device_memory_owner() const
-        {
-            return m_data.device_memory_owner();
-        }
-
-        void set_pending_flush(std::function<void()> flush_fn)
-        {
-            m_data.set_pending_flush(std::move(flush_fn));
-        }
-
-        void mark_device_latest()
-        {
-            m_data.mark_device_latest();
-        }
-
-        bool needs_offload_sync() const
-        {
-            return m_data.needs_offload_sync();
-        }
 
         size_t storage_size_bytes() const
         {
@@ -225,11 +186,10 @@ namespace rllm
             const size_t requested_rows = std::max<size_t>(1, static_cast<size_t>(rows));
             if (requested_rows <= m_capacity_rows)
                 return;
-            m_data.resize(requested_rows * COLS);
+            this->m_data.resize(requested_rows * COLS);
             m_capacity_rows = requested_rows;
         }
 
-        DevicePointer<ElementType> m_data;
         X m_rows;
         size_t m_capacity_rows;
     };

@@ -10,36 +10,37 @@
 #include <Range.hpp>
 #include <IMemorySpace.hpp>
 
+#include <offloadable_data.hpp>
 
 namespace rllm
 {
     /** the number of columns AND rows can vary */
     template <typename ElementType, typename X, typename Y>
-    class flexible_rows_cols_matrix
+    class flexible_rows_cols_matrix: public offloadable_data<ElementType>
     {
       public:
         static constexpr size_t ROWS = static_cast<size_t>(X::MAX);
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         flexible_rows_cols_matrix()
-            : m_data(1)
+            : offloadable_data<ElementType>(1)
             , m_rows(X::START), m_cols(Y::START)
             , m_capacity_elements(1)
         {}
 
         flexible_rows_cols_matrix( X rows, Y cols)
-            : m_data(element_count_for_size(rows, cols))
+            : offloadable_data<ElementType>(element_count_for_size(rows, cols))
             , m_rows(rows), m_cols(cols)
             , m_capacity_elements(element_count_for_size(rows, cols))
         {}
 
         flexible_rows_cols_matrix(const flexible_rows_cols_matrix& other)
-            : m_data(element_count_for_size(other.m_rows, other.m_cols))
+            : offloadable_data<ElementType>(element_count_for_size(other.m_rows, other.m_cols))
             , m_rows(other.m_rows)
             , m_cols(other.m_cols)
             , m_capacity_elements(element_count_for_size(other.m_rows, other.m_cols))
         {
-            m_data = other.m_data;
+            this->m_data = other.m_data;
         }
 
         flexible_rows_cols_matrix& operator=(const flexible_rows_cols_matrix& other)
@@ -47,7 +48,7 @@ namespace rllm
             if (this != &other)
             {
                 ensure_capacity(other.m_rows, other.m_cols);
-                m_data = other.m_data;
+                this->m_data = other.m_data;
                 m_rows = other.m_rows;
                 m_cols = other.m_cols;
                 m_capacity_elements = element_count_for_size(other.m_rows, other.m_cols);
@@ -56,12 +57,12 @@ namespace rllm
         }
 
         flexible_rows_cols_matrix(flexible_rows_cols_matrix&& other)
-            : m_data(element_count_for_size(other.m_rows, other.m_cols))
+            : offloadable_data<ElementType>(element_count_for_size(other.m_rows, other.m_cols))
             , m_rows(other.m_rows)
             , m_cols(other.m_cols)
             , m_capacity_elements(element_count_for_size(other.m_rows, other.m_cols))
         {
-            m_data = other.m_data;
+            this->m_data = other.m_data;
         }
 
         flexible_rows_cols_matrix& operator=(flexible_rows_cols_matrix&& other)
@@ -69,7 +70,7 @@ namespace rllm
             if (this != &other)
             {
                 ensure_capacity(other.m_rows, other.m_cols);
-                m_data = other.m_data;
+                this->m_data = other.m_data;
                 m_rows = other.m_rows;
                 m_cols = other.m_cols;
                 m_capacity_elements = element_count_for_size(other.m_rows, other.m_cols);
@@ -92,7 +93,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
-            m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)] = value;
+            this->m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)] = value;
         }
 
         void set(const std::pair<const X, const Y>& indices, ElementType value)
@@ -104,7 +105,7 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
-            return m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
+            return this->m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
         }
 
         const ElementType& get(const std::pair<const X, const Y>& indices) const
@@ -116,77 +117,23 @@ namespace rllm
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
-            return m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
+            return this->m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
         }
 
         const ElementType& operator[](X x, Y y) const
         {
             assert(static_cast<size_t>(x) < static_cast<size_t>(m_rows));
             assert(static_cast<size_t>(y) < static_cast<size_t>(m_cols));
-            return m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
-        }
-
-        void zero()
-        {
-            m_data.zero();
-        }
-
-        X num_rows() const
-        {
-            return m_rows;
-        }
-
-        Y num_cols() const
-        {
-            return m_cols;
-        }
-
-        ElementType* data()
-        {
-            return m_data.staging_data();
-        }
-
-        const ElementType* data() const
-        {
-            return m_data.staging_data();
-        }
-
-        ElementType* raw_staging_data() const
-        {
-            return m_data.raw_staging_data();
-        }
-
-#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        OffloadMemoryBuffer raw_offload_data() const
-        {
-            return m_data.raw_offload_data();
-        }
-#endif
-
-        DeviceMemoryOwner device_memory_owner() const
-        {
-            return m_data.device_memory_owner();
-        }
-
-        void set_pending_flush(std::function<void()> flush_fn)
-        {
-            m_data.set_pending_flush(std::move(flush_fn));
-        }
-
-        void mark_device_latest()
-        {
-            m_data.mark_device_latest();
-        }
-
-        bool needs_offload_sync() const
-        {
-            return m_data.needs_offload_sync();
+            return this->m_data.get()[static_cast<size_t>(x) * static_cast<size_t>(m_cols) + static_cast<size_t>(y)];
         }
 
         size_t storage_size_bytes() const
         {
             return m_capacity_elements * sizeof(ElementType);
         }
+
+        X num_rows() const { return m_rows; }
+        Y num_cols() const { return m_cols; }
 
       private:
         static size_t element_count_for_size(X rows, Y cols)
@@ -201,11 +148,10 @@ namespace rllm
             const size_t requested_elements = element_count_for_size(rows, cols);
             if (requested_elements <= m_capacity_elements)
                 return;
-            m_data.resize(requested_elements);
+            this->m_data.resize(requested_elements);
             m_capacity_elements = requested_elements;
         }
 
-        DevicePointer<ElementType> m_data;
         X m_rows;
         Y m_cols;
         size_t m_capacity_elements;
