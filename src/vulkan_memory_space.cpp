@@ -265,6 +265,220 @@ void VulkanMemorySpace::initialize_runtime()
     }
 }
 
+namespace
+{
+    VkCommandBuffer begin_one_time_command(VkDevice device, VkCommandPool command_pool)
+    {
+        VkCommandBufferAllocateInfo allocate_info{};
+        allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate_info.commandPool = command_pool;
+        allocate_info.commandBufferCount = 1;
+
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        VkResult result = vkAllocateCommandBuffers(device, &allocate_info, &command_buffer);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR("vkAllocateCommandBuffers failed: result={}", static_cast<int>(result));
+            std::abort();
+        }
+
+        VkCommandBufferBeginInfo begin_info{};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        result = vkBeginCommandBuffer(command_buffer, &begin_info);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR("vkBeginCommandBuffer failed: result={}", static_cast<int>(result));
+            std::abort();
+        }
+
+        return command_buffer;
+    }
+
+    void end_one_time_command(VkDevice device, VkQueue queue, VkCommandPool command_pool, VkCommandBuffer command_buffer)
+    {
+        VkResult result = vkEndCommandBuffer(command_buffer);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR("vkEndCommandBuffer failed: result={}", static_cast<int>(result));
+            std::abort();
+        }
+
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffer;
+
+        result = vkQueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR("vkQueueSubmit failed: result={}", static_cast<int>(result));
+            std::abort();
+        }
+
+        result = vkQueueWaitIdle(queue);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR("vkQueueWaitIdle failed: result={}", static_cast<int>(result));
+            std::abort();
+        }
+
+        vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+    }
+
+    void create_vulkan_buffer(VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memory_usage, VkBuffer& buffer, VmaAllocation& allocation)
+    {
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size = size;
+        buffer_info.usage = usage;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocation_info{};
+        allocation_info.usage = memory_usage;
+
+        const VkResult result = vmaCreateBuffer(allocator, &buffer_info, &allocation_info, &buffer, &allocation, nullptr);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR("vmaCreateBuffer failed: result={}", static_cast<int>(result));
+            std::abort();
+        }
+    }
+
+    void destroy_vulkan_buffer(VmaAllocator allocator, VkBuffer buffer, VmaAllocation allocation)
+    {
+        if (buffer != VK_NULL_HANDLE && allocation != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(allocator, buffer, allocation);
+        }
+    }
+}
+
+
+void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OnHostStagingBuffer& staging_src, size_t src_offset, size_t bytes)
+{
+    assert(bytes != 0);
+    assert(offload_dst.is_valid());
+    assert(staging_src.is_valid());
+
+    VkBuffer staging_buffer = VK_NULL_HANDLE;
+    VmaAllocation staging_allocation = VK_NULL_HANDLE;
+    create_vulkan_buffer(m_allocator, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging_buffer, staging_allocation);
+
+    void* mapped = nullptr;
+    vmaMapMemory(m_allocator, staging_allocation, &mapped);
+    std::memcpy(static_cast<std::uint8_t*>(mapped), static_cast<const std::uint8_t*>(staging_src.get()) + src_offset, bytes);
+    vmaUnmapMemory(m_allocator, staging_allocation);
+
+    VkCommandBuffer command_buffer = begin_one_time_command(m_device, m_command_pool);
+    VkBufferCopy copy_region{};
+    copy_region.srcOffset = 0;
+    copy_region.dstOffset = dst_offset;
+    copy_region.size = bytes;
+    vkCmdCopyBuffer(command_buffer, staging_buffer, offload_dst.get(), 1, &copy_region);
+    end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+
+    destroy_vulkan_buffer(m_allocator, staging_buffer, staging_allocation);
+}
+
+
+void VulkanMemorySpace::copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes)
+{
+    assert(bytes != 0);
+    assert(offload_src.is_valid());
+    assert(staging_dst.is_valid());
+
+    VkBuffer staging_buffer = VK_NULL_HANDLE;
+    VmaAllocation staging_allocation = VK_NULL_HANDLE;
+    create_vulkan_buffer(m_allocator, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging_buffer, staging_allocation);
+
+    VkCommandBuffer command_buffer = begin_one_time_command(m_device, m_command_pool);
+    VkBufferCopy copy_region{};
+    copy_region.srcOffset = src_offset;
+    copy_region.dstOffset = 0;
+    copy_region.size = bytes;
+    vkCmdCopyBuffer(command_buffer, offload_src.get(), staging_buffer, 1, &copy_region);
+    end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+
+    void* mapped = nullptr;
+    vmaMapMemory(m_allocator, staging_allocation, &mapped);
+    std::memcpy(static_cast<std::uint8_t*>(staging_dst.get()) + dst_offset, mapped, bytes);
+    vmaUnmapMemory(m_allocator, staging_allocation);
+
+    destroy_vulkan_buffer(m_allocator, staging_buffer, staging_allocation);
+}
+
+
+void VulkanMemorySpace::copy_offload_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes)
+{
+    assert(bytes != 0);
+    assert(offload_dst.is_valid());
+    assert(offload_src.is_valid());
+
+    VkCommandBuffer command_buffer = begin_one_time_command(m_device, m_command_pool);
+    VkBufferCopy copy_region{};
+    copy_region.srcOffset = src_offset;
+    copy_region.dstOffset = dst_offset;
+    copy_region.size = bytes;
+    vkCmdCopyBuffer(command_buffer, offload_src.get(), offload_dst.get(), 1, &copy_region);
+    end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+}
+
+
+void VulkanMemorySpace::zero_offload(const OffloadMemoryBuffer& offload_dst, size_t offset, size_t bytes)
+{
+    assert(bytes != 0);
+    assert(offload_dst.is_valid());
+
+    VkCommandBuffer command_buffer = begin_one_time_command(m_device, m_command_pool);
+    vkCmdFillBuffer(command_buffer, offload_dst.get(), offset, bytes, 0);
+    end_one_time_command(m_device, m_queue, m_command_pool, command_buffer);
+}
+
+
+OnHostStagingBuffer VulkanMemorySpace::allocate_staging(size_t bytes)
+{
+    assert(bytes != 0);
+    void* buffer = std::malloc(bytes);
+    if (buffer == nullptr)
+    {
+        LOG_ERROR("Failed to allocate Vulkan staging buffer of {} bytes", bytes);
+        std::abort();
+    }
+    memset(buffer, 0, bytes);
+    return OnHostStagingBuffer { buffer };
+}
+
+
+OffloadMemoryBuffer VulkanMemorySpace::allocate_offload(size_t bytes)
+{
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+    const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    create_vulkan_buffer(m_allocator, bytes, usage, VMA_MEMORY_USAGE_GPU_ONLY, buffer, allocation);
+    return OffloadMemoryBuffer { buffer, allocation };
+}
+
+
+void VulkanMemorySpace::release_staging(OnHostStagingBuffer& ref)
+{
+    assert(ref.is_valid());
+    std::free(ref.get());
+    ref.invalidate();
+}
+
+
+void VulkanMemorySpace::release_offload(OffloadMemoryBuffer& ref)
+{
+    if (ref.is_valid())
+    {
+        destroy_vulkan_buffer(m_allocator, ref.get(), ref.allocation());
+        ref.invalidate();
+    }
+}
+
 
 VulkanMemorySpace::VulkanMemorySpace()
 {

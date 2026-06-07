@@ -26,17 +26,6 @@
 #include <memory_spaces/hip_memory_space.hpp>
 #endif
 
-inline IMemorySpace& IMemorySpace::get_instance()
-{
-#if defined(USE_VULKAN_OFFLOAD)
-    static VulkanMemorySpace instance;
-#elif defined(USE_HIP_OFFLOAD)
-    static HipMemorySpace instance;
-#else
-    static HostMemorySpace instance;
-#endif
-    return instance;
-}
 
 
 template <typename T>

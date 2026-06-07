@@ -48,8 +48,12 @@ namespace rllm::vulkan
     class ComputeKernelRuntime
     {
 public:
-        ComputeKernelRuntime(std::string_view kernel_name, std::filesystem::path spirv_path);
-        ~ComputeKernelRuntime();
+        ComputeKernelRuntime(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path)
+            : m_space(space), m_name(kernel_name), m_spirv_path(spirv_path)
+        {
+        }
+
+        ~ComputeKernelRuntime() {}
 
         ComputeKernelRuntime(const ComputeKernelRuntime&) = delete;
         ComputeKernelRuntime& operator=(const ComputeKernelRuntime&) = delete;
@@ -98,6 +102,8 @@ public:
             bool bind_offload_direct = false;
             VkDeviceSize offload_source_offset = 0;
         };
+
+        VulkanMemorySpace& m_space;
 
         std::string m_name;
         std::filesystem::path m_spirv_path;

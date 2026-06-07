@@ -429,7 +429,7 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
         else:
             kernel_template_args = ""
         lines.append(
-            f"{ctx.indent}static rllm::vulkan::ComputeKernel<{kernel_template_args}> {kernel_symbol}("
+            f"{ctx.indent}static rllm::vulkan::ComputeKernel<{kernel_template_args}> {kernel_symbol}(VulkanMemorySpace::get_instance(),"
         )
         lines.append(f"{ctx.indent}    \"{ctx.rel_path}:{ctx.lineno}\",")
         lines.append(f"{ctx.indent}    \"{rel_spv}\"")

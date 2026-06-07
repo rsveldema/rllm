@@ -32,6 +32,8 @@ public:
     uint32_t queue_family_index() const { return m_queue_family_index; }
     VkCommandPool command_pool() const { return m_command_pool; }
 
+    static VulkanMemorySpace& get_instance();
+
 private:
     VkInstance m_instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;

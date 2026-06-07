@@ -7,6 +7,7 @@
 #if defined(USE_VULKAN_OFFLOAD)
     #define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
     #include <vulkan/vulkan.h>
+    #include <vk_mem_alloc.h>
 #elif defined(USE_HIP_OFFLOAD)
     #define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
     #include <hip/hip_runtime.h>
@@ -31,6 +32,7 @@ class OffloadMemoryBuffer
     {
 #if defined(USE_VULKAN_OFFLOAD)
         m_buffer = VK_NULL_HANDLE;
+        m_allocation = VK_NULL_HANDLE;
 #else
         m_ptr = nullptr;
 #endif
@@ -50,7 +52,15 @@ class OffloadMemoryBuffer
         return !is_valid();
     }
 
-#if defined(USE_HIP_OFFLOAD)
+#if defined(USE_VULKAN_OFFLOAD)
+    OffloadMemoryBuffer(VkBuffer buffer, VmaAllocation allocation)
+        : m_buffer(buffer)
+        , m_allocation(allocation)
+    {}
+
+    VkBuffer get() const { return m_buffer; }
+    VmaAllocation allocation() const { return m_allocation; }
+#elif defined(USE_HIP_OFFLOAD)
     void *get() const { return m_ptr; }
 #endif
 
@@ -59,9 +69,10 @@ class OffloadMemoryBuffer
      * The actual type and usage will be determined by the specific memory space implementation.
      */
 #if defined(USE_VULKAN_OFFLOAD)
-    VkBuffer m_buffer;
+    VkBuffer m_buffer = VK_NULL_HANDLE;
+    VmaAllocation m_allocation = VK_NULL_HANDLE;
 #else
-    void* m_ptr;
+    void* m_ptr = nullptr;
 #endif
 };
 
