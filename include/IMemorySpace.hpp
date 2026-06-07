@@ -4,13 +4,18 @@
 #include <cstdlib>
 #include <cstring>
 
-#if defined(USE_VULKAN_OFFLOAD) || defined(USE_HIP_OFFLOAD)
-#define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
+#if defined(USE_VULKAN_OFFLOAD)
+    #define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
+    #include <vulkan/vulkan.h>
+#elif defined(USE_HIP_OFFLOAD)
+    #define RLLM_DEVICE_POINTER_HAS_OFFLOAD 1
+    #include <hip/hip_runtime.h>
 #else
-#define RLLM_DEVICE_POINTER_HAS_OFFLOAD 0
+    #define RLLM_DEVICE_POINTER_HAS_OFFLOAD 0
 #endif
 
-enum class IMemorySpaceType {
+enum class IMemorySpaceType
+{
     HOST,
     VULKAN,
     HIP
@@ -19,34 +24,79 @@ enum class IMemorySpaceType {
 
 class OffloadMemoryBuffer
 {
-public:
+  public:
     OffloadMemoryBuffer() = default;
 
-    void invalidate() { std::memset(storage, 0, sizeof(storage)); }
-    bool is_valid() const;
+    void invalidate()
+    {
+#if defined(USE_VULKAN_OFFLOAD)
+        m_buffer = VK_NULL_HANDLE;
+#else
+        m_ptr = nullptr;
+#endif
+    }
 
-    bool is_invalid() const { return ! is_valid(); }
+    bool is_valid() const
+    {
+#if defined(USE_VULKAN_OFFLOAD)
+        return m_buffer != VK_NULL_HANDLE;
+#else
+        return m_ptr != nullptr;
+#endif
+    }
 
-private:
+    bool is_invalid() const
+    {
+        return !is_valid();
+    }
+
+#if defined(USE_HIP_OFFLOAD)
+    void *get() const { return m_ptr; }
+#endif
+
+  private:
     /** Storage for a Vulkan buffer handle or a HIP device pointer, depending on the memory space type.
      * The actual type and usage will be determined by the specific memory space implementation.
      */
-    char storage[32] = {};
+#if defined(USE_VULKAN_OFFLOAD)
+    VkBuffer m_buffer;
+#else
+    void* m_ptr;
+#endif
 };
 
 class OnHostStagingBuffer
 {
-public:
-    explicit OnHostStagingBuffer(void *p) { m_data = p; }
+  public:
+    explicit OnHostStagingBuffer(void* p)
+    {
+        m_data = p;
+    }
 
-    void *get() { return m_data; }
-    void *get() const { return m_data; }
+    void* get()
+    {
+        return m_data;
+    }
+    void* get() const
+    {
+        return m_data;
+    }
 
-    bool is_valid() const { return m_data != nullptr; }
-    bool is_invalid() const { return ! is_valid(); }
+    bool is_valid() const
+    {
+        return m_data != nullptr;
+    }
+    bool is_invalid() const
+    {
+        return !is_valid();
+    }
 
-    void invalidate() { m_data = nullptr; }
-private:
+    void invalidate()
+    {
+        m_data = nullptr;
+    }
+
+  private:
     void* m_data = nullptr;
 };
 
@@ -63,13 +113,13 @@ private:
  */
 class IMemorySpace
 {
-public:
+  public:
     virtual ~IMemorySpace() = default;
 
-    virtual void copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, const OnHostStagingBuffer& staging_src, size_t bytes) = 0;
-    virtual void copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, const OffloadMemoryBuffer& offload_src, size_t bytes) = 0;
-    virtual void copy_offload_to_offload(const OffloadMemoryBuffer& offload_dst, const OffloadMemoryBuffer& offload_src, size_t bytes) = 0;
-    virtual void zero_offload(const OffloadMemoryBuffer& offload_dst, size_t bytes) = 0;
+    virtual void copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OnHostStagingBuffer& staging_src, size_t src_offset, size_t bytes) = 0;
+    virtual void copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes) = 0;
+    virtual void copy_offload_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes) = 0;
+    virtual void zero_offload(const OffloadMemoryBuffer& offload_dst, size_t offset, size_t bytes) = 0;
 
 
     virtual OnHostStagingBuffer allocate_staging(size_t bytes) = 0;
@@ -84,6 +134,5 @@ public:
      * from the appropriate Vulkan heap and manages staging buffers as needed.
      * For CPU-only builds this can return a simple HostMemorySpace that wraps standard heap allocation.
      */
-    static IMemorySpace* get_instance();
-    static IMemorySpace* get_instance(IMemorySpaceType type);
+    static IMemorySpace& get_instance();
 };

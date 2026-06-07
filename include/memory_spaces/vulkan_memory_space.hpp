@@ -13,12 +13,14 @@ class VulkanMemorySpace final : public IMemorySpace
 {
 public:
     explicit VulkanMemorySpace();
-    ~VulkanMemorySpace() override;
+    ~VulkanMemorySpace() override = default;
 
-    void copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, const OnHostStagingBuffer& staging_src, size_t bytes) override;
-    void copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, const OffloadMemoryBuffer& offload_src, size_t bytes) override;
-    void copy_offload_to_offload(const OffloadMemoryBuffer& offload_dst, const OffloadMemoryBuffer& offload_src, size_t bytes) override;
-    void zero_offload(const OffloadMemoryBuffer& offload_dst, size_t bytes) override;
+    void copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OnHostStagingBuffer& staging_src, size_t src_offset, size_t bytes) override;
+    void copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes) override;
+    void copy_offload_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes) override;
+    void zero_offload(const OffloadMemoryBuffer& offload_dst, size_t offset, size_t bytes) override;
+    OnHostStagingBuffer allocate_staging(size_t bytes) override;
+    OffloadMemoryBuffer allocate_offload(size_t bytes) override;
     void release_staging(OnHostStagingBuffer& ref) override;
     void release_offload(OffloadMemoryBuffer& ref) override;
     
@@ -38,4 +40,7 @@ private:
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool m_command_pool = VK_NULL_HANDLE;
     VmaAllocator m_allocator = nullptr;
+
+
+    void initialize_runtime();
 };

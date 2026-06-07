@@ -25,7 +25,8 @@
 #elif defined(USE_HIP_OFFLOAD)
 #include <memory_spaces/hip_memory_space.hpp>
 #endif
-inline IMemorySpace* IMemorySpace::get_instance()
+
+inline IMemorySpace& IMemorySpace::get_instance()
 {
 #if defined(USE_VULKAN_OFFLOAD)
     static VulkanMemorySpace instance;
@@ -34,38 +35,9 @@ inline IMemorySpace* IMemorySpace::get_instance()
 #else
     static HostMemorySpace instance;
 #endif
-    return &instance;
+    return instance;
 }
 
-inline IMemorySpace* IMemorySpace::get_instance(IMemorySpaceType type)
-{
-    static HostMemorySpace host_instance;
-#if defined(USE_VULKAN_OFFLOAD)
-    static VulkanMemorySpace vulkan_instance;
-#elif defined(USE_HIP_OFFLOAD)
-    static HipMemorySpace hip_instance;
-#endif
-
-    switch (type)
-    {
-        case IMemorySpaceType::HOST:
-            return &host_instance;
-        case IMemorySpaceType::VULKAN:
-#if defined(USE_VULKAN_OFFLOAD)
-            return &vulkan_instance;
-#else
-            return get_instance();
-#endif
-        case IMemorySpaceType::HIP:
-#if defined(USE_HIP_OFFLOAD)
-            return &hip_instance;
-#else
-            return get_instance();
-#endif
-    }
-
-    return get_instance();
-}
 
 template <typename T>
 T* allocate_aligned(IMemorySpace& mem_space, std::size_t count)
