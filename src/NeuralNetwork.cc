@@ -149,6 +149,7 @@ namespace rllm
         const auto last_pos = dec(m_seq_len);
         copy_hidden_row_to_vector(ws.h, last_pos, ws.h_last);
 
+        // TODO: inline forward_from_hidden to turn this into a OFFLOAD_PARFOR_2D_PARAM
         PARFOR(output_index, enum_iterator<MultiTokenPredictionIndex>())
             m_output_layers[output_index].forward_from_hidden(ws.h_last);
         ENDFOR

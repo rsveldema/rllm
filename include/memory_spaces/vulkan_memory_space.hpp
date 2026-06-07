@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 #include <IMemorySpace.hpp>
@@ -23,7 +24,17 @@ public:
     OffloadMemoryBuffer allocate_offload(size_t bytes) override;
     void release_staging(OnHostStagingBuffer& ref) override;
     void release_offload(OffloadMemoryBuffer& ref) override;
-    
+
+
+    // Compute queue synchronization (protects vkQueueSubmit, command pool)
+    void compute_lock()     { m_sync_mutex.lock(); }
+    void compute_unlock()   { m_sync_mutex.unlock(); }
+    std::mutex& sync_mutex() const { return m_sync_mutex; }
+
+    // VMA memory allocation (protects vmaCreateBuffer, vmaDestroyBuffer)
+    void alloc_lock()       { m_alloc_mutex.lock(); }
+    void alloc_unlock()     { m_alloc_mutex.unlock(); }
+    std::mutex& alloc_mutex() const { return m_alloc_mutex; }
 
     VkInstance instance() const { return m_instance; }
     VkPhysicalDevice physical_device() const { return m_physical_device; }
@@ -46,6 +57,11 @@ private:
     VkCommandPool m_command_pool = VK_NULL_HANDLE;
     VmaAllocator m_allocator = nullptr;
 
+    // Compute queue synchronization (queue submission, command pool access)
+    mutable std::mutex m_sync_mutex;
+
+    // VMA memory allocation synchronization
+    mutable std::mutex m_alloc_mutex;
 
     void initialize_runtime();
 };

@@ -225,8 +225,10 @@ namespace rllm::vulkan
             const uint32_t local_x = std::max<uint32_t>(1u, m_local_size.x);
             const uint32_t group_x = static_cast<uint32_t>((total_x + local_x - 1) / local_x);
 
-            // forward to common dispatch helper
+            // forward to common dispatch helper (protected)
+            m_space.compute_lock();
             dispatch_compute(parameter_names, group_x, 1u, 1u, args...);
+            m_space.compute_unlock();
         }
 
         template <typename Range2D>
@@ -255,7 +257,9 @@ namespace rllm::vulkan
             const uint32_t gx = static_cast<uint32_t>((size_x + local_x - 1) / local_x);
             const uint32_t gy = static_cast<uint32_t>((size_y + local_y - 1) / local_y);
 
+            m_space.compute_lock();
             dispatch_compute(parameter_names, gx, gy, 1u, args...);
+            m_space.compute_unlock();
         }
 
         template <typename Range3D>
@@ -296,7 +300,9 @@ namespace rllm::vulkan
             const uint32_t gy = static_cast<uint32_t>((iy + ly - 1) / ly);
             const uint32_t gz = static_cast<uint32_t>((iz + lz - 1) / lz);
 
+            m_space.compute_lock();
             dispatch_compute(parameter_names, gx, gy, gz, args...);
+            m_space.compute_unlock();
         }
 
       private:
@@ -315,11 +321,11 @@ namespace rllm::vulkan
         }
 
 
-        // Core dispatch implementation: creates shader, pipeline, descriptor sets, and dispatches.
+        // Core dispatch implementation: creates shader/pipeline (cached), descriptor pool + set,
+        // and command buffer (fresh per-dispatch), then submits. Caller holds m_sync_mutex.
         template <typename... Args>
         void dispatch_compute(std::initializer_list<std::string_view> parameter_names, uint32_t gx, uint32_t gy, uint32_t gz, Args&&... args)
         {
-            // create shader module (cached)
             VkResult r = VK_SUCCESS;
             if (m_shader_module == VK_NULL_HANDLE)
             {
@@ -362,6 +368,7 @@ namespace rllm::vulkan
                 push_range.size = static_cast<uint32_t>(scalar_count * sizeof(uint32_t));
             }
 
+            // pipeline layout: cached (protected by caller's lock)
             VkPipelineLayout pipeline_layout = m_pipeline_layout;
             if (pipeline_layout == VK_NULL_HANDLE)
             {
@@ -416,38 +423,31 @@ namespace rllm::vulkan
             pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             pool_size.descriptorCount = binding_count;
 
-            VkDescriptorPool descriptor_pool = m_descriptor_pool;
-            if (descriptor_pool == VK_NULL_HANDLE)
+            // Descriptor pool + set: fresh per-dispatch (cached versions don't work with one-shot submits)
+            VkDescriptorPoolCreateInfo dpci{};
+            dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            dpci.maxSets = 1;
+            dpci.poolSizeCount = 1;
+            dpci.pPoolSizes = &pool_size;
+            VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+            r = vkCreateDescriptorPool(m_space.device(), &dpci, nullptr, &descriptor_pool);
+            if (r != VK_SUCCESS)
             {
-                VkDescriptorPoolCreateInfo dpci{};
-                dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-                dpci.maxSets = 1;
-                dpci.poolSizeCount = 1;
-                dpci.pPoolSizes = &pool_size;
-                r = vkCreateDescriptorPool(m_space.device(), &dpci, nullptr, &descriptor_pool);
-                if (r != VK_SUCCESS)
-                {
-                    LOG_ERROR("vkCreateDescriptorPool failed: {}", static_cast<int>(r));
-                    std::abort();
-                }
-                m_descriptor_pool = descriptor_pool;
+                LOG_ERROR("vkCreateDescriptorPool failed: {}", static_cast<int>(r));
+                std::abort();
             }
 
-            VkDescriptorSet descriptor_set = m_descriptor_set;
-            if (descriptor_set == VK_NULL_HANDLE)
+            VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+            VkDescriptorSetAllocateInfo dsai{};
+            dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            dsai.descriptorPool = descriptor_pool;
+            dsai.descriptorSetCount = 1;
+            dsai.pSetLayouts = &descriptor_set_layout;
+            r = vkAllocateDescriptorSets(m_space.device(), &dsai, &descriptor_set);
+            if (r != VK_SUCCESS)
             {
-                VkDescriptorSetAllocateInfo dsai{};
-                dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                dsai.descriptorPool = descriptor_pool;
-                dsai.descriptorSetCount = 1;
-                dsai.pSetLayouts = &descriptor_set_layout;
-                r = vkAllocateDescriptorSets(m_space.device(), &dsai, &descriptor_set);
-                if (r != VK_SUCCESS)
-                {
-                    LOG_ERROR("vkAllocateDescriptorSets failed: {}", static_cast<int>(r));
-                    std::abort();
-                }
-                m_descriptor_set = descriptor_set;
+                LOG_ERROR("vkAllocateDescriptorSets failed: {}", static_cast<int>(r));
+                std::abort();
             }
 
             // prepare buffer infos from args (map by order). Skip scalar args.
@@ -492,43 +492,40 @@ namespace rllm::vulkan
                 (void) scalar_loop;
             }
 
-            // allocate the cached command buffer if needed
-            if (m_command_buffer == VK_NULL_HANDLE)
-            {
-                VkCommandBufferAllocateInfo allocate_info{};
-                allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-                allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-                allocate_info.commandPool = m_space.command_pool();
-                allocate_info.commandBufferCount = 1;
+            // Command buffer: fresh per-dispatch (can't reset submitted buffers)
+            VkCommandBufferAllocateInfo allocate_info{};
+            allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocate_info.commandPool = m_space.command_pool();
+            allocate_info.commandBufferCount = 1;
 
-                VkResult alloc_r = vkAllocateCommandBuffers(m_space.device(), &allocate_info, &m_command_buffer);
-                if (alloc_r != VK_SUCCESS)
-                {
-                    LOG_ERROR("vkAllocateCommandBuffers failed: {}", static_cast<int>(alloc_r));
-                    std::abort();
-                }
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            r = vkAllocateCommandBuffers(m_space.device(), &allocate_info, &command_buffer);
+            if (r != VK_SUCCESS)
+            {
+                LOG_ERROR("vkAllocateCommandBuffers failed: {}", static_cast<int>(r));
+                std::abort();
             }
 
             VkCommandBufferBeginInfo begin_info{};
             begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-            VkResult begin_r = vkBeginCommandBuffer(m_command_buffer, &begin_info);
-            if (begin_r != VK_SUCCESS)
+            r = vkBeginCommandBuffer(command_buffer, &begin_info);
+            if (r != VK_SUCCESS)
             {
-                LOG_ERROR("vkBeginCommandBuffer failed: {}", static_cast<int>(begin_r));
+                LOG_ERROR("vkBeginCommandBuffer failed: {}", static_cast<int>(r));
                 std::abort();
             }
 
-            vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-            vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
             if (m_push_constant_size > 0)
             {
-                vkCmdPushConstants(m_command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, static_cast<uint32_t>(m_push_constant_size * sizeof(uint32_t)), m_push_constant_bytes.data());
+                vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, static_cast<uint32_t>(m_push_constant_size * sizeof(uint32_t)), m_push_constant_bytes.data());
             }
-            vkCmdDispatch(m_command_buffer, gx, gy, gz);
+            vkCmdDispatch(command_buffer, gx, gy, gz);
 
-            VkResult end_r = vkEndCommandBuffer(m_command_buffer);
+            VkResult end_r = vkEndCommandBuffer(command_buffer);
             if (end_r != VK_SUCCESS)
             {
                 LOG_ERROR("vkEndCommandBuffer failed: {}", static_cast<int>(end_r));
@@ -538,7 +535,7 @@ namespace rllm::vulkan
             VkSubmitInfo submit_info{};
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             submit_info.commandBufferCount = 1;
-            submit_info.pCommandBuffers = &m_command_buffer;
+            submit_info.pCommandBuffers = &command_buffer;
 
             VkResult submit_r = vkQueueSubmit(m_space.queue(), 1, &submit_info, VK_NULL_HANDLE);
             if (submit_r != VK_SUCCESS)
@@ -554,7 +551,12 @@ namespace rllm::vulkan
                 std::abort();
             }
 
-            // cached Vulkan objects are reused; cleanup is handled in the runtime destructor
+            vkFreeDescriptorSets(m_space.device(), descriptor_pool, 1, &descriptor_set);
+            vkDestroyDescriptorPool(m_space.device(), descriptor_pool, nullptr);
+            vkFreeCommandBuffers(m_space.device(), m_space.command_pool(), 1, &command_buffer);
+
+            // cached Vulkan objects (shader module, pipeline layout, compute pipeline) are reused;
+            // their cleanup is handled in the ComputeKernelRuntime destructor.
         }
     };
 } // namespace rllm::vulkan

@@ -11,6 +11,7 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include <logging.hpp>
 
@@ -296,6 +297,10 @@ namespace
     }
 } // namespace
 
+// ---- Copy / zero operations ---------------------------------------------------
+// These call begin_one_time_command()/end_one_time_command() which each handle
+// their own m_sync_mutex locking internally. Therefore the caller must NOT
+// acquire m_sync_mutex first (that would cause a recursive-lock deadlock).
 
 void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OnHostStagingBuffer& staging_src, size_t src_offset, size_t bytes)
 {
@@ -312,13 +317,13 @@ void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offlo
     std::memcpy(static_cast<std::uint8_t*>(mapped), static_cast<const std::uint8_t*>(staging_src.get()) + src_offset, bytes);
     vmaUnmapMemory(m_allocator, staging_allocation);
 
-    VkCommandBuffer command_buffer = begin_one_time_command();
+    VkCommandBuffer command_buffer = begin_one_time_command();   // locks m_sync_mutex internally
     VkBufferCopy copy_region{};
     copy_region.srcOffset = 0;
     copy_region.dstOffset = dst_offset;
     copy_region.size = bytes;
     vkCmdCopyBuffer(command_buffer, staging_buffer, offload_dst.get(), 1, &copy_region);
-    end_one_time_command(command_buffer);
+    end_one_time_command(command_buffer);                           // locks m_sync_mutex internally
 
     destroy_vulkan_buffer(m_allocator, staging_buffer, staging_allocation);
 }
@@ -334,13 +339,13 @@ void VulkanMemorySpace::copy_offload_to_staging(const OnHostStagingBuffer& stagi
     VmaAllocation staging_allocation = VK_NULL_HANDLE;
     create_vulkan_buffer(m_allocator, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_CPU_ONLY, staging_buffer, staging_allocation);
 
-    VkCommandBuffer command_buffer = begin_one_time_command();
+    VkCommandBuffer command_buffer = begin_one_time_command();   // locks m_sync_mutex internally
     VkBufferCopy copy_region{};
     copy_region.srcOffset = src_offset;
     copy_region.dstOffset = 0;
     copy_region.size = bytes;
     vkCmdCopyBuffer(command_buffer, offload_src.get(), staging_buffer, 1, &copy_region);
-    end_one_time_command(command_buffer);
+    end_one_time_command(command_buffer);                           // locks m_sync_mutex internally
 
     void* mapped = nullptr;
     vmaMapMemory(m_allocator, staging_allocation, &mapped);
@@ -357,13 +362,13 @@ void VulkanMemorySpace::copy_offload_to_offload(const OffloadMemoryBuffer& offlo
     assert(offload_dst.is_valid());
     assert(offload_src.is_valid());
 
-    VkCommandBuffer command_buffer = begin_one_time_command();
+    VkCommandBuffer command_buffer = begin_one_time_command();   // locks m_sync_mutex internally
     VkBufferCopy copy_region{};
     copy_region.srcOffset = src_offset;
     copy_region.dstOffset = dst_offset;
     copy_region.size = bytes;
     vkCmdCopyBuffer(command_buffer, offload_src.get(), offload_dst.get(), 1, &copy_region);
-    end_one_time_command(command_buffer);
+    end_one_time_command(command_buffer);                           // locks m_sync_mutex internally
 }
 
 
@@ -372,11 +377,13 @@ void VulkanMemorySpace::zero_offload(const OffloadMemoryBuffer& offload_dst, siz
     assert(bytes != 0);
     assert(offload_dst.is_valid());
 
-    VkCommandBuffer command_buffer = begin_one_time_command();
+    VkCommandBuffer command_buffer = begin_one_time_command();   // locks m_sync_mutex internally
     vkCmdFillBuffer(command_buffer, offload_dst.get(), offset, bytes, 0);
-    end_one_time_command(command_buffer);
+    end_one_time_command(command_buffer);                           // locks m_sync_mutex internally
 }
 
+
+// ---- Staging (host-side) ------------------------------------------------------
 
 OnHostStagingBuffer VulkanMemorySpace::allocate_staging(size_t bytes)
 {
@@ -392,8 +399,13 @@ OnHostStagingBuffer VulkanMemorySpace::allocate_staging(size_t bytes)
 }
 
 
+// ---- Offload (VMA) ------------------------------------------------------------
+
 OffloadMemoryBuffer VulkanMemorySpace::allocate_offload(size_t bytes)
 {
+    // VMA-only operation — uses alloc_mutex so it does not block compute-queue
+    // operations during kernel dispatch.
+    std::lock_guard<std::mutex> lock(m_alloc_mutex);
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -412,6 +424,9 @@ void VulkanMemorySpace::release_staging(OnHostStagingBuffer& ref)
 
 void VulkanMemorySpace::release_offload(OffloadMemoryBuffer& ref)
 {
+    // VMA-only operation — uses alloc_mutex so it does not block compute-queue
+    // operations during kernel dispatch.
+    std::lock_guard<std::mutex> lock(m_alloc_mutex);
     if (ref.is_valid())
     {
         destroy_vulkan_buffer(m_allocator, ref.get(), ref.allocation());
@@ -420,14 +435,24 @@ void VulkanMemorySpace::release_offload(OffloadMemoryBuffer& ref)
 }
 
 
+// ---- Construction / Destruction -----------------------------------------------
+
 VulkanMemorySpace::VulkanMemorySpace()
 {
     initialize_runtime();
 }
 
 
+// ---- One-time command helpers -------------------------------------------------
+// Each helper acquires m_sync_mutex for the portion of work it performs.  This
+// design means callers must NOT wrap them in an outer m_sync_mutex acquisition;
+// doing so would deadlock because std::mutex is non-recursive.
+
 VkCommandBuffer VulkanMemorySpace::begin_one_time_command()
 {
+    // Queue/command-pool access — protects command-buffer allocation from the
+    // shared pool while also guarding against concurrent vkBeginCommandBuffer.
+    std::lock_guard<std::mutex> lock(m_sync_mutex);
     auto device = m_device;
     auto command_pool = m_command_pool;
 
@@ -461,6 +486,9 @@ VkCommandBuffer VulkanMemorySpace::begin_one_time_command()
 
 void VulkanMemorySpace::end_one_time_command(VkCommandBuffer command_buffer)
 {
+    // Queue submission — protects vkQueueSubmit + vkQueueWaitIdle from concurrent
+    // submissions.  Command-buffer freeing is safe once wait completes.
+    std::lock_guard<std::mutex> lock(m_sync_mutex);
     const auto device = m_device;
     const auto queue = m_queue;
     const auto command_pool = m_command_pool;
