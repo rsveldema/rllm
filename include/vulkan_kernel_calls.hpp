@@ -226,9 +226,11 @@ namespace rllm::vulkan
             const uint32_t group_x = static_cast<uint32_t>((total_x + local_x - 1) / local_x);
 
             // forward to common dispatch helper (protected)
-            m_space.compute_lock();
-            dispatch_compute(parameter_names, group_x, 1u, 1u, args...);
-            m_space.compute_unlock();
+            RLLM_TIMED_KERNEL(m_name) {
+                m_space.compute_lock();
+                dispatch_compute(parameter_names, group_x, 1u, 1u, args...);
+                m_space.compute_unlock();
+            } // end timer scope
         }
 
         template <typename Range2D>
@@ -257,9 +259,11 @@ namespace rllm::vulkan
             const uint32_t gx = static_cast<uint32_t>((size_x + local_x - 1) / local_x);
             const uint32_t gy = static_cast<uint32_t>((size_y + local_y - 1) / local_y);
 
-            m_space.compute_lock();
-            dispatch_compute(parameter_names, gx, gy, 1u, args...);
-            m_space.compute_unlock();
+            RLLM_TIMED_KERNEL(m_name) {
+                m_space.compute_lock();
+                dispatch_compute(parameter_names, gx, gy, 1u, args...);
+                m_space.compute_unlock();
+            } // end timer scope
         }
 
         template <typename Range3D>
@@ -300,9 +304,11 @@ namespace rllm::vulkan
             const uint32_t gy = static_cast<uint32_t>((iy + ly - 1) / ly);
             const uint32_t gz = static_cast<uint32_t>((iz + lz - 1) / lz);
 
-            m_space.compute_lock();
-            dispatch_compute(parameter_names, gx, gy, gz, args...);
-            m_space.compute_unlock();
+            RLLM_TIMED_KERNEL(m_name) {
+                m_space.compute_lock();
+                dispatch_compute(parameter_names, gx, gy, gz, args...);
+                m_space.compute_unlock();
+            } // end timer scope
         }
 
       private:
