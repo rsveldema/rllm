@@ -805,6 +805,7 @@ def main() -> int:
         emit_named_kernels=True,
         on_emit_loop=collect_kernel,
         symbol_values=symbol_values,
+        parfor_dump_dir=out_dir / "parfor_dumps",
     )
     generated_kernels = _write_kernel_stubs(kernel_specs, kernel_root, symbol_values, config)
     generated_spirv: list[Path] = []

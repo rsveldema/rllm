@@ -44,6 +44,9 @@ class LoopContext:
     offload_param_lines: list[str] | None
     body_lines: list[str]
     emit_named_kernel: bool
+    parfor_invocation: str | None = None  # original PARFOR invocation line text
+    raw_body_lines: list[str] | None = None  # unmodified source lines (before symbol substitution)
+    raw_offload_param_lines: list[str] | None = None  # unmodified OFFLOAD_PARAMETERS content
     shared_vars: dict[str, str] | None = field(default=None)  # var_name -> type (extracted from PARFOR_SHARED_VARIABLES blocks)
 
 
@@ -588,6 +591,7 @@ def transform_source(
     include_line: str,
     emit_named_kernels: bool = False,
     on_emit_loop: Callable[[LoopContext], None] | None = None,
+    parfor_dump_dir: Path | None = None,
     symbol_values: dict[str, str] | None = None,
 ) -> tuple[str, bool]:
     in_lines = src_text.splitlines()
@@ -600,6 +604,8 @@ def transform_source(
     active_offload_param_types: dict[str, str] = {}
     active_offload_param_lines: list[str] = []
     collecting_offload_params = False
+    active_raw_body_lines: list[str] = []
+    pending_parfor_invocation: str | None = None
     collecting_param_names: list[str] = []
     collecting_param_types: dict[str, str] = {}
     collecting_param_lines: list[str] = []
@@ -611,6 +617,7 @@ def transform_source(
     def append_to_current(line: str) -> None:
         if loop_stack:
             loop_stack[-1].body_lines.append(line)
+            active_raw_body_lines.append(line)
         else:
             out_lines.append(line)
 
@@ -757,6 +764,13 @@ def transform_source(
             
             ctx.body_lines = [apply_symbol_values(body_line, symbol_values) for body_line in ctx.body_lines]
             ctx.body_lines = rewrite_enum_iterator_loops(ctx.body_lines, symbol_values)
+            # Set raw body lines before applying symbol substitution
+            ctx.raw_body_lines = list(active_raw_body_lines)
+            
+            # Write PARFOR dump files to build directory if requested
+            if parfor_dump_dir is not None and ctx.parfor_invocation is not None:
+                _write_parfor_dump(ctx, parfor_dump_dir)
+
             if on_emit_loop is not None:
                 on_emit_loop(ctx)
             append_many_to_current(_emit_loop_invocation(ctx))
@@ -768,6 +782,7 @@ def transform_source(
             continue
 
         macro, args, indent = parsed
+        pending_parfor_invocation = line.strip()
         if macro in OFFLOAD_1D_PARAM_MACROS and len(args) >= 3:
             extra_param_names = parse_extra_param_names(", ".join(args[2:]))
             extra_param_types = {
@@ -789,11 +804,14 @@ def transform_source(
                     extra_params=", ".join(args[2:]),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
-                    body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    body_lines=[],
+                    raw_body_lines=list(active_raw_body_lines),
+                    parfor_invocation=pending_parfor_invocation,
                     shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            active_raw_body_lines.clear()
             pending_shared_vars = None
             changed = True
             continue
@@ -813,11 +831,14 @@ def transform_source(
                     extra_params=None,
                     extra_param_types=None,
                     offload_param_lines=list(active_offload_param_lines),
-                    body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    body_lines=[],
+                    raw_body_lines=list(active_raw_body_lines),
+                    parfor_invocation=pending_parfor_invocation,
                     shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            active_raw_body_lines.clear()
             pending_shared_vars = None
             changed = True
             continue
@@ -843,11 +864,14 @@ def transform_source(
                     extra_params=", ".join(args[3:]),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
-                    body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    body_lines=[],
+                    raw_body_lines=list(active_raw_body_lines),
+                    parfor_invocation=pending_parfor_invocation,
                     shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            active_raw_body_lines.clear()
             pending_shared_vars = None
             changed = True
             continue
@@ -873,11 +897,14 @@ def transform_source(
                     extra_params=", ".join(args[4:]),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
-                    body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    body_lines=[],
+                    raw_body_lines=list(active_raw_body_lines),
+                    parfor_invocation=pending_parfor_invocation,
                     shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            active_raw_body_lines.clear()
             pending_shared_vars = None
             changed = True
             continue
@@ -920,11 +947,14 @@ def transform_source(
                     extra_params=", ".join(extra_param_names),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
-                    body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    body_lines=[],
+                    raw_body_lines=list(active_raw_body_lines),
+                    parfor_invocation=pending_parfor_invocation,
                     shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            active_raw_body_lines.clear()
             pending_shared_vars = None
             changed = True
             continue
@@ -961,11 +991,14 @@ def transform_source(
                     extra_params=", ".join(extra_param_names),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
-                    body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    body_lines=[],
+                    raw_body_lines=list(active_raw_body_lines),
+                    parfor_invocation=pending_parfor_invocation,
                     shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            active_raw_body_lines.clear()
             pending_shared_vars = None
             changed = True
             continue
@@ -1002,11 +1035,14 @@ def transform_source(
                     extra_params=", ".join(extra_param_names),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
-                    body_lines=[],
                     emit_named_kernel=emit_named_kernels,
+                    body_lines=[],
+                    raw_body_lines=list(active_raw_body_lines),
+                    parfor_invocation=pending_parfor_invocation,
                     shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
                 )
             )
+            active_raw_body_lines.clear()
             pending_shared_vars = None
             changed = True
             continue
@@ -1026,6 +1062,7 @@ def transform_tree(
     include_line: str,
     emit_named_kernels: bool = False,
     on_emit_loop: Callable[[LoopContext], None] | None = None,
+    parfor_dump_dir: Path | None = None,
     symbol_values: dict[str, str] | None = None,
 ) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1052,6 +1089,41 @@ def transform_tree(
         generated_files.append(out_path)
 
     return generated_files
+
+
+
+def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path) -> None:
+    """Write a PARFOR block and its OFFLOAD_PARAMETERS to a separate file."""
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Build filename: offload_parfor_<basename>_<lineno>.cc
+    src_basename = ctx.rel_path.rsplit("/", 1)[-1] if "/" in ctx.rel_path else ctx.rel_path
+    name_no_ext = src_basename.rsplit(".", 1)[0] if "." in src_basename else src_basename
+    filename = f"offload_parfor_{name_no_ext}_{ctx.lineno}.cc"
+    dump_path = dump_dir / filename
+    
+    lines: list[str] = []
+    lines.append(f"// === PARFOR block from {ctx.rel_path}:{ctx.lineno} ===")
+    lines.append("")
+    
+    # Write the original PARFOR invocation line
+    if ctx.parfor_invocation:
+        lines.append(ctx.parfor_invocation)
+        lines.append("")
+    
+    # Write the OFFLOAD_PARAMETERS block content
+    if ctx.offload_param_lines:
+        lines.append("// === OFFLOAD_PARAMETERS ===")
+        lines.extend(ctx.offload_param_lines)
+        lines.append("")
+    
+    # Write the body lines
+    if ctx.raw_body_lines:
+        lines.append("// === PARFOR BODY ===")
+        lines.extend(ctx.raw_body_lines)
+        lines.append("")
+    
+    dump_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def write_manifest(manifest: Path, variable_name: str, generated_files: list[Path]) -> None:

@@ -26,6 +26,7 @@ def main() -> int:
     src_dir = Path(args.src_dir).resolve()
     out_dir = Path(args.out_dir).resolve()
     symbol_values = resolve_symbol_values(args.enum_value_tool)
+    parfor_dumps = out_dir / "parfor_dumps"
     generated_files = transform_tree(
         src_dir,
         out_dir,
@@ -33,6 +34,7 @@ def main() -> int:
         include_line="#include <hip_kernel_calls.hpp>",
         emit_named_kernels=True,
         symbol_values=symbol_values,
+        parfor_dump_dir=parfor_dumps,
     )
 
     if args.manifest:
