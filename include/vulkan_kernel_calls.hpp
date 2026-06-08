@@ -241,6 +241,7 @@ namespace rllm::vulkan
         uint32_t m_binding_count = 0;
         std::vector<uint32_t> m_push_constant_bytes;
         size_t m_push_constant_size = 0;
+        mutable std::mutex m_dispatch_mutex;
 
       protected:
         void create_vulkan_compute_pipeline()
@@ -351,6 +352,7 @@ namespace rllm::vulkan
         template <typename Range2D>
         void dispatch_named(Range2D&& range, const uint32_t gx, const uint32_t gy, const uint32_t gz, std::initializer_list<std::string_view> pn_in, Args&&... args)
         {
+            std::lock_guard<std::mutex> lock(m_dispatch_mutex);
             // Use pack expansion with index_sequence for compile-time constant indices.
             // Each Args[i] accessed via std::get<i>(tuple) where i is constexpr at each instantiation.
             // Assert that cached vectors are large enough for binding_count
