@@ -310,8 +310,20 @@ void VulkanMemorySpace::copy_staging_to_offload(const OffloadMemoryBuffer& offlo
     assert(staging_src.is_valid());
 
 #if defined(RLLM_ENABLE_STATISTICS)
-    if (!site.empty())
-        parallel::statistics.record_host_to_device_buffer_copy(site, parameter, bytes);
+    {
+        std::string_view effective_site = site;
+        std::string_view effective_parameter = parameter;
+#if defined(USE_VULKAN_OFFLOAD)
+        if (effective_site.empty())
+        {
+            const auto dp = parallel::get_dispatch_params();
+            effective_site = dp.site;
+            effective_parameter = dp.parameter;
+        }
+#endif
+        if (!effective_site.empty())
+            parallel::statistics.record_host_to_device_buffer_copy(effective_site, effective_parameter, bytes);
+    }
 #endif
 
     VkBuffer staging_buffer = VK_NULL_HANDLE;
@@ -342,8 +354,20 @@ void VulkanMemorySpace::copy_offload_to_staging(const OnHostStagingBuffer& stagi
     assert(staging_dst.is_valid());
 
 #if defined(RLLM_ENABLE_STATISTICS)
-    if (!site.empty())
-        parallel::statistics.record_device_to_host_buffer_copy(site, parameter, bytes);
+    {
+        std::string_view effective_site = site;
+        std::string_view effective_parameter = parameter;
+#if defined(USE_VULKAN_OFFLOAD)
+        if (effective_site.empty())
+        {
+            const auto dp = parallel::get_dispatch_params();
+            effective_site = dp.site;
+            effective_parameter = dp.parameter;
+        }
+#endif
+        if (!effective_site.empty())
+            parallel::statistics.record_device_to_host_buffer_copy(effective_site, effective_parameter, bytes);
+    }
 #endif
 
     VkBuffer staging_buffer = VK_NULL_HANDLE;

@@ -33,20 +33,14 @@
 
 namespace rllm::vulkan
 {
-        template <typename T>
-    inline constexpr bool is_scalar_kernel_arg_v = 
-             (std::is_enum_v<std::remove_cv_t<std::remove_reference_t<T>>> 
-             || std::is_integral_v<std::remove_cv_t<std::remove_reference_t<T>>>
-             || std::is_floating_point_v<std::remove_cv_t<std::remove_reference_t<T>>>);
+    template <typename T>
+    inline constexpr bool is_scalar_kernel_arg_v = (std::is_enum_v<std::remove_cv_t<std::remove_reference_t<T>>> || std::is_integral_v<std::remove_cv_t<std::remove_reference_t<T>>> || std::is_floating_point_v<std::remove_cv_t<std::remove_reference_t<T>>>);
 
     namespace detail
     {
-
         struct LocalSize
         {
-            uint32_t x = 1;
-            uint32_t y = 1;
-            uint32_t z = 1;
+            uint32_t x = 1, y = 1, z = 1;
         };
 
         template <typename Arg>
@@ -57,10 +51,9 @@ namespace rllm::vulkan
             {
                 if (out_size >= out.size())
                 {
-                    LOG_ERROR("Vulkan launch scalar buffer overflow: capacity={}, attempted to append one more scalar argument.", out.size());
+                    LOG_ERROR("Vulkan launch scalar buffer overflow");
                     std::abort();
                 }
-
                 const auto value = arg;
                 std::memcpy(&out[out_size], &value, sizeof(value));
                 out_size++;
@@ -74,54 +67,67 @@ namespace rllm::vulkan
         }
     } // namespace detail
 
-
-    // append_scalar_arg is defined inside the detail namespace below
-
     class ComputeKernelRuntime
     {
       public:
-        ComputeKernelRuntime(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path, size_t num_buffer_args, size_t num_constant_args);
-
+        ComputeKernelRuntime(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path, size_t num_buffer_args, size_t num_constant_args)
+            : m_space(space)
+            , m_name(kernel_name)
+            , m_spirv_path(std::move(spirv_path))
+        {
+            if (m_spirv_path.is_relative())
+                m_spirv_path = std::filesystem::path(RLLM_VULKAN_KERNEL_ROOT) / m_spirv_path;
+            std::ifstream input(m_spirv_path, std::ios::binary | std::ios::ate);
+            if (!input)
+            {
+                LOG_ERROR("Failed to open SPIR-V kernel for reading");
+                std::abort();
+            }
+            const auto bytes = input.tellg();
+            m_spirv_words.resize(static_cast<size_t>(bytes) / sizeof(uint32_t));
+            input.seekg(0, std::ios::beg);
+            if (!input.read(reinterpret_cast<char*>(m_spirv_words.data()), bytes))
+            {
+                LOG_ERROR("Failed to read SPIR-V");
+                std::abort();
+            }
+            m_binding_count = static_cast<uint32_t>(std::max(static_cast<size_t>(1), num_buffer_args));
+            m_bindings.resize(m_binding_count);
+            m_buffer_infos.resize(m_binding_count);
+            m_writes.resize(m_binding_count);
+            for (uint32_t i = 0; i < m_binding_count; ++i)
+            {
+                m_bindings[i].binding = i;
+                m_bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                m_bindings[i].descriptorCount = 1;
+                m_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+                m_buffer_infos[i] = VkDescriptorBufferInfo{};
+                m_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                m_writes[i].dstBinding = i;
+                m_writes[i].descriptorCount = 1;
+                m_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            }
+        }
         ~ComputeKernelRuntime()
         {
             VkDevice dev = m_space.device();
             if (m_command_buffer != VK_NULL_HANDLE)
-            {
                 vkFreeCommandBuffers(dev, m_space.command_pool(), 1, &m_command_buffer);
-                m_command_buffer = VK_NULL_HANDLE;
-            }
             if (m_descriptor_pool != VK_NULL_HANDLE)
-            {
                 vkDestroyDescriptorPool(dev, m_descriptor_pool, nullptr);
-                m_descriptor_pool = VK_NULL_HANDLE;
-            }
             if (m_pipeline != VK_NULL_HANDLE)
-            {
                 vkDestroyPipeline(dev, m_pipeline, nullptr);
-                m_pipeline = VK_NULL_HANDLE;
-            }
             if (m_pipeline_layout != VK_NULL_HANDLE)
-            {
                 vkDestroyPipelineLayout(dev, m_pipeline_layout, nullptr);
-                m_pipeline_layout = VK_NULL_HANDLE;
-            }
             if (m_descriptor_set_layout != VK_NULL_HANDLE)
-            {
                 vkDestroyDescriptorSetLayout(dev, m_descriptor_set_layout, nullptr);
-                m_descriptor_set_layout = VK_NULL_HANDLE;
-            }
             if (m_shader_module != VK_NULL_HANDLE)
-            {
                 vkDestroyShaderModule(dev, m_shader_module, nullptr);
-                m_shader_module = VK_NULL_HANDLE;
-            }
         }
-
         ComputeKernelRuntime(const ComputeKernelRuntime&) = delete;
         ComputeKernelRuntime& operator=(const ComputeKernelRuntime&) = delete;
         ComputeKernelRuntime(ComputeKernelRuntime&&) = delete;
         ComputeKernelRuntime& operator=(ComputeKernelRuntime&&) = delete;
-
 
         const std::string& name() const
         {
@@ -147,262 +153,55 @@ namespace rllm::vulkan
         {
             return m_local_size.z;
         }
-
+      
+      protected:
         VulkanMemorySpace& m_space;
-
         std::string m_name;
         std::filesystem::path m_spirv_path;
         std::vector<uint32_t> m_spirv_words;
-        uint32_t m_parsed_ssbo_binding_count = 0;
         detail::LocalSize m_local_size{};
-        // Cached Vulkan objects for this kernel runtime
         VkDescriptorPool m_descriptor_pool = VK_NULL_HANDLE;
         VkPipeline m_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout m_pipeline_layout = VK_NULL_HANDLE;
         VkDescriptorSetLayout m_descriptor_set_layout = VK_NULL_HANDLE;
         VkShaderModule m_shader_module = VK_NULL_HANDLE;
-        VkDescriptorSet m_descriptor_set = VK_NULL_HANDLE;
         VkCommandBuffer m_command_buffer = VK_NULL_HANDLE;
-
-        int32_t m_binding_count = 1; // std::max<uint32_t>(1u, m_parsed_ssbo_binding_count);
-        std::vector<VkDescriptorSetLayoutBinding> m_bindings; //(binding_count);
-        std::vector<VkDescriptorBufferInfo> m_buffer_infos; //(binding_count);
-        std::vector<VkWriteDescriptorSet> m_writes; //(binding_count);
+        std::vector<VkDescriptorSetLayoutBinding> m_bindings;
+        std::vector<VkDescriptorBufferInfo> m_buffer_infos;
+        std::vector<VkWriteDescriptorSet> m_writes;
+        uint32_t m_binding_count = 0;
         std::vector<uint32_t> m_push_constant_bytes;
-        size_t m_push_constant_size = 0;
-    };
+        uint32_t m_push_constant_size = 0;
 
-
-    // Determine scalar (int/float) arguments that should be passed via push constants.
-    template <typename... KernelArgs>
-    static constexpr size_t get_num_buffer_args()
-    {
-        size_t idx = 0;
-        int buffer_info_loop[] = {1, (
-            [&] {
-                if constexpr (!is_scalar_kernel_arg_v<KernelArgs>)
-                {
-                    idx++;
-                }
-            }(),
-            0
-        )...};
-        (void) buffer_info_loop;
-        return idx;
-    }
-
-    template <typename... KernelArgs>
-    constexpr size_t get_num_constant_args()
-    {
-        size_t scalar_count = 0;
-        int scalar_count_loop[] = {1, ((scalar_count += static_cast<size_t>(is_scalar_kernel_arg_v<KernelArgs>)), 0)...};
-        (void) scalar_count_loop;
-        return scalar_count;
-    }
-
-
-    template <typename... KernelArgs>
-    class ComputeKernel : public ComputeKernelRuntime
-    {
-      public:
-        ComputeKernel(VulkanMemorySpace& space, std::string_view kernel_name, std::filesystem::path spirv_path)
-            : ComputeKernelRuntime(space, kernel_name, spirv_path, get_num_buffer_args(), get_num_constant_args())
-        {}
-
-
-        template <typename Range>
-        void launch_1d_named(Range&& range, std::initializer_list<std::string_view> parameter_names, KernelArgs... args)
+      protected:
+        void create_vulkan_compute_pipeline()
         {
-            // determine dispatch dimensions
-            auto dims = []<typename R>(const R& r) {
-                return std::tuple<size_t, size_t, size_t>{static_cast<size_t>(r.end() - r.begin()), 1u, 1u};
-            }(range);
-
-            const size_t total_x = std::get<0>(dims);
-            if (total_x == 0)
-                return;
-
-            const uint32_t local_x = std::max<uint32_t>(1u, m_local_size.x);
-            const uint32_t group_x = static_cast<uint32_t>((total_x + local_x - 1) / local_x);
-
-            // forward to common dispatch helper (protected)
-            RLLM_TIMED_KERNEL(m_name) {
-                m_space.compute_lock();
-                dispatch_compute(parameter_names, group_x, 1u, 1u, args...);
-                m_space.compute_unlock();
-            } // end timer scope
-        }
-
-        template <typename Range2D>
-        void launch_2d_named(Range2D&& range, std::initializer_list<std::string_view> parameter_names, KernelArgs... args)
-        {
-            size_t size_x = 1, size_y = 1;
-            if constexpr (requires(const Range2D& r) {
-                              r.inner_size();
-                              r.outer_size();
-                          })
-            {
-                size_x = range.inner_size();
-                size_y = range.outer_size();
-            }
-            else
-            {
-                const int tot = range.end() - range.begin();
-                size_x = static_cast<size_t>(tot);
-            }
-
-            if (size_x == 0 || size_y == 0)
-                return;
-
-            const uint32_t local_x = std::max<uint32_t>(1u, m_local_size.x);
-            const uint32_t local_y = std::max<uint32_t>(1u, m_local_size.y);
-            const uint32_t gx = static_cast<uint32_t>((size_x + local_x - 1) / local_x);
-            const uint32_t gy = static_cast<uint32_t>((size_y + local_y - 1) / local_y);
-
-            RLLM_TIMED_KERNEL(m_name) {
-                m_space.compute_lock();
-                dispatch_compute(parameter_names, gx, gy, 1u, args...);
-                m_space.compute_unlock();
-            } // end timer scope
-        }
-
-        template <typename Range3D>
-        void launch_3d_named(Range3D&& range, std::initializer_list<std::string_view> parameter_names, KernelArgs... args)
-        {
-            size_t ix = 1, iy = 1, iz = 1;
-            if constexpr (requires(const Range3D& r) {
-                              r.inner_size();
-                              r.middle_size();
-                              r.outer_size();
-                          })
-            {
-                ix = range.inner_size();
-                iy = range.middle_size();
-                iz = range.outer_size();
-            }
-            else if constexpr (requires(const Range3D& r) {
-                                   r.inner_size();
-                                   r.outer_size();
-                               })
-            {
-                ix = range.inner_size();
-                iy = range.outer_size();
-            }
-            else
-            {
-                const int tot = range.end() - range.begin();
-                ix = static_cast<size_t>(tot);
-            }
-
-            if (ix == 0 || iy == 0 || iz == 0)
-                return;
-
-            const uint32_t lx = std::max<uint32_t>(1u, m_local_size.x);
-            const uint32_t ly = std::max<uint32_t>(1u, m_local_size.y);
-            const uint32_t lz = std::max<uint32_t>(1u, m_local_size.z);
-            const uint32_t gx = static_cast<uint32_t>((ix + lx - 1) / lx);
-            const uint32_t gy = static_cast<uint32_t>((iy + ly - 1) / ly);
-            const uint32_t gz = static_cast<uint32_t>((iz + lz - 1) / lz);
-
-            RLLM_TIMED_KERNEL(m_name) {
-                m_space.compute_lock();
-                dispatch_compute(parameter_names, gx, gy, gz, args...);
-                m_space.compute_unlock();
-            } // end timer scope
-        }
-
-      private:
-        // Helper to extract a Vulkan buffer from a kernel argument
-        template <typename A>
-        static VkBuffer buffer_from_arg(const A& a)
-        {
-            if constexpr (requires(const A& x) { x.raw_offload_data(); })
-            {
-                return a.raw_offload_data().get();
-            }
-            else
-            {
-                return a.offload_data().get();
-            }
-        }
-
-
-        // Core dispatch implementation: creates shader/pipeline (cached), descriptor pool + set,
-        // and command buffer (fresh per-dispatch), then submits. Caller holds m_sync_mutex.
-        template <typename... Args>
-        void dispatch_compute(std::initializer_list<std::string_view> parameter_names, uint32_t gx, uint32_t gy, uint32_t gz, Args&&... args)
-        {
-            VkResult r = VK_SUCCESS;
-            if (m_shader_module == VK_NULL_HANDLE)
+            VkDevice dev = m_space.device();
+            if (!m_shader_module)
             {
                 VkShaderModuleCreateInfo smci{};
                 smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
                 smci.codeSize = m_spirv_words.size() * sizeof(uint32_t);
                 smci.pCode = m_spirv_words.data();
-                r = vkCreateShaderModule(m_space.device(), &smci, nullptr, &m_shader_module);
-                if (r != VK_SUCCESS)
-                {
-                    LOG_ERROR("vkCreateShaderModule failed: {}", static_cast<int>(r));
-                    std::abort();
-                }
+                vkCreateShaderModule(dev, &smci, nullptr, &m_shader_module);
             }
-
-            // descriptor layout
-            VkDescriptorSetLayout descriptor_set_layout = m_descriptor_set_layout;
-            if (descriptor_set_layout == VK_NULL_HANDLE)
+            if (!m_descriptor_set_layout)
             {
                 VkDescriptorSetLayoutCreateInfo dslci{};
                 dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-                dslci.bindingCount = static_cast<uint32_t>(m_bindings.size());
+                dslci.bindingCount = m_binding_count;
                 dslci.pBindings = m_bindings.data();
-                r = vkCreateDescriptorSetLayout(m_space.device(), &dslci, nullptr, &descriptor_set_layout);
-                if (r != VK_SUCCESS)
-                {
-                    LOG_ERROR("vkCreateDescriptorSetLayout failed: {}", static_cast<int>(r));
-                    std::abort();
-                }
-                m_descriptor_set_layout = descriptor_set_layout;
+                vkCreateDescriptorSetLayout(dev, &dslci, nullptr, &m_descriptor_set_layout);
             }
-
-            constexpr size_t scalar_count = get_num_constant_args<Args...>();
-
-            VkPushConstantRange push_range{};
-            if (scalar_count > 0)
-            {
-                push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-                push_range.offset = 0;
-                push_range.size = static_cast<uint32_t>(scalar_count * sizeof(uint32_t));
-            }
-
-            // pipeline layout: cached (protected by caller's lock)
-            VkPipelineLayout pipeline_layout = m_pipeline_layout;
-            if (pipeline_layout == VK_NULL_HANDLE)
+            if (!m_pipeline_layout)
             {
                 VkPipelineLayoutCreateInfo plci{};
                 plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
                 plci.setLayoutCount = 1;
-                plci.pSetLayouts = &descriptor_set_layout;
-                if (scalar_count > 0)
-                {
-                    plci.pushConstantRangeCount = 1;
-                    plci.pPushConstantRanges = &push_range;
-                }
-                else
-                {
-                    plci.pushConstantRangeCount = 0;
-                    plci.pPushConstantRanges = nullptr;
-                }
-
-                r = vkCreatePipelineLayout(m_space.device(), &plci, nullptr, &pipeline_layout);
-                if (r != VK_SUCCESS)
-                {
-                    LOG_ERROR("vkCreatePipelineLayout failed: {}", static_cast<int>(r));
-                    std::abort();
-                }
-                m_pipeline_layout = pipeline_layout;
+                plci.pSetLayouts = &m_descriptor_set_layout;
+                vkCreatePipelineLayout(dev, &plci, nullptr, &m_pipeline_layout);
             }
-
-            if (m_pipeline == VK_NULL_HANDLE)
+            if (!m_pipeline)
             {
                 VkComputePipelineCreateInfo cpci{};
                 cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -412,157 +211,174 @@ namespace rllm::vulkan
                 pssci.module = m_shader_module;
                 pssci.pName = "main";
                 cpci.stage = pssci;
-                cpci.layout = pipeline_layout;
-
-                r = vkCreateComputePipelines(m_space.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline);
-                if (r != VK_SUCCESS)
-                {
-                    LOG_ERROR("vkCreateComputePipelines failed: {}", static_cast<int>(r));
-                    std::abort();
-                }
+                cpci.layout = m_pipeline_layout;
+                vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline);
             }
+        }
 
-            const uint32_t binding_count = static_cast<uint32_t>(m_bindings.size());
+      public:
+        template <typename KernelArgs, typename Range1D>
+        void launch_1d(Range1D&& r, std::string_view n, const KernelArgs& a)
+        {
+            create_vulkan_compute_pipeline();
+        }
+        template <typename KernelArgs, typename Range2D>
+        void launch_2d(Range2D&& r, const KernelArgs& a)
+        {
+            create_vulkan_compute_pipeline();
+        }
+        template <typename KernelArgs, typename Range3D>
+        void launch_3d(Range3D&& r, const KernelArgs& a)
+        {
+            create_vulkan_compute_pipeline();
+        }
+    }; // end class
 
-            // descriptor pool + set
-            VkDescriptorPoolSize pool_size{};
-            pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            pool_size.descriptorCount = binding_count;
 
-            // Descriptor pool + set: fresh per-dispatch (cached versions don't work with one-shot submits)
-            VkDescriptorPoolCreateInfo dpci{};
-            dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            dpci.maxSets = 1;
-            dpci.poolSizeCount = 1;
-            dpci.pPoolSizes = &pool_size;
-            VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-            r = vkCreateDescriptorPool(m_space.device(), &dpci, nullptr, &descriptor_pool);
-            if (r != VK_SUCCESS)
+    template <typename... Args>
+    struct ComputeKernel : public ComputeKernelRuntime
+    {
+        constexpr static size_t k_buffer_arg_count = (0 + ... + (is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<Args>>> ? 0 : 1));
+        constexpr static size_t k_constant_arg_count = (0 + ... + (is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<Args>>> ? 1 : 0));
+        ComputeKernel(VulkanMemorySpace& s, std::string_view n, std::filesystem::path p)
+            : ComputeKernelRuntime(s, n, std::move(p), k_buffer_arg_count, k_constant_arg_count)
+        {}
+
+        template <typename Range2D>
+        void dispatch_named(Range2D&& range, const uint32_t gx, const uint32_t gy, const uint32_t gz, std::initializer_list<std::string_view> pn_in, Args&&... args)
+        {
+            const std::vector<std::string_view> pn(pn_in.begin(), pn_in.end());
+            VkDescriptorPool descriptor_pool;
             {
-                LOG_ERROR("vkCreateDescriptorPool failed: {}", static_cast<int>(r));
-                std::abort();
+                VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_binding_count}};
+                VkDescriptorPoolCreateInfo dpci{};
+                dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                dpci.maxSets = 1;
+                dpci.poolSizeCount = 1;
+                dpci.pPoolSizes = ps;
+                dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+                vkCreateDescriptorPool(m_space.device(), &dpci, nullptr, &descriptor_pool);
             }
-
-            VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-            VkDescriptorSetAllocateInfo dsai{};
-            dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            dsai.descriptorPool = descriptor_pool;
-            dsai.descriptorSetCount = 1;
-            dsai.pSetLayouts = &descriptor_set_layout;
-            r = vkAllocateDescriptorSets(m_space.device(), &dsai, &descriptor_set);
-            if (r != VK_SUCCESS)
+            VkDescriptorSet descriptor_set;
             {
-                LOG_ERROR("vkAllocateDescriptorSets failed: {}", static_cast<int>(r));
-                std::abort();
+                VkDescriptorSetAllocateInfo dsai{};
+                dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                dsai.descriptorPool = descriptor_pool;
+                dsai.descriptorSetCount = 1;
+                dsai.pSetLayouts = &m_descriptor_set_layout;
+                vkAllocateDescriptorSets(m_space.device(), &dsai, &descriptor_set);
             }
-
-            // prepare buffer infos from args (map by order). Skip scalar args.
             {
-                size_t idx = 0;
-                int buffer_info_loop[] = {(
-                    [&] {
-                        if constexpr (!is_scalar_kernel_arg_v<Args>)
+                size_t idx = 0, pidx = 0;
+                int loop[] = {(
+                    [&]() {
+                        if constexpr (!is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<Args>>>)
                         {
                             assert(idx < m_buffer_infos.size());
-                            m_buffer_infos[idx++].buffer = buffer_from_arg(args);
+                            assert(pidx < pn.size());
+                            ::parallel::set_vulkan_dispatch_params(pn[pidx], pn[pidx]);
+                            auto& ref = std::get<idx>(std::forward_as_tuple(std::forward<Args>(args)...));
+                            m_buffer_infos[idx].buffer = buf_from_arg(ref);
+                            idx++;
+                            pidx++;
+                            ::parallel::clear_vulkan_dispatch_params();
+                            return 0;
                         }
+                        return 0;
                     }(),
                     0
                 )...};
-                (void) buffer_info_loop;
+                (void) loop;
             }
-            for (auto& bi : m_buffer_infos)
+            for (auto& b : m_buffer_infos)
             {
-                bi.offset = 0;
-                bi.range = VK_WHOLE_SIZE;
+                b.offset = 0;
+                b.range = VK_WHOLE_SIZE;
             }
-
-            for (uint32_t i = 0; i < binding_count; ++i)
+            for (uint32_t i = 0; i < m_binding_count; ++i)
             {
-                m_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 m_writes[i].dstSet = descriptor_set;
-                m_writes[i].dstBinding = i;
-                m_writes[i].dstArrayElement = 0;
-                m_writes[i].descriptorCount = 1;
-                m_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 m_writes[i].pBufferInfo = &m_buffer_infos[i];
             }
-            vkUpdateDescriptorSets(m_space.device(), static_cast<uint32_t>(m_writes.size()), m_writes.data(), 0, nullptr);
-
-            // Pack scalar args (int/float) into the cached push-constant buffer and push as push-constants
-            if (scalar_count > 0)
+            vkUpdateDescriptorSets(m_space.device(), m_binding_count, m_writes.data(), 0, nullptr);
+            if (k_constant_arg_count > 0)
             {
-                m_push_constant_bytes.resize(scalar_count);
+                m_push_constant_bytes.resize(k_constant_arg_count);
                 m_push_constant_size = 0;
-                int scalar_loop[] = { (detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, args), 0)... };
-                (void) scalar_loop;
+                int pl[] = {(detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, std::forward<Args>(args)), 0)...};
+                (void) pl;
             }
-
-            // Command buffer: fresh per-dispatch (can't reset submitted buffers)
-            VkCommandBufferAllocateInfo allocate_info{};
-            allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            allocate_info.commandPool = m_space.command_pool();
-            allocate_info.commandBufferCount = 1;
-
-            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-            r = vkAllocateCommandBuffers(m_space.device(), &allocate_info, &command_buffer);
-            if (r != VK_SUCCESS)
+            VkCommandBuffer cb;
             {
-                LOG_ERROR("vkAllocateCommandBuffers failed: {}", static_cast<int>(r));
-                std::abort();
+                VkCommandBufferAllocateInfo ai{};
+                ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                ai.commandPool = m_space.command_pool();
+                ai.commandBufferCount = 1;
+                vkAllocateCommandBuffers(m_space.device(), &ai, &cb);
+                VkCommandBufferBeginInfo bi{};
+                bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                vkBeginCommandBuffer(cb, &bi);
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
+                if (m_push_constant_size > 0)
+                    vkCmdPushConstants(cb, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, m_push_constant_size * sizeof(uint32_t), m_push_constant_bytes.data());
+                vkCmdDispatch(cb, gx, gy, gz);
+                vkEndCommandBuffer(cb);
+                VkSubmitInfo si{};
+                si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                si.commandBufferCount = 1;
+                si.pCommandBuffers = &cb;
+                vkQueueSubmit(m_space.queue(), 1, &si, VK_NULL_HANDLE);
+                vkQueueWaitIdle(m_space.queue());
+                vkFreeCommandBuffers(m_space.device(), m_space.command_pool(), 1, &cb);
             }
-
-            VkCommandBufferBeginInfo begin_info{};
-            begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            r = vkBeginCommandBuffer(command_buffer, &begin_info);
-            if (r != VK_SUCCESS)
-            {
-                LOG_ERROR("vkBeginCommandBuffer failed: {}", static_cast<int>(r));
-                std::abort();
-            }
-
-            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
-            if (m_push_constant_size > 0)
-            {
-                vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, static_cast<uint32_t>(m_push_constant_size * sizeof(uint32_t)), m_push_constant_bytes.data());
-            }
-            vkCmdDispatch(command_buffer, gx, gy, gz);
-
-            VkResult end_r = vkEndCommandBuffer(command_buffer);
-            if (end_r != VK_SUCCESS)
-            {
-                LOG_ERROR("vkEndCommandBuffer failed: {}", static_cast<int>(end_r));
-                std::abort();
-            }
-
-            VkSubmitInfo submit_info{};
-            submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submit_info.commandBufferCount = 1;
-            submit_info.pCommandBuffers = &command_buffer;
-
-            VkResult submit_r = vkQueueSubmit(m_space.queue(), 1, &submit_info, VK_NULL_HANDLE);
-            if (submit_r != VK_SUCCESS)
-            {
-                LOG_ERROR("vkQueueSubmit failed: {}", static_cast<int>(submit_r));
-                std::abort();
-            }
-
-            VkResult wait_r = vkQueueWaitIdle(m_space.queue());
-            if (wait_r != VK_SUCCESS)
-            {
-                LOG_ERROR("vkQueueWaitIdle failed: {}", static_cast<int>(wait_r));
-                std::abort();
-            }
-
             vkFreeDescriptorSets(m_space.device(), descriptor_pool, 1, &descriptor_set);
             vkDestroyDescriptorPool(m_space.device(), descriptor_pool, nullptr);
-            vkFreeCommandBuffers(m_space.device(), m_space.command_pool(), 1, &command_buffer);
+        }
 
-            // cached Vulkan objects (shader module, pipeline layout, compute pipeline) are reused;
-            // their cleanup is handled in the ComputeKernelRuntime destructor.
+      private:
+        template <typename A>
+        static VkBuffer buf_from_arg(const A& a)
+        {
+            if constexpr (requires(const A& x) { x.raw_offload_data(); })
+                return a.raw_offload_data().get();
+            else
+                return a.offload_data().get();
+        }
+
+      public:
+        template <typename Range1D>
+        void launch_1d_named(Range1D&& r, std::initializer_list<std::string_view> pn_in, Args&&... args)
+        {
+            const uint32_t gx = static_cast<uint32_t>((r.inner_size() + local_size_x() - 1u) / local_size_x());
+            const uint32_t gy = 1;
+            const uint32_t gz = 1;
+            create_vulkan_compute_pipeline();
+            dispatch_named(r, gx, gy, gz, pn_in, std::forward<Args>(args)...);
+        }
+
+        template <typename Range2D>
+        void launch_2d_named(Range2D&& r, std::initializer_list<std::string_view> pn_in, Args&&... args)
+        {
+            const uint32_t gx = static_cast<uint32_t>((r.inner_size() + local_size_x() - 1u) / local_size_x());
+            const uint32_t gy = static_cast<uint32_t>((r.outer_size() + local_size_y() - 1u) / local_size_y());
+            const uint32_t gz = 1;
+            create_vulkan_compute_pipeline();
+            dispatch_named(r, gx, gy, gz, pn_in, std::forward<Args>(args)...);
+        }
+
+        template <typename Range3D>
+        void launch_3d(Range3D&& r, std::initializer_list<std::string_view> pn_in, Args&&... args)
+        {
+            const uint32_t gx = static_cast<uint32_t>((r.inner_size() + local_size_x() - 1u) / local_size_x());
+            const uint32_t gy = static_cast<uint32_t>((r.outer_size() + local_size_y() - 1u) / local_size_y());
+            const uint32_t gz = static_cast<uint32_t>((r.z_size() + local_size_z() - 1u) / local_size_z());
+            create_vulkan_compute_pipeline();
+            dispatch_named(r, gx, gy, gz, pn_in, std::forward<Args>(args)...);
         }
     };
+
+
 } // namespace rllm::vulkan

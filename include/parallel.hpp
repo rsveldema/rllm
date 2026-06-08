@@ -558,6 +558,24 @@ namespace parallel {
         std::unordered_map<std::string, KernelTimingCounts> m_kernel_timings;
     };
 
+    // Thread-local dispatch context for H2D/D2H buffer copy parameter tracking.
+    // Populated by ComputeKernelRuntime during kernel dispatch so that raw offload
+    // buffer access can record meaningful site/parameter names in statistics.
+    struct DispatchParams {
+        std::string_view site;
+        std::string_view parameter;
+    };
+
+#if defined(RLLM_ENABLE_STATISTICS)
+    void set_vulkan_dispatch_params(std::string_view site, std::string_view param);
+    DispatchParams get_dispatch_params();
+    void clear_vulkan_dispatch_params();
+#else
+    inline void set_vulkan_dispatch_params(std::string_view site, std::string_view param) {}
+    inline DispatchParams get_dispatch_params() { return {}; }
+    inline void clear_vulkan_dispatch_params() {}
+#endif
+
     extern Statistics statistics;
 }
 

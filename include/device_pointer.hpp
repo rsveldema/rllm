@@ -367,6 +367,9 @@ public:
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
     OffloadMemoryBuffer raw_offload_data() const
     {
+
+        ensure_device_data();
+        mark_device_modified();
         return m_offload_ptr;
     }
 #endif

@@ -4,6 +4,29 @@
 #include <parallel.hpp>
 #include <vecmath.hpp>
 
+
+namespace parallel
+{
+    
+#if defined(RLLM_ENABLE_STATISTICS)
+    thread_local DispatchParams g_vulkan_dispatch_params{};
+    
+    void set_vulkan_dispatch_params(std::string_view site, std::string_view param)
+    {
+        g_vulkan_dispatch_params.site = site;
+        g_vulkan_dispatch_params.parameter = param;
+    }
+
+
+    DispatchParams get_dispatch_params() { return g_vulkan_dispatch_params; }
+
+    void clear_vulkan_dispatch_params()
+    {
+        g_vulkan_dispatch_params = DispatchParams{};
+    }
+#endif
+}
+
 namespace rllm
 {
     void fill(

@@ -20,6 +20,9 @@ namespace rllm
             , m_end(end)
         {}
 
+        // Number of inner (v2) values per outer (v1) step.
+        size_t inner_size() const noexcept { return m_end - m_start; }
+
         Enum operator*() const
         {
             return m_current;

@@ -12,6 +12,10 @@
 #include <IMemorySpace.hpp>
 #include <logging.hpp>
 
+#if defined(RLLM_ENABLE_STATISTICS)
+#include <parallel.hpp>
+#endif
+
 class HipMemorySpace final : public IMemorySpace
 {
 public:
@@ -29,6 +33,18 @@ public:
     void copy_staging_to_offload(const OffloadMemoryBuffer& offload_dst, size_t dst_offset, const OnHostStagingBuffer& staging_src, size_t src_offset, size_t bytes, std::string_view site = {}, std::string_view parameter = {}) override
     {
         assert(bytes != 0);
+#if defined(RLLM_ENABLE_STATISTICS)
+        {
+            std::string_view effective_site = site;
+            if (effective_site.empty())
+                effective_site = parallel::g_vulkan_dispatch_params.site;
+            std::string_view effective_parameter = parameter;
+            if (effective_site.empty())
+                effective_parameter = parallel::g_vulkan_dispatch_params.parameter;
+            if (!effective_site.empty())
+                parallel::statistics.record_host_to_device_buffer_copy(effective_site, effective_parameter, bytes);
+        }
+#endif
         const hipError_t status = hipMemcpy(offload_dst.get() + dst_offset, staging_src.get() + src_offset, bytes, hipMemcpyHostToDevice);
         if (status != hipSuccess)
         {
@@ -40,6 +56,18 @@ public:
     void copy_offload_to_staging(const OnHostStagingBuffer& staging_dst, size_t dst_offset, const OffloadMemoryBuffer& offload_src, size_t src_offset, size_t bytes, std::string_view site = {}, std::string_view parameter = {}) override
     {
         assert(bytes != 0);
+#if defined(RLLM_ENABLE_STATISTICS)
+        {
+            std::string_view effective_site = site;
+            if (effective_site.empty())
+                effective_site = parallel::g_vulkan_dispatch_params.site;
+            std::string_view effective_parameter = parameter;
+            if (effective_site.empty())
+                effective_parameter = parallel::g_vulkan_dispatch_params.parameter;
+            if (!effective_site.empty())
+                parallel::statistics.record_device_to_host_buffer_copy(effective_site, effective_parameter, bytes);
+        }
+#endif
         const hipError_t status = hipMemcpy(staging_dst.get() + dst_offset, offload_src.get() + src_offset, bytes, hipMemcpyDeviceToHost);
         if (status != hipSuccess)
         {
