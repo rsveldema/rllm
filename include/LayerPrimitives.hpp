@@ -188,6 +188,19 @@ namespace rllm
         return static_cast<NeuronConnectionIndex>(static_cast<size_t>(id) + 1);
     }
 
+    struct ConflictingToken { TokenID tok; PositionIndex pos; };
+
+    enum class ConflictIndex : size_t {
+        START = 0,
+        MAX = 256
+    };
+
+    static inline ConflictIndex inc(ConflictIndex id)
+    {
+        assert(id < ConflictIndex::MAX);
+        return static_cast<ConflictIndex>(static_cast<size_t>(id) + 1);
+    }
+
     class InputLine : public fixed_size_vector<TokenID, PositionIndex>
     {
       public:

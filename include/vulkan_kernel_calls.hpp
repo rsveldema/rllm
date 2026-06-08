@@ -26,6 +26,7 @@
 #include <parallel.hpp>
 #include <vulkan/vulkan.h>
 
+#include <cassert>
 
 #ifndef RLLM_VULKAN_KERNEL_ROOT
 #define RLLM_VULKAN_KERNEL_ROOT "generated/vulkanized/kernels"
@@ -258,6 +259,7 @@ namespace rllm::vulkan
                 VkDescriptorSetLayoutCreateInfo dslci{};
                 dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
                 dslci.bindingCount = m_binding_count;
+                assert(m_binding_count > 0 && static_cast<size_t>(m_binding_count) <= m_bindings.size());
                 dslci.pBindings = m_bindings.data();
                 vkCreateDescriptorSetLayout(dev, &dslci, nullptr, &m_descriptor_set_layout);
             }
@@ -351,6 +353,10 @@ namespace rllm::vulkan
         {
             // Use pack expansion with index_sequence for compile-time constant indices.
             // Each Args[i] accessed via std::get<i>(tuple) where i is constexpr at each instantiation.
+            // Assert that cached vectors are large enough for binding_count
+            assert(static_cast<size_t>(m_binding_count) <= m_bindings.size());
+            assert(static_cast<size_t>(m_binding_count) <= m_buffer_infos.size());
+            assert(static_cast<size_t>(m_binding_count) <= m_writes.size());
             helper_set_buffer_descriptors(m_buffer_infos, pn_in,
                 std::forward_as_tuple(std::forward<Args>(args)...),
                 std::index_sequence_for<Args...>{});
@@ -362,6 +368,9 @@ namespace rllm::vulkan
             }
             for (uint32_t i = 0; i < m_binding_count; ++i)
             {
+                assert(static_cast<size_t>(i) < m_writes.size());
+                assert(static_cast<size_t>(i) < m_buffer_infos.size());
+                assert(m_descriptor_set != VK_NULL_HANDLE);
                 m_writes[i].dstSet = m_descriptor_set;
                 m_writes[i].pBufferInfo = &m_buffer_infos[i];
             }
@@ -386,6 +395,7 @@ namespace rllm::vulkan
                 vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
                 vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 0, 1, &m_descriptor_set, 0, nullptr);
                 if (m_push_constant_size > 0)
+                    assert(static_cast<size_t>(m_push_constant_size) <= m_push_constant_bytes.size());
                     vkCmdPushConstants(m_command_buffer, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, m_push_constant_size * sizeof(uint32_t), m_push_constant_bytes.data());
                 vkCmdDispatch(m_command_buffer, gx, gy, gz);
                 vkEndCommandBuffer(m_command_buffer);

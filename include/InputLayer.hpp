@@ -54,6 +54,11 @@ namespace rllm
         fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension> m_embeddings;
 
         void reset_embeddings();
+
+        // Per-call state for propagate_backward (moved out of the parallel loop to fix data race)
+        // These are class members so each InputLayer instance has its own copy — no static shared state.
+        fixed_size_vector<uint16_t, TokenID> m_updated_tokens;
+        fixed_size_vector<ConflictingToken, ConflictIndex> m_conflicts;
     };
 
 } // namespace rllm

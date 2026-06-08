@@ -543,7 +543,7 @@ private:
 
         m_staging_ptr = m_memory_space.allocate_staging(m_bytes);
 #if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        assert(m_offload_ptr == nullptr);
+        assert(!m_offload_ptr.is_valid());
         m_offload_ptr = m_memory_space.allocate_offload(m_bytes);
         if (m_staging_ptr.is_invalid() || m_offload_ptr.is_invalid())
 #else

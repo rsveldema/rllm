@@ -76,8 +76,9 @@ run_training() {
     local elapsed_file="$4"
 
     echo "Running $label profiling training batch..."
-    /usr/bin/time -f '%e' -o "$elapsed_file" \
-        "./$build_dir/rllm_prof" \
+    #/usr/bin/time -f '%e' -o "$elapsed_file" \
+    
+    gdb --args    "./$build_dir/rllm_prof" \
         --train \
         --train-dir "$TRAIN_DIR" \
         --layers "$LAYERS" \
@@ -108,7 +109,7 @@ configure_build "$VULKAN_STATS_BUILD_DIR" "vulkan" "ON"
 build_profiler "$VULKAN_STATS_BUILD_DIR"
 check_vulkan_provider "$VULKAN_STATS_BUILD_DIR"
 
-run_training "CPU-only runtime" "$CPU_BUILD_DIR" "$OUTPUT_MODEL_CPU" "$cpu_elapsed_file"
+#run_training "CPU-only runtime" "$CPU_BUILD_DIR" "$OUTPUT_MODEL_CPU" "$cpu_elapsed_file"
 #run_training "Vulkan runtime" "$VULKAN_BUILD_DIR" "$OUTPUT_MODEL_VULKAN" "$vulkan_stats_elapsed_file"
 run_training "Vulkan statistics" "$VULKAN_STATS_BUILD_DIR" "$OUTPUT_MODEL_VULKAN_STATS" "$vulkan_stats_elapsed_file"
 
