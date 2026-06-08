@@ -42,6 +42,7 @@ namespace rllm
 
         size_t outer_size() const noexcept { return m_size1; }
         size_t middle_size() const noexcept { return m_size2; }
+        size_t z_size() const noexcept { return middle_size(); }
         size_t inner_size() const noexcept { return m_size3; }
 
       private:

@@ -35,6 +35,16 @@ namespace rllm::vulkan
 {
     template <typename T>
     inline constexpr bool is_scalar_kernel_arg_v = (std::is_enum_v<std::remove_cv_t<std::remove_reference_t<T>>> || std::is_integral_v<std::remove_cv_t<std::remove_reference_t<T>>> || std::is_floating_point_v<std::remove_cv_t<std::remove_reference_t<T>>>);
+    template <typename TupleType, size_t I>
+    struct count_non_scalars_before
+    {
+        static constexpr size_t value = (is_scalar_kernel_arg_v<std::remove_cv_t<std::tuple_element_t<I-1, TupleType>>> ? 0 : 1) + count_non_scalars_before<TupleType, I-1>::value;
+    };
+    template <typename TupleType>
+    struct count_non_scalars_before<TupleType, 0>
+    {
+        static constexpr size_t value = 0;
+    };
 
     namespace detail
     {
@@ -64,6 +74,7 @@ namespace rllm::vulkan
                 static_cast<void>(out_size);
                 static_cast<void>(arg);
             }
+
         }
     } // namespace detail
 
@@ -71,18 +82,9 @@ namespace rllm::vulkan
 
     struct buf_helper { size_t idx = 0; };
 
-    template <typename ArgTupleType, size_t... Is>
-    void helper_set_buffer_descriptors(std::vector<VkDescriptorBufferInfo>& binfos,
-                                       const std::vector<std::string_view>& pn,
-                                       ArgTupleType&& t,
-                                       std::index_sequence<Is...>)
-    {
-        (helper_set_one_buffer(Is, binfos, pn, std::forward<ArgTupleType>(t)), ...);
-    }
-
     template <size_t I>
     void helper_set_one_buffer(std::vector<VkDescriptorBufferInfo>& binfos,
-                               const std::vector<std::string_view>& pn, auto& t)
+                               const std::vector<std::string_view>& pn, auto&& t)
     {
         using ArgType = std::tuple_element_t<I, std::decay_t<decltype(t)>>;
         if constexpr (!is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<ArgType>>>)
@@ -94,40 +96,33 @@ namespace rllm::vulkan
                 buf = ref.raw_offload_data().get();
             else
                 buf = ref.offload_data().get();
-            binfos[detail::count_non_scalars_before<std::decay_t<decltype(t)>, I>::value].buffer = buf;
+            binfos[count_non_scalars_before<std::decay_t<decltype(t)>, I>::value].buffer = buf;
             ::parallel::clear_vulkan_dispatch_params();
         }
     }
 
-    template <typename ArgTupleType, size_t... Is>
-    void helper_append_scalar_args(std::vector<uint32_t>& out_bytes, size_t& out_size,
-                                   ArgTupleType&& t, std::index_sequence<Is...>)
-    {
-        (helper_append_one_scalar(Is, out_bytes, out_size, std::forward<ArgTupleType>(t)), ...);
-    }
-
     template <size_t I>
-    void helper_append_one_scalar(std::vector<uint32_t>& out_bytes, size_t& out_size, auto& t)
+    void helper_append_one_scalar(std::vector<uint32_t>& out_bytes, size_t& out_size, auto&& t)
     {
         using ArgType = std::tuple_element_t<I, std::decay_t<decltype(t)>>;
         if constexpr (is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<ArgType>>>)
             detail::append_scalar_arg(out_bytes, out_size, std::get<I>(t));
     }
 
-    namespace detail {
-        template <typename TupleType, size_t I>
-        struct count_non_scalars_before
-        {
-            static constexpr size_t value =
-                (is_scalar_kernel_arg_v<std::remove_cv_t<std::tuple_element_t<I-1, TupleType>>> ? 0 : 1) +
-                count_non_scalars_before<TupleType, I-1>::value;
-        };
+    template <typename ArgTupleType, size_t... Is>
+    void helper_set_buffer_descriptors(std::vector<VkDescriptorBufferInfo>& binfos,
+                                       std::initializer_list<std::string_view> pn,
+                                       ArgTupleType&& t,
+                                       std::index_sequence<Is...>)
+    {
+        (helper_set_one_buffer<Is>(binfos, pn, std::forward<ArgTupleType>(t)), ...);
+    }
 
-        template <typename TupleType>
-        struct count_non_scalars_before<TupleType, 0>
-        {
-            static constexpr size_t value = 0;
-        };
+    template <typename ArgTupleType, size_t... Is>
+    void helper_append_scalar_args(std::vector<uint32_t>& out_bytes, size_t& out_size,
+                                   ArgTupleType&& t, std::index_sequence<Is...>)
+    {
+        (helper_append_one_scalar<Is>(out_bytes, out_size, std::forward<ArgTupleType>(t)), ...);
     }
 
     class ComputeKernelRuntime
@@ -171,7 +166,9 @@ namespace rllm::vulkan
                 m_writes[i].dstBinding = i;
                 m_writes[i].descriptorCount = 1;
                 m_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+
             }
+            m_push_constant_bytes.resize(num_constant_args);
         }
         ~ComputeKernelRuntime()
         {
@@ -195,7 +192,7 @@ namespace rllm::vulkan
         ComputeKernelRuntime& operator=(ComputeKernelRuntime&&) = delete;
 
         void set_id(size_t unique_id) {
-            m_unique_id = unique_id;
+            unique_id = unique_id;
         }
 
         const std::string& name() const
@@ -231,6 +228,7 @@ namespace rllm::vulkan
         std::vector<uint32_t> m_spirv_words;
         detail::LocalSize m_local_size{};
         VkDescriptorPool m_descriptor_pool = VK_NULL_HANDLE;
+        VkDescriptorSet m_descriptor_set = VK_NULL_HANDLE;
         VkPipeline m_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout m_pipeline_layout = VK_NULL_HANDLE;
         VkDescriptorSetLayout m_descriptor_set_layout = VK_NULL_HANDLE;
@@ -284,6 +282,40 @@ namespace rllm::vulkan
                 cpci.layout = m_pipeline_layout;
                 vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline);
             }
+            // Lazy-init descriptor pool + set for cached reuse
+            if (!m_descriptor_pool)
+            {
+                VkDescriptorPoolSize pool_size{};
+                pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                pool_size.descriptorCount = m_binding_count;
+                VkDescriptorPoolCreateInfo dpci{};
+                dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                dpci.maxSets = 1;
+                dpci.poolSizeCount = 1;
+                dpci.pPoolSizes = &pool_size;
+                vkCreateDescriptorPool(dev, &dpci, nullptr, &m_descriptor_pool);
+            }
+
+            if (!m_descriptor_set)
+            {
+                VkDescriptorSetAllocateInfo dsai{};
+                dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                dsai.descriptorPool = m_descriptor_pool;
+                dsai.descriptorSetCount = 1;
+                dsai.pSetLayouts = &m_descriptor_set_layout;
+                vkAllocateDescriptorSets(dev, &dsai, &m_descriptor_set);
+
+            }
+            // Lazy-init command buffer for cached reuse
+            if (!m_command_buffer)
+            {
+                VkCommandBufferAllocateInfo ai{};
+                ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                ai.commandPool = m_space.command_pool();
+                ai.commandBufferCount = 1;
+                vkAllocateCommandBuffers(dev, &ai, &m_command_buffer);
+            }
         }
 
       public:
@@ -317,30 +349,9 @@ namespace rllm::vulkan
         template <typename Range2D>
         void dispatch_named(Range2D&& range, const uint32_t gx, const uint32_t gy, const uint32_t gz, std::initializer_list<std::string_view> pn_in, Args&&... args)
         {
-            const std::vector<std::string_view> pn(pn_in.begin(), pn_in.end());
-            VkDescriptorPool descriptor_pool;
-            {
-                VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_binding_count}};
-                VkDescriptorPoolCreateInfo dpci{};
-                dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-                dpci.maxSets = 1;
-                dpci.poolSizeCount = 1;
-                dpci.pPoolSizes = ps;
-                dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-                vkCreateDescriptorPool(m_space.device(), &dpci, nullptr, &descriptor_pool);
-            }
-            VkDescriptorSet descriptor_set;
-            {
-                VkDescriptorSetAllocateInfo dsai{};
-                dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                dsai.descriptorPool = descriptor_pool;
-                dsai.descriptorSetCount = 1;
-                dsai.pSetLayouts = &m_descriptor_set_layout;
-                vkAllocateDescriptorSets(m_space.device(), &dsai, &descriptor_set);
-            }
             // Use pack expansion with index_sequence for compile-time constant indices.
             // Each Args[i] accessed via std::get<i>(tuple) where i is constexpr at each instantiation.
-            helper_set_buffer_descriptors(m_buffer_infos, pn,
+            helper_set_buffer_descriptors(m_buffer_infos, pn_in,
                 std::forward_as_tuple(std::forward<Args>(args)...),
                 std::index_sequence_for<Args...>{});
 
@@ -351,48 +362,40 @@ namespace rllm::vulkan
             }
             for (uint32_t i = 0; i < m_binding_count; ++i)
             {
-                m_writes[i].dstSet = descriptor_set;
+                m_writes[i].dstSet = m_descriptor_set;
                 m_writes[i].pBufferInfo = &m_buffer_infos[i];
             }
             vkUpdateDescriptorSets(m_space.device(), m_binding_count, m_writes.data(), 0, nullptr);
 
+            // Reset push constant size and clear bytes without reallocating
             if constexpr (k_constant_arg_count > 0)
             {
-                m_push_constant_bytes.resize(k_constant_arg_count);
                 m_push_constant_size = 0;
                 helper_append_scalar_args(m_push_constant_bytes, m_push_constant_size,
                     std::forward_as_tuple(std::forward<Args>(args)...),
                     std::index_sequence_for<Args...>{});
+
             }
 
-            VkCommandBuffer cb;
-            {
-                VkCommandBufferAllocateInfo ai{};
-                ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-                ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-                ai.commandPool = m_space.command_pool();
-                ai.commandBufferCount = 1;
-                vkAllocateCommandBuffers(m_space.device(), &ai, &cb);
+            // Use cached m_command_buffer (allocated once)
                 VkCommandBufferBeginInfo bi{};
+            vkResetCommandBuffer(m_command_buffer, 0);
                 bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-                bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-                vkBeginCommandBuffer(cb, &bi);
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
+                bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT | VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+                vkBeginCommandBuffer(m_command_buffer, &bi);
+                vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+                vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 0, 1, &m_descriptor_set, 0, nullptr);
                 if (m_push_constant_size > 0)
-                    vkCmdPushConstants(cb, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, m_push_constant_size * sizeof(uint32_t), m_push_constant_bytes.data());
-                vkCmdDispatch(cb, gx, gy, gz);
-                vkEndCommandBuffer(cb);
+                    vkCmdPushConstants(m_command_buffer, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, m_push_constant_size * sizeof(uint32_t), m_push_constant_bytes.data());
+                vkCmdDispatch(m_command_buffer, gx, gy, gz);
+                vkEndCommandBuffer(m_command_buffer);
                 VkSubmitInfo si{};
                 si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
                 si.commandBufferCount = 1;
-                si.pCommandBuffers = &cb;
+                si.pCommandBuffers = &m_command_buffer;
                 vkQueueSubmit(m_space.queue(), 1, &si, VK_NULL_HANDLE);
                 vkQueueWaitIdle(m_space.queue());
-                vkFreeCommandBuffers(m_space.device(), m_space.command_pool(), 1, &cb);
-            }
-            vkFreeDescriptorSets(m_space.device(), descriptor_pool, 1, &descriptor_set);
-            vkDestroyDescriptorPool(m_space.device(), descriptor_pool, nullptr);
+
         }
 
       private:
@@ -428,6 +431,15 @@ namespace rllm::vulkan
 
         template <typename Range3D>
         void launch_3d(Range3D&& r, std::initializer_list<std::string_view> pn_in, Args&&... args)
+        {
+            const uint32_t gx = static_cast<uint32_t>((r.inner_size() + local_size_x() - 1u) / local_size_x());
+            const uint32_t gy = static_cast<uint32_t>((r.outer_size() + local_size_y() - 1u) / local_size_y());
+            const uint32_t gz = static_cast<uint32_t>((r.z_size() + local_size_z() - 1u) / local_size_z());
+            create_vulkan_compute_pipeline();
+            dispatch_named(r, gx, gy, gz, pn_in, std::forward<Args>(args)...);
+        }
+        template <typename Range3D>
+        void launch_3d_named(Range3D&& r, std::initializer_list<std::string_view> pn_in, Args&&... args)
         {
             const uint32_t gx = static_cast<uint32_t>((r.inner_size() + local_size_x() - 1u) / local_size_x());
             const uint32_t gy = static_cast<uint32_t>((r.outer_size() + local_size_y() - 1u) / local_size_y());

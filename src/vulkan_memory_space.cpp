@@ -556,3 +556,11 @@ void VulkanMemorySpace::end_one_time_command(VkCommandBuffer command_buffer)
 
     vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
 }
+
+
+void VulkanMemorySpace::register_kernel(rllm::vulkan::ComputeKernelRuntime* kernel)
+{
+    assert(kernel != nullptr);
+    std::lock_guard<std::mutex> lock(m_sync_mutex);
+    m_kernels.push_back(kernel);
+}

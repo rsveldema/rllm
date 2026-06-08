@@ -11,8 +11,7 @@
 
 #include <vk_mem_alloc.h>
 
-namespace rllm::vulkan
-{
+namespace rllm::vulkan {
     class ComputeKernelRuntime;
 }
 
@@ -58,7 +57,7 @@ public:
      * This way we know how many kernels there are and can iterate over them
      * and query their properties.
      */
-    void register_kernel(ComputeKernelRuntime* kernel);
+    void register_kernel(rllm::vulkan::ComputeKernelRuntime* kernel);
 
 private:
     VkInstance m_instance = VK_NULL_HANDLE;
@@ -69,7 +68,7 @@ private:
     VkCommandPool m_command_pool = VK_NULL_HANDLE;
     VmaAllocator m_allocator = nullptr;
 
-    std::vector<ComputeKernelRuntime*> m_kernels;
+    std::vector<rllm::vulkan::ComputeKernelRuntime*> m_kernels;
 
     // Compute queue synchronization (queue submission, command pool access)
     mutable std::mutex m_sync_mutex;
