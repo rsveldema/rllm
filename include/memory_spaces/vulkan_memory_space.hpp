@@ -11,6 +11,11 @@
 
 #include <vk_mem_alloc.h>
 
+namespace rllm::vulkan
+{
+    class ComputeKernelRuntime;
+}
+
 class VulkanMemorySpace final : public IMemorySpace
 {
 public:
@@ -49,6 +54,12 @@ public:
 
     static VulkanMemorySpace& get_instance();
 
+    /** Each kernel registers itself at bootup using this method.
+     * This way we know how many kernels there are and can iterate over them
+     * and query their properties.
+     */
+    void register_kernel(ComputeKernelRuntime* kernel);
+
 private:
     VkInstance m_instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
@@ -57,6 +68,8 @@ private:
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool m_command_pool = VK_NULL_HANDLE;
     VmaAllocator m_allocator = nullptr;
+
+    std::vector<ComputeKernelRuntime*> m_kernels;
 
     // Compute queue synchronization (queue submission, command pool access)
     mutable std::mutex m_sync_mutex;

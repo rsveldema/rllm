@@ -67,6 +67,69 @@ namespace rllm::vulkan
         }
     } // namespace detail
 
+    // Helper functions for Vulkan kernel argument setup using index_sequence.
+
+    struct buf_helper { size_t idx = 0; };
+
+    template <typename ArgTupleType, size_t... Is>
+    void helper_set_buffer_descriptors(std::vector<VkDescriptorBufferInfo>& binfos,
+                                       const std::vector<std::string_view>& pn,
+                                       ArgTupleType&& t,
+                                       std::index_sequence<Is...>)
+    {
+        (helper_set_one_buffer(Is, binfos, pn, std::forward<ArgTupleType>(t)), ...);
+    }
+
+    template <size_t I>
+    void helper_set_one_buffer(std::vector<VkDescriptorBufferInfo>& binfos,
+                               const std::vector<std::string_view>& pn, auto& t)
+    {
+        using ArgType = std::tuple_element_t<I, std::decay_t<decltype(t)>>;
+        if constexpr (!is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<ArgType>>>)
+        {
+            auto& ref = std::get<I>(t);
+            ::parallel::set_vulkan_dispatch_params(pn[I], pn[I]);
+            VkBuffer buf;
+            if constexpr (requires(const ArgType& x) { x.raw_offload_data(); })
+                buf = ref.raw_offload_data().get();
+            else
+                buf = ref.offload_data().get();
+            binfos[detail::count_non_scalars_before<std::decay_t<decltype(t)>, I>::value].buffer = buf;
+            ::parallel::clear_vulkan_dispatch_params();
+        }
+    }
+
+    template <typename ArgTupleType, size_t... Is>
+    void helper_append_scalar_args(std::vector<uint32_t>& out_bytes, size_t& out_size,
+                                   ArgTupleType&& t, std::index_sequence<Is...>)
+    {
+        (helper_append_one_scalar(Is, out_bytes, out_size, std::forward<ArgTupleType>(t)), ...);
+    }
+
+    template <size_t I>
+    void helper_append_one_scalar(std::vector<uint32_t>& out_bytes, size_t& out_size, auto& t)
+    {
+        using ArgType = std::tuple_element_t<I, std::decay_t<decltype(t)>>;
+        if constexpr (is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<ArgType>>>)
+            detail::append_scalar_arg(out_bytes, out_size, std::get<I>(t));
+    }
+
+    namespace detail {
+        template <typename TupleType, size_t I>
+        struct count_non_scalars_before
+        {
+            static constexpr size_t value =
+                (is_scalar_kernel_arg_v<std::remove_cv_t<std::tuple_element_t<I-1, TupleType>>> ? 0 : 1) +
+                count_non_scalars_before<TupleType, I-1>::value;
+        };
+
+        template <typename TupleType>
+        struct count_non_scalars_before<TupleType, 0>
+        {
+            static constexpr size_t value = 0;
+        };
+    }
+
     class ComputeKernelRuntime
     {
       public:
@@ -75,6 +138,8 @@ namespace rllm::vulkan
             , m_name(kernel_name)
             , m_spirv_path(std::move(spirv_path))
         {
+            space.register_kernel(this);
+
             if (m_spirv_path.is_relative())
                 m_spirv_path = std::filesystem::path(RLLM_VULKAN_KERNEL_ROOT) / m_spirv_path;
             std::ifstream input(m_spirv_path, std::ios::binary | std::ios::ate);
@@ -129,6 +194,10 @@ namespace rllm::vulkan
         ComputeKernelRuntime(ComputeKernelRuntime&&) = delete;
         ComputeKernelRuntime& operator=(ComputeKernelRuntime&&) = delete;
 
+        void set_id(size_t unique_id) {
+            m_unique_id = unique_id;
+        }
+
         const std::string& name() const
         {
             return m_name;
@@ -155,6 +224,7 @@ namespace rllm::vulkan
         }
       
       protected:
+        size_t unique_id = 0;
         VulkanMemorySpace& m_space;
         std::string m_name;
         std::filesystem::path m_spirv_path;
@@ -171,7 +241,7 @@ namespace rllm::vulkan
         std::vector<VkWriteDescriptorSet> m_writes;
         uint32_t m_binding_count = 0;
         std::vector<uint32_t> m_push_constant_bytes;
-        uint32_t m_push_constant_size = 0;
+        size_t m_push_constant_size = 0;
 
       protected:
         void create_vulkan_compute_pipeline()
@@ -268,28 +338,12 @@ namespace rllm::vulkan
                 dsai.pSetLayouts = &m_descriptor_set_layout;
                 vkAllocateDescriptorSets(m_space.device(), &dsai, &descriptor_set);
             }
-            {
-                size_t idx = 0, pidx = 0;
-                int loop[] = {(
-                    [&]() {
-                        if constexpr (!is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<Args>>>)
-                        {
-                            assert(idx < m_buffer_infos.size());
-                            assert(pidx < pn.size());
-                            ::parallel::set_vulkan_dispatch_params(pn[pidx], pn[pidx]);
-                            auto& ref = std::get<idx>(std::forward_as_tuple(std::forward<Args>(args)...));
-                            m_buffer_infos[idx].buffer = buf_from_arg(ref);
-                            idx++;
-                            pidx++;
-                            ::parallel::clear_vulkan_dispatch_params();
-                            return 0;
-                        }
-                        return 0;
-                    }(),
-                    0
-                )...};
-                (void) loop;
-            }
+            // Use pack expansion with index_sequence for compile-time constant indices.
+            // Each Args[i] accessed via std::get<i>(tuple) where i is constexpr at each instantiation.
+            helper_set_buffer_descriptors(m_buffer_infos, pn,
+                std::forward_as_tuple(std::forward<Args>(args)...),
+                std::index_sequence_for<Args...>{});
+
             for (auto& b : m_buffer_infos)
             {
                 b.offset = 0;
@@ -301,13 +355,16 @@ namespace rllm::vulkan
                 m_writes[i].pBufferInfo = &m_buffer_infos[i];
             }
             vkUpdateDescriptorSets(m_space.device(), m_binding_count, m_writes.data(), 0, nullptr);
-            if (k_constant_arg_count > 0)
+
+            if constexpr (k_constant_arg_count > 0)
             {
                 m_push_constant_bytes.resize(k_constant_arg_count);
                 m_push_constant_size = 0;
-                int pl[] = {(detail::append_scalar_arg(m_push_constant_bytes, m_push_constant_size, std::forward<Args>(args)), 0)...};
-                (void) pl;
+                helper_append_scalar_args(m_push_constant_bytes, m_push_constant_size,
+                    std::forward_as_tuple(std::forward<Args>(args)...),
+                    std::index_sequence_for<Args...>{});
             }
+
             VkCommandBuffer cb;
             {
                 VkCommandBufferAllocateInfo ai{};

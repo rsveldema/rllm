@@ -1,4 +1,5 @@
 __pycache__
+kernels
 build
 build_release_cpu
 build_release
