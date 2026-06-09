@@ -24,6 +24,12 @@ class Visitor:
     def visit_fixed_size_matrix(self, node: ast.FixedSizeMatrix):
         raise NotImplementedError
 
+    def visit_fixed_size_levels_rows_cols_matrix(self, node: ast.FixedSizeLevelsRowsColsMatrix):
+        raise NotImplementedError
+
+    def visit_flexible_rows_cols_levels_matrix(self, node: ast.FlexibleRowsColsLevelsMatrix):
+        raise NotImplementedError
+
     def visit_expression(self, node: ast.Expression):
         raise NotImplementedError
 
@@ -33,7 +39,10 @@ class Visitor:
     def visit_identifier(self, node: ast.Identifier):
         raise NotImplementedError
 
-    def visit_indexed_identifier(self, node: ast.IndexedIdentifier):
+    def visit_array_access(self, node: ast.ArrayAccess):
+        raise NotImplementedError
+
+    def visit_field_access(self, node: ast.FieldAccess):
         raise NotImplementedError
 
     def visit_limit_expr(self, node: ast.LimitExpr):

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import re
 from pathlib import Path
 
 import pytest
@@ -34,26 +35,20 @@ def _generate_and_compile(kernel_path: Path):
     visitor = VulkanCppStubVisitor()
     stub_content = program.accept(visitor)
 
-    kernel_name = kernel_path.stem
     has_2d = program.space_dim >= 2 and len(program.loop_vars) >= 2
 
-    # Classify params for main() generation
-    from codegen.ast import FlexibleRowsMatrix, FixedSizeMatrix, FixedSizeVector, Int, Float
-
+    # Classify params from the stub (parse buffer names from generated output)
     matrix_params = []
-    vector_params = []
-    scalar_count = 0
+    pc_type = None
 
-    for param in program.params:
-        vt = param.var_type
-        if isinstance(vt, (FlexibleRowsMatrix, FixedSizeMatrix)):
-            sname = f"FRM_float"
-            matrix_params.append((sname, "const"))
-        elif isinstance(vt, FixedSizeVector):
-            vec_name = f"vec_{param.name}"
-            vector_params.append((vec_name, "const" if param.is_const else ""))
-        elif isinstance(vt, (Int, Float)):
-            scalar_count += 1
+    for line in stub_content.splitlines():
+        match = re.match(r'struct\s+(RllmBuffer_\w+)\s*\{', line)
+        if match:
+            matrix_params.append(match.group(1))
+
+    pc_match = re.search(r'struct\s+(\w+_PushConstants)\s*\{', stub_content)
+    if pc_match:
+        pc_type = pc_match.group(1)
 
     # Mock Vulkan types
     mock_vulkan = textwrap.dedent("""\
@@ -72,29 +67,24 @@ def _generate_and_compile(kernel_path: Path):
             continue
         harness_lines.append(line)
 
-    # Build main() with correct number of args
+    # Build main() with correct number of args matching the RLLM stub format
     init_code = []
-    call_args = ["nullptr", "nullptr", "nullptr", "nullptr", "nullptr"]  # device, pipeline_layout, dsl, cb, ds
+    call_args = ["nullptr", "nullptr", "nullptr", "nullptr", "nullptr"]
 
     if has_2d:
         call_args.extend(["1u", "1u"])
     else:
         call_args.append("1u")
 
-    for i, (sname, _cv) in enumerate(matrix_params):
+    for i, sname in enumerate(matrix_params):
         vname = f"_m{i}"
-        init_code.append(f"    {sname} {vname}{{nullptr, 0, 0}};")
+        init_code.append(f"    {sname} {vname};")
         call_args.append(vname)
 
-    for i, (vec_name, _cv) in enumerate(vector_params):
-        vname = f"_v{i}"
-        init_code.append(f"    {vec_name} {vname}{{nullptr, 0}};")
-        call_args.append(vname)
-
-    for i in range(scalar_count):
-        vname = f"_sc{i}"
-        init_code.append(f"    int32_t {vname} = 0;")
-        call_args.append(vname)
+    if pc_type:
+        push_var_name = "_push"
+        init_code.append(f"    const {pc_type} {push_var_name}{{}};")
+        call_args.append(f"const_cast<{pc_type}&>({push_var_name})")
 
     # Find the dispatch function name from stub
     func_name = None
@@ -173,39 +163,6 @@ def test_stub_has_vkcmddispatch_call(kernel_path: Path):
 
 
 @pytest.mark.parametrize("kernel_path", [
-    SINGLE_ASSIGN_KERNEL,
-], ids=["single-assign"])
-def test_stub_single_assign_has_vector_struct(kernel_path: Path):
-    """Verify single-assign kernel stub has vector SSBO struct with size."""
-    from codegen.parser import parse
-    from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
-
-    program = parse(str(kernel_path))
-    visitor = VulkanCppStubVisitor()
-    content = program.accept(visitor)
-
-    assert "vkCmdDispatch" in content
-    assert "vec_dst" in content, "Missing vec_dst struct for fixed_size_vector param"
-    assert "uint32_t size" in content, "Missing size field in vector struct"
-
-
-@pytest.mark.parametrize("kernel_path", [
-    MULTI_ARG_KERNEL,
-], ids=["multi-arg"])
-def test_stub_multi_arg_has_struct_defs(kernel_path: Path):
-    """Verify multi-arg kernel stub has matrix struct definitions."""
-    from codegen.parser import parse
-    from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
-
-    program = parse(str(kernel_path))
-    visitor = VulkanCppStubVisitor()
-    content = program.accept(visitor)
-
-    assert "vkCmdDispatch" in content
-    assert "struct FRM_float" in content, "Missing FRM_float struct"
-
-
-@pytest.mark.parametrize("kernel_path", [
     MULTI_ARG_KERNEL,
 ], ids=["multi-arg"])
 def test_stub_multi_arg_dispatch_dimensions(kernel_path: Path):
@@ -221,3 +178,50 @@ def test_stub_multi_arg_dispatch_dimensions(kernel_path: Path):
     assert "dispatch_cols" in content, "Missing dispatch_cols param for 2D kernel"
     assert "(dispatch_rows + 8 - 1)" in content, "Missing workgroup X division"
     assert "(dispatch_cols + 8 - 1)" in content, "Missing workgroup Y division"
+
+
+@pytest.mark.parametrize("kernel_path", [
+    MULTI_ARG_KERNEL,
+    SINGLE_ASSIGN_KERNEL,
+], ids=["multi-arg", "single-assign"])
+def test_stub_has_buffer_struct(kernel_path: Path):
+    """Verify stub has RllmBuffer struct definitions."""
+    from codegen.parser import parse
+    from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
+
+    program = parse(str(kernel_path))
+    visitor = VulkanCppStubVisitor()
+    content = program.accept(visitor)
+
+    assert "struct RllmBuffer_" in content, "Missing RllmBuffer struct definitions"
+
+
+@pytest.mark.parametrize("kernel_path", [
+    SINGLE_ASSIGN_KERNEL,
+], ids=["single-assign"])
+def test_stub_single_assign_has_push_constants(kernel_path: Path):
+    """Verify single-assign kernel stub has push constants (it has scalar params)."""
+    from codegen.parser import parse
+    from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
+
+    program = parse(str(kernel_path))
+    visitor = VulkanCppStubVisitor()
+    content = program.accept(visitor)
+
+    assert "_PushConstants" in content, "Missing push constants struct for single-assign"
+
+
+@pytest.mark.parametrize("kernel_path", [
+    MULTI_ARG_KERNEL,
+], ids=["multi-arg"])
+def test_stub_multi_arg_has_all_matrix_buffers(kernel_path: Path):
+    """Verify multi-arg kernel stub has all matrix buffer structs."""
+    from codegen.parser import parse
+    from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
+
+    program = parse(str(kernel_path))
+    visitor = VulkanCppStubVisitor()
+    content = program.accept(visitor)
+
+    for name in ['A1', 'B1', 'A2', 'B2', 'A3', 'B3', 'C']:
+        assert f"RllmBuffer_{name}" in content, f"Missing RllmBuffer_{name} struct"

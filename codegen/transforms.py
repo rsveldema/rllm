@@ -6,6 +6,7 @@ parse() and a thin transform wrapper.
 
 from lark import Tree, Token
 from . import ast as codegen_ast
+from .visitors.resolve_array_indices import resolve_array_indices
 
 
 # ── helpers ────────────────────────────────────────────────────────
@@ -95,12 +96,54 @@ def _find_expression_tree(space_tree):
     trees = _find_expression_trees(space_tree)
     return trees[0] if trees else None
 
+def _extract_expression_name(expr_tree):
+    """Extract a variable name from an expression tree.
+
+    Returns the identifier/variable name if the expression is a simple field access,
+    or its numeric value if it's a number literal.
+    """
+    for child in expr_tree.children:
+        if isinstance(child, Tree) and child.data == 'base_expr':
+            for sub in child.children:
+                if isinstance(sub, Tree):
+                    if sub.data == 'number':
+                        for nc in sub.children:
+                            if hasattr(nc, 'value'):
+                                v = nc.value
+                                if isinstance(v, (int, float)):
+                                    return str(int(v))
+                                # Handle string numeric values from tokens
+                                try:
+                                    fval = float(str(v).rstrip('fF'))
+                                    return str(int(fval))
+                                except ValueError:
+                                    pass
+                        return "0"
+                    elif sub.data == 'field_access':
+                        # Return the identifier name from field_access
+                        for sc in sub.children:
+                            if isinstance(sc, Token) and sc.type == 'IDENT':
+                                return sc.value
+    # Fallback: try direct tokens
+    for child in expr_tree.children:
+        if _is_token(child):
+            if child.type == 'NUMBER':
+                v = child.value
+                if '.' in str(v):
+                    return str(int(float(v)))
+                return str(v)
+            elif child.type == 'IDENT':
+                return child.value
+    return None
+
 
 def extract_limit_expr(space_tree):
     """Extract limit or triangular bound expressions from parfor_space.
 
     For 1D/2D (single expression): returns a single expression AST node.
-    For 3D triangular (two expressions): returns a tuple of (lower_bound, upper_bound).
+    For 3D triangular (two expressions): returns a tuple of
+        (lower_bound_expr, upper_bound_expr, raw_names_list).
+        raw_names_list contains the string names/values for push constants.
     """
     expr_trees = _find_expression_trees(space_tree)
     if not expr_trees:
@@ -110,7 +153,8 @@ def extract_limit_expr(space_tree):
         # Triangular case: two bounds (lower and upper)
         lower = transform_expression(expr_trees[0])
         upper = transform_expression(expr_trees[1])
-        return (lower, upper) if lower is not None and upper is not None else None
+        raw_names = [_extract_expression_name(et) for et in expr_trees]
+        return (lower, upper, raw_names)
 
     expr_tree = expr_trees[0]
 
@@ -256,6 +300,11 @@ def _transform_from_base(base_tree):
                 return transform_expression(child)
             elif data == 'lhs':
                 return _transform_lvalue(child)
+            elif data == 'field_access':
+                # Handle field_access in base_expr context
+                result = _transform_lvalue(child)
+                if result is not None:
+                    return result
             elif data == 'cast':
                 cast_type = _resolve_nested_type(child.children[0])
                 operand = transform_expression(child.children[1])
@@ -277,35 +326,78 @@ def _transform_from_base(base_tree):
 
 
 def _transform_lvalue(lhs_tree):
-    """Transform an LHS tree into an AST lvalue expression."""
+    """Transform an LHS tree into an AST lvalue expression.
+
+    Produces FieldAccess for a.b chains, ArrayAccess for a[b,c] arrays,
+    or bare Identifier when there's just a name.
+    """
     if _is_token(lhs_tree):
         return codegen_ast.Identifier(lhs_tree.value)
 
     data = lhs_tree.data
 
+    # lhs always has exactly one child: a field_access node (grammar: lhs -> field_access)
     if data == 'lhs':
-        first = lhs_tree.children[0]
-        if _is_token(first) and len(lhs_tree.children) == 1:
-            return codegen_ast.Identifier(first.value)
+        child = lhs_tree.children[0]
+        if isinstance(child, Tree) and child.data == 'field_access':
+            return _parse_field_access_for_lhs(child)
+        # fallback for unexpected structure
+        return _transform_lvalue(child)
 
-        if _is_token(first):
-            base = codegen_ast.Identifier(first.value)
-            indices = []
-            for child in lhs_tree.children[1:]:
-                if isinstance(child, Tree):
-                    expr_result = transform_expression(child)
-                    if expr_result is not None:
-                        indices.append(expr_result)
-                elif _is_token(child):
-                    indices.append(codegen_ast.Identifier(child.value))
-            return codegen_ast.IndexedIdentifier(base, indices)
-
-        return _transform_lvalue(first)
+    # Handle field_access nodes directly (can appear in base_expr context)
+    if data == 'field_access':
+        return _parse_field_access_for_lhs(lhs_tree)
 
     if data == 'base_expr':
         return _transform_from_base(lhs_tree)
 
     return None
+
+
+def _parse_field_access_for_lhs(fa_tree):
+    """Parse a field_access tree into an AST FieldAccess or ArrayAccess.
+
+    The grammar is: IDENT (array_index)? (DOT IDENT)*
+    - Bare identifier ``x``  ->  FieldAccess(base=Identifier("x"), fields=[])
+    - Simple chain ``obj.x`` ->  FieldAccess(base=Identifier("obj"), fields=["x"])
+    - Array access ``a[b,c]`` ->  ArrayAccess(base=FieldAccess(base=Identifier("a")), indices=[...])
+    """
+    children = fa_tree.children
+    
+    # First child is always the base IDENT token
+    first = children[0]
+    if not _is_token(first) or first.type != 'IDENT':
+        return None
+
+    base_name = first.value
+    fields = []
+    indices = []
+
+    for child in children[1:]:
+        if isinstance(child, Tree) and child.data == 'array_index':
+            for idx_child in child.children:
+                if isinstance(idx_child, Tree):
+                    expr_result = transform_expression(idx_child)
+                    if expr_result is not None:
+                        indices.append(expr_result)
+        elif _is_token(child) and child.type == 'DOT':
+            pass  # separator between field names
+        elif _is_token(child) and child.type == 'IDENT':
+            fields.append(child.value)
+
+    base = codegen_ast.Identifier(base_name)
+
+    if indices:
+        fa = codegen_ast.FieldAccess(base=base, fields=list(fields))
+        return codegen_ast.ArrayAccess(base=fa, indices=indices)
+
+    if fields:
+        # Pure field chain (no array indexing)
+        return codegen_ast.FieldAccess(base=base, fields=list(fields))
+
+    # Bare identifier - return a bare Identifier for simplicity
+    # (FieldAccess with empty fields is equivalent but less clean)
+    return base
 
 
 # ── type transform ─────────────────────────────────────────────────
@@ -470,22 +562,22 @@ def transform_statement(stmt_tree):
             return codegen_ast.OverflowCheck(lvalue, operand)
 
     # block: "{" statement* "}"
-    if data == 'block':
-        body_stmts = []
-        for stmt_child in stmt_tree.children:
-            stmt = transform_statement(stmt_child)
-            if stmt is not None:
-                body_stmts.append(stmt)
-        return codegen_ast.Statement() if not body_stmts else body_stmts[0]
-
     # for_statement
     if data == 'for_statement':
         # Two grammar alternatives:
         # 1. "for" "(" for_loop_var ";" condition ";" increment ")" (block | statement)
         # 2. "for" "(" "const" type IDENT ":" expression ")" (block | statement)
         body_stmts = []
+        # Initialize all variables early to avoid UnboundLocalError
+        loop_var_type = None
+        loop_var_name = ""
+        init_expr_for_var = None
+        condition_tree = None
+        condition = None
+        inc_var = ""
+        inc_op = ""
         
-        # Handle loop variable part (children[0] = for_loop_var or "const" type+IDENT)
+        # Handle loop variable part (children[0] = for_loop_var OR inline type "int"/"float")
         for_loop_part = stmt_tree.children[0]
         if isinstance(for_loop_part, Tree):
             for_lp_data = for_loop_part.data
@@ -525,7 +617,55 @@ def transform_statement(stmt_tree):
                     if lhs is not None and rhs is not None:
                         condition = codegen_ast.Condition(lhs, op_val, rhs)
                 
-                # increment from children[2]
+                
+                return codegen_ast.For(loop_var_type, loop_var_name, condition, inc_var, inc_op, body_stmts)
+        
+        # Handle inline type variant: Tree(for_statement, [Tree(int/float), IDENT, expr, body])
+        if loop_var_type is None and len(stmt_tree.children) >= 4:
+            first_child = stmt_tree.children[0]
+            if isinstance(first_child, Tree) and first_child.data in ('int', 'float'):
+                # type from children[0]
+                loop_var_type = _resolve_nested_type(first_child) or (codegen_ast.Int() if first_child.data == 'int' else codegen_ast.Float())
+                
+                # Variable name from children[1]
+                second_child = stmt_tree.children[1]
+                if isinstance(second_child, Token) and second_child.type == 'IDENT':
+                    loop_var_name = second_child.value
+                
+                # Init expr from children[2]
+                third_child = stmt_tree.children[2]
+                if isinstance(third_child, Tree) and third_child.data == 'expression':
+                    init_expr_for_var = transform_expression(third_child)
+                
+                # Body from children[3] (can be deeply nested statement/block)
+                fourth_child = stmt_tree.children[3]
+                if isinstance(fourth_child, Tree):
+                    def extract_stmts(t):
+                        results = []
+                        if isinstance(t, Tree):
+                            if t.data == 'block':
+                                for inner in t.children:
+                                    results.extend(extract_stmts(inner))
+                            elif t.data == 'statement':
+                                for inner in t.children:
+                                    results.extend(extract_stmts(inner))
+                            else:
+                                results.append(t)
+                        return results
+                    
+                    extracted = extract_stmts(fourth_child)
+                    for eb in extracted:
+                        if isinstance(eb, Tree):
+                            s = transform_statement(eb)
+                            if s is not None:
+                                if isinstance(s, list):
+                                    body_stmts.extend(s)
+                                else:
+                                    body_stmts.append(s)
+                
+                return codegen_ast.For(loop_var_type, loop_var_name or "", condition, inc_var, inc_op, body_stmts, init_expr_for_var)
+        
+        # increment from children[2]
                 inc_tree = stmt_tree.children[2] if len(stmt_tree.children) > 2 else None
                 inc_var = ""
                 inc_op = ""
@@ -551,33 +691,237 @@ def transform_statement(stmt_tree):
                 
                 return codegen_ast.For(loop_var_type, loop_var_name, condition, inc_var, inc_op, body_stmts)
             
-            elif for_lp_data == 'for':
-                # Alternative 2: "for" "(" "const" type IDENT ":" expression ")"
-                for child in for_loop_part.children:
-                    if isinstance(child, Tree):
-                        data = child.data
-                        if data == 'type':
-                            loop_var_type = _resolve_nested_type(child) or _transform_type(child)
-                        elif data == 'condition':
-                            # Handle condition: IDENT compare_operator expression
-                            pass
-                        elif data == 'expression':
-                            condition = transform_expression(child)
-                    elif _is_token(child):
-                        loop_var_name = child.value
+        
+        # Handle inline for loop variant (from "for" "(" <type> IDENT ":" expr ")" body)
+        if not loop_var_type and len(stmt_tree.children) >= 2:
+            first_child = stmt_tree.children[0]
+            
+            is_inline_type = False
+            type_node = None
+            
+            # Direct inline type at for_statement level
+            if isinstance(first_child, Tree) and first_child.data in ('int', 'float'):
+                is_inline_type = True
+                type_node = first_child
+                loop_var_name = str(stmt_tree.children[1].value) if len(stmt_tree.children) > 1 and hasattr(stmt_tree.children[1], 'value') else ""
+            
+            elif isinstance(first_child, Tree) and first_child.data == 'for_statement':
+                # Nested for_statement (shouldn't normally happen but handle it)
+                inner = first_child
+                if len(inner.children) > 0 and isinstance(inner.children[0], Tree):
+                    inner_first = inner.children[0]
+                    if inner_first.data in ('int', 'float'):
+                        is_inline_type = True
+                        type_node = inner_first
+                        loop_var_name = str(inner.children[1].value) if len(inner.children) > 1 and hasattr(inner.children[1], 'value') else ""
+            
+            # Also check: if first_child.data == 'int'/'float', also get name from stmt_tree children
+            if isinstance(first_child, Tree) and first_child.data in ('int', 'float'):
+                is_inline_type = True
+                type_node = first_child
+                if len(stmt_tree.children) > 1:
+                    second = stmt_tree.children[1]
+                    if hasattr(second, 'type') and second.type == 'IDENT':
+                        loop_var_name = str(second.value)
+            
+            if is_inline_type and type_node is not None:
+                is_inline_type = True
+                loop_var_type = _resolve_nested_type(first_child) or (codegen_ast.Int() if first_child.data == 'int' else codegen_ast.Float())
                 
-                body_tree = stmt_tree.children[1] if len(stmt_tree.children) > 1 else None
-                if isinstance(body_tree, Tree):
-                    if body_tree.data == 'block':
-                        for bc in body_tree.children:
-                            s = transform_statement(bc)
-                            if s is not None:
-                                body_stmts.append(s)
+                # Variable name - look at appropriate child
+                var_child = None
+                if is_inline_type and type_node is not None:
+                    # Check if first_child was a for_statement wrapper
+                    if isinstance(stmt_tree.children[0], Tree) and stmt_tree.children[0].data == 'for_statement':
+                        inner_fs = stmt_tree.children[0]
+                        var_child = inner_fs.children[1] if len(inner_fs.children) > 1 else None
                     else:
-                        s = transform_statement(body_tree)
-                        if s is not None:
-                            body_stmts.append(s)
+                        var_child = stmt_tree.children[1] if len(stmt_tree.children) > 1 else None
+                else:
+                    var_child = stmt_tree.children[1] if len(stmt_tree.children) > 1 else None
                 
+                if isinstance(var_child, Token) and var_child.type == 'IDENT':
+                    loop_var_name = var_child.value
+                
+                # Init expression from third child  
+                if len(stmt_tree.children) > 2:
+                    third_child = stmt_tree.children[2]
+                    if isinstance(third_child, Tree):
+                        init_expr_for_var = transform_expression(third_child) if third_child.data == 'expression' else None
+                        condition_tree = third_child if third_child.data == 'condition' else None
+                
+                # Condition from fourth child  
+                if len(stmt_tree.children) > 3:
+                    fourth_child = stmt_tree.children[3]
+                    if isinstance(fourth_child, Tree):
+                        if fourth_child.data == 'expression':
+                            init_expr_for_var = transform_expression(fourth_child)
+                        elif fourth_child.data == 'condition':
+                            condition_tree = fourth_child
+                
+                # Body from fifth child (can be deeply nested statement/block)
+                if len(stmt_tree.children) > 4:
+                    fifth_child = stmt_tree.children[4]
+                    if isinstance(fifth_child, Tree):
+                        def extract_stmts(t):
+                            results = []
+                            if isinstance(t, Tree):
+                                if t.data == 'block':
+                                    for inner in t.children:
+                                        results.extend(extract_stmts(inner))
+                                elif t.data == 'statement':
+                                    for inner in t.children:
+                                        results.extend(extract_stmts(inner))
+                                else:
+                                    results.append(t)
+                            return results
+                        
+                        extracted = extract_stmts(fifth_child)
+                        for eb in extracted:
+                            if isinstance(eb, Tree):
+                                s = transform_statement(eb)
+                                if s is not None:
+                                    if isinstance(s, list):
+                                        body_stmts.extend(s)
+                                    else:
+                                        body_stmts.append(s)
+                
+                # Parse condition if found
+                if condition_tree is not None and len(condition_tree.children) >= 3:
+                    cond_children = condition_tree.children
+                    lhs_t = cond_children[0]
+                    rhs_t = cond_children[2]
+                    op_val = ""
+                    for c in cond_children:
+                        if _is_token(c):
+                            op_val = c.value
+                        elif isinstance(c, Tree) and len(c.children) == 1:
+                            inner = c.children[0]
+                            if _is_token(inner):
+                                op_val = inner.value
+                    
+                    lhs = None
+                    rhs = transform_expression(rhs_t) if isinstance(rhs_t, Tree) else None
+                    if hasattr(lhs_t, 'type') and _is_token(lhs_t):
+                        lhs_name = getattr(lhs_t, 'value', '')
+                        if lhs_name:
+                            lhs = codegen_ast.Identifier(lhs_name)
+                    
+                    if lhs is not None and rhs is not None:
+                        condition = codegen_ast.Condition(lhs, op_val, rhs)
+                
+                return codegen_ast.For(loop_var_type, loop_var_name or "", condition, inc_var, inc_op, body_stmts)
+            elif for_lp_data == 'for':
+                # Alternative 2: "for" "(" <type> IDENT ":" expression ")" (block | statement)
+                # First child is type (could be 'int', 'float', or 'type' tree)
+                first_child = for_loop_part.children[0] if len(for_loop_part.children) > 0 else None
+                
+                loop_var_type = None
+                init_expr_for_var = None
+                condition_tree = None
+                
+                if isinstance(first_child, Tree):
+                    fdata = first_child.data
+                    if fdata in ('int', 'float'):
+                        loop_var_type = _resolve_nested_type(first_child) or codegen_ast.Int() if fdata == 'int' else codegen_ast.Float()
+                    elif fdata == 'type':
+                        loop_var_type = _transform_type(first_child)
+                    # First child could also be a condition tree (for alternate grammar variant)
+                    elif first_child.data == 'condition':
+                        condition_tree = first_child
+                
+                # Second child is the variable name (IDENT token)
+                if len(for_loop_part.children) > 1:
+                    second = for_loop_part.children[1]
+                    if _is_token(second):
+                        loop_var_name = second.value
+                
+                # Third child could be init expression or condition
+                if len(for_loop_part.children) > 2:
+                    third = for_loop_part.children[2]
+                    if isinstance(third, Tree) and third.data == 'expression':
+                        init_expr_for_var = transform_expression(third)
+                    elif isinstance(third, Tree) and third.data == 'condition':
+                        condition_tree = third
+                
+                # Body from remaining children (handle both block and statement bodies)
+                body_found = False
+                for bc_idx in range(3, len(for_loop_part.children)):
+                    bc = for_loop_part.children[bc_idx]
+                    if isinstance(bc, Tree):
+                        extracted_blocks = []
+                        
+                        # Unwrap nested statement/block layers to get actual statements
+                        def extract_from_tree(t):
+                            results = []
+                            if isinstance(t, Tree):
+                                if t.data == 'block':
+                                    for inner in t.children:
+                                        results.extend(extract_from_tree(inner))
+                                elif t.data == 'statement':
+                                    # statement has children which might contain the block
+                                    for inner in t.children:
+                                        results.extend(extract_from_tree(inner))
+                                else:
+                                    results.append(t)
+                            return results
+                        
+                        extracted_blocks = extract_from_tree(bc)
+                        
+                        for eb in extracted_blocks:
+                            if isinstance(eb, Tree):
+                                s = transform_statement(eb)
+                                if s is not None:
+                                    if isinstance(s, list):
+                                        body_stmts.extend(s)
+                                    else:
+                                        body_stmts.append(s)
+                        body_found = True
+                
+                # Also check for condition in remaining children
+                if not body_found:
+                    for cond_idx in range(3, len(for_loop_part.children)):
+                        cond_child = for_loop_part.children[cond_idx]
+                        if isinstance(cond_child, Tree) and cond_child.data == 'condition':
+                            condition_tree = cond_child
+                            # Deeply nested block - extract inner statements
+                            inner_block = fourth.children[0] if len(fourth.children) > 0 else None
+                            if inner_block and isinstance(inner_block, Tree):
+                                for bc in inner_block.children:
+                                    s = transform_statement(bc)
+                                    if s is not None:
+                                        body_stmts.append(s)
+                        elif fourth.data == 'statement':
+                            # Statement containing block - extract from it
+                            sub_block = fourth.children[0] if len(fourth.children) > 0 else None
+                            if sub_block and isinstance(sub_block, Tree) and sub_block.data == 'block':
+                                for bc in sub_block.children:
+                                    s = transform_statement(bc)
+                                    if s is not None:
+                                        body_stmts.append(s)
+                        elif fourth.data == 'condition':
+                            # Handle condition parsing (IDENT compare_operator expression)
+                            cond_children = fourth.children
+                            if len(cond_children) >= 3:
+                                lhs_t = cond_children[0]
+                                rhs_t = cond_children[2]
+                                op_val = ""
+                                for c in cond_children:
+                                    if _is_token(c):
+                                        op_val = c.value
+                                    elif isinstance(c, Tree) and len(c.children) == 1:
+                                        inner = c.children[0]
+                                        if _is_token(inner):
+                                            op_val = inner.value
+                                lhs = None
+                                rhs = transform_expression(rhs_t) if isinstance(rhs_t, Tree) else None
+                                if hasattr(lhs_t, 'type') and _is_token(lhs_t):
+                                    from lark import Token as LarkToken
+                                    # Try to get identifier for comparison
+                                    lhs_name = getattr(lhs_t, 'value', '')
+                                    if lhs_name:
+                                        pass  # Use string directly in condition
+
                 return codegen_ast.For(loop_var_type, loop_var_name or "", condition, "", "", body_stmts)
 
     # if_statement
@@ -606,14 +950,18 @@ def transform_statement(stmt_tree):
             body_tree = stmt_tree.children[1]
             if isinstance(body_tree, Tree):
                 if body_tree.data == 'block':
-                    for bc in body_tree.children:
-                        s = transform_statement(bc)
-                        if s is not None:
-                            body_stmts.append(s)
+                    result = transform_statement(body_tree)
+                    if isinstance(result, list):
+                        body_stmts.extend(result)
+                    elif result is not None:
+                        body_stmts.append(result)
                 else:
                     s = transform_statement(body_tree)
                     if s is not None:
-                        body_stmts.append(s)
+                        if isinstance(s, list):
+                            body_stmts.extend(s)
+                        else:
+                            body_stmts.append(s)
 
         return codegen_ast.If(condition, body_stmts)
 
@@ -634,20 +982,28 @@ def transform_statement(stmt_tree):
                     lvalue = _transform_lvalue(child)
                 elif child.data == 'expression':
                     rvalue = transform_expression(child)
+                elif child.data == 'assign_operator':
+                    # Extract the actual ASSIGN_OP token from within assign_operator
+                    for sub in child.children:
+                        if _is_token(sub):
+                            assign_op = sub.value
             elif _is_token(child):
                 assign_op = child.value
         
         return codegen_ast.Assignment(lvalue, assign_op, rvalue)
 
     # SharedDecl from workgroup "shared" alternative (handled in _transform_workgroup_properties)
-    # block statement within body
+    # block statement within body - collect all statements
     if data == 'block':
-        body_stmts = []
+        all_stmts = []
         for stmt_child in stmt_tree.children:
-            stmt = transform_statement(stmt_child)
-            if stmt is not None:
-                body_stmts.append(stmt)
-        return codegen_ast.Statement() if not body_stmts else body_stmts[0]
+            result = transform_statement(stmt_child)
+            if result is not None:
+                if isinstance(result, list):
+                    all_stmts.extend(result)
+                else:
+                    all_stmts.append(result)
+        return all_stmts
 
     return None
 
@@ -718,13 +1074,23 @@ def transform(t: Tree) -> codegen_ast.Program:
 
     p.params = [param_type_map.get(n) for n in param_names]
 
-    if not isinstance(limit_result, tuple):
-        p.limit_expr = limit_result
+    # Store triangular bound expressions and names (for RLLM-style push constants)
+    if isinstance(limit_result, tuple) and len(limit_result) == 3:
+        lower, upper, raw_bounds = limit_result
+        p.lower_bound_expr = lower
+        p.upper_bound_expr = upper
+        p.triangular_bounds_raw = raw_bounds
 
     for stmt_tree in t.children[3].children:
-        stmt = transform_statement(stmt_tree)
-        if stmt is not None:
-            p.body_stmts.append(stmt)
+        result = transform_statement(stmt_tree)
+        if result is not None:
+            if isinstance(result, list):
+                p.body_stmts.extend(result)
+            else:
+                p.body_stmts.append(result)
+
+    # Resolve multi-dimensional array indices to linear addresses
+    p = resolve_array_indices(p)
 
     return p
 

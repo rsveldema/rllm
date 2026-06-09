@@ -61,6 +61,34 @@ class PrettyPrinter(Visitor):
         inner = "\n".join(inner_lines)
         return f"{indent}fixed_size_matrix<\n{inner}{indent}>"
 
+    def visit_fixed_size_levels_rows_cols_matrix(self, node: ast.FixedSizeLevelsRowsColsMatrix):
+        indent = self._indent_str()
+        inner_lines = []
+        if node.elem_type is not None:
+            inner_lines.append(f"{indent}  elem_type: {node.elem_type.accept(self)}")
+        if node.level_expr is not None:
+            inner_lines.append(f"{indent}  level_expr: {node.level_expr.accept(self)}")
+        if node.row_size_expr is not None:
+            inner_lines.append(f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}")
+        if node.col_size_expr is not None:
+            inner_lines.append(f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}")
+        inner = "\n".join(inner_lines)
+        return f"{indent}fixed_size_levels_rows_cols_matrix<\n{inner}{indent}>"
+
+    def visit_flexible_rows_cols_levels_matrix(self, node: ast.FlexibleRowsColsLevelsMatrix):
+        indent = self._indent_str()
+        inner_lines = []
+        if node.elem_type is not None:
+            inner_lines.append(f"{indent}  elem_type: {node.elem_type.accept(self)}")
+        if node.level_expr is not None:
+            inner_lines.append(f"{indent}  level_expr: {node.level_expr.accept(self)}")
+        if node.row_size_expr is not None:
+            inner_lines.append(f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}")
+        if node.col_size_expr is not None:
+            inner_lines.append(f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}")
+        inner = "\n".join(inner_lines)
+        return f"{indent}flexible_rows_cols_levels_matrix<\n{inner}{indent}>"
+
     # ── Expression visitors ─────────────────────────────────────────
 
     def visit_expression(self, node: ast.Expression):
@@ -72,12 +100,51 @@ class PrettyPrinter(Visitor):
     def visit_identifier(self, node: ast.Identifier):
         return f"{self._indent_str()}{node.name}"
 
-    def visit_indexed_identifier(self, node: ast.IndexedIdentifier):
+    def visit_array_access(self, node: ast.ArrayAccess):
         indent = self._indent_str()
-        parts = [node.base.name]
-        for idx in node.indices:
-            parts.append(f"[{idx.accept(self)}]")
-        return f"{self._indent_str()}{''.join(parts)}"
+        # Build the base string (could be Identifier or FieldAccess)
+        if isinstance(node.base, ast.Identifier):
+            base_str = node.base.name or "?"
+        else:
+            base_str = node.base.accept(self)
+        # Join all indices with commas in a single bracket
+        idx_parts = [self._to_string_node(idx) for idx in node.indices]
+        return f"{indent}{base_str}[{', '.join(idx_parts)}]"
+
+    def _to_string_node(self, node):
+        """Convert an AST node to a compact string representation."""
+        if isinstance(node, ast.Identifier):
+            return node.name or "?"
+        if isinstance(node, ast.Number):
+            return str(node.value)
+        if hasattr(node, 'accept'):
+            old_indent = self.indent
+            self.indent = 0
+            result = str(node.accept(self)).strip()
+            self.indent = old_indent
+            return result
+        return str(node)
+
+    def visit_field_access(self, node: ast.FieldAccess):
+        indent = self._indent_str()
+        if isinstance(node.base, ast.Identifier):
+            base_str = node.base.name or "?"
+        else:
+            base_str = node.base.accept(self)
+        for f in node.fields:
+            base_str += f".{f}"
+        return f"{indent}{base_str}"
+
+    def _to_string_node(self, node):
+        """Convert an AST node to a string without indentation."""
+        if isinstance(node, ast.Identifier):
+            return node.name or "?"
+        if isinstance(node, ast.Number):
+            return str(node.value)
+        if hasattr(node, 'accept'):
+            # Use visitor but collect the result (which includes its own indent)
+            return str(node.accept(self)).strip()
+        return str(node)
 
     def visit_limit_expr(self, node: ast.LimitExpr):
         indent = self._indent_str()

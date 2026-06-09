@@ -5,7 +5,7 @@ at the top level so existing imports (``from codegen.ast import Foo``) still wor
 """
 
 from .type import Type, Int, Float, FixedSizeVector, FlexibleRowsMatrix, FixedSizeMatrix, FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix
-from .expression import Expression, Number, Identifier, IndexedIdentifier, LimitExpr, BinaryExpr, CastExpr, NegationExpr
+from .expression import Expression, Number, Identifier, FieldAccess, ArrayAccess, LimitExpr, BinaryExpr, CastExpr, NegationExpr
 from .statement import Condition, Statement, For, If, Declaration, Assignment, OverflowCheck, SharedDecl
 from .workgroup import WorkgroupProperties
 from .program import Program
@@ -16,7 +16,7 @@ __all__ = [
     'FixedSizeVector', 'FlexibleRowsMatrix', 'FixedSizeMatrix',
     'FixedSizeLevelsRowsColsMatrix', 'FlexibleRowsColsLevelsMatrix',
     # Expressions
-    'Expression', 'Number', 'Identifier', 'IndexedIdentifier',
+    'Expression', 'Number', 'Identifier', 'FieldAccess', 'ArrayAccess',
     'LimitExpr', 'BinaryExpr', 'CastExpr', 'NegationExpr',
     # Statements & conditions
     'Condition', 'Statement', 'For', 'If',

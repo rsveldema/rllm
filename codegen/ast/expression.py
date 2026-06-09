@@ -23,14 +23,32 @@ class Identifier(Expression):
         return visitor.visit_identifier(self)
 
 
-class IndexedIdentifier(Expression):
-    """Represents an identifier with one or more index expressions (e.g., dst[i])."""
+class ArrayAccess(Expression):
+    """Represents a[expr1, expr2, ...] array indexing."""
     def __init__(self, base=None, indices=None):
         self.base = base
         self.indices = indices or []
 
     def accept(self, visitor):
-        return visitor.visit_indexed_identifier(self)
+        return visitor.visit_array_access(self)
+
+
+class FieldAccess(Expression):
+    """Represents a.b chain of member accesses.
+
+    The ``base`` is the leftmost expression (an Identifier by convention),
+    and ``fields`` holds every field name in order after it.  For example
+    ``obj.x.y`` becomes ``FieldAccess(Identifier("obj"), ["x", "y"])``.
+
+    When there are no fields (length == 0) the node is effectively an alias
+    for the bare base Identifier and pretty-printing will emit just ``base``.
+    """
+    def __init__(self, base=None, fields=None):
+        self.base = base
+        self.fields = fields or []
+
+    def accept(self, visitor):
+        return visitor.visit_field_access(self)
 
 
 class LimitExpr(Expression):
@@ -73,6 +91,6 @@ class NegationExpr(Expression):
 
 
 __all__ = [
-    'Expression', 'Number', 'Identifier', 'IndexedIdentifier',
+    'Expression', 'Number', 'Identifier', 'ArrayAccess', 'FieldAccess',
     'LimitExpr', 'BinaryExpr', 'CastExpr', 'NegationExpr',
 ]

@@ -1,24 +1,24 @@
 """C++ stub generator for Vulkan compute kernels.
 
 Generates compilable C++ header with:
-- Struct wrappers for matrix/vector types used in SSBOs
-- Descriptor set layout generation code
-- A dispatch function signature matching the kernel's parameters
+- Struct wrappers matching the SSBO layout (RllmBuffer_<name>)
+- Push constants struct for scalar params and triangular bounds
+- Descriptor set struct for buffer bindings
+- A dispatch function matching the kernel's parameters
 """
 
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 from .. import ast
 from .visitor import Visitor
 
 
 class VulkanCppStubVisitor(Visitor):
-    """Transforms the parsed AST into a C++ stub for calling the kernel."""
+    """Transforms the parsed AST into a C++ stub for calling the Vulkan kernel."""
 
     def __init__(self):
         self._lines: List[str] = []
         self._indent_level: int = 0
-        # Maps (tag, elem) -> struct_name (FRM_float, SRM_float, etc.)
-        self._matrix_structs: Dict[tuple, str] = {}
+        self._buffer_structs: Dict[str, str] = {}  # name -> struct_name
         self._kernel_name: str = ""
 
     # ── helpers ────────────────────────────────────────────────────────
@@ -35,27 +35,7 @@ class VulkanCppStubVisitor(Visitor):
     def result(self) -> str:
         return "\n".join(self._lines) + "\n"
 
-    # ── type helpers (C++) ─────────────────────────────────────────────
-
-    def _matrix_type_key(self, ty: ast.Type) -> tuple:
-        """Returns ('flex_rows'|'fixed_rows', elem_cpp_type)."""
-        elem = self._cpp_type_str(ty.elem_type) if getattr(ty, 'elem_type', None) else "float"
-        is_flex = isinstance(ty, ast.FlexibleRowsMatrix)
-        return (("flex_rows", elem) if is_flex else ("fixed_rows", elem))
-    def _matrix_struct_name(self, key: tuple) -> str:
-        tag, elem = key
-        prefix = "FRM" if tag == "flex_rows" else "FRM"
-        return f"{prefix}_{elem}"
-
-    def _ensure_matrix_struct(self, ty: ast.Type) -> str:
-        """Register a matrix type and return its struct name."""
-        key = self._matrix_type_key(ty)
-        if key not in self._matrix_structs:
-            sname = self._matrix_struct_name(key)
-            self._matrix_structs[key] = sname
-        return self._matrix_structs[key]
-
-    def _cpp_type_str(self, ty: ast.Type) -> str:
+    def _cpp_type_str(self, ty) -> str:
         if isinstance(ty, ast.Int):
             return "int32_t"
         if isinstance(ty, ast.Float):
@@ -78,10 +58,10 @@ class VulkanCppStubVisitor(Visitor):
         return f"{elem}"
 
     def visit_flexible_rows_matrix(self, node: ast.FlexibleRowsMatrix) -> str:
-        return self._ensure_matrix_struct(node)
+        return ""  # handled in visit_program
 
     def visit_fixed_size_matrix(self, node: ast.FixedSizeMatrix) -> str:
-        return self._ensure_matrix_struct(node)
+        return ""
 
     def visit_expression(self, node: ast.Expression) -> str:
         return node.accept(self)
@@ -92,30 +72,51 @@ class VulkanCppStubVisitor(Visitor):
     def visit_identifier(self, node: ast.Identifier) -> str:
         return node.name or "unknown"
 
-    def visit_indexed_identifier(self, node: ast.IndexedIdentifier) -> str:
+    def visit_array_access(self, node: ast.ArrayAccess) -> str:
         base = node.base.accept(self) if node.base else ""
         indices = ", ".join(i.accept(self) for i in node.indices)
         return f"{base}[{indices}]"
 
-    def visit_limit_expr(self, node: ast.LimitExpr) -> str:
-        max_v = node.max_val.accept(self) if node.max_val else "?"
-        body_v = node.body.accept(self) if node.body else "?"
-        return f"limit<{max_v}>({body_v})"
+    def visit_field_access(self, node: ast.FieldAccess) -> str:
+        base = node.base.accept(self) if node.base else ""
+        for field in node.fields:
+            base += '.' + field
+        return base
 
-    def visit_binary_expr(self, node: ast.BinaryExpr) -> str:
-        left = node.left.accept(self) if node.left else "?"
-        right = node.right.accept(self) if node.right else "?"
-        op = node.op or "+"
-        return f"({left} {op} {right})"
+    def _to_str(self, node) -> str:
+        if node is None:
+            return ""
+        if isinstance(node, ast.Number):
+            val = node.value
+            if isinstance(val, float):
+                s = f"{val}"
+                if "." not in s:
+                    s += ".0"
+                return s
+            return str(int(val))
+        if isinstance(node, (ast.Identifier,)):
+            return node.accept(self)
+        if isinstance(node, ast.BinaryExpr):
+            left = self._to_str(node.left) if node.left else "?"
+            right = self._to_str(node.right) if node.right else "?"
+            op = node.op or "+"
+            return f"({left} {op} {right})"
+        if isinstance(node, ast.LimitExpr):
+            max_v = self._to_str(node.max_val) if node.max_val else "?"
+            body_v = self._to_str(node.body) if node.body else "?"
+            return f"limit<{max_v}>({body_v})"
+        if hasattr(node, 'value'):
+            return str(node.value)
+        return str(node)
 
     def visit_cast_expr(self, node: ast.CastExpr) -> str:
-        cast_type = self._cpp_type_str(node.cast_type) if node.cast_type else "int32_t"
-        operand = node.operand.accept(self) if node.operand else "?"
+        cast_type = "int32_t"
+        operand = self._to_str(node.operand) if node.operand else "?"
         return f"static_cast<{cast_type}>({operand})"
 
     def visit_negation_expr(self, node: ast.NegationExpr) -> str:
-        op = node.operand.accept(self) if node.operand else "?"
-        return f"!{op}"
+        op = "!" + (self._to_str(node.operand) if node.operand else "?")
+        return op
 
     # ── condition visitor ──────────────────────────────────────────────
 
@@ -130,36 +131,63 @@ class VulkanCppStubVisitor(Visitor):
         return node.accept(self)
 
     def visit_for(self, node: ast.For) -> str:
-        raise NotImplementedError("visit_for: should be handled by accept")
+        raise NotImplementedError("visit_for")
 
     def visit_if(self, node: ast.If) -> str:
-        raise NotImplementedError("visit_if: should be handled by accept")
+        raise NotImplementedError("visit_if")
 
     def visit_declaration(self, node: ast.Declaration) -> str:
-        raise NotImplementedError("visit_declaration: should not be called directly")
+        raise NotImplementedError("visit_declaration")
 
     def visit_assignment(self, node: ast.Assignment) -> str:
-        raise NotImplementedError("visit_assignment: should not be called directly")
+        raise NotImplementedError("visit_assignment")
 
     def visit_overflow_check(self, node: ast.OverflowCheck) -> str:
-        raise NotImplementedError("visit_overflow_check: should not be called directly")
+        raise NotImplementedError("visit_overflow_check")
 
     def visit_shared_decl(self, node: ast.SharedDecl) -> str:
-        raise NotImplementedError("visit_shared_decl: should not be called directly")
+        raise NotImplementedError("visit_shared_decl")
 
     # ── workgroup and program visitors ────────────────────────────────
 
+    def _is_matrix_type(self, ty) -> bool:
+        """Check if a type is a matrix or vector that maps to an SSBO."""
+        return isinstance(ty, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix,
+                               ast.FlexibleRowsColsLevelsMatrix, ast.FixedSizeLevelsRowsColsMatrix,
+                               ast.FixedSizeVector))
+
+    def _compute_matrix_size(self, ty) -> str:
+        """Compute compile-time array size for a matrix/vector type."""
+        if isinstance(ty, (ast.FixedSizeLevelsRowsColsMatrix, ast.FlexibleRowsColsLevelsMatrix)):
+            parts = []
+            for attr in ('level_expr', 'row_size_expr', 'col_size_expr'):
+                expr = getattr(ty, attr, None)
+                if expr and isinstance(expr, ast.Number):
+                    parts.append(str(int(expr.value)))
+            return "*".join(parts) if parts else "1"
+        elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix)):
+            parts = []
+            for attr in ('row_size_expr', 'col_size_expr'):
+                expr = getattr(ty, attr, None)
+                if expr and isinstance(expr, ast.Number):
+                    parts.append(str(int(expr.value)))
+            return "*".join(parts) if parts else "1"
+        elif isinstance(ty, ast.FixedSizeVector) and ty.size_expr and isinstance(ty.size_expr, ast.Number):
+            return str(int(ty.size_expr.value))
+        return "1"
+
     def visit_workgroup_properties(self, node: ast.WorkgroupProperties) -> dict:
         return {
-            'x': node.x_expr.accept(self) if node.x_expr else "8",
-            'y': node.y_expr.accept(self) if node.y_expr else "8",
-            'z': node.z_expr.accept(self) if node.z_expr else "1",
+            'x': self._to_str(node.x_expr) if node.x_expr else "8",
+            'y': self._to_str(node.y_expr) if node.y_expr else "8",
+            'z': self._to_str(node.z_expr) if node.z_expr else "1",
         }
 
     def visit_program(self, node: ast.Program) -> str:
-        """Generate the complete C++ stub header."""
+        """Generate the complete C++ stub header for RLLM-style kernels."""
         self._lines = []
-        self._matrix_structs = {}
+        self._indent_level = 0
+        self._buffer_structs = {}
         self._kernel_name = ""
 
         # Determine kernel name from header
@@ -169,33 +197,42 @@ class VulkanCppStubVisitor(Visitor):
             basename = parts[-1].rsplit('.', 1)[0] if '.' in parts[-1] else parts[-1]
         self._kernel_name = f"{basename}_dispatch"
 
-        # Classify params and collect matrix/vector structs
-        matrix_params: List[Tuple[ast.Declaration, str]] = []     # (param, struct_name)
-        vector_params: List[ast.Declaration] = []
+        # Classify params
+        buffer_params: List[Tuple[ast.Declaration, str]] = []
         scalar_params: List[ast.Declaration] = []
-
+        
+        is_triangular = len(getattr(node, 'triangular_bounds_raw', [])) >= 2
+        
         for param in node.params:
-            if isinstance(param, ast.Declaration):
-                vt = param.var_type
-                if isinstance(vt, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix)):
-                    sname = self._ensure_matrix_struct(vt)
-                    matrix_params.append((param, sname))
-                elif isinstance(vt, ast.FixedSizeVector):
-                    vector_params.append(param)
-                else:
-                    scalar_params.append(param)
+            if not isinstance(param, ast.Declaration):
+                continue
+            
+            vt = param.var_type
+            if self._is_matrix_type(vt):
+                sname = f"RllmBuffer_{param.name}"
+                self._buffer_structs[param.name] = sname
+                buffer_params.append((param, sname))
+            else:
+                scalar_params.append(param)
 
         # Collect dispatch dimensions
         has_2d = node.space_dim >= 2 and len(node.loop_vars) >= 2
-        if has_2d:
-            rows_param_name = node.loop_vars[0]
-            cols_param_name = node.loop_vars[1]
-        elif node.space_dim >= 1 and node.loop_vars:
-            rows_param_name = node.loop_vars[0]
-            cols_param_name = None
-        else:
-            rows_param_name = "dispatch_rows"
-            cols_param_name = None
+        rows_param_name = node.loop_vars[0] if node.loop_vars else "dispatch_rows"
+        cols_param_name = node.loop_vars[1] if has_2d else None
+
+        # Workgroup sizes
+        wg_x, wg_y, wg_z = "8", "8", "1"
+        for wg in node.workgroups:
+            if isinstance(wg, ast.WorkgroupProperties):
+                x_val = self._to_str(wg.x_expr) if wg.x_expr else "8"
+                y_val = self._to_str(wg.y_expr) if wg.y_expr else "8"
+                z_val = self._to_str(wg.z_expr) if wg.z_expr else "1"
+                if x_val.isdigit():
+                    wg_x = x_val
+                if y_val.isdigit():
+                    wg_y = y_val
+                if z_val.isdigit():
+                    wg_z = z_val
 
         # ── Emit C++ header ────────────────────────────────────────────
 
@@ -204,130 +241,75 @@ class VulkanCppStubVisitor(Visitor):
         func_params.append("    VkPipelineLayout pipeline_layout")
         func_params.append("    VkDescriptorSetLayout descriptor_set_layout")
         func_params.append("    VkCommandBuffer command_buffer")
+        func_params.append("    VkDescriptorSet _desc_set")
 
-        # Binding info comments
-        binding = 0
-        for _param, sname in matrix_params:
-            self._emit(f"// Binding {binding}: SSBO (matrix) {sname}")
-            binding += 1
-        for param in vector_params:
-            self._emit(f"// Binding {binding}: SSBO (vector) vec_{param.name}")
-            binding += 1
-
-        desc_set_name = "_desc_set"
-        func_params.append(f"    VkDescriptorSet {desc_set_name}")
-
-        if rows_param_name:
+        if has_2d:
             func_params.append("    uint32_t dispatch_rows")
-        if cols_param_name:
             func_params.append("    uint32_t dispatch_cols")
+        else:
+            func_params.append("    uint32_t dispatch_rows")
 
-        # Matrix params — const reference (no redundant 'const' prefix)
-        for param, sname in matrix_params:
-            is_const = "const " if param.is_const else ""
-            func_params.append(f"    {is_const}{sname}& {param.name}")
+        # Add buffer params as references
+        for param, sname in buffer_params:
+            func_params.append(f"    {sname}& {param.name}")
 
-        # Vector params
-        for param in vector_params:
-            vec_name = f"vec_{param.name}"
-            is_const = "const " if param.is_const else ""
-            func_params.append(f"    {is_const}{vec_name}& {param.name}")
-
-        # Scalar params (passed as push constant values)
+        # Build push constant field names (deduplicated)
+        pc_field_names = set()
+        all_pc_fields = []
+        
         for param in scalar_params:
-            ctype = self._cpp_type_str(param.var_type)
-            is_const = "const " if param.is_const else ""
-            init_val = ""
-            if param.init_expr:
-                init_val = f" = {param.init_expr.accept(self)}"
-            func_params.append(f"    {is_const}{ctype} {param.name}{init_val}")
+            if param.name not in pc_field_names:
+                pc_field_names.add(param.name)
+                all_pc_fields.append(param)
 
-        # Workgroup sizes from workgroup properties
-        wg_x, wg_y, wg_z = "8", "8", "1"
-        for wg in node.workgroups:
-            if isinstance(wg, ast.WorkgroupProperties):
-                if wg.x_expr:
-                    x_val = str(wg.x_expr.accept(self))
-                    if x_val.isdigit():
-                        wg_x = x_val
-                if wg.y_expr:
-                    y_val = str(wg.y_expr.accept(self))
-                    if y_val.isdigit():
-                        wg_y = y_val
-                if wg.z_expr:
-                    z_val = str(wg.z_expr.accept(self))
-                    if z_val.isdigit():
-                        wg_z = z_val
+        if is_triangular:
+            for tb in getattr(node, 'triangular_bounds_raw', []):
+                if tb not in pc_field_names and not tb.lstrip('-').isdigit():
+                    pc_field_names.add(tb)
+                    # Create a synthetic field for triangular bounds
+                    all_pc_fields.append(type('', (), {
+                        'name': tb, 'is_const': True, 'var_type': ast.Int()
+                    })())
 
-        # Emit file header and includes
+        if is_triangular or scalar_params:
+            func_params.append(f"    const {self._kernel_name}_PushConstants& push_constants")
+
+        # Emit includes
         self._emit("")
         hdr_text = node.header.strip('"') if node.header else "unknown"
         self._emit(f"// ── Kernel dispatch stub: {hdr_text} ─────────────")
         self._emit("#include <cstdint>")
         self._emit("#include <vulkan/vulkan.h>")
-        self._emit('')
+        self._emit("")
 
-        # Matrix structs (FRM for flexible-rows, SRM for fixed-size)
-        for key in sorted(self._matrix_structs.keys(), key=lambda k: self._matrix_structs[k]):
-            sname = self._matrix_structs[key]
-            tag, elem = key
-            is_flex = tag == "flex_rows"
+        # Buffer structs (matching SSBO layout)
+        for param, sname in buffer_params:
+            vt = param.var_type
+            size_str = self._compute_matrix_size(vt)
+            
             self._emit(f"struct {sname} {{")
             self._push()
-            self._emit(f"{elem}* data;")
-            if is_flex:
-                self._emit(f"uint32_t rows;")
-                self._emit(f"uint32_t cols;")
-            else:
-                self._emit(f"static constexpr uint32_t rows = 1;")
-                self._emit(f"static constexpr uint32_t cols = 1;")
+            self._emit(f"    float data[{size_str}];")
             self._pop()
             self._emit("};")
-
-        # Vector structs
-        for param in vector_params:
-            vt = param.var_type
-            elem = self._cpp_type_str(vt.elem_type) if vt.elem_type else "float"
-            vec_name = f"vec_{param.name}"
             self._emit("")
-            self._emit(f"struct {vec_name} {{")
-            self._push()
-            self._emit(f"{elem}* data;")
-            self._emit(f"uint32_t size;")
-            self._pop()
-            self._emit("};")
 
-        # Descriptor set struct
-        if matrix_params or vector_params:
-            self._emit("")
-            self._emit(f"struct {self._kernel_name}_DescriptorSet {{")
-            self._push()
-            b = 0
-            for param, sname in matrix_params:
-                self._emit(f'{sname}& {param.name}; // binding {b}')
-                b += 1
-            for param in vector_params:
-                vec_name = f"vec_{param.name}"
-                self._emit(f'{vec_name}& {param.name}; // binding {b}')
-                b += 1
-            self._pop()
-            self._emit("};")
-
-        # Push constants struct for scalar params
-        if scalar_params:
+        # Push constants struct for scalar params and triangular bounds
+        if all_pc_fields:
             pc_name = f"{self._kernel_name}_PushConstants"
-            self._emit("")
             self._emit(f"struct {pc_name} {{")
             self._push()
-            for param in scalar_params:
-                ctype = self._cpp_type_str(param.var_type)
-                is_const = "" if param.is_const else "const "
-                self._emit(f'    {is_const}{ctype} {param.name};')
+            
+            for field in all_pc_fields:
+                ctype = "int32_t"  # All scalar params are int-sized
+                is_const = "const " if getattr(field, 'is_const', False) else ""
+                self._emit(f'    {is_const}{ctype} {field.name};')
+            
             self._pop()
             self._emit("};")
+            self._emit("")
 
         # Dispatch function signature
-        self._emit("")
         self._emit(f"inline void {self._kernel_name}(")
         for i, fp in enumerate(func_params):
             comma = "," if i < len(func_params) - 1 else ""
@@ -340,7 +322,7 @@ class VulkanCppStubVisitor(Visitor):
         y_wg = str(wg_y)
         z_wg = str(wg_z)
 
-        if cols_param_name:
+        if has_2d:
             self._emit(f'vkCmdDispatch(command_buffer, '
                        f'(dispatch_rows + {x_wg} - 1) / {x_wg}, '
                        f'(dispatch_cols + {y_wg} - 1) / {y_wg}, '
@@ -352,12 +334,5 @@ class VulkanCppStubVisitor(Visitor):
 
         self._pop()
         self._emit("}")
-
-        # Workgroup size constants (if workgroup properties present)
-        if any(isinstance(wg, ast.WorkgroupProperties) for wg in node.workgroups):
-            self._emit("")
-            self._emit(f'constexpr uint32_t {self._kernel_name}_WG_X = {wg_x};')
-            self._emit(f'constexpr uint32_t {self._kernel_name}_WG_Y = {wg_y};')
-            self._emit(f'constexpr uint32_t {self._kernel_name}_WG_Z = {wg_z};')
 
         return self.result()

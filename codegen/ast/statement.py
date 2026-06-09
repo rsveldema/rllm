@@ -20,13 +20,14 @@ class Statement:
 class For(Statement):
     def __init__(self, loop_var_type=None, loop_var_name="",
                  condition=None, increment_var="",
-                 increment_op="", body_stmts=None):
+                 increment_op="", body_stmts=None, init_expr=None):
         self.loop_var_type = loop_var_type
         self.loop_var_name = loop_var_name
         self.condition = condition
         self.increment_var = increment_var
         self.increment_op = increment_op
         self.body_stmts = body_stmts or []
+        self.init_expr = init_expr
 
     def accept(self, visitor):
         return visitor.visit_for(self)

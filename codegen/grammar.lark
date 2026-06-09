@@ -71,7 +71,10 @@ ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/="
 assign_operator: ASSIGN_OP
 
 DOT: "."
-field_access: IDENT ( "[" expression ("," expression)* "]" )* ( DOT IDENT)*
+field_access: IDENT ( array_index )? ( DOT IDENT)?
+
+array_index:  "[" expression ("," expression)* "]"
+
 lhs: field_access
 
 expression: base_expr (arith_operator expression)?

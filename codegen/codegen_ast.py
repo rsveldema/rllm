@@ -8,7 +8,7 @@ __all__ = [
     'ast', 'Visitor', 'PrettyPrinter',
     # AST nodes
     'Type', 'Int', 'Float', 'FixedSizeVector', 'FlexibleRowsMatrix', 'FixedSizeMatrix',
-    'Expression', 'Number', 'Identifier', 'IndexedIdentifier',
+    'Expression', 'Number', 'Identifier', 'FieldAccess', 'ArrayAccess',
     'LimitExpr', 'BinaryExpr', 'CastExpr', 'NegationExpr',
     'Condition', 'Statement', 'For', 'If', 'Declaration', 'Assignment', 'OverflowCheck',
     'Program', 'WorkgroupProperties', 'SharedDecl',
@@ -24,7 +24,8 @@ FixedSizeMatrix = ast.FixedSizeMatrix
 Expression = ast.Expression
 Number = ast.Number
 Identifier = ast.Identifier
-IndexedIdentifier = ast.IndexedIdentifier
+FieldAccess = ast.FieldAccess
+ArrayAccess = ast.ArrayAccess
 LimitExpr = ast.LimitExpr
 BinaryExpr = ast.BinaryExpr
 CastExpr = ast.CastExpr
