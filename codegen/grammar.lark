@@ -1,9 +1,10 @@
 
 
+
 program: header parfor_space parfor_parameters body
 
 
-parfor_parameters: declaration ("," declaration)*
+parfor_parameters: "PARAMETERS" declaration ("," declaration)*
 
 header: "PROGRAM" "(" string ")" 
 
@@ -11,26 +12,34 @@ parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_para
 parfor_parameters_list: "(" parameter ("," parameter)* ")"
 parameter: IDENT
 
-body: statement+
+body: "BEGIN" statement+ "END_PROGRAM"
 
-statement: "for" "(" for_loop_var ";" condition ";" increment ")" block 
- | "if" "(" condition ")" block
- | declaration ";"
- | assignment ";"
+statement: for_statement
+| if_statement
+| declaration ";"
+| assignment ";"
 
+
+for_statement: "for" "(" for_loop_var ";" condition ";" increment ")" block
+
+if_statement: "if" "(" condition ")" block
 
 for_loop_var: type IDENT "=" expression 
 
 
-condition: IDENT "<" expression
+condition: IDENT compare_operator expression
+
+compare_operator: "<" | ">" 
+|  "<=" | ">=" 
+| "==" | "!="
 
 increment: IDENT "++" | IDENT "--"
 
+declaration: "const" type IDENT -> const_decl
+| type IDENT -> decl
 
-
-declaration: "const" type
-
-type: "int"
+type: "int" -> int
+| "float" -> float
 | "fixed_size_vector" "<" type "," expression ">"  "&"
 
 
@@ -40,16 +49,17 @@ assignment: lhs "=" expression
 
 lhs: IDENT ( "[" expression ("," expression)*  "]" )?
 
-expression: lhs
+expression: limit_expr | number_term | lhs
 
-
+limit_expr: "limit" "<" expression ">" "(" expression ")"
+number_term: NUMBER -> number
 
 // Define the Comment Terminals
-COMMENT: "//" /[^\\n]/* | "/*" /.*?/ "*/"
+COMMENT: "//" /[^\n]/* | "/*" /.*?/ "*/"
 
 // Instruct the lexer to skip them
 %ignore COMMENT
-%ignore /\\s+/ // Ignores whitespace
+%ignore /\s+/ // Ignores whitespace
 
 
 string : ESCAPED_STRING

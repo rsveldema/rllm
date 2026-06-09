@@ -1,6 +1,6 @@
 PROGRAM("vecmath.cc:40")
 
-OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<int>(length), (dst, value))
+OFFLOAD_PARFOR_1D_PARAM(i, limit<16384>(length), (dst, value))
 
 PARAMETERS
         fixed_size_vector<int, int>& dst,

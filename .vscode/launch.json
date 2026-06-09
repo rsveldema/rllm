@@ -5,6 +5,15 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Codegen",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "parser.py",
+            "cwd": "${workspaceFolder}/codegen",
+            "console": "integratedTerminal",
+            "args": ""
+        },
+        {
             "name": "Tokenizer",
             "type": "debugpy",
             "request": "launch",
@@ -18,7 +27,15 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/rllm",
             "args": [
-                "--train", "-i", "model.json", "--filter", "iuring", "--method", "window:3", "--epochs", "5"
+                "--train",
+                "-i",
+                "model.json",
+                "--filter",
+                "iuring",
+                "--method",
+                "window:3",
+                "--epochs",
+                "5"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
