@@ -358,6 +358,23 @@ def apply_symbol_values(text: str, symbol_values: dict[str, str] | None) -> str:
             break
     return out
 
+def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) -> str:
+    if not symbol_values:
+        return text    
+
+    out = text
+
+    for symbol, value in symbol_values.items():
+        out = out.replace(symbol, value)
+    out = out.replace("PositionIndex", "int")
+
+    k = out.find("static_cast")
+    if k >= 0:
+        p = out.find("(", k)
+        w = out.find(")", p)
+        out = out[:k] + out[p+1:w] + out[w+1:]
+    return out
+
 
 def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
     if not enum_value_tool:
@@ -769,7 +786,7 @@ def transform_source(
             
             # Write PARFOR dump files to build directory if requested
             if parfor_dump_dir is not None and ctx.parfor_invocation is not None:
-                _write_parfor_dump(ctx, parfor_dump_dir)
+                _write_parfor_dump(ctx, parfor_dump_dir, symbol_values)
 
             if on_emit_loop is not None:
                 on_emit_loop(ctx)
@@ -1076,6 +1093,8 @@ def transform_tree(
         out_path = out_dir / rel_path
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
+        parfor_dump_dir.mkdir(parents=True, exist_ok=True)
+
         transformed, _ = transform_source(
             src_path.read_text(encoding="utf-8"),
             rel_path.as_posix(),
@@ -1084,6 +1103,7 @@ def transform_tree(
             emit_named_kernels=emit_named_kernels,
             on_emit_loop=on_emit_loop,
             symbol_values=symbol_values,
+            parfor_dump_dir=parfor_dump_dir
         )
         out_path.write_text(transformed, encoding="utf-8")
         generated_files.append(out_path)
@@ -1092,7 +1112,8 @@ def transform_tree(
 
 
 
-def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path) -> None:
+def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path, 
+        symbol_values: dict[str, str] | None = None) -> None:
     """Write a PARFOR block and its OFFLOAD_PARAMETERS to a separate file."""
     dump_dir.mkdir(parents=True, exist_ok=True)
     
@@ -1103,25 +1124,32 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path) -> None:
     dump_path = dump_dir / filename
     
     lines: list[str] = []
-    lines.append(f"// === PARFOR block from {ctx.rel_path}:{ctx.lineno} ===")
+    lines.append(f"PROGRAM(\"{ctx.rel_path}:{ctx.lineno}\")")
     lines.append("")
     
     # Write the original PARFOR invocation line
     if ctx.parfor_invocation:
-        lines.append(ctx.parfor_invocation)
+        #print(f"CHECK: {ctx.parfor_invocation}")
+        lines.append(hard_apply_symbol_values(ctx.parfor_invocation, symbol_values))
         lines.append("")
     
     # Write the OFFLOAD_PARAMETERS block content
+    lines.append("PARAMETERS")
     if ctx.offload_param_lines:
-        lines.append("// === OFFLOAD_PARAMETERS ===")
-        lines.extend(ctx.offload_param_lines)
+        for line in ctx.offload_param_lines:
+            #print(f"CHECK: {line}")
+            line = hard_apply_symbol_values(line, symbol_values)
+            lines.append(line)
         lines.append("")
     
     # Write the body lines
+    lines.append("BEGIN")
     if ctx.raw_body_lines:
-        lines.append("// === PARFOR BODY ===")
-        lines.extend(ctx.raw_body_lines)
+        for l in ctx.raw_body_lines:
+            lines.append( hard_apply_symbol_values(l, symbol_values))
         lines.append("")
+
+    lines.append("END_PROGRAM")
     
     dump_path.write_text("\n".join(lines), encoding="utf-8")
 

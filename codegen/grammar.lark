@@ -1,0 +1,62 @@
+
+
+program: header parfor_space parfor_parameters body
+
+
+parfor_parameters: declaration ("," declaration)*
+
+header: "PROGRAM" "(" string ")" 
+
+parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" 
+parfor_parameters_list: "(" parameter ("," parameter)* ")"
+parameter: IDENT
+
+body: statement+
+
+statement: "for" "(" for_loop_var ";" condition ";" increment ")" block 
+ | "if" "(" condition ")" block
+ | declaration ";"
+ | assignment ";"
+
+
+for_loop_var: type IDENT "=" expression 
+
+
+condition: IDENT "<" expression
+
+increment: IDENT "++" | IDENT "--"
+
+
+
+declaration: "const" type
+
+type: "int"
+| "fixed_size_vector" "<" type "," expression ">"  "&"
+
+
+block: "{" statement* "}"
+
+assignment: lhs "=" expression
+
+lhs: IDENT ( "[" expression ("," expression)*  "]" )?
+
+expression: lhs
+
+
+
+// Define the Comment Terminals
+COMMENT: "//" /[^\\n]/* | "/*" /.*?/ "*/"
+
+// Instruct the lexer to skip them
+%ignore COMMENT
+%ignore /\\s+/ // Ignores whitespace
+
+
+string : ESCAPED_STRING
+
+%import common.ESCAPED_STRING
+%import common.CNAME -> IDENT
+%import common.NUMBER
+%import common.WS_INLINE
+%import common.WS
+%ignore WS_INLINE

@@ -396,9 +396,10 @@ namespace rllm::vulkan
                 vkBeginCommandBuffer(m_command_buffer, &bi);
                 vkCmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
                 vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 0, 1, &m_descriptor_set, 0, nullptr);
-                if (m_push_constant_size > 0)
+                if (m_push_constant_size > 0) {
                     assert(static_cast<size_t>(m_push_constant_size) <= m_push_constant_bytes.size());
                     vkCmdPushConstants(m_command_buffer, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, m_push_constant_size * sizeof(uint32_t), m_push_constant_bytes.data());
+                }
                 vkCmdDispatch(m_command_buffer, gx, gy, gz);
                 vkEndCommandBuffer(m_command_buffer);
                 VkSubmitInfo si{};
