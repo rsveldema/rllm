@@ -1,7 +1,8 @@
 """Compiler front-end: parse kernel files -> AST."""
 
-from lark import Lark, Tree
-import codegen_ast
+from lark import Lark
+from codegen_ast import Program
+from visitors.pretty_printer import PrettyPrinter
 from transforms import transform
 
 
@@ -21,9 +22,14 @@ def parse(filename: str):
     program = transform(ret)
     return program
 
+def prettyprint(program: Program):
+    printer = PrettyPrinter()
+    s = program.accept(printer)
+    print(s)
 
 # Quick smoke test
 if __name__ == "__main__":
     import sys
     for path in sys.argv[1:]:
-        parse(path)
+        program = parse(path)
+        prettyprint(program)
