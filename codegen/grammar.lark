@@ -9,6 +9,8 @@ parfor_parameters: "PARAMETERS" declaration ("," declaration)*
 header: "PROGRAM" "(" string ")" 
 
 parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" 
+| "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
+
 parfor_parameters_list: "(" parameter ("," parameter)* ")"
 parameter: IDENT
 
@@ -18,6 +20,7 @@ statement: for_statement
 | if_statement
 | declaration ";"
 | assignment ";"
+| "OVERFLOW_CHECK_ADD" "(" lhs "," expression ")" ";"
 
 
 for_statement: "for" "(" for_loop_var ";" condition ";" increment ")" block
@@ -26,30 +29,40 @@ if_statement: "if" "(" condition ")" block
 
 for_loop_var: type IDENT "=" expression 
 
-
+// in the AST becomes <expr> <op> <expr>
 condition: IDENT compare_operator expression
 
-compare_operator: "<" | ">" 
-|  "<=" | ">=" 
-| "==" | "!="
+compare_operator: "<" | ">" | "<=" | ">=" | "==" | "!="
 
-increment: IDENT "++" | IDENT "--"
+increment: IDENT "++" | IDENT "--" | "++" IDENT | "--" IDENT
 
-declaration: "const" type IDENT -> const_decl
-| type IDENT -> decl
+declaration: "const" type IDENT ("=" expression)? -> const_decl
+| type IDENT  ("=" expression)? -> decl
 
 type: "int" -> int
+| "size_t" -> int
 | "float" -> float
+| "rlmm_float" -> float
+| "rlmm_float_small" -> float
 | "fixed_size_vector" "<" type "," expression ">"  "&"
+| "flexible_rows_matrix" "<" type "," type "," expression ">"  "&"
+| "fixed_size_matrix" "<" type "," type "," type ">"  "&"
 
 
 block: "{" statement* "}"
 
-assignment: lhs "=" expression
+assignment: lhs assign_operator expression
+
+assign_operator: "=" | "+=" | "-=" | "*=" | "/="
 
 lhs: IDENT ( "[" expression ("," expression)*  "]" )?
 
-expression: limit_expr | number_term | lhs
+expression: base_expr (arith_operator expression)?
+
+arith_operator: "*" | "/" | "+" | "-"
+
+base_expr: limit_expr | number_term | lhs | type "(" expression ")" | "!" expression
+
 
 limit_expr: "limit" "<" expression ">" "(" expression ")"
 number_term: NUMBER -> number
@@ -64,9 +77,11 @@ COMMENT: "//" /[^\n]/* | "/*" /.*?/ "*/"
 
 string : ESCAPED_STRING
 
+NUMBER: /([0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)[fF]?/
+
+
 %import common.ESCAPED_STRING
 %import common.CNAME -> IDENT
-%import common.NUMBER
 %import common.WS_INLINE
 %import common.WS
 %ignore WS_INLINE

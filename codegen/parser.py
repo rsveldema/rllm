@@ -1,6 +1,5 @@
 from lark import Lark, Tree, Token
 import codegen_ast
-from codegen_ast import PrettyPrinter
 
 
 def read_file(filename: str) -> str:
@@ -68,9 +67,9 @@ def _transform_expression(expr_tree) -> codegen_ast.Expression:
       - limit_expr tree (from limit<max>(body)) -> LimitExpr
       - 'number' tree (NUMBER alias) -> Number
       - 'expression' wrapper (from various rules) -> unwrap and process child
-      - lhs (identifier with optional index) -> Identifier
+      - lhs (identifier with optional index) -> Identifier or IndexedIdentifier
     """
-    # Handle limit_expr wrapper (e.g., from expression → limit_expr)
+    # Handle direct limit_expr (or from expression → limit_expr via recursion below)
     if expr_tree.data == 'limit_expr':
         max_child = expr_tree.children[0]
         body_child = expr_tree.children[1]
@@ -91,7 +90,11 @@ def _transform_expression(expr_tree) -> codegen_ast.Expression:
         val_token = expr_tree.children[0]
         return codegen_ast.Number(int(val_token.value))
 
-    # Check for lhs (identifier with optional indexed access)
+    # Handle bare lhs trees directly (e.g., when expression expands to lhs)
+    if expr_tree.data == 'lhs':
+        return _transform_lvalue(expr_tree)
+
+    # Check for lhs nested inside a wrapper tree
     for child in expr_tree.children:
         if isinstance(child, Tree) and child.data == 'lhs':
             return _transform_lvalue(child)
@@ -99,16 +102,55 @@ def _transform_expression(expr_tree) -> codegen_ast.Expression:
     return None
 
 
-def _transform_lvalue(lhs_tree) -> codegen_ast.Identifier:
-    """Convert a lhs Tree to an Identifier Expression.
+def _extract_bracket_expressions(lhs_children):
+    """Extract index expressions from bracket parts of an lhs tree.
 
-    Handles both plain identifiers (e.g., "dst") and indexed access (e.g., "dst[i]").
-    For now, extracts only the base name.
+    Skips string terminals like '[' and ',' and collects expression subtrees.
     """
-    name_token = lhs_tree.children[0]
-    if _is_token(name_token):
-        return codegen_ast.Identifier(name_token.value)
-    return codegen_ast.Identifier(str(name_token))
+    expressions = []
+    i = 1  # Start after the base IDENT (children[0])
+    while i < len(lhs_children):
+        child = lhs_children[i]
+        if isinstance(child, Tree) and child.data == 'expression':
+            expr = _transform_expression(child)
+            if expr is not None:
+                expressions.append(expr)
+        i += 1
+    return expressions
+
+
+def _transform_lvalue(lhs_tree) -> codegen_ast.Expression:
+    """Convert a lhs Tree to an Expression.
+
+    Returns:
+      - Identifier for plain identifiers (e.g., "dst")
+      - IndexedIdentifier for indexed access (e.g., "dst[i]")
+    """
+    base_name = None
+    children = lhs_tree.children
+
+    # Extract the base identifier name (first child is always IDENT)
+    if children:
+        first = children[0]
+        if _is_token(first):
+            base_name = first.value
+        elif isinstance(first, Tree):
+            base_name = str(first.data)
+        else:
+            base_name = str(first)
+
+    if not base_name:
+        return codegen_ast.Identifier("unknown")
+
+    # Check for bracket expressions (index access)
+    indices = _extract_bracket_expressions(children)
+
+    if indices:
+        return codegen_ast.IndexedIdentifier(
+            codegen_ast.Identifier(base_name), indices
+        )
+
+    return codegen_ast.Identifier(base_name)
 
 
 def _transform_declaration(decl_tree) -> codegen_ast.Declaration:
@@ -232,16 +274,19 @@ parser = Lark(grammar, start="program")
 
 
 def parse(filename: str):
-    print(f"parsing: {filename}")
+    print(f"--------------- parsing: {filename} -----------------")
 
     text = read_file(filename)
     ret = parser.parse(text)
-    print(ret.pretty())
+    #print(ret.pretty())
 
     program = transform(ret)
-    
+
+    from codegen_ast import PrettyPrinter
     printer = PrettyPrinter()
     output = program.visit_children(printer)
+    print(output)
 
 
-parse("testdata/dump_matmul_A_B_C.cc")
+parse("testdata/single-assign.kernel")
+parse("testdata/multi-arg.kernel")

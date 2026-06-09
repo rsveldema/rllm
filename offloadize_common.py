@@ -366,6 +366,8 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
 
     out = out.replace("enum_iterator<PositionIndex>(", 
                       "limit<PositionIndex::MAX>(")
+    out = out.replace("enum_iterator<EmbeddingDimension>(", 
+                      "limit<EmbeddingDimension::MAX>(")
 
     for symbol, value in symbol_values.items():
         out = out.replace(symbol, value)
@@ -377,6 +379,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
         out = out[:k] + out[p+1:w] + out[w+1:]
 
     out = out.replace("PositionIndex", "int")
+    out = out.replace("EmbeddingDimension", "int")
     return out
 
 
