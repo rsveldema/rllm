@@ -1,11 +1,7 @@
 """Pretty-printing visitor for AST nodes."""
 
-from .visitor import (
-    Visitor, Type, Int, Float, FixedSizeVector, FlexibleRowsMatrix,
-    FixedSizeMatrix, Expression, Number, Identifier, IndexedIdentifier,
-    LimitExpr, BinaryExpr, CastExpr, NegationExpr, Condition,
-    Statement, For, If, Declaration, Assignment, OverflowCheck, Program, WorkgroupProperties, SharedDecl
-)
+from .. import ast
+from .visitor import Visitor
 
 
 class PrettyPrinter(Visitor):
@@ -22,16 +18,16 @@ class PrettyPrinter(Visitor):
 
     # ── Type visitors ────────────────────────────────────────────────
 
-    def visit_type(self, node: Type):
+    def visit_type(self, node: ast.Type):
         return node.accept(self._child_indent())
 
-    def visit_int(self, node: Int):
+    def visit_int(self, node: ast.Int):
         return f"{self._indent_str()}int"
 
-    def visit_float(self, node: Float):
+    def visit_float(self, node: ast.Float):
         return f"{self._indent_str()}float"
 
-    def visit_fixed_size_vector(self, node: FixedSizeVector):
+    def visit_fixed_size_vector(self, node: ast.FixedSizeVector):
         indent = self._indent_str()
         inner_lines = []
         if node.elem_type is not None:
@@ -41,7 +37,7 @@ class PrettyPrinter(Visitor):
         inner = "\n".join(inner_lines)
         return f"{indent}fixed_size_vector<\n{inner}{indent}>"
 
-    def visit_flexible_rows_matrix(self, node: FlexibleRowsMatrix):
+    def visit_flexible_rows_matrix(self, node: ast.FlexibleRowsMatrix):
         indent = self._indent_str()
         inner_lines = []
         if node.elem_type is not None:
@@ -53,7 +49,7 @@ class PrettyPrinter(Visitor):
         inner = "\n".join(inner_lines)
         return f"{indent}flexible_rows_matrix<\n{inner}{indent}>"
 
-    def visit_fixed_size_matrix(self, node: FixedSizeMatrix):
+    def visit_fixed_size_matrix(self, node: ast.FixedSizeMatrix):
         indent = self._indent_str()
         inner_lines = []
         if node.elem_type is not None:
@@ -67,23 +63,23 @@ class PrettyPrinter(Visitor):
 
     # ── Expression visitors ─────────────────────────────────────────
 
-    def visit_expression(self, node: Expression):
+    def visit_expression(self, node: ast.Expression):
         return node.accept(self._child_indent())
 
-    def visit_number(self, node: Number):
+    def visit_number(self, node: ast.Number):
         return f"{self._indent_str()}{node.value}"
 
-    def visit_identifier(self, node: Identifier):
+    def visit_identifier(self, node: ast.Identifier):
         return f"{self._indent_str()}{node.name}"
 
-    def visit_indexed_identifier(self, node: IndexedIdentifier):
+    def visit_indexed_identifier(self, node: ast.IndexedIdentifier):
         indent = self._indent_str()
         parts = [node.base.name]
         for idx in node.indices:
             parts.append(f"[{idx.accept(self)}]")
         return f"{self._indent_str()}{''.join(parts)}"
 
-    def visit_limit_expr(self, node: LimitExpr):
+    def visit_limit_expr(self, node: ast.LimitExpr):
         indent = self._indent_str()
         max_part = node.max_val.accept(self) if node.max_val else "None"
         body_part = node.body.accept(self) if node.body else "None"
@@ -94,154 +90,95 @@ class PrettyPrinter(Visitor):
                 f"{inner_indent}  {body_part}\n"
                 f"{indent})")
 
-    def visit_binary_expr(self, node: BinaryExpr):
+    def visit_binary_expr(self, node: ast.BinaryExpr):
         indent = self._indent_str()
-        left = node.left.accept(self)
-        right = node.right.accept(self)
-        inner_indent = " " * (self.indent + 2)
-        return (f"{indent}(\n"
-                f"{inner_indent}{left}\n"
-                f"{inner_indent} {node.op}\n"
-                f"{inner_indent}{right}\n"
-                f"{indent})")
+        return (f"{indent}binary<\n"
+                f"{indent}  op: {node.op}\n"
+                f"{indent}  lhs: {node.left.accept(self)}\n"
+                f"{indent}  rhs: {node.right.accept(self)}\n"
+                f"{indent}>")
 
-    def visit_cast_expr(self, node: CastExpr):
-        indent = self._indent_str()
-        operand = node.operand.accept(self)
-        inner_indent = " " * (self.indent + 2)
-        return (f"{indent}cast\n{inner_indent}type: {node.cast_type.accept(self)}\n"
-                f"{inner_indent}operand: {operand}")
+    def visit_cast_expr(self, node: ast.CastExpr):
+        return (f"cast<{node.cast_type.accept(self._child_indent())}>("
+                f"{node.operand.accept(self)})")
 
-    def visit_negation_expr(self, node: NegationExpr):
-        indent = self._indent_str()
-        operand = node.operand.accept(self)
-        inner_indent = " " * (self.indent + 2)
-        return f"{indent}!\n{inner_indent}{operand}"
+    def visit_negation_expr(self, node: ast.NegationExpr):
+        return f"{self._indent_str()}!{node.operand.accept(self)}"
 
-    def visit_condition(self, node: Condition):
-        indent = self._indent_str()
-        lhs_part = node.lhs.accept(self)
-        rhs_part = node.rhs.accept(self)
-        inner_indent = " " * (self.indent + 2)
-        return (f"{indent}condition:\n"
-                f"{inner_indent}lhs: {lhs_part}\n"
-                f"{inner_indent}op: \"{node.op}\"\n"
-                f"{inner_indent}rhs: {rhs_part}")
+    # ── Condition visitors ───────────────────────────────────────────
 
-    # ── Statement visitors ──────────────────────────────────────────
+    def visit_condition(self, node: ast.Condition):
+        return (f"{node.lhs.accept(self)} {node.op} {node.rhs.accept(self)}")
 
-    def visit_statement(self, node: Statement):
+    # ── Statement visitors ───────────────────────────────────────────
+
+    def visit_statement(self, node: ast.Statement):
         return node.accept(self._child_indent())
 
-    def visit_for(self, node: For):
-        inner_indent = " " * (self.indent + 2)
-        parts = []
-        if node.loop_var_type is not None:
-            parts.append(f"{inner_indent}loop_var_type: {node.loop_var_type.accept(self)}")
-        parts.append(f"{inner_indent}loop_var_name: \"{node.loop_var_name}\"")
-        if node.condition is not None:
-            parts.append(f"{inner_indent}condition:\n{inner_indent}{node.condition.accept(self)}")
-        if node.increment_var is not None:
-            parts.append(f"{inner_indent}increment: {node.increment_var} {node.increment_op}")
-        self.indent += 8
+    def visit_for(self, node: ast.For):
         indent = self._indent_str()
-        if node.body_stmts:
-            body_lines = []
-            for s in node.body_stmts:
-                body_lines.append(s.accept(self))
-            parts.append(f"{inner_indent}body:\n" + "\n".join(" " * (self.indent) + l.lstrip() for l in body_lines))
-        self.indent -= 8
-        return f"{indent}for (\n" + ",\n".join(parts) + f"\n{indent})"
+        cond_str = node.condition.accept(self) if node.condition else "None"
+        body_lines = "\n".join(s.accept(self._child_indent()) for s in node.body_stmts)
+        return (f"{indent}for ({node.loop_var_type.accept(self) if node.loop_var_type else "u32"} {node.loop_var_name}; "
+                f"{cond_str}; {node.increment_var}{node.increment_op}) {{\n"
+                f"{body_lines}\n"
+                f"{indent}}}")
 
-    def visit_if(self, node: If):
+    def visit_if(self, node: ast.If):
         indent = self._indent_str()
-        inner_indent = " " * (self.indent + 2)
-        parts = []
-        if node.condition is not None:
-            parts.append(f"{inner_indent}condition:\n{inner_indent}{node.condition.accept(self)}")
-        if node.body_stmts:
-            body_lines = []
-            for s in node.body_stmts:
-                body_lines.append(s.accept(self))
-            parts.append(f"{inner_indent}body:\n" + "\n".join(" " * (self.indent + 4) + l.lstrip() for l in body_lines))
-        return f"{indent}if (\n" + ",\n".join(parts) + f"\n{indent})"
+        cond_str = node.condition.accept(self) if node.condition else "None"
+        body_lines = "\n".join(s.accept(self._child_indent()) for s in node.body_stmts)
+        return (f"{indent}if ({cond_str}) {{\n"
+                f"{body_lines}\n"
+                f"{indent}}}")
 
-    def visit_declaration(self, node: Declaration):
+    def visit_declaration(self, node: ast.Declaration):
         indent = self._indent_str()
-        inner_indent = " " * (self.indent + 2)
-        const_prefix = "const " if node.is_const else ""
-        init_part = ""
-        if node.init_expr is not None:
-            init_part = f" = {node.init_expr.accept(self._child_indent())}"
-        return (f"{indent}{const_prefix}"
-                f"type:\n{inner_indent}{node.var_type.accept(self)}\n"
-                f"{inner_indent}name: \"{node.name}\""
-                f"{init_part}")
+        prefix = "const " if node.is_const else ""
+        init_str = f" = {node.init_expr.accept(self)}" if node.init_expr else ""
+        return f"{indent}{prefix}{node.var_type.accept(self)} {node.name}{init_str};"
 
-    def visit_assignment(self, node: Assignment):
+    def visit_assignment(self, node: ast.Assignment):
         indent = self._indent_str()
-        inner_indent = " " * (self.indent + 2)
-        assign_op = node.assign_op or "="
-        return (f"{indent}{node.lvalue.accept(self)}\n"
-                f"{inner_indent}{assign_op} {node.rvalue.accept(self)}")
+        return f"{indent}{node.lvalue.accept(self)} {node.assign_op} {node.rvalue.accept(self)};"
 
-    def visit_overflow_check(self, node: OverflowCheck):
+    def visit_overflow_check(self, node: ast.OverflowCheck):
         indent = self._indent_str()
-        inner_indent = " " * (self.indent + 2)
-        lvalue = node.lvalue.accept(self)
-        operand = node.operand.accept(self)
-        return f"{indent}OVERFLOW_CHECK_ADD(\n{inner_indent}{lvalue},\n{inner_indent}{operand}\n{indent})"
+        return (f"{indent}OVERFLOW_CHECK_ADD("
+                f"{node.lvalue.accept(self)}, {node.operand.accept(self)})")
 
-    def visit_shared_decl(self, node: SharedDecl):
+    def visit_shared_decl(self, node: ast.SharedDecl):
         indent = self._indent_str()
-        inner_indent = " " * (self.indent + 2)
-        const_prefix = "const " if node.is_const else ""
-        init_part = ""
-        if node.init_expr is not None:
-            init_part = f" = {node.init_expr.accept(self)}"
-        return (f"{indent}shared {const_prefix}"
-                f"type:\n{inner_indent}{node.var_type.accept(self)}\n"
-                f"{inner_indent}name: \"{node.name}\"" 
-                f"{init_part}")
+        prefix = "const " if node.is_const else ""
+        init_str = f" = {node.init_expr.accept(self)}" if node.init_expr else ""
+        return f"{indent}shared {prefix}{node.var_type.accept(self)} {node.name}{init_str};"
 
-    def visit_workgroup_properties(self, node: WorkgroupProperties):
+    def visit_workgroup_properties(self, node: ast.WorkgroupProperties):
         indent = self._indent_str()
-        inner_indent = " " * (self.indent + 2)
         parts = []
         if node.x_expr is not None:
-            parts.append(f"{inner_indent}x: {node.x_expr.accept(self)}")
+            parts.append(f"x: {node.x_expr.accept(self)}")
         if node.y_expr is not None:
-            parts.append(f"{inner_indent}y: {node.y_expr.accept(self)}")
+            parts.append(f"y: {node.y_expr.accept(self)}")
         if node.z_expr is not None:
-            parts.append(f"{inner_indent}z: {node.z_expr.accept(self)}")
-        inner = "\n".join(parts)
-        return f"{indent}workgroup {{\n{inner}\n{indent}}}"
+            parts.append(f"z: {node.z_expr.accept(self)}")
+        return f"{indent}workgroup {{ {', '.join(parts)} }}"
 
-    # ── Program visitor ─────────────────────────────────────────────
-
-    def visit_program(self, node: Program):
+    def visit_program(self, node: ast.Program):
         indent = self._indent_str()
-        inner_indent = " " * (self.indent + 2)
-
-        header = node.header
-        if len(header) >= 2 and header[0] == '"' and header[-1] == '"':
-            header = header[1:-1]
-
-        lines = [f'{indent}header: "{header}"',
-                 f'{indent}space: {node.space}']
+        lines = [f"{indent}PROGRAM({node.header})"]
+        if node.loop_vars:
+            lines.append(f"{indent}  space: {node.loop_vars}")
         if node.limit_expr is not None:
-            limit_part = node.limit_expr.accept(self)
-            lines.append(f"{inner_indent}limit_expr:\n{limit_part}")
-        if node.params:
-            params_lines = [p.accept(self) for p in node.params]
-            lines.append(f"{indent}params:")
-            lines.extend(" " * (self.indent + 2) + l.lstrip() for l in params_lines)
-        if node.workgroups:
-            wg_lines = [w.accept(self) for w in node.workgroups]
-            lines.append(f"{indent}workgroups:")
-            lines.extend(" " * (self.indent + 2) + l.lstrip() for l in wg_lines)
-        if node.body_stmts:
-            body_lines = [s.accept(self) for s in node.body_stmts]
-            lines.append(f"{indent}body_stmts:")
-            lines.extend(" " * (self.indent + 2) + l.lstrip() for l in body_lines)
-        return "\n".join(lines)
+            lines.append(f"{indent}  limit: {node.limit_expr.accept(self)}")
+        param_lines = "\n".join(p.accept(self._child_indent()) for p in node.params)
+        body_lines = "\n".join(s.accept(self._child_indent()) for s in node.body_stmts)
+        wg_lines = "\n".join(w.accept(self._child_indent()) for w in node.workgroups)
+
+        return (f"{indent}Program {{\n"
+                f"  header: {node.header}\n"
+                f"  space: {node.loop_vars}\n"
+                f"  params:\n{param_lines}\n"
+                f"  body:\n{body_lines}\n"
+                f"  workgroups:\n{wg_lines}\n"
+                f"{indent}}}")

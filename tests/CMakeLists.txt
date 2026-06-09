@@ -111,3 +111,12 @@ if(PARALLEL_BACKEND STREQUAL "fastfork")
     target_include_directories(test_fastfork PRIVATE ${CMAKE_SOURCE_DIR}/include)
     gtest_discover_tests(test_fastfork WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
+
+# ---- Vulkan stubs unit test (header-only, links against GTest) ----
+add_executable(test_vulkan_stubs
+    test_vulkan_stubs.cc
+)
+target_link_libraries(test_vulkan_stubs PRIVATE rllm_lib_debug GTest::gtest_main)
+target_compile_options(test_vulkan_stubs PRIVATE -march=native -O3)
+target_include_directories(test_vulkan_stubs PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/tests)
+gtest_discover_tests(test_vulkan_stubs WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

@@ -5,7 +5,7 @@ parse() and a thin transform wrapper.
 """
 
 from lark import Tree, Token
-import codegen_ast
+from . import ast as codegen_ast
 
 
 # ── helpers ────────────────────────────────────────────────────────
@@ -17,6 +17,10 @@ def _is_token(val):
 def _token_value(t):
     if isinstance(t, Token):
         return t.value
+    if isinstance(t, Tree) and len(t.children) == 1:
+        child = t.children[0]
+        if isinstance(child, Token):
+            return child.value
     return None
 
 
@@ -41,28 +45,27 @@ def extract_header(header_tree):
     return (header_str, workgroups)
 
 
-def extract_space_name(space_tree):
-    """Extract the loop/space variable name from parfor_space.
+def extract_loop_vars_and_dim(space_tree):
+    """Extract all loop variable names and dimensionality from parfor_space.
 
-    For 1D: children = [IDENT, expression, parameters_list] → space = first IDENT
-    For 2D: children = [IDENT_i, IDENT_j, expression(grid_name), parameters_list]
-            → space = grid name from the expression child
+    For 1D (OFFLOAD_PARFOR_1D_PARAM(i, ...)): loop_vars=[i], dim=1
+    For 2D (OFFLOAD_PARFOR_2D_PARAM(i, j, ...)): loop_vars=[i, j], dim=2
     """
-    if len(space_tree.children) >= 3:
-        third = space_tree.children[2]
-        if isinstance(third, Tree) and third.data == 'expression':
-            # 2D case: extract the identifier from the expression
-            return _extract_identifier_from_expr(third)
-    # 1D case: first child is the IDENT loop variable
-    if len(space_tree.children) >= 1:
-        first = space_tree.children[0]
-        if _is_token(first):
-            return first.value
-    return ""
+    # IDENTs are the first N children where N = space_dim
+    ids = []
+    for c in space_tree.children[:2]:
+        if _is_token(c) and c.type == 'IDENT':
+            ids.append(c.value)
+
+    dim = len(ids)
+    if dim > 3:
+        dim = 3
+
+    return ids, dim
 
 
-def _extract_identifier_from_expr(expr_tree):
-    """Extract an identifier name from an expression tree (single IDENT base)."""
+def _extract_grid_name_from_expr(expr_tree):
+    """Extract a single identifier name from an expression tree (grid/extent name in 2D)."""
     for child in expr_tree.children:
         if isinstance(child, Tree) and child.data == 'base_expr':
             for sub in child.children:
@@ -72,6 +75,10 @@ def _extract_identifier_from_expr(expr_tree):
                         first = lhs_children[0]
                         if _is_token(first):
                             return first.value
+    # Fallback: scan all children for a lone IDENT token
+    for child in expr_tree.children:
+        if _is_token(child) and child.type == 'IDENT':
+            return child.value
     return ""
 
 
@@ -168,12 +175,22 @@ def transform_expression(expr_tree):
     # 'expression' wrapper with binary ops: base_expr arith_operator expression
     if expr_tree.data == 'expression':
         children = expr_tree.children
+        op_val = None
+        
+        # Try token-based operator first (compare_operator style)
         if len(children) == 3 and _is_token(children[1]):
-            op_token = children[1]
+            op_val = children[1].value
+        # Also handle Tree-based operator (arith_operator, assign_operator) with single Token child
+        elif len(children) == 3 and isinstance(children[1], Tree) and len(children[1].children) == 1:
+            inner = children[1].children[0]
+            if isinstance(inner, Token):
+                op_val = inner.value
+        
+        if op_val is not None:
             left = transform_expression(children[0])
             right = transform_expression(children[2])
             if left is not None and right is not None:
-                return codegen_ast.BinaryExpr(left, op_token.value, right)
+                return codegen_ast.BinaryExpr(left, op_val, right)
 
         # Simple expression — unwrap and process single child
         for child in children:
@@ -188,7 +205,11 @@ def transform_expression(expr_tree):
         try:
             val_str = val_token.value
             if isinstance(val_str, str) and '.' in val_str:
-                return codegen_ast.Number(int(float(val_str)))
+                core = val_str.rstrip('fF')  # Remove trailing f/F suffix
+                if core.endswith('.'):
+                    # Trailing dot with no digits after, e.g. "0." or "16384."
+                    core = core + '0'
+                return codegen_ast.Number(int(float(core)))
             return codegen_ast.Number(int(val_str))
         except (ValueError, TypeError):
             return None
@@ -378,7 +399,7 @@ def transform_statement(stmt_tree):
     # Assignment: lhs assign_operator expression
     if data == 'assignment':
         lhs_part = stmt_tree.children[0]
-        op_token = stmt_tree.children[1]
+        op_tree = stmt_tree.children[1]
         rhs_part = stmt_tree.children[2]
 
         if isinstance(lhs_part, Tree):
@@ -387,7 +408,9 @@ def transform_statement(stmt_tree):
             lvalue = codegen_ast.Identifier(
                 _token_value(lhs_part) or str(lhs_part))
 
-        assign_op = _token_value(op_token) or '='
+        # Extract operator value (now a Token wrapped in assign_operator tree)
+        op_val = _token_value(op_tree)  # Now finds the inner Token via Tree with single child
+        assign_op = op_val if op_val else '='
         rvalue = transform_expression(rhs_part)
         return codegen_ast.Assignment(lvalue, assign_op, rvalue)
 
@@ -529,6 +552,7 @@ def transform_declaration(stmt_tree):
 
 # ── public transform entry point ───────────────────────────────────
 
+
 def transform(t: Tree) -> codegen_ast.Program:
     """Top-level: turn a parsed Lark tree into a Program AST."""
     p = codegen_ast.Program()
@@ -540,11 +564,51 @@ def transform(t: Tree) -> codegen_ast.Program:
     for wg_tree in wg_trees:
         p.workgroups.append(_transform_workgroup_properties(wg_tree))
     
-    p.space = extract_space_name(t.children[1])
-    p.limit_expr = extract_limit_expr(t.children[1])
+    # Extract all loop variable names, dimensionality, and grid name from parfor_space
+    p.loop_vars, p.space_dim = extract_loop_vars_and_dim(t.children[1])
+    
+    # Try to get the grid/extent name (only relevant for 2D)
+    if p.space_dim >= 2:
+        for c in t.children[1].children:
+            if isinstance(c, Tree) and c.data == 'expression':
+                p.grid_name = _extract_grid_name_from_expr(c)
+                break
+    
+    # Try to find dispatch size expression from the expression inside parfor_space
+    # (e.g., the "length" part of limit<16384>(length))
+    for c in t.children[1].children:
+        if isinstance(c, Tree) and c.data == 'expression':
+            p.dispatch_size_expr = transform_expression(c)
+            break
 
+    # Build name-to-declaration map from parameters_list
+    param_names = []
+    for c in t.children[1].children:
+        if isinstance(c, Tree) and c.data == 'parfor_parameters_list':
+            for pc in c.children:
+                if isinstance(pc, Tree) and pc.data == 'parameter':
+                    for tc in pc.children:
+                        if isinstance(tc, Token) and tc.type == 'IDENT':
+                            param_names.append(tc.value)
+
+    # Build name-to-type map from the type declarations (for FixedSizeVector etc.)
+    param_type_map = {}
     for decl_tree in t.children[2].children:
-        p.params.append(transform_declaration(decl_tree))
+        var_name = ""
+        if isinstance(decl_tree, Tree):
+            for dc in decl_tree.children:
+                if isinstance(dc, Token) and dc.type == 'IDENT':
+                    # Find a type-decl pair: type token followed by IDENT
+                    idx = decl_tree.children.index(dc)
+                    if idx > 0:
+                        prev = decl_tree.children[idx-1]
+                        if isinstance(prev, Tree) and prev.data in ('type', 'int', 'float'):
+                            var_name = dc.value
+        param_type_map[var_name] = transform_declaration(decl_tree)
+
+    p.params = [param_type_map.get(n) for n in param_names]
+
+    p.limit_expr = extract_limit_expr(t.children[1])
 
     for stmt_tree in t.children[3].children:
         stmt = transform_statement(stmt_tree)

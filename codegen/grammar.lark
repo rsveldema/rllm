@@ -13,6 +13,7 @@ workgroup_properties: "workgroup" "{" "x" ":" expression "," "y" ":" expression 
 
 parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" 
 | "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
+| "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
 
 parfor_parameters_list: "(" parameter ("," parameter)* ")"
 parameter: IDENT
@@ -26,7 +27,7 @@ statement: for_statement
 | "OVERFLOW_CHECK_ADD" "(" lhs "," expression ")" ";"
 
 
-for_statement: "for" "(" for_loop_var ";" condition ";" increment ")" block
+for_statement: "for" "(" for_loop_var ";" condition ";" increment ")" statement
 
 if_statement: "if" "(" condition ")" block
 
@@ -63,13 +64,15 @@ block: "{" statement* "}"
 
 assignment: lhs assign_operator expression
 
-assign_operator: "=" | "+=" | "-=" | "*=" | "/="
+ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/="
+assign_operator: ASSIGN_OP
 
 lhs: IDENT ( "[" expression ("," expression)*  "]" )?
 
 expression: base_expr (arith_operator expression)?
 
-arith_operator: "*" | "/" | "+" | "-"
+ARITH_OP: "*" | "/" | "+" | "-"
+arith_operator: ARITH_OP
 
 base_expr: limit_expr | number_term | lhs | type "(" expression ")" | "!" expression
 

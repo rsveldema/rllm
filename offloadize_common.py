@@ -370,7 +370,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "limit<EmbeddingDimension::MAX>(")
 
     if out.find("::MAX") < 0:
-        if out.find("_matrix") >= 0 or out.find("_vector"):
+        if out.find("_matrix") >= 0 or out.find("_vector") >= 0:
             out = out.replace("PositionIndex", "PositionIndex::MAX")
             out = out.replace("EmbeddingDimension", "EmbeddingDimension::MAX")
 
@@ -383,7 +383,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
         w = out.find(")", p)
         out = out[:k] + out[p+1:w] + out[w+1:]
 
-
+    out = out.replace("[[maybe_unused]]", "")
     return out
 
 
