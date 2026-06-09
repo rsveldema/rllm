@@ -369,6 +369,10 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace("enum_iterator<EmbeddingDimension>(", 
                       "limit<EmbeddingDimension::MAX>(")
 
+    if out.find("_matrix") >= 0 or out.find("_vector"):
+        out = out.replace("PositionIndex", "PositionIndex::MAX")
+        out = out.replace("EmbeddingDimension", "EmbeddingDimension::MAX")
+
     for symbol, value in symbol_values.items():
         out = out.replace(symbol, value)
 
@@ -378,8 +382,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
         w = out.find(")", p)
         out = out[:k] + out[p+1:w] + out[w+1:]
 
-    out = out.replace("PositionIndex", "int")
-    out = out.replace("EmbeddingDimension", "int")
+
     return out
 
 
@@ -814,6 +817,8 @@ def transform_source(
                 for name in extra_param_names
                 if name in active_offload_param_types
             }
+
+            print(f"HERE IT IS; {active_offload_param_lines}")
             loop_stack.append(
                 LoopContext(
                     indent=indent,

@@ -31,6 +31,30 @@ class FixedSizeVector(Type):
         return visitor.visit_fixed_size_vector(self)
 
 
+class FlexibleRowsMatrix(Type):
+    """flexible_rows_matrix<elem_type, row_type, size_expr>&"""
+
+    def __init__(self, elem_type: Type = None, row_type: Type = None, size_expr = None):
+        self.elem_type = elem_type
+        self.row_type = row_type
+        self.size_expr = size_expr
+
+    def accept(self, visitor):
+        return visitor.visit_flexible_rows_matrix(self)
+
+
+class FixedSizeMatrix(Type):
+    """fixed_size_matrix<elem_type, row_type, col_type>&"""
+
+    def __init__(self, elem_type: Type = None, row_type: Type = None, col_type: Type = None):
+        self.elem_type = elem_type
+        self.row_type = row_type
+        self.col_type = col_type
+
+    def accept(self, visitor):
+        return visitor.visit_fixed_size_matrix(self)
+
+
 class Expression:
     def accept(self, visitor):
         return visitor.visit_expression(self)
@@ -70,6 +94,39 @@ class LimitExpr(Expression):
 
     def accept(self, visitor):
         return visitor.visit_limit_expr(self)
+
+
+class BinaryExpr(Expression):
+    """Represents a binary operation (e.g., a + b)."""
+
+    def __init__(self, left: Expression, op: str, right: Expression):
+        self.left = left
+        self.op = op
+        self.right = right
+
+    def accept(self, visitor):
+        return visitor.visit_binary_expr(self)
+
+
+class CastExpr(Expression):
+    """Represents a cast expression (e.g., int(x))."""
+
+    def __init__(self, cast_type: Type, operand: Expression):
+        self.cast_type = cast_type
+        self.operand = operand
+
+    def accept(self, visitor):
+        return visitor.visit_cast_expr(self)
+
+
+class NegationExpr(Expression):
+    """Represents a negation expression (e.g., !x)."""
+
+    def __init__(self, operand: Expression):
+        self.operand = operand
+
+    def accept(self, visitor):
+        return visitor.visit_negation_expr(self)
 
 
 class Condition:
@@ -121,12 +178,24 @@ class Declaration(Statement):
 
 
 class Assignment(Statement):
-    def __init__(self, lvalue: Expression, rvalue: Expression):
+    def __init__(self, lvalue: Expression, assign_op: str, rvalue: Expression):
         self.lvalue = lvalue
+        self.assign_op = assign_op
         self.rvalue = rvalue
 
     def accept(self, visitor):
         return visitor.visit_assignment(self)
+
+
+class OverflowCheck(Statement):
+    """OVERFLOW_CHECK_ADD(lvalue, operand) statement."""
+
+    def __init__(self, lvalue: Expression, operand: Expression):
+        self.lvalue = lvalue
+        self.operand = operand
+
+    def accept(self, visitor):
+        return visitor.visit_overflow_check(self)
 
 
 class Program:
@@ -168,6 +237,12 @@ class Visitor:
     def visit_fixed_size_vector(self, node: FixedSizeVector):
         raise NotImplementedError
 
+    def visit_flexible_rows_matrix(self, node: FlexibleRowsMatrix):
+        raise NotImplementedError
+
+    def visit_fixed_size_matrix(self, node: FixedSizeMatrix):
+        raise NotImplementedError
+
     def visit_expression(self, node: Expression):
         raise NotImplementedError
 
@@ -181,6 +256,15 @@ class Visitor:
         raise NotImplementedError
 
     def visit_limit_expr(self, node: LimitExpr):
+        raise NotImplementedError
+
+    def visit_binary_expr(self, node: BinaryExpr):
+        raise NotImplementedError
+
+    def visit_cast_expr(self, node: CastExpr):
+        raise NotImplementedError
+
+    def visit_negation_expr(self, node: NegationExpr):
         raise NotImplementedError
 
     def visit_condition(self, node: Condition):
@@ -199,6 +283,9 @@ class Visitor:
         raise NotImplementedError
 
     def visit_assignment(self, node: Assignment):
+        raise NotImplementedError
+
+    def visit_overflow_check(self, node: OverflowCheck):
         raise NotImplementedError
 
     def visit_program(self, node: Program):

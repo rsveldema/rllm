@@ -45,8 +45,8 @@ type: "int" -> int
 | "rlmm_float" -> float
 | "rlmm_float_small" -> float
 | "fixed_size_vector" "<" type "," expression ">"  "&"
-| "flexible_rows_matrix" "<" type "," type "," expression ">"  "&"
-| "fixed_size_matrix" "<" type "," type "," type ">"  "&"
+| "flexible_rows_matrix" "<" type "," expression "," expression ">"  "&"
+| "fixed_size_matrix" "<" type "," expression "," expression ">"  "&"
 
 
 block: "{" statement* "}"
