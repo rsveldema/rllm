@@ -1,28 +1,28 @@
 """Base visitor pattern: all AST node types and the Visitor base class."""
 
 
+# ── Type nodes ─────────────────────────────────────────────────────
+
 class Type:
+    """Base class for type AST nodes."""
     def accept(self, visitor):
         return visitor.visit_type(self)
 
 
 class Int(Type):
-    def __init__(self):
-        pass
-
+    """Represents 'int' or 'size_t' types."""
     def accept(self, visitor):
         return visitor.visit_int(self)
 
 
 class Float(Type):
-    def __init__(self):
-        pass
-
+    """Represents 'float', 'rlmm_float', or 'rlmm_float_small' types."""
     def accept(self, visitor):
         return visitor.visit_float(self)
 
 
 class FixedSizeVector(Type):
+    """fixed_size_vector<elem_type, size_expr>&"""
     def __init__(self, elem_type: Type = None, size_expr = None):
         self.elem_type = elem_type
         self.size_expr = size_expr
@@ -32,30 +32,31 @@ class FixedSizeVector(Type):
 
 
 class FlexibleRowsMatrix(Type):
-    """flexible_rows_matrix<elem_type, row_type, size_expr>&"""
-
-    def __init__(self, elem_type: Type = None, row_type: Type = None, size_expr = None):
+    """flexible_rows_matrix<elem_type, row_size_expr, col_size_expr>&"""
+    def __init__(self, elem_type: Type = None, row_size_expr = None, col_size_expr = None):
         self.elem_type = elem_type
-        self.row_type = row_type
-        self.size_expr = size_expr
+        self.row_size_expr = row_size_expr
+        self.col_size_expr = col_size_expr
 
     def accept(self, visitor):
         return visitor.visit_flexible_rows_matrix(self)
 
 
 class FixedSizeMatrix(Type):
-    """fixed_size_matrix<elem_type, row_type, col_type>&"""
-
-    def __init__(self, elem_type: Type = None, row_type: Type = None, col_type: Type = None):
+    """fixed_size_matrix<elem_type, row_size_expr, col_size_expr>&"""
+    def __init__(self, elem_type: Type = None, row_size_expr = None, col_size_expr = None):
         self.elem_type = elem_type
-        self.row_type = row_type
-        self.col_type = col_type
+        self.row_size_expr = row_size_expr
+        self.col_size_expr = col_size_expr
 
     def accept(self, visitor):
         return visitor.visit_fixed_size_matrix(self)
 
 
+# ── Expression nodes ───────────────────────────────────────────────
+
 class Expression:
+    """Base class for expression AST nodes."""
     def accept(self, visitor):
         return visitor.visit_expression(self)
 
@@ -78,7 +79,6 @@ class Identifier(Expression):
 
 class IndexedIdentifier(Expression):
     """Represents an identifier with one or more index expressions (e.g., dst[i])."""
-
     def __init__(self, base: Identifier, indices: list = None):
         self.base = base
         self.indices = indices or []
@@ -98,7 +98,6 @@ class LimitExpr(Expression):
 
 class BinaryExpr(Expression):
     """Represents a binary operation (e.g., a + b)."""
-
     def __init__(self, left: Expression, op: str, right: Expression):
         self.left = left
         self.op = op
@@ -110,7 +109,6 @@ class BinaryExpr(Expression):
 
 class CastExpr(Expression):
     """Represents a cast expression (e.g., int(x))."""
-
     def __init__(self, cast_type: Type, operand: Expression):
         self.cast_type = cast_type
         self.operand = operand
@@ -121,13 +119,14 @@ class CastExpr(Expression):
 
 class NegationExpr(Expression):
     """Represents a negation expression (e.g., !x)."""
-
     def __init__(self, operand: Expression):
         self.operand = operand
 
     def accept(self, visitor):
         return visitor.visit_negation_expr(self)
 
+
+# ── Statement-related nodes ────────────────────────────────────────
 
 class Condition:
     def __init__(self, lhs: Expression, op: str, rhs: Expression):
@@ -140,6 +139,7 @@ class Condition:
 
 
 class Statement:
+    """Base class for statement AST nodes."""
     def accept(self, visitor):
         return visitor.visit_statement(self)
 
@@ -168,10 +168,11 @@ class If(Statement):
 
 
 class Declaration(Statement):
-    def __init__(self, is_const: bool, var_type: Type, name: str):
+    def __init__(self, is_const: bool, var_type: Type, name: str, init_expr = None):
         self.is_const = is_const
         self.var_type = var_type
         self.name = name
+        self.init_expr = init_expr
 
     def accept(self, visitor):
         return visitor.visit_declaration(self)
@@ -189,7 +190,6 @@ class Assignment(Statement):
 
 class OverflowCheck(Statement):
     """OVERFLOW_CHECK_ADD(lvalue, operand) statement."""
-
     def __init__(self, lvalue: Expression, operand: Expression):
         self.lvalue = lvalue
         self.operand = operand
@@ -198,14 +198,42 @@ class OverflowCheck(Statement):
         return visitor.visit_overflow_check(self)
 
 
+
+
+
+class SharedDecl(Statement):
+    """shared declaration in workgroup context (from 'shared' alternative)."""
+    def __init__(self, is_const: bool, var_type: Type, name: str, init_expr = None):
+        self.is_const = is_const
+        self.var_type = var_type
+        self.name = name
+        self.init_expr = init_expr
+
+    def accept(self, visitor):
+        return visitor.visit_shared_decl(self)
+
+
+class WorkgroupProperties:
+    """workgroup { x: expr, y: expr, z: expr } properties."""
+    def __init__(self, x_expr=None, y_expr=None, z_expr=None):
+        self.x_expr = x_expr
+        self.y_expr = y_expr
+        self.z_expr = z_expr
+
+    def accept(self, visitor):
+        return visitor.visit_workgroup_properties(self)
+
+# ── Program ────────────────────────────────────────────────────────
+
 class Program:
     def __init__(self, header: str = "", space: str = "", limit_expr = None,
-                 params: list = None, body_stmts: list = None):
+                 params: list = None, body_stmts: list = None, workgroups: list = None):
         self.header = header
         self.space = space
         self.limit_expr = limit_expr
         self.params = params or []
         self.body_stmts = body_stmts or []
+        self.workgroups = workgroups or []
 
     def accept(self, visitor):
         return visitor.visit_program(self)
@@ -221,6 +249,8 @@ class Program:
                 stmt.accept(visitor)
         return result
 
+
+# ── Visitor base class ─────────────────────────────────────────────
 
 class Visitor:
     """Base visitor class. Subclasses override visit_* methods as needed."""
@@ -286,6 +316,12 @@ class Visitor:
         raise NotImplementedError
 
     def visit_overflow_check(self, node: OverflowCheck):
+        raise NotImplementedError
+
+    def visit_shared_decl(self, node: SharedDecl):
+        raise NotImplementedError
+
+    def visit_workgroup_properties(self, node: WorkgroupProperties):
         raise NotImplementedError
 
     def visit_program(self, node: Program):

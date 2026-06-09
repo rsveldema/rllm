@@ -6,7 +6,10 @@ program: header parfor_space parfor_parameters body
 
 parfor_parameters: "PARAMETERS" declaration ("," declaration)*
 
-header: "PROGRAM" "(" string ")" 
+header: "PROGRAM" "(" string ")" workgroup_properties*
+
+workgroup_properties: "workgroup" "{" "x" ":" expression "," "y" ":" expression "," "z" ":" expression "}"
+| "shared" declaration ";"
 
 parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" 
 | "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
@@ -32,9 +35,16 @@ for_loop_var: type IDENT "=" expression
 // in the AST becomes <expr> <op> <expr>
 condition: IDENT compare_operator expression
 
-compare_operator: "<" | ">" | "<=" | ">=" | "==" | "!="
+compare_operator: LT | GT | LTE | GTE | EQ | NEQ
+LT: "<"
+GT: ">"
+LTE: "<="
+GTE: ">="
+EQ: "=="
+NEQ: "!="
 
-increment: IDENT "++" | IDENT "--" | "++" IDENT | "--" IDENT
+increment: IDENT INC_OP -> inc_postfix | INC_OP IDENT -> inc_prefix
+INC_OP: "++" | "--"
 
 declaration: "const" type IDENT ("=" expression)? -> const_decl
 | type IDENT  ("=" expression)? -> decl

@@ -23,9 +23,22 @@ def _token_value(t):
 # ── extractors ─────────────────────────────────────────────────────
 
 def extract_header(header_tree):
-    """Extract string value from header tree."""
-    string_tree = header_tree.children[0]
-    return _token_value(string_tree.children[0])
+    """Extract string value and workgroup properties from header tree.
+    
+    Header tree has: [string, workgroup_properties*, ...]
+    Returns (header_string, list_of_workgroup_properties_trees)
+    """
+    header_str = ""
+    workgroups = []
+    for child in header_tree.children:
+        if isinstance(child, Tree):
+            if child.data == 'string':
+                header_str = _token_value(child.children[0])
+            elif child.data == 'workgroup_properties':
+                workgroups.append(child)
+        elif _is_token(child) and child.type == 'ESCAPED_STRING':
+            header_str = _token_value(child)
+    return (header_str, workgroups)
 
 
 def extract_space_name(space_tree):
@@ -91,7 +104,58 @@ def extract_limit_expr(space_tree):
     return None
 
 
-# ── expression / lvalue transforms ────────────────────────────────
+
+def _transform_workgroup_properties(wg_tree):
+    """Transform workgroup_properties tree to an AST node.
+    
+    Two grammar alternatives:
+    1. workgroup { x: expr, y: expr, z: expr } -> WorkgroupProperties
+    2. shared declaration ; -> SharedDecl
+    """
+    if len(wg_tree.children) == 0:
+        return None
+    
+    # Detect shared vs workgroup structurally:
+    # - workgroup { ... } has 3+ expression children (x, y, z expressions)
+    # - shared declaration ; has 1 child (the declaration tree)
+    if len(wg_tree.children) == 1 and isinstance(wg_tree.children[0], Tree):
+        child = wg_tree.children[0]
+        if child.data in ('declaration', 'decl', 'const_decl'):
+            # This is the shared alternative
+            decl_tree = child
+            is_const = child.data == 'const_decl'
+            var_type = codegen_ast.Int()
+            name = ""
+            init_expr = None
+            for dc in decl_tree.children:
+                if isinstance(dc, Tree):
+                    # Check if this child looks like a type (either 'type' or a grammar-rewritten leaf name)
+                    is_type_like = dc.data in ('type', 'int', 'float')
+                    # Also check for complex types that start with their container name
+                    if dc.data.startswith(('fixed_size_vector', 'flexible_rows_matrix', 'fixed_size_matrix')):
+                        is_type_like = True
+                    if is_type_like:
+                        resolved = _resolve_nested_type(dc)
+                        var_type = resolved or _transform_type(dc)
+                    elif dc.data == 'assignment':
+                        init_expr = transform_expression(dc)
+                    elif dc.data == 'expression':
+                        init_expr = dc
+                elif isinstance(dc, Token):
+                    name = dc.value
+            return codegen_ast.SharedDecl(is_const, var_type, name, init_expr)
+    
+    # workgroup { x: ..., y: ..., z: ... } case
+    expressions = []
+    for child in wg_tree.children:
+        if isinstance(child, Tree):
+            expr_result = transform_expression(child)
+            if expr_result is not None:
+                expressions.append(expr_result)
+    x_expr = expressions[0] if len(expressions) > 0 else None
+    y_expr = expressions[1] if len(expressions) > 1 else None
+    z_expr = expressions[2] if len(expressions) > 2 else None
+    return codegen_ast.WorkgroupProperties(x_expr, y_expr, z_expr)
 
 def transform_expression(expr_tree):
     """Convert an expression Tree to an AST node."""
@@ -121,7 +185,13 @@ def transform_expression(expr_tree):
     # Direct number tree
     if expr_tree.data == 'number':
         val_token = expr_tree.children[0]
-        return codegen_ast.Number(int(val_token.value))
+        try:
+            val_str = val_token.value
+            if isinstance(val_str, str) and '.' in val_str:
+                return codegen_ast.Number(int(float(val_str)))
+            return codegen_ast.Number(int(val_str))
+        except (ValueError, TypeError):
+            return None
 
     # Handle base_expr directly (recursion target from expression or direct)
     if expr_tree.data == 'base_expr':
@@ -194,6 +264,8 @@ def _transform_lvalue(lhs_tree):
                     expr_result = transform_expression(child)
                     if expr_result is not None:
                         indices.append(expr_result)
+                elif _is_token(child):
+                    indices.append(codegen_ast.Identifier(child.value))
             return codegen_ast.IndexedIdentifier(base, indices)
 
         # Nested structure — recurse
@@ -209,7 +281,18 @@ def _transform_lvalue(lhs_tree):
 # ── type transform ─────────────────────────────────────────────────
 
 def _transform_type(type_tree):
-    """Transform a 'type' Lark tree into an AST Type node."""
+    """Transform a 'type' Lark tree into an AST Type node.
+
+    Grammar rules for multi-param types:
+      fixed_size_vector<type, expression>&
+      flexible_rows_matrix<type, expression, expression>&
+      fixed_size_matrix<type, expression, expression>&
+
+    The type name token is consumed by the grammar; we infer the kind
+    from the number of children and whether they are Types or Expressions.
+    Note: flexible_rows_matrix and fixed_size_matrix produce identical trees
+    (both have 3 children), so we default to FlexibleRowsMatrix for 3-param.
+    """
     data = type_tree.data
     children = type_tree.children
     if data != 'type' or len(children) < 2:
@@ -219,27 +302,25 @@ def _transform_type(type_tree):
     if elem_type is None:
         return None
 
-    # 3-param types: distinguish by whether the third child is an expression.
+    # 3-param types: flexible_rows_matrix or fixed_size_matrix
     if len(children) == 3:
-        third = children[2]
-        if isinstance(third, Tree):
-            if third.data == 'expression':
-                row_type = _resolve_nested_type(children[1])
-                size_expr = transform_expression(third)
-                return codegen_ast.FlexibleRowsMatrix(elem_type, row_type, size_expr)
-            else:
-                # All three are type params → fixed_size_matrix
-                col_type = _resolve_nested_type(third)
-                row_type = _resolve_nested_type(children[1])
-                return codegen_ast.FixedSizeMatrix(elem_type, row_type, col_type)
+        first_is_expr = isinstance(children[1], Tree) and children[1].data == 'expression'
+        second_is_expr = isinstance(children[2], Tree) and children[2].data == 'expression'
 
-    # 2-param types
+        if first_is_expr and second_is_expr:
+            # Both are expression trees → flexible_rows_matrix or fixed_size_matrix
+            row_size_expr = transform_expression(children[1])
+            col_size_expr = transform_expression(children[2])
+            return codegen_ast.FlexibleRowsMatrix(elem_type, row_size_expr, col_size_expr)
+
+    # 2-param types: fixed_size_vector<type, expression>&
     elif len(children) == 2:
         second = children[1]
         if isinstance(second, Tree):
             if second.data == 'expression':
                 return codegen_ast.FixedSizeVector(elem_type, transform_expression(second))
             else:
+                # Fallback: treat as type (shouldn't happen with current grammar)
                 second_type = _resolve_nested_type(second)
                 if second_type is not None:
                     return codegen_ast.FlexibleRowsMatrix(elem_type, second_type, None)
@@ -310,9 +391,13 @@ def transform_statement(stmt_tree):
         rvalue = transform_expression(rhs_part)
         return codegen_ast.Assignment(lvalue, assign_op, rvalue)
 
-    # For/if statements — placeholder
-    if data in ('for_statement', 'if_statement'):
-        return None
+    # For statement: for "(" for_loop_var ";" condition ";" increment ")" block
+    if data == 'for_statement':
+        return _transform_for(stmt_tree)
+
+    # If statement: if "(" condition ")" block
+    if data == 'if_statement':
+        return _transform_if(stmt_tree)
 
     # Standalone declarations
     if data in ('decl', 'const_decl'):
@@ -321,20 +406,116 @@ def transform_statement(stmt_tree):
     return None
 
 
+def _extract_condition(cond_tree):
+    """Extract a Condition AST node from a condition tree.
+
+    condition: IDENT compare_operator expression
+    """
+    lhs_expr = None
+    op = ""
+    rhs_expr = None
+
+    for c in cond_tree.children:
+        if isinstance(c, Token) and c.type == 'IDENT':
+            lhs_expr = codegen_ast.Identifier(c.value)
+        elif isinstance(c, Tree) and c.data == 'compare_operator':
+            # compare_operator has one child: the operator token (LT/GT/etc.)
+            for sub in c.children:
+                if isinstance(sub, Token):
+                    op = sub.value
+                    break
+        elif isinstance(c, Tree):
+            rhs_expr = transform_expression(c)
+
+    return codegen_ast.Condition(lhs_expr, op, rhs_expr)
+
+
+def _transform_for(for_tree):
+    """Transform a for_statement tree into a For AST node."""
+    # Structure: [for_loop_var, condition, increment, block]
+    for_loop_var_tree = for_tree.children[0]
+    cond_tree = for_tree.children[1]
+    inc_tree = for_tree.children[2]
+    block_tree = for_tree.children[3]
+
+    # Parse loop variable: type IDENT "=" expression
+    loop_var_type = None
+    loop_var_name = ""
+    init_expr = None
+    for child in for_loop_var_tree.children:
+        if isinstance(child, Tree) and child.data == 'type':
+            loop_var_type = _resolve_nested_type(child) or _transform_type(child)
+        elif isinstance(child, Token):
+            loop_var_name = child.value
+
+    # Parse condition
+    condition = _extract_condition(cond_tree)
+
+    # Parse increment: supports both prefix (++i) and postfix (i++)
+    increment_var = ""
+    increment_op = ""
+    if isinstance(inc_tree, Tree):
+        inc_data = inc_tree.data
+        if inc_data in ('increment', 'inc_postfix', 'inc_prefix'):
+            tokens = [c for c in inc_tree.children if isinstance(c, Token)]
+            for t in tokens:
+                val = t.value
+                if val in ('++', '--'):
+                    increment_op = val
+                elif t.type == 'IDENT':
+                    increment_var = val
+
+    # Parse body block
+    body_stmts = []
+    if isinstance(block_tree, Tree) and block_tree.data == 'block':
+        for stmt_child in block_tree.children:
+            stmt = transform_statement(stmt_child)
+            if stmt is not None:
+                body_stmts.append(stmt)
+
+    return codegen_ast.For(loop_var_type, loop_var_name, condition,
+                          increment_var, increment_op, body_stmts)
+
+
+def _transform_if(if_tree):
+    """Transform an if_statement tree into an If AST node."""
+    cond_tree = if_tree.children[0]
+    block_tree = if_tree.children[1]
+
+    # Parse condition
+    condition = _extract_condition(cond_tree)
+
+    # Parse body block
+    body_stmts = []
+    if isinstance(block_tree, Tree) and block_tree.data == 'block':
+        for stmt_child in block_tree.children:
+            stmt = transform_statement(stmt_child)
+            if stmt is not None:
+                body_stmts.append(stmt)
+
+    return codegen_ast.If(condition, body_stmts)
+
+
 def transform_declaration(stmt_tree):
     """Transform a declaration tree into Declaration AST."""
     is_const = stmt_tree.data == 'const_decl'
     var_type = None
     name = ""
+    init_expr = None
 
     for child in stmt_tree.children:
         if isinstance(child, Tree):
-            if child.data == 'type':
+            # Simple types (int/float from grammar rewrite rules like "float" -> float)
+            if child.data in ('int', 'float'):
+                var_type = _resolve_nested_type(child) or codegen_ast.Int()
+            elif child.data == 'type':
                 resolved = _resolve_nested_type(child)
                 if resolved is not None:
                     var_type = resolved
                 else:
                     var_type = _transform_type(child)
+            elif child.data == 'expression':
+                init_expr = transform_expression(child)
             elif child.data in ('index_expr', 'lhs'):
                 lvalue = _transform_lvalue(child)
                 if isinstance(lvalue, codegen_ast.Identifier):
@@ -343,7 +524,7 @@ def transform_declaration(stmt_tree):
             # Could be the variable name token directly
             name = child.value
 
-    return codegen_ast.Declaration(is_const, var_type or codegen_ast.Int(), name)
+    return codegen_ast.Declaration(is_const, var_type or codegen_ast.Int(), name, init_expr)
 
 
 # ── public transform entry point ───────────────────────────────────
@@ -353,7 +534,12 @@ def transform(t: Tree) -> codegen_ast.Program:
     p = codegen_ast.Program()
 
     # children: [header, parfor_space, params_list, body_list]
-    p.header = extract_header(t.children[0])
+    header_str, wg_trees = extract_header(t.children[0])
+    p.header = header_str
+    
+    for wg_tree in wg_trees:
+        p.workgroups.append(_transform_workgroup_properties(wg_tree))
+    
     p.space = extract_space_name(t.children[1])
     p.limit_expr = extract_limit_expr(t.children[1])
 
