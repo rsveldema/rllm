@@ -42,10 +42,9 @@ class VulkanCppStubVisitor(Visitor):
         elem = self._cpp_type_str(ty.elem_type) if getattr(ty, 'elem_type', None) else "float"
         is_flex = isinstance(ty, ast.FlexibleRowsMatrix)
         return (("flex_rows", elem) if is_flex else ("fixed_rows", elem))
-
     def _matrix_struct_name(self, key: tuple) -> str:
         tag, elem = key
-        prefix = "FRM" if tag == "flex_rows" else "SRM"
+        prefix = "FRM" if tag == "flex_rows" else "FRM"
         return f"{prefix}_{elem}"
 
     def _ensure_matrix_struct(self, ty: ast.Type) -> str:

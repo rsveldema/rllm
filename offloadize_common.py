@@ -368,11 +368,19 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "limit<PositionIndex::MAX>(")
     out = out.replace("enum_iterator<EmbeddingDimension>(", 
                       "limit<EmbeddingDimension::MAX>(")
+    out = out.replace("enum_iterator<HeadsIndex>(", 
+                      "limit<HeadsIndex::MAX>(")
 
     if out.find("::MAX") < 0:
         if out.find("_matrix") >= 0 or out.find("_vector") >= 0:
+            out = out.replace("HeadsIndex", "HeadsIndex::MAX")
             out = out.replace("PositionIndex", "PositionIndex::MAX")
             out = out.replace("EmbeddingDimension", "EmbeddingDimension::MAX")
+
+    # enum as a loose parameter type:
+    out = out.replace(" PositionIndex ", " int ")
+    out = out.replace(" auto ", " int ")
+
 
     for symbol, value in symbol_values.items():
         out = out.replace(symbol, value)
@@ -1151,7 +1159,13 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
         for line in ctx.offload_param_lines:
             #print(f"CHECK: {line}")
             line = hard_apply_symbol_values(line, symbol_values)
+            asg = line.find("=")
+            if asg > 0:
+                line = line[:asg] + ","
             lines.append(line)
+        if len(lines) > 0:
+            if lines[-1].endswith(","):
+                lines[-1] = lines[-1][:-2]
         lines.append("")
     
     # Write the body lines

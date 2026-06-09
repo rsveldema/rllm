@@ -4,6 +4,7 @@
 class Program:
     def __init__(self, header="", loop_vars=None, space_dim=0, grid_name="",
                  limit_expr=None, dispatch_size_expr=None,
+                 lower_bound_expr=None, upper_bound_expr=None,
                  params=None, body_stmts=None, workgroups=None):
         self.header = header
         # Loop variables from OFFLOAD_PARFOR_x_PARAM (e.g. ['i'] or ['i', 'j'])
@@ -14,6 +15,9 @@ class Program:
         self.grid_name = grid_name
         self.limit_expr = limit_expr
         self.dispatch_size_expr = dispatch_size_expr
+        # Triangular parfor bounds (lower and upper)
+        self.lower_bound_expr = lower_bound_expr
+        self.upper_bound_expr = upper_bound_expr
         self.params = params or []
         self.body_stmts = body_stmts or []
         self.workgroups = workgroups or []

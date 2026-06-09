@@ -51,7 +51,32 @@ class FixedSizeMatrix(Type):
         return visitor.visit_fixed_size_matrix(self)
 
 
+class FixedSizeLevelsRowsColsMatrix(Type):
+    """fixed_size_levels_rows_cols_matrix<elem_type, level_expr, row_size_expr, col_size_expr>&"""
+    def __init__(self, elem_type=None, level_expr=None, row_size_expr=None, col_size_expr=None):
+        self.elem_type = elem_type
+        self.level_expr = level_expr
+        self.row_size_expr = row_size_expr
+        self.col_size_expr = col_size_expr
+
+    def accept(self, visitor):
+        return visitor.visit_fixed_size_levels_rows_cols_matrix(self)
+
+
+class FlexibleRowsColsLevelsMatrix(Type):
+    """flexible_rows_cols_levels_matrix<elem_type, level_expr, row_size_expr, col_size_expr>&"""
+    def __init__(self, elem_type=None, level_expr=None, row_size_expr=None, col_size_expr=None):
+        self.elem_type = elem_type
+        self.level_expr = level_expr
+        self.row_size_expr = row_size_expr
+        self.col_size_expr = col_size_expr
+
+    def accept(self, visitor):
+        return visitor.visit_flexible_rows_cols_levels_matrix(self)
+
+
 __all__ = [
     'Type', 'Int', 'Float',
     'FixedSizeVector', 'FlexibleRowsMatrix', 'FixedSizeMatrix',
+    'FixedSizeLevelsRowsColsMatrix', 'FlexibleRowsColsLevelsMatrix',
 ]
