@@ -36,9 +36,6 @@ namespace
 
 int main(int argc, char** argv)
 {
-#if defined(USE_VULKAN_OFFLOAD)
-    setenv("RLLM_VULKAN_POOL_BYTES", "868435456", 0);
-#endif
     parallel::init_parallel();
     ::testing::InitGoogleTest(&argc, argv);
     ::testing::UnitTest::GetInstance()->listeners().Append(new CleanModelsListener());

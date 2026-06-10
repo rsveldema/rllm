@@ -1,0 +1,3 @@
+[submodule "kernel_compiler"]
+	path = kernel_compiler
+	url = https://github.com/rsveldema/kernel_compiler.git

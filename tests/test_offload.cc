@@ -32,9 +32,6 @@ constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ = 0u;
 
 int main(int argc, char** argv)
 {
-#if defined(USE_VULKAN_OFFLOAD)
-    setenv("RLLM_VULKAN_POOL_BYTES", "268435456", 0);
-#endif
     parallel::init_parallel();
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

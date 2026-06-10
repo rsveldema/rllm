@@ -6,7 +6,6 @@ echo "Configuring and building release before training..."
 sh ./build_release.sh
 
 TRAIN_DIR="${TRAIN_DIR:-training_data1}"
-export RLLM_VULKAN_POOL_BYTES="${RLLM_VULKAN_POOL_BYTES:-2147483648}"
 
 echo "Locating checkpoint to resume from..."
 
