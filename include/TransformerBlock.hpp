@@ -262,7 +262,11 @@ namespace rllm
 
         void forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void compute_attention_scores_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
+        void backward_accumulate_attention_dq_for_head_hi(BackwardWorkspace& ws, 
+                const ForwardWorkspace& fwd,
+                HeadsIndex hi);
         void apply_causal_softmax_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
+        void compute_attention_scores_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi);
         void compute_attention_values_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
         void backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);

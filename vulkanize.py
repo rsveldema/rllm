@@ -967,10 +967,16 @@ def _generate_kernel_compiler_artifacts(
 
     umbrella = kernel_root / "rllm_vulkan_kernels.hpp"
     include_lines = ["#pragma once"]
-    include_lines.extend(
-        f'#include "{header.relative_to(kernel_root).as_posix()}"'
+    all_dispatch_headers = {
+        header.relative_to(kernel_root).as_posix()
         for header in generated_headers
+    }
+    all_dispatch_headers.update(
+        path.relative_to(kernel_root).as_posix()
+        for path in kernel_root.rglob("*.hpp")
+        if path.name != umbrella.name
     )
+    include_lines.extend(f'#include "{header}"' for header in sorted(all_dispatch_headers))
     umbrella.write_text("\n".join(include_lines) + "\n", encoding="utf-8")
     generated_headers.append(umbrella)
     return generated_glsl, generated_headers, generated_spirv

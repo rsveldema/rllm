@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 
 #include <vulkan_session.hpp>
 
@@ -12,6 +13,7 @@ namespace rllm::vulkan_runtime
     void set_session(VulkanSession& session);
     VulkanSession& session();
     VulkanComputeContext& context();
+    std::recursive_mutex& mutex();
 
     template <typename T>
     VBaseDeviceBuffer& device_buffer(T& value)

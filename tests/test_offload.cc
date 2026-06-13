@@ -219,14 +219,9 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 4;
     constexpr size_t COLS = 9;
-    enum class VisitIndex : size_t
-    {
-        START = 0,
-        MAX = ROWS * COLS
-    };
-    fixed_size_vector<int, VisitIndex> visits;
-    visits.set_size(VisitIndex::MAX);
+    fixed_size_vector<int, PositionIndex> visits;
     // END_OFFLOAD_PARAMETERS
+    visits.set_size(static_cast<PositionIndex>(ROWS * COLS));
 
     for (size_t idx = 0; idx < static_cast<size_t>(visits.size()); ++idx)
         visits[idx] = 0;
@@ -290,8 +285,8 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamWritesFixedSizeFloatVector)
     // OFFLOAD_PARAMETERS(values,N)
     constexpr size_t N = 21;
     fixed_size_vector<rlmm_float, PositionIndex> values;
-    values.set_size(static_cast<PositionIndex>(N));
     // END_OFFLOAD_PARAMETERS
+    values.set_size(static_cast<PositionIndex>(N));
     fill(values, 0.0f, static_cast<PositionIndex>(N));
 
     OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(static_cast<PositionIndex>(N)), (values))
@@ -499,8 +494,9 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
 {
     // OFFLOAD_PARAMETERS(values)
-    flexible_rows_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values(static_cast<MultiTokenPredictionIndex>(3));
+    flexible_rows_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
+    values.set_rows(static_cast<MultiTokenPredictionIndex>(3));
     values.zero();
 
     const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>(
@@ -529,8 +525,9 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
 {
     // OFFLOAD_PARAMETERS(values)
-    flexible_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values(HeadsIndex::MAX);
+    flexible_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
+    values.set_cols(HeadsIndex::MAX);
     values.zero();
 
     const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>();
@@ -557,8 +554,9 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
 {
     // OFFLOAD_PARAMETERS(values)
-    flexible_rows_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values(static_cast<MultiTokenPredictionIndex>(3), HeadsIndex::MAX);
+    flexible_rows_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
+    values.set_size(static_cast<MultiTokenPredictionIndex>(3), HeadsIndex::MAX);
     values.zero();
 
     const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>(

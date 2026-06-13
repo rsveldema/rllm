@@ -354,6 +354,11 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace(" PositionIndex ", " int ")
     out = out.replace("EmbeddingDimension ", " int ")
 
+    # Kernel dumps are parsed by kernel_compiler, not a C++ compiler. Strip
+    # C++ casts and normalize C++-only scalar spellings before parsing.
+    out = _strip_static_casts(out)
+
+    out = re.sub(r"\bsize_t\b", "int", out)
     out = out.replace(" auto ", " int ")
     out = out.replace("rlmm_float_small", " float16 ")
     out = out.replace("rlmm_float", " float ")
@@ -373,14 +378,44 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     for symbol, value in symbol_values.items():
         out = out.replace(symbol, value)
 
-    k = out.find("static_cast")
-    if k >= 0:
-        p = out.find("(", k)
-        w = out.find(")", p)
-        out = out[:k] + out[p:w] + out[w:]
-
     out = out.replace("[[maybe_unused]]", "")
     return out
+
+
+def _strip_static_casts(text: str) -> str:
+    needle = "static_cast"
+    out = text
+    while True:
+        start = out.find(needle)
+        if start < 0:
+            return out
+
+        lt = out.find("<", start + len(needle))
+        if lt < 0 or out[start + len(needle):lt].strip():
+            return out
+        gt = out.find(">", lt + 1)
+        if gt < 0:
+            return out
+        lparen = out.find("(", gt + 1)
+        if lparen < 0 or out[gt + 1:lparen].strip():
+            return out
+
+        depth = 0
+        end = None
+        for idx in range(lparen, len(out)):
+            ch = out[idx]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    end = idx
+                    break
+        if end is None:
+            return out
+
+        inner = out[lparen + 1:end]
+        out = out[:start] + inner + out[end + 1:]
 
 
 def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
