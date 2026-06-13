@@ -84,6 +84,7 @@ add_executable(rllm src/main.cc
   include/enum_iterator.hpp
   include/fixed_size_vector.hpp
   include/fixed_size_matrix.hpp
+  include/flexible_size_matrix.hpp
   include/Statistics.hpp
   include/fastfork/circular_queue.hpp
   include/Prompter.hpp)

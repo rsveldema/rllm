@@ -133,7 +133,7 @@ namespace rllm
         // ENDPARFOR_SHARED_VARIABLES
 
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, temp_values))
-            temp_values[TempStorage::ZERO] = atomicMax(temp_values[TempStorage::ZERO], inputs[i]);
+            atomicMax(temp_values[TempStorage::ZERO], inputs[i]);
         ENDFOR
     }
 

@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <device_pointer.hpp>
+#include <fixed_size_obj_vector.hpp>
 #include <logging.hpp>
 #include <parallel.hpp>
 #include <vulkan/vulkan.h>
@@ -36,10 +37,38 @@ namespace rllm::vulkan
 {
     template <typename T>
     inline constexpr bool is_scalar_kernel_arg_v = (std::is_enum_v<std::remove_cv_t<std::remove_reference_t<T>>> || std::is_integral_v<std::remove_cv_t<std::remove_reference_t<T>>> || std::is_floating_point_v<std::remove_cv_t<std::remove_reference_t<T>>>);
+
+    template <typename T>
+    struct is_fixed_size_obj_vector : std::false_type
+    {};
+
+    template <typename T, typename LengthType>
+    struct is_fixed_size_obj_vector<fixed_size_obj_vector<T, LengthType>> : std::true_type
+    {};
+
+    template <typename T>
+    inline constexpr bool is_fixed_size_obj_vector_v = is_fixed_size_obj_vector<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+
+    template <typename T>
+    struct kernel_buffer_binding_count
+        : std::integral_constant<size_t, is_scalar_kernel_arg_v<T> ? 0 : 1>
+    {};
+
+    template <typename T, typename LengthType>
+    struct kernel_buffer_binding_count<fixed_size_obj_vector<T, LengthType>>
+        : std::integral_constant<size_t, static_cast<size_t>(LengthType::MAX)>
+    {};
+
+    template <typename T>
+    inline constexpr size_t kernel_buffer_binding_count_v =
+        kernel_buffer_binding_count<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+
     template <typename TupleType, size_t I>
     struct count_non_scalars_before
     {
-        static constexpr size_t value = (is_scalar_kernel_arg_v<std::remove_cv_t<std::tuple_element_t<I-1, TupleType>>> ? 0 : 1) + count_non_scalars_before<TupleType, I-1>::value;
+        static constexpr size_t value =
+            kernel_buffer_binding_count_v<std::tuple_element_t<I - 1, TupleType>> +
+            count_non_scalars_before<TupleType, I - 1>::value;
     };
     template <typename TupleType>
     struct count_non_scalars_before<TupleType, 0>
@@ -91,14 +120,27 @@ namespace rllm::vulkan
         if constexpr (!is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<ArgType>>>)
         {
             auto& ref = std::get<I>(t);
-            ::parallel::set_vulkan_dispatch_params(pn[I], pn[I]);
-            VkBuffer buf;
-            if constexpr (requires(const ArgType& x) { x.raw_offload_data(); })
-                buf = ref.raw_offload_data().get();
+            constexpr size_t base = count_non_scalars_before<std::decay_t<decltype(t)>, I>::value;
+            if constexpr (is_fixed_size_obj_vector_v<ArgType>)
+            {
+                for (size_t element = 0; element < std::remove_cv_t<std::remove_reference_t<ArgType>>::CAPACITY; ++element)
+                {
+                    ::parallel::set_vulkan_dispatch_params(pn[I], pn[I]);
+                    binfos[base + element].buffer = ref[element].raw_offload_data().get();
+                    ::parallel::clear_vulkan_dispatch_params();
+                }
+            }
             else
-                buf = ref.offload_data().get();
-            binfos[count_non_scalars_before<std::decay_t<decltype(t)>, I>::value].buffer = buf;
-            ::parallel::clear_vulkan_dispatch_params();
+            {
+                ::parallel::set_vulkan_dispatch_params(pn[I], pn[I]);
+                VkBuffer buf;
+                if constexpr (requires(const ArgType& x) { x.raw_offload_data(); })
+                    buf = ref.raw_offload_data().get();
+                else
+                    buf = ref.offload_data().get();
+                binfos[base].buffer = buf;
+                ::parallel::clear_vulkan_dispatch_params();
+            }
         }
     }
 
@@ -343,7 +385,7 @@ namespace rllm::vulkan
     template <typename... Args>
     struct ComputeKernel : public ComputeKernelRuntime
     {
-        constexpr static size_t k_buffer_arg_count = (0 + ... + (is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<Args>>> ? 0 : 1));
+        constexpr static size_t k_buffer_arg_count = (0 + ... + kernel_buffer_binding_count_v<Args>);
         constexpr static size_t k_constant_arg_count = (0 + ... + (is_scalar_kernel_arg_v<std::remove_cv_t<std::remove_reference_t<Args>>> ? 1 : 0));
         ComputeKernel(VulkanMemorySpace& s, std::string_view n, std::filesystem::path p)
             : ComputeKernelRuntime(s, n, std::move(p), k_buffer_arg_count, k_constant_arg_count)

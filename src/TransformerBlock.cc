@@ -214,12 +214,14 @@ namespace rllm
     {
         static_assert(static_cast<size_t>(HeadDimension::MAX) == 128);
 
-        ws.attn_w.set_size(HeadsIndex::MAX, seq_len, seq_len);
+        ws.attn_w.set_size(HeadsIndex::MAX);
+        for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            ws.attn_w[hi].set_size(seq_len, seq_len);
 
         const auto score_grid = enum_iterator3D<HeadsIndex, PositionIndex, PositionIndex>(HeadsIndex::MAX, seq_len, seq_len);
 
         // OFFLOAD_PARAMETERS(attn_w, Q, K)
-        flexible_rows_cols_levels_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& attn_w = ws.attn_w;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& attn_w = ws.attn_w;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = ws.Q;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = ws.K;
         // END_OFFLOAD_PARAMETERS
@@ -233,7 +235,7 @@ namespace rllm
             for (int d = h_start; d < h_end; ++d)
                 dot += Q[i, d] * K[j, d];
             const float score = dot * (1.0f / sqrt(128.0f));
-            attn_w[hi, i, j] = score;
+            attn_w[hi][i, j] = score;
         }
         ENDFOR
     }
@@ -243,7 +245,7 @@ namespace rllm
         const auto softmax_grid = enum_iterator2D<HeadsIndex, PositionIndex>(HeadsIndex::MAX, seq_len);
 
         // OFFLOAD_PARAMETERS(attn_w, active_seq_len)
-        flexible_rows_cols_levels_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& attn_w = ws.attn_w;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& attn_w = ws.attn_w;
         int active_seq_len;
         // END_OFFLOAD_PARAMETERS
 
@@ -251,20 +253,20 @@ namespace rllm
 
         OFFLOAD_PARFOR_2D_PARAM(hi, i, softmax_grid, (attn_w, active_seq_len))
         {
-            rlmm_float max_val = attn_w[hi, i, 0];
+            rlmm_float max_val = attn_w[hi][i, 0];
             for (int j = 1; j <= static_cast<int>(i); ++j)
-                max_val = math::max(max_val, attn_w[hi, i, j]);
+                max_val = math::max(max_val, attn_w[hi][i, j]);
             rlmm_float sum_exp = 0.f;
             for (int j = 0; j <= static_cast<int>(i); ++j)
             {
-                attn_w[hi, i, j] = static_cast<rlmm_float>(std::exp(attn_w[hi, i, j] - max_val));
-                sum_exp += attn_w[hi, i, j];
+                attn_w[hi][i, j] = static_cast<rlmm_float>(std::exp(attn_w[hi][i, j] - max_val));
+                sum_exp += attn_w[hi][i, j];
             }
             const rlmm_float inv = 1.0f / sum_exp;
             for (int j = 0; j <= static_cast<int>(i); ++j)
-                attn_w[hi, i, j] *= static_cast<rlmm_float>(inv);
+                attn_w[hi][i, j] *= static_cast<rlmm_float>(inv);
             for (int j = static_cast<int>(i) + 1; j < active_seq_len; ++j)
-                attn_w[hi, i, j] = static_cast<rlmm_float>(0.f);
+                attn_w[hi][i, j] = static_cast<rlmm_float>(0.f);
         }
         ENDFOR
     }
@@ -274,7 +276,7 @@ namespace rllm
         static_assert(static_cast<size_t>(HeadDimension::MAX) == 128);
 
         // OFFLOAD_PARAMETERS(attn_w, V, attn_concat, active_seq_len, attn_w_rows, attn_w_cols)
-        flexible_rows_cols_levels_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& attn_w = ws.attn_w;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& attn_w = ws.attn_w;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V = ws.V;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& attn_concat = ws.attn_concat;
         int active_seq_len;
@@ -288,7 +290,7 @@ namespace rllm
             const int hi_int = static_cast<int>(hi);
             const int h_start = hi_int * 128;
             const int h_end = (hi_int + 1) * 128;
-            const float w = attn_w[hi, i, j];
+            const float w = attn_w[hi][i, j];
             for (int d = h_start; d < h_end; ++d)
                 atomicAdd((attn_concat[i, d]), (w * V[j, d]));
         }
@@ -297,7 +299,9 @@ namespace rllm
 
     void TransformerBlock::forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len)
     {
-        ws.attn_w.set_size(HeadsIndex::MAX, seq_len, seq_len);
+        ws.attn_w.set_size(HeadsIndex::MAX);
+        for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            ws.attn_w[hi].set_size(seq_len, seq_len);
 
         compute_attention_scores_for_heads(ws, seq_len);
         apply_causal_softmax_for_heads(ws, seq_len);
@@ -396,7 +400,7 @@ namespace rllm
 
         // OFFLOAD_PARAMETERS(d_V, attn_w, d_attn_concat, seq_len, attn_w_rows, attn_w_cols)
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_V = ws.d_V;
-        const flexible_rows_cols_levels_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& attn_w = fwd.attn_w;
+        const fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& attn_w = fwd.attn_w;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws.d_attn_concat;
         const PositionIndex seq_len = fwd.seq_len;
         // END_OFFLOAD_PARAMETERS
@@ -407,7 +411,7 @@ namespace rllm
             const int hi_int = static_cast<int>(hi);
             const int h_start = hi_int * 128;
             const int h_end = (hi_int + 1) * 128;
-            const float w = attn_w[hi, i, j];
+            const float w = attn_w[hi][i, j];
             for (int d = h_start; d < h_end; ++d)
                 atomicAdd((d_V[j, d]), (w * d_attn_concat[i, d]));
         }
@@ -419,7 +423,7 @@ namespace rllm
         static_assert(static_cast<size_t>(HeadDimension::MAX) == 128);
 
         // OFFLOAD_PARAMETERS(d_scores, d_attn_concat, V, seq_len, d_scores_rows, d_scores_cols)
-        fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& d_scores = ws.d_scores;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& d_scores = ws.d_scores;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws.d_attn_concat;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& V = fwd.V;
         const PositionIndex seq_len = fwd.seq_len;
@@ -437,7 +441,7 @@ namespace rllm
             float dot = 0.f;
             for (int d = h_start; d < h_end; ++d)
                 dot += d_attn_concat[i, d] * V[j, d];
-            d_scores[hi, i, j] = dot;
+            d_scores[hi][i, j] = dot;
         }
         ENDFOR
     }
@@ -445,22 +449,22 @@ namespace rllm
     void TransformerBlock::backward_softmax_attention_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
     {
         // OFFLOAD_PARAMETERS(d_scores, d_raw, attn_w, seq_len, d_scores_rows, d_scores_cols, d_raw_rows, d_raw_cols, attn_w_rows, attn_w_cols)
-        fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& d_scores = ws.d_scores;
-        fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& d_raw = ws.d_raw;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& d_scores = ws.d_scores;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& d_raw = ws.d_raw;
         const PositionIndex seq_len = fwd.seq_len;
         [[maybe_unused]] const int d_scores_rows = static_cast<int>(seq_len);
         [[maybe_unused]] const int d_scores_cols = static_cast<int>(seq_len);
         [[maybe_unused]] const int d_raw_rows = static_cast<int>(seq_len);
         [[maybe_unused]] const int d_raw_cols = static_cast<int>(seq_len);
-        const flexible_rows_cols_levels_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& attn_w = fwd.attn_w;
+        const fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& attn_w = fwd.attn_w;
         // END_OFFLOAD_PARAMETERS
 
         OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(hi, i, j, static_cast<HeadsIndex>(HeadsIndex::MAX), seq_len, (d_scores, d_raw, attn_w, seq_len, d_scores_rows, d_scores_cols, d_raw_rows, d_raw_cols))
         {
             float row_dot = 0.f;
             for (const auto k : enum_iterator<PositionIndex>(inc(i)))
-                row_dot += d_scores[hi, i, k] * attn_w[hi, i, k];
-            d_raw[hi, i, j] = attn_w[hi, i, j] * (d_scores[hi, i, j] - row_dot);
+                row_dot += d_scores[hi][i, k] * attn_w[hi][i, k];
+            d_raw[hi][i, j] = attn_w[hi][i, j] * (d_scores[hi][i, j] - row_dot);
         }
         ENDFOR
     }
@@ -473,7 +477,7 @@ namespace rllm
 
         // OFFLOAD_PARAMETERS(d_Q, d_raw, K, head_scale, seq_len, d_raw_rows, d_raw_cols)
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_Q = ws.d_Q;
-        fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& d_raw = ws.d_raw;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& d_raw = ws.d_raw;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = fwd.K;
         const float head_scale = scale;
         const PositionIndex seq_len = fwd.seq_len;
@@ -489,7 +493,7 @@ namespace rllm
             const int d = hi_int * static_cast<int>(HeadDimension::MAX) + int(d_head);
             float sum_q = 0.f;
             for (const auto j : enum_iterator<PositionIndex>(inc(i)))
-                sum_q += d_raw[hi, i, j] * head_scale * K[j, d];
+                sum_q += d_raw[hi][i, j] * head_scale * K[j, d];
             d_Q[i, d] = sum_q;
         }
         ENDFOR
@@ -503,7 +507,7 @@ namespace rllm
 
         // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, head_scale, seq_len, d_raw_h_rows, d_raw_h_cols)
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K = ws.d_K;
-        const fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex>& d_raw_h = ws.d_raw;
+        const fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& d_raw_h = ws.d_raw;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
         float head_scale = scale;
         PositionIndex seq_len = fwd.seq_len;
@@ -519,7 +523,7 @@ namespace rllm
             const float hs = head_scale;
             float sum_k = 0.f;
             for (const auto i : enum_iterator<PositionIndex>(j, seq_len))
-                sum_k += d_raw_h[hi, i, j] * hs * Q[i, d];
+                sum_k += d_raw_h[hi][i, j] * hs * Q[i, d];
             d_K[j, d] = sum_k;
         }
         ENDFOR

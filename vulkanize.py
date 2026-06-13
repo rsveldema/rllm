@@ -123,6 +123,7 @@ class MatrixViewSpec:
     levels: int | None = None
     dynamic_rows_name: str | None = None
     dynamic_cols_name: str | None = None
+    separate_level_bindings: bool = False
 
 
 @dataclass
@@ -146,10 +147,13 @@ class VulkanConfig:
 
 
 _MATRIX_TYPE_RE = re.compile(
-    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:fixed_size_matrix|flexible_rows_matrix|flexible_cols_matrix|flexible_rows_cols_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:fixed_size_matrix|flexible_size_matrix|flexible_rows_matrix|flexible_cols_matrix|flexible_rows_cols_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _MATRIX_3D_TYPE_RE = re.compile(
     r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:flexible_rows_cols_levels_matrix|fixed_size_levels_rows_cols_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<levels>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
+)
+_OBJ_VECTOR_MATRIX_RE = re.compile(
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*fixed_size_obj_vector\s*<\s*(?:[A-Za-z_]\w*::)*(?:fixed_size_matrix|flexible_size_matrix)\s*<\s*(?P<scalar>[^,]+)\s*,\s*(?P<rows>[^,]+)\s*,\s*(?P<cols>[^>]+)\s*>\s*,\s*(?P<levels>[^>]+)\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _STD_VECTOR_ATOMIC_INT_RE = re.compile(
     r"^(?P<const>const\s+)?std::vector\s*<\s*std::atomic\s*<\s*int\s*>\s*>\s*(?P<ref>[&*])?\s*$"
@@ -257,6 +261,25 @@ def _map_cpp_extra_param_to_vulkan(
                 levels=levels_max,
             ), None, None
 
+    obj_vector_matrix_match = _OBJ_VECTOR_MATRIX_RE.match(t)
+    if obj_vector_matrix_match:
+        glsl_scalar = _map_cpp_buffer_scalar_to_glsl(obj_vector_matrix_match.group("scalar"))
+        levels_max = _resolve_enum_max(obj_vector_matrix_match.group("levels"), symbol_values)
+        rows_max = _resolve_enum_max(obj_vector_matrix_match.group("rows"), symbol_values)
+        cols_max = _resolve_enum_max(obj_vector_matrix_match.group("cols"), symbol_values)
+        if glsl_scalar is not None and levels_max is not None and rows_max is not None and cols_max is not None:
+            is_const = obj_vector_matrix_match.group("const") is not None
+            return "", "", MatrixViewSpec(
+                name=name,
+                glsl_scalar=glsl_scalar,
+                rows=rows_max,
+                cols=cols_max,
+                is_const=is_const,
+                flat_len=rows_max * cols_max,
+                levels=levels_max,
+                separate_level_bindings=True,
+            ), None, None
+
     matrix_match = _MATRIX_TYPE_RE.match(t)
     if matrix_match:
         glsl_scalar = _map_cpp_buffer_scalar_to_glsl(matrix_match.group("scalar"))
@@ -349,7 +372,72 @@ def _map_cpp_extra_param_to_vulkan(
 
 def _rewrite_matrix_view_indexing(line: str, specs: dict[str, MatrixViewSpec]) -> str:
     out = line
+
+    def rewrite_reads(text: str) -> str:
+        rewritten = text
+        for read_name, read_spec in specs.items():
+            if read_spec.levels is not None and read_spec.separate_level_bindings:
+                read_pattern = re.compile(
+                    rf"\b{re.escape(read_name)}\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]"
+                )
+                rewritten = read_pattern.sub(
+                    lambda match: (
+                        f"rllm_load_{read_name}("
+                        f"{match.group(1).strip()}, {match.group(2).strip()}, {match.group(3).strip()})"
+                    ),
+                    rewritten,
+                )
+            elif read_spec.levels is not None:
+                read_pattern = re.compile(
+                    rf"\b{re.escape(read_name)}\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]"
+                )
+
+                def repl3(match: re.Match[str]) -> str:
+                    level = match.group(1).strip()
+                    row = match.group(2).strip()
+                    col = match.group(3).strip()
+                    row_stride = read_spec.dynamic_rows_name or str(read_spec.rows)
+                    col_stride = read_spec.dynamic_cols_name or str(read_spec.cols)
+                    return f"{read_name}[((({level}) * {row_stride}) + ({row})) * {col_stride} + ({col})]"
+
+                rewritten = read_pattern.sub(repl3, rewritten)
+            else:
+                read_pattern = re.compile(
+                    rf"\b{re.escape(read_name)}\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]"
+                )
+                rewritten = read_pattern.sub(
+                    lambda match: (
+                        f"{read_name}[(({match.group(1).strip()}) * {read_spec.cols}) + ({match.group(2).strip()})]"
+                    ),
+                    rewritten,
+                )
+        return rewritten
+
     for name, spec in specs.items():
+        if spec.levels is not None and spec.separate_level_bindings:
+            indexed = (
+                rf"\b{re.escape(name)}\s*\[\s*(?P<level>[^\[\]]+?)\s*\]\s*"
+                rf"\[\s*(?P<row>[^\[\]]+?)\s*\]\s*\[\s*(?P<col>[^\[\]]+?)\s*\]"
+            )
+            assignment = re.compile(
+                rf"^(?P<prefix>.*?)({indexed})\s*(?P<op>[+\-*/]?=)\s*(?P<rhs>.+);\s*$"
+            )
+            match = assignment.match(line)
+            if match is not None:
+                level = match.group("level").strip()
+                row = match.group("row").strip()
+                col = match.group("col").strip()
+                rhs = rewrite_reads(match.group("rhs").strip())
+                op = match.group("op")
+                if op != "=":
+                    rhs = f"rllm_load_{name}({level}, {row}, {col}) {op[0]} ({rhs})"
+                return f"{match.group('prefix')}rllm_store_{name}({level}, {row}, {col}, {rhs});"
+
+    for name, spec in specs.items():
+        if spec.levels is not None and spec.separate_level_bindings:
+            out = rewrite_reads(out)
+            continue
+
         if spec.levels is not None:
             pattern = re.compile(
                 rf"\b{re.escape(name)}\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]\s*\[\s*([^\[\]]+?)\s*\]"
@@ -536,6 +624,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
         typed_params.append(f"int {var}")
     extra_setup_decls: list[str] = []
     ssbo_decls: list[str] = []
+    matrix_helper_decls: list[str] = []
     ssbo_binding = 0
     for name in extra_param_names:
         if spec.extra_param_types and name in spec.extra_param_types:
@@ -546,13 +635,66 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
             )
             if matrix_view_spec is not None:
                 matrix_view_specs[name] = matrix_view_spec
-                readonly = "readonly " if matrix_view_spec.is_const else ""
-                block_name = f"RllmBuffer_{name}"
-                array_extent = "" if matrix_view_spec.flat_len >= (1 << 31) else str(matrix_view_spec.flat_len)
-                ssbo_decls.append(
-                    f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ {matrix_view_spec.glsl_scalar} {name}[{array_extent}]; }};"
-                )
-                ssbo_binding += 1
+                if matrix_view_spec.separate_level_bindings:
+                    assert matrix_view_spec.levels is not None
+                    readonly = "readonly " if matrix_view_spec.is_const else ""
+                    array_extent = "" if matrix_view_spec.flat_len >= (1 << 31) else str(matrix_view_spec.flat_len)
+                    for level in range(matrix_view_spec.levels):
+                        level_name = f"{name}_{level}"
+                        block_name = f"RllmBuffer_{level_name}"
+                        ssbo_decls.append(
+                            f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ {matrix_view_spec.glsl_scalar} {level_name}[{array_extent}]; }};"
+                        )
+                        ssbo_binding += 1
+
+                    dynamic_cols = (
+                        f"rllm_push.{name}_cols"
+                        if f"{name}_cols" in extra_param_names
+                        else "rllm_push.active_seq_len"
+                        if "active_seq_len" in extra_param_names
+                        else "rllm_push.seq_len"
+                        if "seq_len" in extra_param_names
+                        else "rllm_push.rllm_bound_y"
+                    )
+                    index_expr = f"(row * {dynamic_cols}) + col"
+                    load_cases = "\n".join(
+                        f"        case {level}: return {name}_{level}[idx];" for level in range(matrix_view_spec.levels)
+                    )
+                    matrix_helper_decls.append(
+                        f"{matrix_view_spec.glsl_scalar} rllm_load_{name}(int level, int row, int col)\n"
+                        "{\n"
+                        f"    int idx = {index_expr};\n"
+                        "    switch (level)\n"
+                        "    {\n"
+                        f"{load_cases}\n"
+                        "        default: return 0;\n"
+                        "    }\n"
+                        "}"
+                    )
+                    if not matrix_view_spec.is_const:
+                        store_cases = "\n".join(
+                            f"        case {level}: {name}_{level}[idx] = value; return;"
+                            for level in range(matrix_view_spec.levels)
+                        )
+                        matrix_helper_decls.append(
+                            f"void rllm_store_{name}(int level, int row, int col, {matrix_view_spec.glsl_scalar} value)\n"
+                            "{\n"
+                            f"    int idx = {index_expr};\n"
+                            "    switch (level)\n"
+                            "    {\n"
+                            f"{store_cases}\n"
+                            "        default: return;\n"
+                            "    }\n"
+                            "}"
+                        )
+                else:
+                    readonly = "readonly " if matrix_view_spec.is_const else ""
+                    block_name = f"RllmBuffer_{name}"
+                    array_extent = "" if matrix_view_spec.flat_len >= (1 << 31) else str(matrix_view_spec.flat_len)
+                    ssbo_decls.append(
+                        f"layout(std430, set = 0, binding = {ssbo_binding}) {readonly}buffer {block_name} {{ {matrix_view_spec.glsl_scalar} {name}[{array_extent}]; }};"
+                    )
+                    ssbo_binding += 1
             elif buffer_view_spec is not None:
                 buffer_view_specs[name] = buffer_view_spec
                 readonly = "readonly " if buffer_view_spec.is_const else ""
@@ -645,6 +787,9 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
     ssbo_block = "\n".join(ssbo_decls)
     if ssbo_block:
         ssbo_block = ssbo_block + "\n\n"
+    matrix_helper_block = "\n\n".join(matrix_helper_decls)
+    if matrix_helper_block:
+        matrix_helper_block = matrix_helper_block + "\n\n"
     
     # Generate shared variable declarations. GLSL requires workgroup storage to
     # live at global scope, not inside function scope.
@@ -688,6 +833,7 @@ def _render_kernel_stub(spec: VulkanKernelSpec, symbol_values: dict[str, str], c
         f"{const_block}"
         f"{push_constant_block}"
         f"{ssbo_block}"
+        f"{matrix_helper_block}"
         f"{shared_block}"
         f"void rllm_kernel_body({param_list})\n"
         "{\n"

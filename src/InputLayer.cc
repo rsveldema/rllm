@@ -69,6 +69,7 @@ namespace rllm
         // Use per-instance state (not static) to avoid data race with PARFOR_2D.
         // Previously: static local variables shared across threads → heap corruption.
         m_updated_tokens.zero();
+        m_conflicts.clear();
 
         size_t duplicate_count = 0;
         for (const auto pos : enum_iterator<PositionIndex>(input.size()))
@@ -79,8 +80,7 @@ namespace rllm
             if (m_updated_tokens[tok] > 1)
             {
                 assert(duplicate_count < static_cast<size_t>(ConflictIndex::MAX));
-                m_conflicts[duplicate_count].tok = tok;
-                m_conflicts[duplicate_count].pos = pos;
+                m_conflicts.push_back(ConflictingToken{.tok = tok, .pos = pos});
                 duplicate_count++;
             }
         }

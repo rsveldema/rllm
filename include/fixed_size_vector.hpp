@@ -24,48 +24,39 @@ namespace rllm
         static constexpr size_t CAPACITY = static_cast<size_t>(LengthType::MAX);
 
         fixed_size_vector()
-            : offloadable_data<T>(1)
-            , m_capacity(1)
+            : offloadable_data<T>(CAPACITY)
         {}
 
         fixed_size_vector(const fixed_size_vector& other)
-            : offloadable_data<T>(std::max<size_t>(1, static_cast<size_t>(other.len)))
+            : offloadable_data<T>(CAPACITY)
             , len(other.len)
-            , m_capacity(other.m_data.size())
         {
             this->m_data = other.m_data;
-            m_capacity = this->m_data.size();
         }
 
         fixed_size_vector& operator=(const fixed_size_vector& other)
         {
             if (this != &other)
             {
-                ensure_capacity(static_cast<size_t>(other.len));
                 this->m_data = other.m_data;
                 len = other.len;
-                m_capacity = this->m_data.size();
             }
             return *this;
         }
 
         fixed_size_vector(fixed_size_vector&& other)
-            : offloadable_data<T>(std::max<size_t>(1, static_cast<size_t>(other.len)))
+            : offloadable_data<T>(CAPACITY)
             , len(other.len)
-            , m_capacity(other.m_data.size())
         {
             this->m_data = other.m_data;
-            m_capacity = this->m_data.size();
         }
 
         fixed_size_vector& operator=(fixed_size_vector&& other)
         {
             if (this != &other)
             {
-                ensure_capacity(static_cast<size_t>(other.len));
                 this->m_data = other.m_data;
                 len = other.len;
-                m_capacity = this->m_data.size();
             }
             return *this;
         }
@@ -75,7 +66,6 @@ namespace rllm
         void set_size(LengthType new_size)
         {
             assert(new_size <= LengthType::MAX);
-            ensure_capacity(static_cast<size_t>(new_size));
             len = new_size;
         }
 
@@ -132,7 +122,6 @@ namespace rllm
         void push_back(T value)
         {
             assert(len < LengthType::MAX);
-            ensure_capacity(static_cast<size_t>(len) + 1);
             this->m_data.get()[static_cast<size_t>(len)] = value;
             len = static_cast<LengthType>(static_cast<size_t>(len) + 1);
         }
@@ -166,6 +155,7 @@ namespace rllm
 
         T& operator[](LengthType index)
         {
+            assert(index < LengthType::MAX);
             return this->m_data.get()[static_cast<size_t>(index)];
         }
 
@@ -177,6 +167,7 @@ namespace rllm
 
         const T& operator[](LengthType index) const
         {
+            assert(index < LengthType::MAX);
             return this->m_data.get()[static_cast<size_t>(index)];
         }
 
@@ -188,6 +179,7 @@ namespace rllm
 
         T get_offload_synced(LengthType index) const
         {
+            assert(index < LengthType::MAX);
             return this->m_data.get_offload_synced(static_cast<size_t>(index));
         }
 
@@ -197,20 +189,6 @@ namespace rllm
         }
 
       private:
-        void ensure_capacity(size_t requested)
-        {
-            requested = std::max<size_t>(1, requested);
-            if (requested <= m_capacity)
-                return;
-
-            size_t new_capacity = m_capacity;
-            while (new_capacity < requested)
-                new_capacity = std::min(CAPACITY, new_capacity * 2);
-            this->m_data.resize(new_capacity);
-            m_capacity = new_capacity;
-        }
-
         LengthType len = LengthType::START;
-        size_t m_capacity;
     };
 } // namespace rllm

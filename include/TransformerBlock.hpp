@@ -2,6 +2,8 @@
 
 #include <LayerPrimitives.hpp>
 #include <fixed_size_levels_rows_cols_matrix.hpp>
+#include <fixed_size_obj_vector.hpp>
+#include <flexible_size_matrix.hpp>
 #include <flexible_rows_matrix.hpp>
 #include <flexible_rows_cols_levels_matrix.hpp>
 #include <memory>
@@ -22,7 +24,7 @@ namespace rllm
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_norm_attn;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> Q, K, V;
         // Per-head softmax weight matrices; only the [H x T x T] block is live.
-        flexible_rows_cols_levels_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex> attn_w;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> attn_w;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> attn_concat;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_mid;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_norm_ff;
@@ -50,7 +52,11 @@ namespace rllm
             , ffn_act(seq)
             , attn_proj(seq)
             , ffn_out(seq)
-        {}
+        {
+            attn_w.set_size(HeadsIndex::MAX);
+            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+                attn_w[hi].set_size(seq, seq);
+        }
 
         void reset(PositionIndex seq)
         {
@@ -68,6 +74,9 @@ namespace rllm
             ffn_act.set_rows(seq);
             attn_proj.set_rows(seq);
             ffn_out.set_rows(seq);
+            attn_w.set_size(HeadsIndex::MAX);
+            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+                attn_w[hi].set_size(seq, seq);
             rms_norm_row_sums.zero();
             rms_norm_inv_rms.zero();
         }
@@ -99,8 +108,8 @@ namespace rllm
         fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_v;
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
 
-        fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex> d_scores;
-        fixed_size_levels_rows_cols_matrix<rlmm_float, HeadsIndex, PositionIndex, PositionIndex> d_raw;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
+        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
 
         explicit BackwardWorkspace(PositionIndex seq)
             : d_h_mid(seq)
@@ -113,7 +122,15 @@ namespace rllm
             , d_K(seq)
             , d_V(seq)
             , d_h_norm_attn(seq)
-        {}
+        {
+            d_scores.set_size(HeadsIndex::MAX);
+            d_raw.set_size(HeadsIndex::MAX);
+            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            {
+                d_scores[hi].set_size(seq, seq);
+                d_raw[hi].set_size(seq, seq);
+            }
+        }
 
         void reset(PositionIndex seq)
         {
@@ -127,8 +144,13 @@ namespace rllm
             d_K.set_rows(seq);
             d_V.set_rows(seq);
             d_h_norm_attn.set_rows(seq);
-            d_scores.set_size(seq, seq);
-            d_raw.set_size(seq, seq);
+            d_scores.set_size(HeadsIndex::MAX);
+            d_raw.set_size(HeadsIndex::MAX);
+            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            {
+                d_scores[hi].set_size(seq, seq);
+                d_raw[hi].set_size(seq, seq);
+            }
 
             dW_down.zero();
             d_h_norm_ff.zero();
@@ -142,7 +164,8 @@ namespace rllm
             dW_k.zero();
             dW_v.zero();
             d_h_norm_attn.zero();
-            d_raw.zero();
+            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+                d_raw[hi].zero();
         }
     };
 
