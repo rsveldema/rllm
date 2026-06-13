@@ -15,7 +15,7 @@ Backend/offload dependencies:
 - FastFork backend: hwloc development package
     - Fedora: sudo dnf install hwloc-devel
 - OpenMP backend: OpenMP runtime/dev package for your compiler
-- HIP offload mode: HIP headers/runtime (HIP_ROOT defaults to /opt/rocm)
+- Vulkan offload mode: Vulkan headers/runtime and `glslc`
 
 Parallel backends:
 
@@ -26,20 +26,17 @@ Parallel backends:
 Offload modes:
 
 - none
-- hip
 - vulkan
 
 Offload dispatch note:
 
-- In `hip`/`vulkan` offload modes, kernel launch helpers fail fast if no real backend dispatch is implemented.
+- In `vulkan` offload mode, kernel launch helpers dispatch through kernel_compiler generated stubs and SPIR-V.
 
 Compatibility matrix:
 
 - fastfork + none: supported
-- fastfork + hip: supported
 - fastfork + vulkan: supported
 - openmp + none: supported
-- openmp + hip: supported
 - sequential + none: supported
 - sequential + vulkan: supported
 - openmp + vulkan: supported
@@ -67,20 +64,6 @@ cmake --preset fastfork-vulkan
 cmake --build --preset build-fastfork-vulkan --parallel
 ```
 
-Configure + build OpenMP with HIP offload mode:
-
-```bash
-cmake --preset openmp-hip
-cmake --build --preset build-openmp-hip --parallel
-```
-
-Configure + build FastFork with HIP offload mode:
-
-```bash
-cmake --preset fastfork-hip
-cmake --build --preset build-fastfork-hip --parallel
-```
-
 Manual CMake configuration (without presets)
 ===============
 
@@ -96,20 +79,6 @@ OpenMP build:
 ```bash
 cmake -S . -B build/openmp -DPARALLEL_BACKEND=openmp -DOFFLOAD_BACKEND=none
 cmake --build build/openmp --parallel
-```
-
-OpenMP + HIP offload build (HIP under /opt/rocm):
-
-```bash
-cmake -S . -B build/openmp-hip -DPARALLEL_BACKEND=openmp -DOFFLOAD_BACKEND=hip -DHIP_ROOT=/opt/rocm
-cmake --build build/openmp-hip --parallel
-```
-
-FastFork + HIP offload build (HIP under /opt/rocm):
-
-```bash
-cmake -S . -B build/fastfork-hip -DPARALLEL_BACKEND=fastfork -DOFFLOAD_BACKEND=hip -DHIP_ROOT=/opt/rocm
-cmake --build build/fastfork-hip --parallel
 ```
 
 FastFork + Vulkan offload mode build:

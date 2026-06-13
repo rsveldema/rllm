@@ -148,8 +148,8 @@ namespace parallel {
         fastfork::reset_worker_stats(); \
     } while (false)
 
-#if defined(USE_VULKAN_OFFLOAD) or defined(USE_HIP_OFFLOAD) or defined(USE_CUDA_OFFLOAD)
-// Source offload macros are rewritten by vulkanize/hipify, but headers are not rewritten.
+#if defined(USE_VULKAN_OFFLOAD) or defined(USE_CUDA_OFFLOAD)
+// Source offload macros are rewritten by vulkanize, but headers are not rewritten.
 // Keep header-time uses valid by falling back to the CPU PARFOR forms.
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
@@ -160,8 +160,8 @@ namespace parallel {
 #else
 
 // Index-space OFFLOAD_PARFOR* fallback for fastfork builds.
-// With Vulkan/HIP these are located and replaced by the
-// vulkanizer/hipify scripts with target-specific offload pragmas and APIs,
+// With Vulkan these are located and replaced by the
+// vulkanizer script with target-specific offload pragmas and APIs,
 // but for CPU builds they just map to the regular PARFOR* macros.
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) \
     RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)

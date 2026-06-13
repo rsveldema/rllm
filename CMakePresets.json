@@ -34,28 +34,6 @@
         "PARALLEL_BACKEND": "fastfork",
         "OFFLOAD_BACKEND": "vulkan"
       }
-    },
-    {
-      "name": "openmp-hip",
-      "displayName": "OpenMP + HIP Offload",
-      "description": "OpenMP backend with HIP offload mode and explicit HIP root",
-      "inherits": "base",
-      "cacheVariables": {
-        "PARALLEL_BACKEND": "openmp",
-        "OFFLOAD_BACKEND": "hip",
-        "HIP_ROOT": "/opt/rocm"
-      }
-    },
-    {
-      "name": "fastfork-hip",
-      "displayName": "FastFork + HIP Offload",
-      "description": "FastFork backend with HIP offload mode and explicit HIP root",
-      "inherits": "base",
-      "cacheVariables": {
-        "PARALLEL_BACKEND": "fastfork",
-        "OFFLOAD_BACKEND": "hip",
-        "HIP_ROOT": "/opt/rocm"
-      }
     }
   ],
   "buildPresets": [
@@ -68,16 +46,6 @@
       "name": "build-fastfork-vulkan",
       "displayName": "Build FastFork + Vulkan",
       "configurePreset": "fastfork-vulkan"
-    },
-    {
-      "name": "build-openmp-hip",
-      "displayName": "Build OpenMP + HIP",
-      "configurePreset": "openmp-hip"
-    },
-    {
-      "name": "build-fastfork-hip",
-      "displayName": "Build FastFork + HIP",
-      "configurePreset": "fastfork-hip"
     }
   ]
 }

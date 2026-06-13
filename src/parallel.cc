@@ -12,24 +12,9 @@
 
 IMemorySpace& IMemorySpace::get_instance()
 {
-#if defined(USE_VULKAN_OFFLOAD)
-    return VulkanMemorySpace::get_instance();
-#elif defined(USE_HIP_OFFLOAD)
-    static HipMemorySpace instance;
-    return instance;
-#else
     static HostMemorySpace instance;
     return instance;
-#endif
 }
-
-#if defined(USE_VULKAN_OFFLOAD)
-VulkanMemorySpace& VulkanMemorySpace::get_instance()
-{
-    static VulkanMemorySpace instance;
-    return instance;
-}
-#endif
 
 namespace parallel {
 

@@ -217,8 +217,6 @@ def _defined_macros_for_backend(backend_namespace: str) -> set[str]:
     defined: set[str] = set()
     if backend_namespace == "vulkan":
         defined.add("USE_VULKAN_OFFLOAD")
-    elif backend_namespace == "hip":
-        defined.add("USE_HIP_OFFLOAD")
     return defined
 
 

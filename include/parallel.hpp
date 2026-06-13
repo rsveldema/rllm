@@ -20,13 +20,6 @@
 //   USE_OPENMP, USE_FASTFORK, or neither (sequential fallback).
 
 #include <memory_spaces/host_memory_space.hpp>
-#if defined(USE_VULKAN_OFFLOAD)
-#include <memory_spaces/vulkan_memory_space.hpp>
-#elif defined(USE_HIP_OFFLOAD)
-#include <memory_spaces/hip_memory_space.hpp>
-#endif
-
-
 
 template <typename T>
 T* allocate_aligned(IMemorySpace& mem_space, std::size_t count)
@@ -559,7 +552,7 @@ namespace parallel {
     };
 
     // Thread-local dispatch context for H2D/D2H buffer copy parameter tracking.
-    // Populated by ComputeKernelRuntime during kernel dispatch so that raw offload
+    // Populated during kernel dispatch so that raw offload
     // buffer access can record meaningful site/parameter names in statistics.
     struct DispatchParams {
         std::string_view site;
@@ -603,7 +596,7 @@ namespace parallel {
 #define RLLM_STRINGIZE(x) RLLM_STRINGIZE_IMPL(x)
 #define RLLM_DO_PRAGMA(x) _Pragma(RLLM_STRINGIZE(x))
 
-#if defined(USE_OPENMP) && !defined(USE_HIP_OFFLOAD) && !defined(USE_VULKAN_OFFLOAD)
+#if defined(USE_OPENMP) && !defined(USE_VULKAN_OFFLOAD)
 #define RLLM_OMP_SIMD RLLM_DO_PRAGMA(omp simd)
 #else
 #define RLLM_OMP_SIMD

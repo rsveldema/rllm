@@ -18,6 +18,7 @@ models/*.json
 staged/*.json
 *.log
 *.bin
+*.glsl
 cmake_test_discovery*
 perf*.data
 build_profile_vulkan_stats

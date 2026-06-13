@@ -1,7 +1,6 @@
 #pragma once
 
 #include <functional>
-#include <IMemorySpace.hpp>
 #include <device_pointer.hpp>
 
 namespace rllm
@@ -34,10 +33,10 @@ namespace rllm
             return m_data.raw_staging_data();
         }
 
-#if RLLM_DEVICE_POINTER_HAS_OFFLOAD
-        OffloadMemoryBuffer raw_offload_data() const
+#if defined(USE_VULKAN_OFFLOAD)
+        VBaseDeviceBuffer& device_buffer() const
         {
-            return m_data.raw_offload_data();
+            return m_data.device_buffer();
         }
 #endif
 

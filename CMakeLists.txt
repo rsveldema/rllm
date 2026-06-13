@@ -26,7 +26,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(
     RLLM_ENUM_VALUE_TOOL ""
     CACHE FILEPATH
-    "Optional path to a prebuilt enum-value tool used by hipify/vulkanize"
+    "Optional path to a prebuilt enum-value tool used by vulkanize"
 )
 
 # --- tokenizer_map codegen ---------------------------------------------------

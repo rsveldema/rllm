@@ -298,3 +298,5 @@ namespace rllm
     };
 
 } // namespace rllm
+
+namespace rlmm = rllm;

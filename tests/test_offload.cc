@@ -219,10 +219,16 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 4;
     constexpr size_t COLS = 9;
-    fixed_size_vector<int, ROWS * COLS> visits;
+    enum class VisitIndex : size_t
+    {
+        START = 0,
+        MAX = ROWS * COLS
+    };
+    fixed_size_vector<int, VisitIndex> visits;
+    visits.set_size(VisitIndex::MAX);
     // END_OFFLOAD_PARAMETERS
 
-    for (size_t idx = 0; idx < visits.size(); ++idx)
+    for (size_t idx = 0; idx < static_cast<size_t>(visits.size()); ++idx)
         visits[idx] = 0;
 
     const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(

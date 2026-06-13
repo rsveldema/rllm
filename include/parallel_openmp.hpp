@@ -67,15 +67,7 @@ namespace parallel {
 #define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 
 // Index-space loops intended for target offload-friendly kernels.
-#if defined(USE_HIP_OFFLOAD)
-#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
-
-#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
-#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
-#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
-#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_TRIANGULAR(v1, v2, N)
-#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
-#elif defined(USE_VULKAN_OFFLOAD)
+#if defined(USE_VULKAN_OFFLOAD)
 // Vulkan offload mode currently keeps a canonical CPU index loop shape.
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
 

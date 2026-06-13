@@ -12,28 +12,7 @@ enable_testing()
 set(RLLM_TEST_OFFLOAD_SRC "${CMAKE_CURRENT_SOURCE_DIR}/test_offload.cc")
 set(RLLM_TEST_OFFLOAD_PREPROCESS_TARGET "")
 
-if(OFFLOAD_BACKEND STREQUAL "hip")
-    set(RLLM_HIPIFIED_TEST_DIR "${CMAKE_BINARY_DIR}/generated/hipified/tests")
-    set(RLLM_HIPIFIED_TEST_MANIFEST "${CMAKE_BINARY_DIR}/generated/hipified/hipified_test_sources.cmake")
-    set(RLLM_TEST_OFFLOAD_PREPROCESS_TARGET rllm_generate_hipified_test_sources)
-    set(RLLM_TEST_OFFLOAD_SRC "${RLLM_HIPIFIED_TEST_DIR}/test_offload.cc")
-
-    add_custom_target(${RLLM_TEST_OFFLOAD_PREPROCESS_TARGET}
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${RLLM_HIPIFIED_TEST_DIR}"
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/hipify.py"
-                --src-dir "${CMAKE_CURRENT_SOURCE_DIR}"
-                --out-dir "${RLLM_HIPIFIED_TEST_DIR}"
-                --enum-value-tool "$<TARGET_FILE:generate_domain_replace_json>"
-                --manifest "${RLLM_HIPIFIED_TEST_MANIFEST}"
-        DEPENDS
-            generate_domain_replace_json
-            "${CMAKE_CURRENT_SOURCE_DIR}/test_offload.cc"
-            "${CMAKE_SOURCE_DIR}/hipify.py"
-            "${CMAKE_SOURCE_DIR}/offloadize_common.py"
-        COMMENT "Generating HIP-offload test source tree from tests/"
-        VERBATIM
-    )
-elseif(OFFLOAD_BACKEND STREQUAL "vulkan")
+if(OFFLOAD_BACKEND STREQUAL "vulkan")
     set(RLLM_VULKANIZED_TEST_DIR "${CMAKE_BINARY_DIR}/generated/vulkanized/tests")
     set(RLLM_VULKANIZED_TEST_MANIFEST "${CMAKE_BINARY_DIR}/generated/vulkanized/vulkanized_test_sources.cmake")
     set(RLLM_TEST_OFFLOAD_PREPROCESS_TARGET rllm_generate_vulkanized_test_sources)
