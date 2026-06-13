@@ -130,26 +130,10 @@ namespace rllm
     )
     {
         // PARFOR_SHARED_VARIABLES(workgroup_max)
-#if defined(USE_VULKAN_OFFLOAD)
-        float workgroup_max = -std::numeric_limits<float>::infinity();
-#else
-        float workgroup_max[1] = {-std::numeric_limits<float>::infinity()};
-#endif
         // ENDPARFOR_SHARED_VARIABLES
+
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, temp_values))
-        const uint lid = gl_LocalInvocationIndex;
-        const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (int(i) < rllm_push.rllm_bound_x);
-        workgroup_max[lid] = in_bounds ? inputs[i] : -3.402823e38f;
-        barrier();
-        for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u;
-             stride >>= 1u)
-        {
-            if (lid < stride)
-                workgroup_max[lid] = math::max(workgroup_max[lid], workgroup_max[lid + stride]);
-            barrier();
-        }
-        if (lid == 0u)
-            atomicMax(temp_values[0], workgroup_max[0]);
+            temp_values[TempStorage::ZERO] = atomicMax(temp_values[TempStorage::ZERO], inputs[i]);
         ENDFOR
     }
 
@@ -161,35 +145,18 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        // PARFOR_SHARED_VARIABLES(workgroup_sum)
-#if defined(USE_VULKAN_OFFLOAD)
-        float workgroup_sum = 0.0f;
-#else
-        float workgroup_sum[1] = {0.0f};
-#endif
+        // PARFOR_SHARED_VARIABLES()
         // ENDPARFOR_SHARED_VARIABLES
+
+        temp_values[TempStorage::ONE] = 0;
+
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, values, temp_values))
         {
-            const uint lid = gl_LocalInvocationIndex;
-            const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (int(i) < rllm_push.rllm_bound_x);
-            const float max_val = temp_values[0];
-            float exp_value = 0.0f;
-            if (in_bounds)
-            {
-                exp_value = exp(inputs[i] - max_val);
-                values[i] = exp_value;
-            }
-            workgroup_sum[lid] = exp_value;
-            barrier();
-            for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u;
-                 stride >>= 1u)
-            {
-                if (lid < stride)
-                    workgroup_sum[lid] += workgroup_sum[lid + stride];
-                barrier();
-            }
-            if (lid == 0u)
-                atomicAdd(temp_values[1], workgroup_sum[0]);
+            const float max_val = temp_values[TempStorage::ZERO];
+            float exp_value = exp(inputs[i] - max_val);            
+            values[i] = exp_value;
+            
+            atomicAdd(temp_values[TempStorage::ONE], exp_value);
         }
         ENDFOR
     }

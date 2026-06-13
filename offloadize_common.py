@@ -158,60 +158,6 @@ def extract_shared_variables_from_body_lines(body_lines: list[str]) -> tuple[dic
     return shared_vars, filtered
 
 
-def default_symbol_values() -> dict[str, str]:
-    # Fallback substitutions used when the enum-value helper executable is unavailable
-    # at configure time (common for fresh build trees).
-    values: dict[str, str] = {
-        "EmbeddingDimension::START": "0",
-        "EmbeddingDimension::MAX": "512",
-        "PositionIndex::START": "0",
-        "PositionIndex::MAX": "128",
-        "PositionIndex::UNKNOWN_POSITION_INDEX": str((1 << 64) - 1),
-        "HeadsIndex::START": "0",
-        "HeadsIndex::MAX": "8",
-        "MultiTokenPredictionIndex::START": "0",
-        "MultiTokenPredictionIndex::ONE": "1",
-        "MultiTokenPredictionIndex::TWO": "2",
-        "MultiTokenPredictionIndex::THREE": "3",
-        "MultiTokenPredictionIndex::FOUR": "4",
-        "MultiTokenPredictionIndex::MAX": "4",
-        "HeadDimension::START": "0",
-        "HeadDimension::MAX": "64",
-        "FFDimension::START": "0",
-        "FFDimension::MAX": "2048",
-        "NeuronConnectionIndex::START": "0",
-        "NeuronConnectionIndex::MAX": "128",
-        "TransformerBlock::MOMENTUM_BETA": "0.9",
-        "TransformerBlock::GRAD_CLIP": "1.0",
-        "TransformerBlock::VEL_CLIP": "0.1",
-        "TransformerBlock::WEIGHT_CLAMP": "2.0",
-        "rllm::TransformerBlock::MOMENTUM_BETA": "0.9",
-        "rllm::TransformerBlock::GRAD_CLIP": "1.0",
-        "rllm::TransformerBlock::VEL_CLIP": "0.1",
-        "rllm::TransformerBlock::WEIGHT_CLAMP": "2.0",
-        "OutputLayer::MOMENTUM_BETA": "0.9",
-        "OutputLayer::GRAD_CLIP": "1.0",
-        "OutputLayer::VEL_CLIP": "0.1",
-        "OutputLayer::WEIGHT_CLAMP": "2.0",
-        "OutputLayer::LABEL_SMOOTHING": "0.1",
-        "OutputLayer::smooth": "(OutputLayer::LABEL_SMOOTHING / float(TokenID::MAX))",
-        "rllm::OutputLayer::MOMENTUM_BETA": "0.9",
-        "rllm::OutputLayer::GRAD_CLIP": "1.0",
-        "rllm::OutputLayer::VEL_CLIP": "0.1",
-        "rllm::OutputLayer::WEIGHT_CLAMP": "2.0",
-        "rllm::OutputLayer::LABEL_SMOOTHING": "0.1",
-        "rllm::OutputLayer::smooth": "(rllm::OutputLayer::LABEL_SMOOTHING / float(TokenID::MAX))",
-        "TempStorage::START": "0",
-        "TempStorage::ONE": "1",
-        "TempStorage::MAX": "2",
-        "rllm::TempStorage::START": "0",
-        "rllm::TempStorage::ONE": "1",
-        "rllm::TempStorage::MAX": "2",
-    }
-
-    return values
-
-
 def split_top_level_args(raw: str) -> list[str]:
     args: list[str] = []
     depth_round = 0
@@ -364,6 +310,8 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
 
     out = text
 
+    out = out.replace("enum_iterator<TokenID>(", 
+                      "limit<TokenID::MAX>(")
     out = out.replace("enum_iterator<TempStorage>(", 
                       "limit<TempStorage::MAX>(")
     out = out.replace("enum_iterator<PositionIndex>(", 
@@ -388,8 +336,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     # enum as a loose parameter type:
     out = out.replace(" PositionIndex ", " int ")
     out = out.replace("EmbeddingDimension ", " int ")
-    
-    out = out.replace("TokenID", " int ")
+
     out = out.replace(" auto ", " int ")
     out = out.replace("rlmm_float_small", " float16 ")
     out = out.replace("rlmm_float", " float ")
@@ -403,6 +350,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace("math::max", " max ")
     out = out.replace("std::sqrt", " sqrt ")
 
+    out = out.replace("constexpr", "const")
 
     for symbol, value in symbol_values.items():
         out = out.replace(symbol, value)
@@ -413,14 +361,15 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
         w = out.find(")", p)
         out = out[:k] + out[p:w] + out[w:]
 
+    out = out.replace("TokenID", " int ")
+    
     out = out.replace("[[maybe_unused]]", "")
     return out
 
 
 def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
-    if not enum_value_tool:
-        return default_symbol_values()
-
+    assert enum_value_tool
+        
     cmd = [enum_value_tool, "--print-json"]
     proc = subprocess.run(cmd, text=True, capture_output=True)
     if proc.returncode != 0:
@@ -450,7 +399,7 @@ def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
             f"stderr:\n{proc.stderr}"
         )
 
-    replacements: dict[str, str] = default_symbol_values()
+    replacements: dict[str, str] = {}
     for idx, item in enumerate(payload):
         if not isinstance(item, dict):
             raise RuntimeError(

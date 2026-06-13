@@ -119,6 +119,7 @@ namespace rllm
     enum class TempStorage : size_t
     {
         START = 0,
+        ZERO = 0,
         ONE = 1,
         MAX = 2 // defines an array with up-to M temp variables in a kernel
     };

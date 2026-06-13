@@ -27,6 +27,15 @@ void append_float_pair(std::vector<SearchReplace>& pairs, const std::string& key
 
 void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
 {
+    append_enum_pair(pairs, "TempStorage::START", static_cast<size_t>(rllm::TempStorage::START));
+    append_enum_pair(pairs, "TempStorage::ZERO", static_cast<size_t>(rllm::TempStorage::ZERO));
+    append_enum_pair(pairs, "TempStorage::ONE", static_cast<size_t>(rllm::TempStorage::ONE));
+    //append_enum_pair(pairs, "TempStorage::TWO", static_cast<size_t>(rllm::TempStorage::TWO));
+    //append_enum_pair(pairs, "TempStorage::THREE", static_cast<size_t>(rllm::TempStorage::THREE));
+    //append_enum_pair(pairs, "TempStorage::FOUR", static_cast<size_t>(rllm::TempStorage::FOUR));
+    //append_enum_pair(pairs, "TempStorage::FIVE", static_cast<size_t>(rllm::TempStorage::FIVE));
+    append_enum_pair(pairs, "TempStorage::MAX", static_cast<size_t>(rllm::TempStorage::MAX));
+
     append_enum_pair(pairs, "EmbeddingDimension::START", static_cast<size_t>(rllm::EmbeddingDimension::START));
     append_enum_pair(pairs, "EmbeddingDimension::MAX", static_cast<size_t>(rllm::EmbeddingDimension::MAX));
 
@@ -93,6 +102,7 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     );
 
     // Casts to enum types are not valid in generated shader code; force int casts.
+    pairs.emplace_back("static_cast<TempStorage>", "(int)");
     pairs.emplace_back("static_cast<EmbeddingDimension>", "(int)");
     pairs.emplace_back("static_cast<PositionIndex>", "(int)");
     pairs.emplace_back("static_cast<HeadsIndex>", "(int)");
@@ -101,6 +111,7 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     pairs.emplace_back("static_cast<HeadDimension>", "(int)");
     pairs.emplace_back("static_cast<FFDimension>", "(int)");
     pairs.emplace_back("static_cast<NeuronConnectionIndex>", "(int)");
+    pairs.emplace_back("static_cast<rllm::TempStorage>", "(int)");
     pairs.emplace_back("static_cast<rllm::EmbeddingDimension>", "(int)");
     pairs.emplace_back("static_cast<rllm::PositionIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::HeadsIndex>", "(int)");
@@ -129,6 +140,10 @@ void append_output_layer_constant_pairs(std::vector<SearchReplace>& pairs)
     append_float_pair(pairs, "OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
     append_float_pair(pairs, "OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
     append_float_pair(pairs, "OutputLayer::WEIGHT_CLAMP", rllm::OutputLayer::WEIGHT_CLAMP);
+    
+    append_float_pair(pairs, "OutputLayer::smooth", rllm::OutputLayer::smooth);
+    append_float_pair(pairs, "OutputLayer::LABEL_SMOOTHING", rllm::OutputLayer::LABEL_SMOOTHING);
+
     append_float_pair(pairs, "rllm::OutputLayer::MOMENTUM_BETA", rllm::OutputLayer::MOMENTUM_BETA);
     append_float_pair(pairs, "rllm::OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
     append_float_pair(pairs, "rllm::OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
