@@ -93,8 +93,10 @@ def _sanitize_offload_param_line_for_glsl(line: str) -> str | None:
         return None
 
     name = match.group("name")
+    kw = match.group("kw")
+    glsl_kw = "constexpr" if kw == "constexpr" else "const"
     expr = _sanitize_kernel_line_for_glsl(match.group("expr"))
-    return f"const uint {name} = {expr};"
+    return f"{glsl_kw} uint {name} = {expr};"
 
 
 @dataclass
@@ -175,7 +177,7 @@ _DEVICE_POINTER_INT_RE = re.compile(
     r"^(?P<const>const\s+)?DevicePointer\s*<\s*int\s*>\s*(?P<ref>[&*])?\s*$"
 )
 _GLSL_CONST_DECL_RE = re.compile(
-    r"^\s*(?:constexpr|const)\s+(?:size_t|int|unsigned|auto)\s+(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+?)\s*;\s*$"
+    r"^\s*(?P<kw>constexpr|const)\s+(?:size_t|int|unsigned|auto)\s+(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+?)\s*;\s*$"
 )
 
 

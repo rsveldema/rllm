@@ -215,12 +215,13 @@ TEST_F(OffloadParForTest, OffloadParFor2DUpperTriangularParamVisitsUpperTriangle
  *  the second call does not cause additional host-device buffer copies because the data is still valid on the device from the first call.
  */
 TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
-{
+{    
     // OFFLOAD_PARAMETERS(visits,ROWS,COLS)
     constexpr size_t ROWS = 4;
     constexpr size_t COLS = 9;
-    DevicePointer<int> visits(ROWS * COLS);
+    fixed_size_vector<int, ROWS * COLS> visits;
     // END_OFFLOAD_PARAMETERS
+
     for (size_t idx = 0; idx < visits.size(); ++idx)
         visits[idx] = 0;
 

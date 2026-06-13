@@ -48,6 +48,7 @@ class LoopContext:
     raw_body_lines: list[str] | None = None  # unmodified source lines (before symbol substitution)
     raw_offload_param_lines: list[str] | None = None  # unmodified OFFLOAD_PARAMETERS content
     shared_vars: dict[str, str] | None = field(default=None)  # var_name -> type (extracted from PARFOR_SHARED_VARIABLES blocks)
+    constexpr_defines: list[tuple[str, str]] | None = field(default=None)  # [(name, expr), ...] extracted from body
 
 
 _OFFLOAD_PARAMETERS_START_RE = re.compile(
@@ -370,8 +371,6 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = re.sub(r"\b([A-Za-z_]\w*)\s*&\s*~1\b", r"(\1 - (\1 % 2))", out)
     out = re.sub(r"\b([A-Za-z_]\w*)\s*%\s*2\s*==\s*0\b", r"((\1 % 2) == 0)", out)
     out = re.sub(r"limit<([^>]+)>\(\s*inc\(([^)]+)\)\s*\)", r"limit<\1>(0, inc(\2))", out)
-
-    out = out.replace("constexpr", "const")
 
     for symbol, value in symbol_values.items():
         out = out.replace(symbol, value)
@@ -1136,9 +1135,6 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
         for line in ctx.offload_param_lines:
             #print(f"CHECK: {line}")
             line = hard_apply_symbol_values(line, symbol_values)
-            asg = line.find("=")
-            if asg > 0:
-                line = line[:asg] + ","
             lines.append(line)
         if len(lines) > 0:
             if lines[-1].endswith(","):
@@ -1151,6 +1147,23 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
         for l in ctx.raw_body_lines:
             lines.append( hard_apply_symbol_values(l, symbol_values))
         lines.append("")
+
+    # Extract constexpr declarations for Vulkan compatibility.
+    # These are kept in the kernel file (above) and also emitted as #define during GLSL generation.
+    if not getattr(ctx, '_constexpr_defines_set', False):
+        import re as _re2
+        _EXPR_RE2 = _re2.compile(
+            r"^\s*constexpr\s+(?P<type>[A-Za-z_][A-Za-z0-9_]*(?:\s*::[A-Za-z_][A-Za-z0-9_]*)?)\s+"
+            r"(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<expr>.+?)\s*;\s*$"
+        )
+        defines = []
+        for _l in ctx.raw_body_lines:
+            _m = _EXPR_RE2.match(_l)
+            if _m:
+                defines.append((_m.group("name"), _m.group("expr")))
+        if defines:
+            ctx.constexpr_defines = defines
+    setattr(ctx, '_constexpr_defines_set', True)
 
     lines.append("END_PROGRAM")
     
