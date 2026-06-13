@@ -364,22 +364,44 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
 
     out = text
 
+    out = out.replace("enum_iterator<TempStorage>(", 
+                      "limit<TempStorage::MAX>(")
     out = out.replace("enum_iterator<PositionIndex>(", 
                       "limit<PositionIndex::MAX>(")
     out = out.replace("enum_iterator<EmbeddingDimension>(", 
                       "limit<EmbeddingDimension::MAX>(")
     out = out.replace("enum_iterator<HeadsIndex>(", 
                       "limit<HeadsIndex::MAX>(")
+    out = out.replace("InputLine", 
+                      "fixed_size_vector<TokenID, PositionIndex>")
+    
+
+    
 
     if out.find("::MAX") < 0:
         if out.find("_matrix") >= 0 or out.find("_vector") >= 0:
+            out = out.replace("TempStorage", "TempStorage::MAX")
             out = out.replace("HeadsIndex", "HeadsIndex::MAX")
             out = out.replace("PositionIndex", "PositionIndex::MAX")
             out = out.replace("EmbeddingDimension", "EmbeddingDimension::MAX")
 
     # enum as a loose parameter type:
     out = out.replace(" PositionIndex ", " int ")
+    out = out.replace("EmbeddingDimension ", " int ")
+    
+    out = out.replace("TokenID", " int ")
     out = out.replace(" auto ", " int ")
+    out = out.replace("rlmm_float_small", " float16 ")
+    out = out.replace("rlmm_float", " float ")
+    out = out.replace("std::pow", " pow ")
+    out = out.replace("std::exp", " exp ")
+    out = out.replace("std::sin", " sin ")
+    out = out.replace("std::cos", " cos ")
+    out = out.replace("std::tanh", " tanh ")
+    out = out.replace("std::tan", " tan ")
+    out = out.replace("math::clamp", " clamp ")
+    out = out.replace("math::max", " max ")
+    out = out.replace("std::sqrt", " sqrt ")
 
 
     for symbol, value in symbol_values.items():
@@ -389,7 +411,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     if k >= 0:
         p = out.find("(", k)
         w = out.find(")", p)
-        out = out[:k] + out[p+1:w] + out[w+1:]
+        out = out[:k] + out[p:w] + out[w:]
 
     out = out.replace("[[maybe_unused]]", "")
     return out

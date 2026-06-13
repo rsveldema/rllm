@@ -295,7 +295,6 @@ namespace rllm
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
             float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
             {
                 const int k = int(l_idx);
@@ -319,7 +318,6 @@ namespace rllm
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
             float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(FFDimension::MAX); ++l_idx)
             {
                 const int k = int(l_idx);
@@ -343,7 +341,6 @@ namespace rllm
         const auto grid = enum_iterator2D<PositionIndex, FFDimension>(m);
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
             float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
             {
                 const int k = int(l_idx);
@@ -367,7 +364,6 @@ namespace rllm
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
             float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
             {
                 const int k = int(l_idx);
@@ -391,7 +387,6 @@ namespace rllm
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
             float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(FFDimension::MAX); ++l_idx)
             {
                 const int k = int(l_idx);
@@ -453,7 +448,6 @@ namespace rllm
         const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C, k_count))
             float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(k_count); ++l_idx)
             {
                 const int k = int(l_idx);
@@ -509,7 +503,6 @@ namespace rllm
         const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C, k_count))
             float sum = 0.f;
-            RLLM_OMP_SIMD_REDUCTION_PLUS(sum)
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(k_count); ++l_idx)
             {
                 const int k = int(l_idx);

@@ -605,8 +605,6 @@ namespace parallel {
 
 #if defined(USE_OPENMP) && !defined(USE_HIP_OFFLOAD) && !defined(USE_VULKAN_OFFLOAD)
 #define RLLM_OMP_SIMD RLLM_DO_PRAGMA(omp simd)
-#define RLLM_OMP_SIMD_REDUCTION_PLUS(var) RLLM_DO_PRAGMA(omp simd reduction(+:var))
 #else
 #define RLLM_OMP_SIMD
-#define RLLM_OMP_SIMD_REDUCTION_PLUS(var)
 #endif
