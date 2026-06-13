@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+using namespace rllm;
+
 namespace
 {
 using SearchReplace = std::pair<std::string, std::string>;
@@ -39,12 +41,12 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     append_enum_pair(pairs, "EmbeddingDimension::START", static_cast<size_t>(rllm::EmbeddingDimension::START));
     append_enum_pair(pairs, "EmbeddingDimension::MAX", static_cast<size_t>(rllm::EmbeddingDimension::MAX));
 
-    append_enum_pair(pairs, "PositionIndex::START", static_cast<size_t>(rllm::PositionIndex::START));
-    append_enum_pair(pairs, "PositionIndex::MAX", static_cast<size_t>(rllm::PositionIndex::MAX));
+    append_enum_pair(pairs, "PositionIndex::START", static_cast<size_t>(PositionIndex::START));
+    append_enum_pair(pairs, "PositionIndex::MAX", static_cast<size_t>(PositionIndex::MAX));
     append_enum_pair(
         pairs,
         "PositionIndex::UNKNOWN_POSITION_INDEX",
-        static_cast<size_t>(rllm::PositionIndex::UNKNOWN_POSITION_INDEX)
+        static_cast<size_t>(PositionIndex::UNKNOWN_POSITION_INDEX)
     );
 
     append_enum_pair(pairs, "HeadsIndex::START", static_cast<size_t>(rllm::HeadsIndex::START));
@@ -113,7 +115,7 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     pairs.emplace_back("static_cast<NeuronConnectionIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::TempStorage>", "(int)");
     pairs.emplace_back("static_cast<rllm::EmbeddingDimension>", "(int)");
-    pairs.emplace_back("static_cast<rllm::PositionIndex>", "(int)");
+    pairs.emplace_back("static_cast<PositionIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::HeadsIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::TokenID>", "(int)");
     pairs.emplace_back("static_cast<rllm::MultiTokenPredictionIndex>", "(int)");

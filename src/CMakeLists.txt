@@ -89,7 +89,7 @@ set(RLLM_OFFLOAD_PREPROCESS_TARGET "")
 file(
     GLOB_RECURSE RLLM_OFFLOAD_INPUT_SOURCES
     CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.kernel"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
 )
 
@@ -136,6 +136,12 @@ if(OFFLOAD_BACKEND STREQUAL "vulkan")
             generate_domain_replace_json
             ${RLLM_OFFLOAD_INPUT_SOURCES}
             "${CMAKE_SOURCE_DIR}/vulkanize.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/compile.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/parser.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/transforms.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/optim.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/vulkan_kernel_visitor.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/rllm_vulkan_dispatch_stub_visitor.py"
             "${CMAKE_SOURCE_DIR}/vulkan-config.json"
             "${CMAKE_SOURCE_DIR}/offloadize_common.py"
         COMMENT "Generating Vulkan-offload source tree from src/ and compiling shaders"
@@ -222,6 +228,7 @@ function(rllm_define_lib target_name)
             USE_VULKAN_OFFLOAD
             RLLM_VULKAN_KERNEL_ROOT="${RLLM_VULKAN_KERNEL_DIR}"
         )
+        target_include_directories(${target_name} PUBLIC ${RLLM_VULKAN_KERNEL_DIR})
         target_link_libraries(${target_name} PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
     endif()
 endfunction()

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 from offloadize_common import (
     LoopContext,
@@ -503,6 +504,18 @@ def _kernel_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
     return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.comp"
 
 
+def _kernel_glsl_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
+    rel = Path(spec.rel_path)
+    stem = _sanitize_name_component(rel.stem)
+    return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.glsl"
+
+
+def _kernel_header_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
+    rel = Path(spec.rel_path)
+    stem = _sanitize_name_component(rel.stem)
+    return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.hpp"
+
+
 def _spirv_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
     rel = Path(spec.rel_path)
     stem = _sanitize_name_component(rel.stem)
@@ -868,7 +881,7 @@ def _compile_to_spirv(compiler: str, input_path: Path, output_path: Path) -> Non
     if Path(compiler).name == "glslangValidator":
         cmd = [compiler, "-V", "--target-env", "vulkan1.1", input_path.as_posix(), "-o", output_path.as_posix()]
     else:
-        cmd = [compiler, "--target-env=vulkan1.1", input_path.as_posix(), "-o", output_path.as_posix()]
+        cmd = [compiler, "-fshader-stage=compute", "--target-env=vulkan1.1", input_path.as_posix(), "-o", output_path.as_posix()]
     proc = subprocess.run(cmd, text=True, capture_output=True)
     if proc.returncode != 0:
         raise RuntimeError(
@@ -892,6 +905,73 @@ def _compile_kernel_stubs(
         _compile_to_spirv(compiler, src, spv)
         generated_spirv_files.append(spv)
     return generated_spirv_files
+
+
+def _parfor_dump_path(parfor_dump_dir: Path, spec: VulkanKernelSpec) -> Path:
+    src_basename = Path(spec.rel_path).name
+    name_no_ext = src_basename.rsplit(".", 1)[0] if "." in src_basename else src_basename
+    return parfor_dump_dir / f"offload_parfor_{name_no_ext}_{spec.lineno}.kernel"
+
+
+def _kernel_compiler_python() -> str:
+    venv_python = Path(__file__).resolve().parent / ".venv" / "bin" / "python"
+    return venv_python.as_posix() if venv_python.exists() else sys.executable
+
+
+def _generate_kernel_compiler_artifacts(
+    compiler: str | None,
+    kernel_specs: list[VulkanKernelSpec],
+    kernel_root: Path,
+    parfor_dump_dir: Path,
+) -> tuple[list[Path], list[Path], list[Path]]:
+    repo_root = Path(__file__).resolve().parent
+    compile_py = repo_root / "kernel_compiler" / "codegen" / "compile.py"
+    generated_glsl: list[Path] = []
+    generated_headers: list[Path] = []
+    generated_spirv: list[Path] = []
+
+    for spec in kernel_specs:
+        dump = _parfor_dump_path(parfor_dump_dir, spec)
+        glsl = _kernel_glsl_file_path(kernel_root, spec)
+        header = _kernel_header_file_path(kernel_root, spec)
+        spv = _spirv_file_path(kernel_root, spec)
+        rel_spv = spv.relative_to(kernel_root).as_posix()
+        glsl.parent.mkdir(parents=True, exist_ok=True)
+        header.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            _kernel_compiler_python(),
+            compile_py.as_posix(),
+            "--vulkan",
+            glsl.as_posix(),
+            "--rllm-dispatch-stub",
+            header.as_posix(),
+            "--rllm-spv-path",
+            rel_spv,
+            dump.as_posix(),
+        ]
+        proc = subprocess.run(cmd, text=True, capture_output=True)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"kernel_compiler failed for {dump}:\n"
+                f"command: {' '.join(cmd)}\n"
+                f"stdout:\n{proc.stdout}\n"
+                f"stderr:\n{proc.stderr}"
+            )
+        generated_glsl.append(glsl)
+        generated_headers.append(header)
+        if compiler:
+            _compile_to_spirv(compiler, glsl, spv)
+            generated_spirv.append(spv)
+
+    umbrella = kernel_root / "rllm_vulkan_kernels.hpp"
+    include_lines = ["#pragma once"]
+    include_lines.extend(
+        f'#include "{header.relative_to(kernel_root).as_posix()}"'
+        for header in generated_headers
+    )
+    umbrella.write_text("\n".join(include_lines) + "\n", encoding="utf-8")
+    generated_headers.append(umbrella)
+    return generated_glsl, generated_headers, generated_spirv
 
 
 def parse_args() -> argparse.Namespace:
@@ -947,23 +1027,25 @@ def main() -> int:
         src_dir,
         out_dir,
         backend_namespace="vulkan",
-        include_line="#include <vulkan_kernel_calls.hpp>",
+        include_line="#include <rllm_vulkan_kernels.hpp>",
         emit_named_kernels=True,
         on_emit_loop=collect_kernel,
         symbol_values=symbol_values,
         parfor_dump_dir=out_dir / "parfor_dumps",
     )
-    generated_kernels = _write_kernel_stubs(kernel_specs, kernel_root, symbol_values, config)
-    generated_spirv: list[Path] = []
-
-    if args.shader_compiler:
-        generated_spirv = _compile_kernel_stubs(args.shader_compiler, kernel_specs, kernel_root)
+    parfor_dump_dir = out_dir / "parfor_dumps"
+    generated_kernels, generated_headers, generated_spirv = _generate_kernel_compiler_artifacts(
+        args.shader_compiler,
+        kernel_specs,
+        kernel_root,
+        parfor_dump_dir,
+    )
 
     if args.manifest:
         manifest = Path(args.manifest).resolve()
         write_manifest(manifest, "RLLM_VULKANIZED_SOURCES", generated_files)
         kernel_manifest = manifest.with_name("vulkan_kernel_sources.cmake")
-        write_manifest(kernel_manifest, "RLLM_VULKAN_KERNEL_SOURCES", generated_kernels)
+        write_manifest(kernel_manifest, "RLLM_VULKAN_KERNEL_SOURCES", generated_kernels + generated_headers)
         if generated_spirv:
             spirv_manifest = manifest.with_name("vulkan_kernel_spirv.cmake")
             write_manifest(spirv_manifest, "RLLM_VULKAN_KERNEL_SPIRV", generated_spirv)

@@ -18,7 +18,7 @@
 #include <print>
 #include <vector>
 
-using rllm::rlmm_float;
+using namespace rlmm;
 
 namespace
 {
@@ -55,25 +55,25 @@ namespace
     constexpr int TEST_SEQ_LEN = 8; // smoke tests
     constexpr int BENCH_SEQ_LEN = 64; // speedup benchmark needs more work
 
-    std::unique_ptr<rllm::NeuralNetwork> train_guaranteed_model(rllm::Corpus& corpus, rllm::Statistics& stats)
+    std::unique_ptr<NeuralNetwork> train_guaranteed_model(Corpus& corpus, Statistics& stats)
     {
         std::srand(0);
         corpus.load_files_from_dir("training_data0");
-        auto nn = std::make_unique<rllm::NeuralNetwork>(1, corpus, stats);
-        nn->set_training_method(rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN);
+        auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+        nn->set_training_method(TrainingMethod::RANDOM_LINE_RANDOM_LEN);
         nn->train(false, 3, std::nullopt, std::nullopt);
         return nn;
     }
 
-    std::vector<rllm::OutputToken>
-    top5_for_prompt(rllm::NeuralNetwork& nn, rllm::Corpus& corpus, const std::string& prompt)
+    std::vector<OutputToken>
+    top5_for_prompt(NeuralNetwork& nn, Corpus& corpus, const std::string& prompt)
     {
         const auto token_ids = corpus.get_token_ids(prompt);
 
         nn.get_last_input() = token_ids; // set the input to the probe token(s) for tracing
 
         nn.propagate_forward();
-        const auto top5 = nn.get_best_output_token_ids(5, rllm::MultiTokenPredictionIndex::START);
+        const auto top5 = nn.get_best_output_token_ids(5, MultiTokenPredictionIndex::START);
 
         std::println("Prompt '{}', top-5:", prompt);
         for (size_t i = 0; i < top5.size(); ++i)
@@ -94,11 +94,11 @@ TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
     // #include token sequence. Small enough (5 lines) that the validation split
     // stays below 2 lines, disabling early stopping and checkpoint restoration.
     std::vector<std::string> filters = {"include_sequence"};
-    rllm::Corpus corpus(filters);
+    Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
-    rllm::Statistics stats;
-    auto nn = std::make_unique<rllm::NeuralNetwork>(2, corpus, stats);
-    nn->set_training_method(rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
+    Statistics stats;
+    auto nn = std::make_unique<NeuralNetwork>(2, corpus, stats);
+    nn->set_training_method(TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
     nn->train(false, 10, std::nullopt, std::nullopt);
 
     const auto top5 = top5_for_prompt(*nn, corpus, "#");
@@ -108,7 +108,7 @@ TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
     // MTP head 1: all output heads were already computed by the top5_for_prompt call above.
     // Head 1 should predict 'clu' — the 2nd token of '#include' — in parallel with head 0.
     {
-        const auto& head1 = nn->get_output_layer(rllm::MultiTokenPredictionIndex::ONE);
+        const auto& head1 = nn->get_output_layer(MultiTokenPredictionIndex::ONE);
         const auto head1_top = head1.get_top_k_by_logit(5);
         ASSERT_FALSE(head1_top.empty());
         std::println("Prompt '#', MTP head-1 top-5:");
@@ -124,7 +124,7 @@ TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
 
     // MTP head 2: predict 'de' (3rd token of '#include') from context '#'.
     {
-        const auto& head2 = nn->get_output_layer(rllm::MultiTokenPredictionIndex::TWO);
+        const auto& head2 = nn->get_output_layer(MultiTokenPredictionIndex::TWO);
         const auto head2_top = head2.get_top_k_by_logit(5);
         ASSERT_FALSE(head2_top.empty());
         std::println("Prompt '#', MTP head-2 top-5:");
@@ -145,11 +145,11 @@ TEST(PredictorRegressionTest, MTP_HashPredictsInThenCluInParallel)
 {
     std::srand(0);
     std::vector<std::string> filters = {"include_sequence"};
-    rllm::Corpus corpus(filters);
+    Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
-    rllm::Statistics stats;
-    auto nn = std::make_unique<rllm::NeuralNetwork>(2, corpus, stats);
-    nn->set_training_method(rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
+    Statistics stats;
+    auto nn = std::make_unique<NeuralNetwork>(2, corpus, stats);
+    nn->set_training_method(TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
     nn->train(false, 10, std::nullopt, std::nullopt);
 
     // Single forward pass with '#' activates all MTP heads simultaneously.
@@ -159,13 +159,13 @@ TEST(PredictorRegressionTest, MTP_HashPredictsInThenCluInParallel)
     nn->propagate_forward();
 
     // Head 0 (primary): predicts the next token after '#'.
-    const auto head0_top = nn->get_best_output_token_ids(1, rllm::MultiTokenPredictionIndex::START);
+    const auto head0_top = nn->get_best_output_token_ids(1, MultiTokenPredictionIndex::START);
     ASSERT_FALSE(head0_top.empty());
     EXPECT_EQ(corpus.get_token_from_id(head0_top.front().token_id), "in")
         << "Head 0 should predict 'in' (next token after '#') from context '#'";
 
     // Head 1: predicts the 2nd-next token from '#' in parallel with head 0.
-    const auto& head1 = nn->get_output_layer(rllm::MultiTokenPredictionIndex::ONE);
+    const auto& head1 = nn->get_output_layer(MultiTokenPredictionIndex::ONE);
     const auto head1_top = head1.get_top_k_by_logit(1);
     ASSERT_FALSE(head1_top.empty());
     EXPECT_EQ(corpus.get_token_from_id(head1_top.front().token_id), "clu")
@@ -182,11 +182,11 @@ TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
     // "#define B" (4 tokens) only activates 3 heads, so head 3 is exclusively
     // trained to predict "A" from "[#]" — no conflicting signal.
     std::vector<std::string> filters = {"include_a_training"};
-    rllm::Corpus corpus(filters);
+    Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
-    rllm::Statistics stats;
-    auto nn = std::make_unique<rllm::NeuralNetwork>(1, corpus, stats);
-    nn->set_training_method(rllm::TrainingMethod::RANDOM_LINE_FULL);
+    Statistics stats;
+    auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+    nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
     nn->train(false, 10, std::nullopt, std::nullopt);
 
     // Head 3 (THREE) should predict "A" — the 4th token after "#".
@@ -195,7 +195,7 @@ TEST(PredictorRegressionTest, GuaranteedModel_IncludePredictsA)
 
     nn->get_last_input() = hash_toks; // set the input to the probe token(s) for tracing
     nn->propagate_forward();
-    const auto top1 = nn->get_best_output_token_ids(1, rllm::MultiTokenPredictionIndex::THREE);
+    const auto top1 = nn->get_best_output_token_ids(1, MultiTokenPredictionIndex::THREE);
     ASSERT_FALSE(top1.empty());
     EXPECT_EQ(corpus.get_token_from_id(top1.front().token_id), "A")
         << "Expected MTP head 3 to predict 'A' (4th token of '#include A') from context '#'";
@@ -207,11 +207,11 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
     std::srand(0);
 
     std::vector<std::string> filters = {"guaranteed_to_learn"};
-    rllm::Corpus corpus(filters);
+    Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
-    rllm::Statistics stats;
-    auto nn = std::make_unique<rllm::NeuralNetwork>(1, corpus, stats);
-    nn->set_training_method(rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN);
+    Statistics stats;
+    auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+    nn->set_training_method(TrainingMethod::RANDOM_LINE_RANDOM_LEN);
 
     // 3 epochs is the smallest fast setting that consistently keeps both
     // preprocessor branches visible on this tiny corpus.
@@ -219,12 +219,12 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
 
     const auto prompt = corpus.get_token_ids("#");
     const auto defin_tokens = corpus.get_token_ids("defin");
-    ASSERT_EQ(defin_tokens.size(), static_cast<rllm::PositionIndex>(1));
-    const auto defin_token_id = defin_tokens[rllm::PositionIndex::START];
+    ASSERT_EQ(defin_tokens.size(), static_cast<PositionIndex>(1));
+    const auto defin_token_id = defin_tokens[PositionIndex::START];
     nn->get_last_input() = prompt;
     nn->propagate_forward();
-    const auto top5 = nn->get_best_output_token_ids(5, rllm::MultiTokenPredictionIndex::START);
-    const auto all_outputs = nn->get_best_output_token_ids(static_cast<size_t>(rllm::TokenID::MAX), rllm::MultiTokenPredictionIndex::START);
+    const auto top5 = nn->get_best_output_token_ids(5, MultiTokenPredictionIndex::START);
+    const auto all_outputs = nn->get_best_output_token_ids(static_cast<size_t>(TokenID::MAX), MultiTokenPredictionIndex::START);
     ASSERT_EQ(top5.size(), 5u);
 
     bool include_seen = false;
@@ -261,18 +261,18 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
 // ---------------------------------------------------------------------------
 TEST(TransformerBlockTest, ForwardOutputShape)
 {
-    auto block = std::make_unique<rllm::TransformerBlock>();
+    auto block = std::make_unique<TransformerBlock>();
     block->randomize();
 
     const int T = TEST_SEQ_LEN;
-    const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
-        static_cast<rllm::PositionIndex>(T)
+    const int D = static_cast<int>(EmbeddingDimension::MAX);
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h(
+        static_cast<PositionIndex>(T)
     );
     fill(h, 0.1f);
 
-    auto forward_workspace = std::make_unique<rllm::ForwardWorkspace>(static_cast<rllm::PositionIndex>(T));
-    block->forward(h, static_cast<rllm::PositionIndex>(T), *forward_workspace);
+    auto forward_workspace = std::make_unique<ForwardWorkspace>(static_cast<PositionIndex>(T));
+    block->forward(h, static_cast<PositionIndex>(T), *forward_workspace);
 
     ASSERT_EQ(static_cast<size_t>(h.num_rows()), static_cast<size_t>(T));
 }
@@ -282,26 +282,26 @@ TEST(TransformerBlockTest, ForwardOutputShape)
 // ---------------------------------------------------------------------------
 TEST(TransformerBlockTest, BackwardOutputShape)
 {
-    auto block = std::make_unique<rllm::TransformerBlock>();
+    auto block = std::make_unique<TransformerBlock>();
     block->randomize();
 
     const int T = TEST_SEQ_LEN;
-    const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h(
-        static_cast<rllm::PositionIndex>(T)
+    const int D = static_cast<int>(EmbeddingDimension::MAX);
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h(
+        static_cast<PositionIndex>(T)
     );
     fill(h, 0.05f);
-    auto forward_workspace = std::make_unique<rllm::ForwardWorkspace>(static_cast<rllm::PositionIndex>(T));
-    block->forward(h, static_cast<rllm::PositionIndex>(T), *forward_workspace);
+    auto forward_workspace = std::make_unique<ForwardWorkspace>(static_cast<PositionIndex>(T));
+    block->forward(h, static_cast<PositionIndex>(T), *forward_workspace);
 
-    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout(
-        static_cast<rllm::PositionIndex>(T)
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dout(
+        static_cast<PositionIndex>(T)
     );
     fill(dout, 0.01f);
-    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
-        static_cast<rllm::PositionIndex>(T)
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din(
+        static_cast<PositionIndex>(T)
     );
-    auto backward_workspace = std::make_unique<rllm::BackwardWorkspace>(static_cast<rllm::PositionIndex>(T));
+    auto backward_workspace = std::make_unique<BackwardWorkspace>(static_cast<PositionIndex>(T));
     block->backward(dout, din, *backward_workspace, 0.01f, *forward_workspace);
 
     ASSERT_EQ(static_cast<int>(din.num_rows()) * static_cast<int>(din.num_cols()), T * D)
@@ -451,17 +451,17 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
 
     const int max_threads = parallel::get_max_threads();
 
-    auto block = std::make_unique<rllm::TransformerBlock>();
+    auto block = std::make_unique<TransformerBlock>();
     block->randomize();
 
     const int T = BENCH_SEQ_LEN;
-    const int D = static_cast<int>(rllm::EmbeddingDimension::MAX);
-    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
-        static_cast<rllm::PositionIndex>(T)
+    const int D = static_cast<int>(EmbeddingDimension::MAX);
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_template(
+        static_cast<PositionIndex>(T)
     );
     fill(h_template, 0.1f);
 
-    rllm::ForwardWorkspace forward_workspace(static_cast<rllm::PositionIndex>(T));
+    ForwardWorkspace forward_workspace(static_cast<PositionIndex>(T));
 
     // --- serial baseline (1 thread) ---
     parallel::set_num_threads(1);
@@ -470,7 +470,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     {
         std::println("Forward seq iter {}/{}", iter + 1, BENCH_FORWARD_ITERS);
         auto h = h_template;
-        block->forward(h, static_cast<rllm::PositionIndex>(T), forward_workspace);
+        block->forward(h, static_cast<PositionIndex>(T), forward_workspace);
     }
     const auto t1 = std::chrono::steady_clock::now();
 
@@ -481,7 +481,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     {
         std::println("Forward par iter {}/{}", iter + 1, BENCH_FORWARD_ITERS);
         auto h = h_template;
-        block->forward(h, static_cast<rllm::PositionIndex>(T), forward_workspace);
+        block->forward(h, static_cast<PositionIndex>(T), forward_workspace);
     }
     const auto t3 = std::chrono::steady_clock::now();
 
@@ -517,28 +517,28 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
 
     const int max_threads = parallel::get_max_threads();
 
-    auto block = std::make_unique<rllm::TransformerBlock>();
+    auto block = std::make_unique<TransformerBlock>();
     block->randomize();
     
     const int T = BENCH_SEQ_LEN;
 
 
-    auto forward_workspace = std::make_unique<rllm::ForwardWorkspace>(static_cast<rllm::PositionIndex>(BENCH_SEQ_LEN));
-    auto backward_workspace = std::make_unique<rllm::BackwardWorkspace>(static_cast<rllm::PositionIndex>(T));
+    auto forward_workspace = std::make_unique<ForwardWorkspace>(static_cast<PositionIndex>(BENCH_SEQ_LEN));
+    auto backward_workspace = std::make_unique<BackwardWorkspace>(static_cast<PositionIndex>(T));
 
-    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> h_template(
-        static_cast<rllm::PositionIndex>(T)
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_template(
+        static_cast<PositionIndex>(T)
     );
     fill(h_template, 0.1f);
-    rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> dout_template(
-        static_cast<rllm::PositionIndex>(T)
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dout_template(
+        static_cast<PositionIndex>(T)
     );
     fill(dout_template, 0.01f);
 
     // Prime the block with a forward pass so backward has valid cached state.
     {
         auto h = h_template;
-        block->forward(h, static_cast<rllm::PositionIndex>(T), *forward_workspace);
+        block->forward(h, static_cast<PositionIndex>(T), *forward_workspace);
     }
 
     // --- serial baseline (1 thread) ---
@@ -547,8 +547,8 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
         std::print("Backward iter {}/{}\n", iter + 1, BENCH_ITERS);
-        rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
-            static_cast<rllm::PositionIndex>(T)
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din(
+            static_cast<PositionIndex>(T)
         );
         block->backward(dout_template, din, *backward_workspace, 0.01f, *forward_workspace);
     }
@@ -560,8 +560,8 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
         std::println("Backward par iter {}/{}", iter + 1, BENCH_ITERS);
-        rllm::flexible_rows_matrix<rlmm_float, rllm::PositionIndex, rllm::EmbeddingDimension> din(
-            static_cast<rllm::PositionIndex>(T)
+        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din(
+            static_cast<PositionIndex>(T)
         );
         block->backward(dout_template, din, *backward_workspace, 0.01f, *forward_workspace);
     }
@@ -604,11 +604,11 @@ TEST(ParFor2DTest, SpeedupFasterThanSerial)
     const int max_threads = parallel::get_max_threads();
 
     constexpr int ROWS = BENCH_SEQ_LEN; // 64
-    constexpr int COLS = static_cast<int>(rllm::EmbeddingDimension::MAX); // 512
+    constexpr int COLS = static_cast<int>(EmbeddingDimension::MAX); // 512
     constexpr int WORK_PER_CELL = 128; // float multiply-adds per cell
     constexpr int ITERS = 100;
 
-    const auto seq = static_cast<rllm::PositionIndex>(ROWS);
+    const auto seq = static_cast<PositionIndex>(ROWS);
     std::vector<float> buf(ROWS * COLS, 0.0f);
 
     // --- serial baseline (1 thread) ---
@@ -616,7 +616,7 @@ TEST(ParFor2DTest, SpeedupFasterThanSerial)
     const auto t0 = std::chrono::steady_clock::now();
     for (int it = 0; it < ITERS; ++it)
     {
-        for (const auto [t, d] : rllm::enum_iterator2D<rllm::PositionIndex, rllm::EmbeddingDimension>(seq))
+        for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq))
         {
             float v = static_cast<float>(static_cast<int>(t) * COLS + static_cast<int>(d) + it);
             for (int k = 0; k < WORK_PER_CELL; ++k)
@@ -632,7 +632,7 @@ TEST(ParFor2DTest, SpeedupFasterThanSerial)
     const auto t2 = std::chrono::steady_clock::now();
     for (int it = 0; it < ITERS; ++it)
     {
-        PARFOR_2D(t, d, rllm::enum_iterator2D<rllm::PositionIndex, rllm::EmbeddingDimension>(seq))
+        PARFOR_2D(t, d, enum_iterator2D<PositionIndex, EmbeddingDimension>(seq))
         float v = static_cast<float>(static_cast<int>(t) * COLS + static_cast<int>(d) + it);
         for (int k = 0; k < WORK_PER_CELL; ++k)
             v = v * 1.00001f + 0.00001f;
@@ -712,7 +712,7 @@ TEST(Parfor2DTriangularTest, SpeedupFasterThanSerial)
     constexpr int WORK_PER_CELL = 256; // float multiply-adds per cell
     constexpr int ITERS = 100;
 
-    const auto N_pos = static_cast<rllm::PositionIndex>(N);
+    const auto N_pos = static_cast<PositionIndex>(N);
     std::vector<float> buf(static_cast<size_t>(N) * static_cast<size_t>(N), 0.0f);
 
     // --- serial baseline (1 thread) ---
@@ -819,7 +819,7 @@ TEST(Parfor2DUpperTriangularTest, SpeedupFasterThanSerial)
     constexpr int WORK_PER_CELL = 256;
     constexpr int ITERS = 100;
 
-    const auto N_pos = static_cast<rllm::PositionIndex>(N);
+    const auto N_pos = static_cast<PositionIndex>(N);
     std::vector<float> buf(static_cast<size_t>(N) * static_cast<size_t>(N), 0.0f);
 
     // --- serial baseline (1 thread) ---

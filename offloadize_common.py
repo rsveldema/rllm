@@ -322,6 +322,24 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "limit<HeadsIndex::MAX>(")
     out = out.replace("InputLine", 
                       "fixed_size_vector<TokenID, PositionIndex>")
+    out = out.replace("PositionIndex::START", "0")
+    out = out.replace("EmbeddingDimension::START", "0")
+    out = out.replace("HeadsIndex::START", "0")
+    out = out.replace("TokenID::START", "0")
+    out = out.replace("TempStorage::START", "0")
+    out = out.replace("fixed_size_vector<TokenID,", "fixed_size_vector<int,")
+    out = out.replace(", TokenID,", ", TokenID::MAX,")
+    out = out.replace(", TokenID>", ", TokenID::MAX>")
+    out = out.replace(", TempStorage", ", TempStorage::MAX")
+    out = out.replace(", HeadsIndex", ", HeadsIndex::MAX")
+    out = out.replace(", PositionIndex", ", PositionIndex::MAX")
+    out = out.replace(", EmbeddingDimension", ", EmbeddingDimension::MAX")
+    out = out.replace(", FFDimension", ", FFDimension::MAX")
+    out = out.replace(", HeadDimension", ", HeadDimension::MAX")
+    out = out.replace(", RmsNormPartialSumIndex", ", RmsNormPartialSumIndex::MAX")
+    out = out.replace(", MultiTokenPredictionIndex", ", MultiTokenPredictionIndex::MAX")
+    out = out.replace(", NeuronConnectionIndex", ", NeuronConnectionIndex::MAX")
+    out = out.replace(", ConflictIndex", ", ConflictIndex::MAX")
     
 
     
@@ -349,6 +367,9 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace("math::clamp", " clamp ")
     out = out.replace("math::max", " max ")
     out = out.replace("std::sqrt", " sqrt ")
+    out = re.sub(r"\b([A-Za-z_]\w*)\s*&\s*~1\b", r"(\1 - (\1 % 2))", out)
+    out = re.sub(r"\b([A-Za-z_]\w*)\s*%\s*2\s*==\s*0\b", r"((\1 % 2) == 0)", out)
+    out = re.sub(r"limit<([^>]+)>\(\s*inc\(([^)]+)\)\s*\)", r"limit<\1>(0, inc(\2))", out)
 
     out = out.replace("constexpr", "const")
 
@@ -361,8 +382,6 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
         w = out.find(")", p)
         out = out[:k] + out[p:w] + out[w:]
 
-    out = out.replace("TokenID", " int ")
-    
     out = out.replace("[[maybe_unused]]", "")
     return out
 
@@ -432,23 +451,10 @@ def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
 
     if ctx.backend_namespace == "vulkan":
         kernel_symbol, rel_spv = _vulkan_kernel_symbol_and_rel_spv(ctx.rel_path, ctx.lineno)
-        launch_name = "launch_3d_named" if ctx.is_3d else ("launch_2d_named" if ctx.is_2d else "launch_1d_named")
         extra_param_names = parse_extra_param_names(ctx.extra_params)
-        if extra_param_names:
-            kernel_template_args = ", ".join(f"decltype(({name}))" for name in extra_param_names)
-        else:
-            kernel_template_args = ""
-        lines.append(
-            f"{ctx.indent}static rllm::vulkan::ComputeKernel<{kernel_template_args}> {kernel_symbol}(VulkanMemorySpace::get_instance(),"
-        )
-        lines.append(f"{ctx.indent}    \"{ctx.rel_path}:{ctx.lineno}\",")
-        lines.append(f"{ctx.indent}    \"{rel_spv}\"")
-        lines.append(f"{ctx.indent});")
-        lines.append(f"{ctx.indent}{kernel_symbol}.{launch_name}(")
+        _ = rel_spv
+        lines.append(f"{ctx.indent}rllm::vulkan::generated::{kernel_symbol}(")
         lines.append(f"{ctx.indent}    {ctx.range_expr}{',' if extra_param_names else ''}")
-        if extra_param_names:
-            joined_names = ", ".join(f'\"{name}\"' for name in extra_param_names)
-            lines.append(f"{ctx.indent}    {{{joined_names}}},")
         for idx, name in enumerate(extra_param_names):
             suffix = "," if idx + 1 < len(extra_param_names) else ""
             lines.append(f"{ctx.indent}    {name}{suffix}")
@@ -1111,7 +1117,7 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
     # Build filename: offload_parfor_<basename>_<lineno>.cc
     src_basename = ctx.rel_path.rsplit("/", 1)[-1] if "/" in ctx.rel_path else ctx.rel_path
     name_no_ext = src_basename.rsplit(".", 1)[0] if "." in src_basename else src_basename
-    filename = f"offload_parfor_{name_no_ext}_{ctx.lineno}.cc"
+    filename = f"offload_parfor_{name_no_ext}_{ctx.lineno}.kernel"
     dump_path = dump_dir / filename
     
     lines: list[str] = []
