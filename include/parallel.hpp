@@ -21,6 +21,10 @@
 
 #include <memory_spaces/host_memory_space.hpp>
 
+#if defined(USE_VULKAN_OFFLOAD)
+#include <vulkan_session.hpp>
+#endif
+
 template <typename T>
 T* allocate_aligned(IMemorySpace& mem_space, std::size_t count)
 {
@@ -246,6 +250,9 @@ namespace parallel {
             std::lock_guard<std::mutex> lock(m_copy_site_mutex);
             m_copy_sites.clear();
             m_copy_parameters.clear();
+#if defined(USE_VULKAN_OFFLOAD)
+            ComputeKernelRegistry::instance().resetStatistics();
+#endif
 #endif
         }
 
@@ -263,6 +270,50 @@ namespace parallel {
                 device_to_host_buffer_copies(),
                 device_to_host_buffer_copy_bytes()
             );
+
+#if defined(USE_VULKAN_OFFLOAD)
+            const auto print_top_kernel_transfers = [](std::string_view title, bool host_to_device) {
+                auto stats = ComputeKernelRegistry::instance().getStatistics(-1);
+                std::erase_if(stats, [host_to_device](const VStatistics& item) {
+                    return host_to_device ? item.host_to_device == 0 : item.device_to_host == 0;
+                });
+
+                std::sort(stats.begin(), stats.end(), [host_to_device](const VStatistics& lhs, const VStatistics& rhs) {
+                    const size_t lhs_count = host_to_device ? lhs.host_to_device : lhs.device_to_host;
+                    const size_t rhs_count = host_to_device ? rhs.host_to_device : rhs.device_to_host;
+                    if (lhs_count != rhs_count)
+                        return lhs_count > rhs_count;
+
+                    const size_t lhs_bytes = host_to_device ? lhs.host_to_device_bytes : lhs.device_to_host_bytes;
+                    const size_t rhs_bytes = host_to_device ? rhs.host_to_device_bytes : rhs.device_to_host_bytes;
+                    if (lhs_bytes != rhs_bytes)
+                        return lhs_bytes > rhs_bytes;
+
+                    return lhs.kernel_name < rhs.kernel_name;
+                });
+
+                if (stats.size() > 5)
+                    stats.resize(5);
+                if (stats.empty())
+                    return;
+
+                std::println("  {}:", title);
+                for (const auto& item : stats)
+                {
+                    std::println(
+                        "    {}: H2D={} ({} bytes), D2H={} ({} bytes)",
+                        item.kernel_name,
+                        item.host_to_device,
+                        item.host_to_device_bytes,
+                        item.device_to_host,
+                        item.device_to_host_bytes
+                    );
+                }
+            };
+
+            print_top_kernel_transfers("Top H2D kernels", true);
+            print_top_kernel_transfers("Top D2H kernels", false);
+#endif
 
             const auto top_sites = top_copy_sites();
             if (!top_sites.empty())

@@ -7,12 +7,14 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #if defined(USE_VULKAN_OFFLOAD)
 #include <rllm_vulkan_runtime.hpp>
+#include <parallel.hpp>
 #endif
 
 enum class DeviceMemoryOwner {
@@ -136,6 +138,9 @@ public:
         std::lock_guard<std::mutex> lock(m_state_mutex);
         m_pending_flush = nullptr;
         m_owner = DeviceMemoryOwner::ON_DEVICE;
+#if defined(USE_VULKAN_OFFLOAD)
+        m_last_device_writer = std::string(ComputeKernelRegistry::activeKernelName());
+#endif
     }
 
     DeviceMemoryOwner device_memory_owner() const
@@ -187,15 +192,18 @@ public:
         mark_host_modified();
     }
 
-    void copy_to_offload_buffer(std::string_view = {}, std::string_view = {})
+    void copy_to_offload_buffer(std::string_view site = {}, std::string_view parameter = {})
     {
 #if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
-        copy_to_offload_buffer_unlocked();
+        copy_to_offload_buffer_unlocked(site, parameter);
+#else
+        static_cast<void>(site);
+        static_cast<void>(parameter);
 #endif
     }
 
-    void copy_range_to_offload_buffer(size_t start_element, size_t element_count, std::string_view = {}, std::string_view = {})
+    void copy_range_to_offload_buffer(size_t start_element, size_t element_count, std::string_view site = {}, std::string_view parameter = {})
     {
 #if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
@@ -206,11 +214,15 @@ public:
             const auto offset = static_cast<VkDeviceSize>(start_element * sizeof(T));
             const auto bytes = static_cast<VkDeviceSize>(element_count * sizeof(T));
             m_device->write(rllm::vulkan_runtime::context(), *m_host, bytes, offset, offset);
+            parallel::statistics.record_host_to_device_buffer_copy(site, parameter, static_cast<size_t>(bytes));
+            ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), static_cast<size_t>(bytes));
             m_owner = DeviceMemoryOwner::REPLICATED;
         }
 #else
         static_cast<void>(start_element);
         static_cast<void>(element_count);
+        static_cast<void>(site);
+        static_cast<void>(parameter);
 #endif
     }
 
@@ -312,12 +324,14 @@ private:
 #endif
     }
 
-    void copy_to_offload_buffer_unlocked() const
+    void copy_to_offload_buffer_unlocked(std::string_view site = {}, std::string_view parameter = {}) const
     {
 #if defined(USE_VULKAN_OFFLOAD)
         if (m_owner == DeviceMemoryOwner::ON_HOST || m_owner == DeviceMemoryOwner::INVALID)
         {
             m_device->write(rllm::vulkan_runtime::context(), *m_host);
+            parallel::statistics.record_host_to_device_buffer_copy(site, parameter, m_bytes);
+            ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), m_bytes);
             m_owner = DeviceMemoryOwner::REPLICATED;
         }
 #endif
@@ -334,6 +348,8 @@ private:
         if (m_owner == DeviceMemoryOwner::ON_DEVICE)
         {
             m_device->read(rllm::vulkan_runtime::context(), *m_host);
+            parallel::statistics.record_device_to_host_buffer_copy({}, {}, m_bytes);
+            ComputeKernelRegistry::instance().recordDeviceToHost(m_last_device_writer, m_bytes);
             m_owner = DeviceMemoryOwner::REPLICATED;
         }
 #endif
@@ -360,4 +376,7 @@ private:
     mutable DeviceMemoryOwner m_owner = DeviceMemoryOwner::INVALID;
     mutable std::function<void()> m_pending_flush;
     mutable std::mutex m_state_mutex;
+#if defined(USE_VULKAN_OFFLOAD)
+    mutable std::string m_last_device_writer;
+#endif
 };

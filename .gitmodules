@@ -1,3 +1,6 @@
 [submodule "kernel_compiler"]
 	path = kernel_compiler
 	url = https://github.com/rsveldema/kernel_compiler.git
+[submodule "safetensors-cpp"]
+	path = safetensors-cpp
+	url = https://github.com/syoyo/safetensors-cpp.git
