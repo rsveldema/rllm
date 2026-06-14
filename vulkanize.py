@@ -925,7 +925,7 @@ def _generate_kernel_compiler_artifacts(
     kernel_specs: list[VulkanKernelSpec],
     kernel_root: Path,
     parfor_dump_dir: Path,
-    enable_parallelization: bool = False,
+    enable_parallelization: bool = True,
 ) -> tuple[list[Path], list[Path], list[Path]]:
     repo_root = Path(__file__).resolve().parent
     compile_py = repo_root / "kernel_compiler" / "codegen" / "compile.py"
