@@ -44,10 +44,11 @@ namespace parallel::detail
     {
     }
 
-    inline void cpu_atomic_add(float& dst, const float value)
+    template<typename T>
+    inline void cpu_atomic_add(T& dst, const float value)
     {
-        std::atomic_ref<float> atomic_dst(dst);
-        float current = atomic_dst.load(std::memory_order_relaxed);
+        std::atomic_ref<T> atomic_dst(dst);
+        T current = atomic_dst.load(std::memory_order_relaxed);
         while (!atomic_dst.compare_exchange_weak(
             current,
             current + value,
