@@ -213,7 +213,7 @@ namespace rllm
     void TransformerBlock::compute_attention_scores_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi)
     {
         // OFFLOAD_PARAMETERS(attn_w_h, Q, K)
-        fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& attn_w_h = ws.attn_w[hi];
+        flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>& attn_w_h = ws.attn_w[hi];
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = ws.Q;
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = ws.K;
         // END_OFFLOAD_PARAMETERS
@@ -227,7 +227,7 @@ namespace rllm
             {
                 dot += Q[i, d] * K[j, d];
             }
-            const float score = dot * (1.0f / sqrt(HeadDimension::MAX));
+            const float score = dot * (1.0f / sqrt(float(HeadDimension::MAX)));
             attn_w_h[i, j] = score;
         }
         ENDFOR
@@ -562,7 +562,7 @@ namespace rllm
         ENDFOR
     }
 
-    void TransformerBlock::backward_accumulate_attention_dk_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    void TransformerBlock::backward_accumulate_attention_dk_for_heads_hi(BackwardWorkspace& ws, const ForwardWorkspace& fwd, HeadsIndex hi)
     {
         constexpr float scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
 
@@ -570,7 +570,7 @@ namespace rllm
 
         // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, head_scale, seq_len, d_raw_h_rows, d_raw_h_cols)
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K = ws.d_K;
-        const fixed_size_obj_vector<flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex>& d_raw_h = ws.d_raw;
+        const flexible_size_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws.d_raw[hi];
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
         float head_scale = scale;
         PositionIndex seq_len = fwd.seq_len;
@@ -581,15 +581,20 @@ namespace rllm
 
         OFFLOAD_PARFOR_3D_PARAM(hi, j, d_head, dk_grid, (d_K, d_raw_h, Q, head_scale, seq_len, d_raw_h_rows, d_raw_h_cols))
         {
-            const int hi_int = static_cast<int>(hi);
-            const int d = hi_int * static_cast<int>(HeadDimension::MAX) + int(d_head);
-            const float hs = head_scale;
             float sum_k = 0.f;
             for (const auto i : enum_iterator<PositionIndex>(j, seq_len))
-                sum_k += d_raw_h[hi][i, j] * hs * Q[i, d];
+                sum_k += d_raw_h[i, j] * head_scale * Q[i, d];
             d_K[j, d] = sum_k;
         }
         ENDFOR
+    }
+
+
+    void TransformerBlock::backward_accumulate_attention_dk_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    {
+        PARFOR(hi, enum_iterator<HeadsIndex>())
+        backward_accumulate_attention_dk_for_heads_hi(ws, fwd, hi);
+        END_FOR
     }
 
     void TransformerBlock::backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)

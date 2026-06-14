@@ -27,8 +27,8 @@
 
 namespace rllm
 {
-    //using rlmm_float_small = _Float16;
-    using rlmm_float_small = float;
+    // when changing this, also add the compile.py option to enable bfloat16 generation
+    using rlmm_float_small = _Float16;    
     using rlmm_float = float;
     static constexpr rlmm_float RLMM_ZERO = rlmm_float{0};
     static constexpr rlmm_float RLMM_ONE = rlmm_float{1};
