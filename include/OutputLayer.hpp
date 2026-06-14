@@ -1,9 +1,11 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <safetensors.hh>
 
 #include <nlohmann/json_fwd.hpp>
 #include <Corpus.hpp>
+#include <string>
 
 namespace rllm
 {
@@ -49,10 +51,15 @@ namespace rllm
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
+        void load_from_safetensors(const std::string& filename, std::string* err = nullptr);
+        void save_to_safetensors(const std::string& filename,
+                                         std::string* warn = nullptr,
+                                         std::string* err = nullptr) const;
 
         // Returns the top-k tokens by raw logit value.
         std::vector<OutputToken> get_top_k_by_logit(size_t k) const;
 
+    friend class NeuralNetwork;
       private:
         // Vocabulary logits computed by forward_from_hidden().
         fixed_size_vector<rlmm_float, TokenID> m_inputs;

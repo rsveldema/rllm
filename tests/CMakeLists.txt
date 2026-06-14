@@ -47,6 +47,7 @@ add_executable(test_rllm
     test_outputlayer.cc
     test_enum_iterator.cc
     test_enum_iterator2D.cc
+    test_serialization.cc
 )
 target_link_libraries(test_rllm PRIVATE rllm_lib_debug GTest::gtest_main)
 target_compile_options(test_rllm PRIVATE -march=native -O3)

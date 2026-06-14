@@ -140,6 +140,8 @@ function(rllm_define_lib target_name)
 
     add_dependencies(${target_name} generate_tokenizer_map)
     target_link_libraries(${target_name} PUBLIC nlohmann_json::nlohmann_json)
+    target_link_libraries(${target_name} PUBLIC safetensors-cpp::safetensors_cpp)
+    target_link_libraries(${target_name} PUBLIC isocline)
 
     if(PARALLEL_BACKEND STREQUAL "fastfork")
         set(RLLM_FASTFORK_SOURCE "${RLLM_COMPILE_SRC_DIR}/fastfork/fastfork.cc")

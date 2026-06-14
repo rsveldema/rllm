@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <safetensors.hh>
 #include <fixed_size_levels_rows_cols_matrix.hpp>
 #include <fixed_size_obj_vector.hpp>
 #include <flexible_size_matrix.hpp>
@@ -9,6 +10,7 @@
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <parallel.hpp>
+#include <string>
 #include <vector>
 
 namespace rllm
@@ -209,6 +211,10 @@ namespace rllm
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
+        void load_from_safetensors(const std::string& filename, std::string* err = nullptr);
+        void save_to_safetensors(const std::string& filename,
+                                         std::string* warn = nullptr,
+                                         std::string* err = nullptr) const;
 
         // Public RMS norm: used by NeuralNetwork to apply the final pre-LM-head norm.
         static void apply_rms_norm(const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y)
@@ -229,6 +235,8 @@ namespace rllm
         }
 
 
+    // Serialization helpers need access to private weight matrices.
+    friend class NeuralNetwork;
       private:
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
         fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;

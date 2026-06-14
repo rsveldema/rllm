@@ -4,3 +4,6 @@
 [submodule "safetensors-cpp"]
 	path = safetensors-cpp
 	url = https://github.com/syoyo/safetensors-cpp.git
+[submodule "isocline"]
+	path = isocline
+	url = https://github.com/daanx/isocline

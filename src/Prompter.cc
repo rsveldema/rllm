@@ -4,6 +4,7 @@
 #include <iostream>
 #include <print>
 #include <string>
+#include <isocline.h>
 
 namespace rllm
 {
@@ -161,16 +162,17 @@ namespace rllm
         }
         else
         {
-            std::string line;
             while (true)
             {
                 std::println("Enter input (or '/exit' to quit): ");
-                std::print("> ");
-                if (!std::getline(std::cin, line))
+                char* raw = ic_readline("> ");
+                if (raw == nullptr)
                 {
                     std::println("Exiting prompt mode.");
                     break;
                 }
+                std::string line(raw);
+                ic_free(raw);
                 process_line(line, corpus, *nn, options);
             }
         }

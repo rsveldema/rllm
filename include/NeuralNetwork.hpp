@@ -6,6 +6,7 @@
 #include <LayerPrimitives.hpp>
 #include <OutputLayer.hpp>
 #include <Statistics.hpp>
+#include <string>
 
 #include <fixed_size_obj_vector.hpp>
 
@@ -75,6 +76,9 @@ namespace rllm
         bool load(const std::string& filename);
         void checkpoint() const;
         void save(const std::string& filename) const;
+        // Safetensors serialization
+        void save_to_safetensors(const std::string& filename) const;
+        bool load_from_safetensors(const std::string& filename);
 
         // Mean-pool the last transformer block's hidden state over the sequence dimension.
         // Equivalent to last_hidden_state.mean(dim=1) in PyTorch.

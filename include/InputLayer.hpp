@@ -1,9 +1,11 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <safetensors.hh>
 
 #include <nlohmann/json_fwd.hpp>
 #include <vector>
+#include <string>
 
 namespace rllm
 {
@@ -48,7 +50,12 @@ namespace rllm
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
+        void load_from_safetensors(const std::string& filename, std::string* err = nullptr);
+        void save_to_safetensors(const std::string& filename,
+                                         std::string* warn = nullptr,
+                                         std::string* err = nullptr) const;
 
+    friend class NeuralNetwork;
       private:
         // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.
         fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension> m_embeddings;
