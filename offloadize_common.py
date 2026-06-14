@@ -28,6 +28,15 @@ OFFLOAD_ALL_MACROS = (
 )
 
 
+
+def load_json(path: Path) -> dict | list | str | int | float | bool | None:
+    """Load and parse a JSON file."""
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_json(path: Path, data: dict | list | str | int | float | bool | None) -> None:
+    """Write data as JSON to a file."""
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 @dataclass
 class LoopContext:
     indent: str

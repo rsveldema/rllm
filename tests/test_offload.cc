@@ -342,13 +342,14 @@ TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
 
     for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
     {
-        const auto embedding = input_layer.get_embedding(input[pos]);
+        embedding_row_t embedding;
+        input_layer.get_embedding(input[pos], embedding);
         const float pos_f = static_cast<float>(pos);
 
         for (const auto di : enum_iterator1D<EmbeddingDimension>())
         {
             const int di_int = static_cast<int>(di);
-            const float emb_val = embedding[di];
+            const float emb_val = embedding[static_cast<size_t>(di)];
             const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / model_dim);
             const float pe = (di_int % 2 == 0) ? std::sin(pos_f * freq) : std::cos(pos_f * freq);
             const float expected = emb_val + pe;

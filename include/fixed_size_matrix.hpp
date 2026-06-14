@@ -145,6 +145,16 @@ namespace rllm
             this->m_data.copy_range_to_offload_buffer(static_cast<size_t>(x) * COLS, COLS);
         }
 
+        /** Copy the entire row at index `x` into a fixed-size container (e.g. std::array). */
+        template <typename Out>
+        void export_row(X x, Out& out) const
+        {
+            assert(static_cast<size_t>(x) < ROWS);
+            auto* src = this->m_data.get() + static_cast<size_t>(x) * COLS;
+            for (size_t i = 0; i < COLS; ++i)
+                out[i] = src[i];
+        }
+
         size_t storage_size_bytes() const
         {
             return ROWS * COLS * sizeof(ElementType);

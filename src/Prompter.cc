@@ -102,12 +102,13 @@ namespace rllm
                      const TokenID tok = token_ids[pos];
                      const auto token_str = corpus.get_token_from_id(tok);
                      std::println("Embedding for token '{}' (id {}):", token_str, static_cast<size_t>(tok));
-                     const auto& emb = input_layer.get_embedding(tok);
+                     embedding_row_t emb;
+                     input_layer.get_embedding(tok, emb);
                      for (size_t i = 0; i < D; i += COLS)
                      {
                          std::print("  [{:3d}]", i);
                          for (size_t j = i; j < std::min(i + COLS, D); ++j)
-                             std::print("  {:+.4f}", static_cast<float>(emb[static_cast<EmbeddingDimension>(j)]));
+                             std::print("  {:+.4f}", static_cast<float>(emb[static_cast<size_t>(j)]));
                          std::println("");
                      }
                  }

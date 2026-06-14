@@ -657,18 +657,18 @@ namespace rllm
 
     // ── serialisation ──────────────────────────────────────────────────────────
 
-    nlohmann::json TransformerBlock::save() const
+     std::unique_ptr<nlohmann::json> TransformerBlock::save() const
     {
         using namespace json_helpers;
-        return {
-            {"W_q", serialize_matrix(W_q)},
-            {"W_k", serialize_matrix(W_k)},
-            {"W_v", serialize_matrix(W_v)},
-            {"W_o", serialize_matrix(W_o)},
-            {"W_gate", serialize_matrix(W_gate)},
-            {"W_up", serialize_matrix(W_up)},
-            {"W_down", serialize_matrix(W_down)},
-        };
+        return std::make_unique<nlohmann::json>(nlohmann::json{
+            {"W_q", *serialize_matrix(W_q)},
+            {"W_k", *serialize_matrix(W_k)},
+            {"W_v", *serialize_matrix(W_v)},
+            {"W_o", *serialize_matrix(W_o)},
+            {"W_gate", *serialize_matrix(W_gate)},
+            {"W_up", *serialize_matrix(W_up)},
+            {"W_down", *serialize_matrix(W_down)}
+        });
     }
 
     void TransformerBlock::load(const nlohmann::json& j)

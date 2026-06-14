@@ -124,4 +124,11 @@ namespace rllm
             m_updated_tokens[tok] = 0;
         }
     }
+
+
+    void InputLayer::get_embedding(TokenID tok, embedding_row_t& out) const
+    {
+        m_embeddings.export_row(tok, out);
+    }
+
 } // namespace rllm

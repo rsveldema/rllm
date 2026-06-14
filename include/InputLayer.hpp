@@ -9,10 +9,15 @@
 
 namespace rllm
 {
-    // InputLayer converts an InputLine (sequence of token IDs) into a
-    // flat hidden-state vector h[seq_len × EmbeddingDimension::MAX].
-    // Each position receives its learned token embedding plus a
-    // fixed sinusoidal positional encoding.
+    /** the embedding for a given TokenID */    
+    using embedding_row_t = std::array<rlmm_float_small, static_cast<size_t>(EmbeddingDimension::MAX)>;
+
+    /**  InputLayer converts an InputLine (sequence of token IDs) into a
+    * flat hidden-state vector h[seq_len × EmbeddingDimension::MAX].
+    * Each position receives its learned token embedding plus a
+    * fixed sinusoidal positional encoding.
+    */
+
     class InputLayer
     {
       public:
@@ -39,14 +44,7 @@ namespace rllm
         void set_random_embeddings();
 
         // Returns the raw learned embedding for a single token (without positional encoding).
-        fixed_size_vector<rlmm_float_small, EmbeddingDimension> get_embedding(TokenID tok) const
-        {
-            fixed_size_vector<rlmm_float_small, EmbeddingDimension> embedding;
-            embedding.set_size(EmbeddingDimension::MAX);
-            for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                embedding[d] = m_embeddings[tok, d];
-            return embedding;
-        }
+        void get_embedding(TokenID tok, embedding_row_t& out) const;
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
@@ -56,7 +54,8 @@ namespace rllm
                                          std::string* err = nullptr) const;
 
     friend class NeuralNetwork;
-      private:
+
+    private:
         // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.
         fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension> m_embeddings;
 

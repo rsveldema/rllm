@@ -210,7 +210,7 @@ namespace rllm
         void randomize();
 
         void load(const nlohmann::json& j);
-        nlohmann::json save() const;
+        std::unique_ptr<nlohmann::json> save() const;
         void load_from_safetensors(const std::string& filename, std::string* err = nullptr);
         void save_to_safetensors(const std::string& filename,
                                          std::string* warn = nullptr,
