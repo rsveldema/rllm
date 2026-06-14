@@ -951,6 +951,8 @@ def _generate_kernel_compiler_artifacts(
             rel_spv,
             dump.as_posix(),
         ]
+        if getattr(args, "parallelize", False):
+            cmd.append("--parallelize")
         proc = subprocess.run(cmd, text=True, capture_output=True)
         if proc.returncode != 0:
             raise RuntimeError(
@@ -996,6 +998,12 @@ def parse_args() -> argparse.Namespace:
         "--shader-compiler",
         required=False,
         help="Path to Vulkan GLSL compiler (glslc or glslangValidator)",
+    )
+    parser.add_argument(
+        "--parallelize",
+        action="store_true",
+        default=False,
+        help="Enable workgroup partitioning parallelization pass",
     )
     return parser.parse_args()
 
