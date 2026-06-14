@@ -31,6 +31,7 @@ if(OFFLOAD_BACKEND STREQUAL "vulkan")
                 --shader-compiler "${RLLM_TEST_VULKAN_SHADER_COMPILER}"
                 --enum-value-tool "$<TARGET_FILE:generate_domain_replace_json>"
                 --manifest "${RLLM_VULKANIZED_TEST_MANIFEST}"
+        $<$<CONFIG:Release>:--parallelize>
         DEPENDS
             generate_domain_replace_json
             "${CMAKE_CURRENT_SOURCE_DIR}/test_offload.cc"

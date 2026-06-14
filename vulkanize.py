@@ -925,6 +925,7 @@ def _generate_kernel_compiler_artifacts(
     kernel_specs: list[VulkanKernelSpec],
     kernel_root: Path,
     parfor_dump_dir: Path,
+    enable_parallelization: bool = False,
 ) -> tuple[list[Path], list[Path], list[Path]]:
     repo_root = Path(__file__).resolve().parent
     compile_py = repo_root / "kernel_compiler" / "codegen" / "compile.py"
@@ -951,7 +952,7 @@ def _generate_kernel_compiler_artifacts(
             rel_spv,
             dump.as_posix(),
         ]
-        if getattr(args, "parallelize", False):
+        if enable_parallelization:
             cmd.append("--parallelize")
         proc = subprocess.run(cmd, text=True, capture_output=True)
         if proc.returncode != 0:
@@ -1055,6 +1056,7 @@ def main() -> int:
         kernel_specs,
         kernel_root,
         parfor_dump_dir,
+        getattr(args, "parallelize", False),
     )
 
     if args.manifest:
