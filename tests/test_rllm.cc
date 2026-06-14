@@ -881,3 +881,67 @@ TEST(Parfor2DUpperTriangularTest, SpeedupFasterThanSerial)
                             << " (serial=" << serial_us << "us, parallel=" << parallel_us << "us, speedup=" << speedup
                             << ").";
 }
+
+
+// ---------------------------------------------------------------------------
+// TransformerBlock RMSNorm backward correctness vs. sequential CPU reference
+// ---------------------------------------------------------------------------
+TEST(TransformerBlockTest, RmsNormBackwardMatchesCpuReference)
+{
+    constexpr int T = 32;
+
+    const auto seq   = static_cast<PositionIndex>(T);
+    constexpr float eps = 1e-6f;
+    constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
+
+    // Seed for reproducibility
+    std::srand(42);
+
+    // --- allocate dy, x, dx ---
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dy(seq);
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> x(seq);
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dx(seq);
+    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dx_ref(seq);
+
+    // Fill with random values in [-1, 1]
+    for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq)) {
+        float v = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 2.0f - 1.0f;
+        dy[t, d] = v;
+        x[t, d]  = v * 0.5f;           // smaller values for stability
+        dx[t, d]  = 0.f;
+        dx_ref[t, d] = 0.f;
+    }
+
+    // --- run the existing rms_norm_backward (parallel or not — we compare to ref) ---
+    TransformerBlock::rms_norm_backward_for_test(dy, x, dx);
+
+    // --- independent sequential CPU reference ---
+    for (const auto t : enum_iterator1D<PositionIndex>(seq)) {
+        float sq = 0.f;
+        for (const auto d : enum_iterator1D<EmbeddingDimension>()) {
+            sq += static_cast<float>(x[t, d]) * static_cast<float>(x[t, d]);
+        }
+        const float inv_rms = 1.0f / std::sqrt(sq / fd + eps);
+
+        float dot = 0.f;
+        for (const auto d : enum_iterator1D<EmbeddingDimension>()) {
+            dot += static_cast<float>(dy[t, d]) * static_cast<float>(x[t, d]) * inv_rms;
+        }
+        dot /= fd;   // mean over embedding dimension
+
+        for (const auto d : enum_iterator1D<EmbeddingDimension>()) {
+            dx_ref[t, d] += inv_rms * (static_cast<float>(dy[t, d]) - static_cast<float>(x[t, d]) * inv_rms * dot);
+        }
+    }
+
+    // --- compare ---
+    float max_diff = 0.f;
+    for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq)) {
+        const float diff = std::abs(static_cast<float>(dx[t, d]) - static_cast<float>(dx_ref[t, d]));
+        if (diff > max_diff) max_diff = diff;
+    }
+
+    constexpr float tol = 1e-4f;
+    EXPECT_LT(max_diff, tol)
+        << "rms_norm_backward vs reference: max_diff=" << max_diff;
+}

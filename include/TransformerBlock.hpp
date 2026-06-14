@@ -235,6 +235,15 @@ namespace rllm
         }
 
 
+        // Test helper: expose RMSNorm backward for correctness tests.
+        static void rms_norm_backward_for_test(
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dy,
+            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dx)
+        {
+            rms_norm_backward(dy, x, dx);
+        }
+
     // Serialization helpers need access to private weight matrices.
     friend class NeuralNetwork;
       private:

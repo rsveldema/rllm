@@ -94,21 +94,27 @@ namespace rllm
     {
         OFFLOAD_PARFOR_1D_PARAM(t, enum_iterator1D<PositionIndex>(x.num_rows()), (dy, x, dx))
         constexpr float eps = 1e-6f;
-        constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
 
         rlmm_float sq = 0.f;
-        for (const auto i : enum_iterator1D<EmbeddingDimension>())
-            sq += x[t, i] * x[t, i];
+        for (const auto i : enum_iterator1D<EmbeddingDimension>()) {
+            const float value = x[t, i];
+            sq += value * value;
+        }
+
+        constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);            
         const rlmm_float inv = 1.0f / std::sqrt(sq / fd + eps);
 
         // dot = mean(dy · y) = (1/d) * sum_i dy[i] * x[i] * inv
         rlmm_float dot = 0.f;
-        for (const auto i : enum_iterator1D<EmbeddingDimension>())
+        for (const auto i : enum_iterator1D<EmbeddingDimension>()) {
             dot += dy[t, i] * x[t, i] * inv;
+        }
+
         dot /= fd;
 
-        for (const auto i : enum_iterator1D<EmbeddingDimension>())
-            dx[t, i] += inv * (dy[t, i] - x[t, i] * inv * dot);
+        for (const auto i : enum_iterator1D<EmbeddingDimension>()) {
+            dx[t, i] += inv * (dy[t, i] - (x[t, i] * inv * dot));
+        }
         ENDFOR
     }
 
