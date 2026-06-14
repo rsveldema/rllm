@@ -8,7 +8,7 @@
 #include <functional>
 
 #include <Range.hpp>
-#include <enum_iterator.hpp>
+#include <enum_iterator1D.hpp>
 #include <parallel.hpp>
 #include <IMemorySpace.hpp>
 
@@ -73,7 +73,7 @@ namespace rllm
         {
             const auto* data = this->m_data.get();
             float max_value = std::numeric_limits<float>::lowest();
-            for (const auto i : enum_iterator<LengthType>(length))
+            for (const auto i : enum_iterator1D<LengthType>(length))
             {
                 const auto val = data[static_cast<size_t>(i)];
                 if (val > max_value)
@@ -95,12 +95,12 @@ namespace rllm
             const auto max_value = get_highest_value(length);
 
             float sum_exp = 0.0f;
-            for (const auto i : enum_iterator<LengthType>(length))
+            for (const auto i : enum_iterator1D<LengthType>(length))
             {
                 sum_exp += std::exp(data[static_cast<size_t>(i)] - max_value);
             }
 
-            for (const auto i : enum_iterator<LengthType>(length))
+            for (const auto i : enum_iterator1D<LengthType>(length))
             {
                 data[static_cast<size_t>(i)] = std::exp(data[static_cast<size_t>(i)] - max_value) / sum_exp;
             }
@@ -111,7 +111,7 @@ namespace rllm
             assert(length <= len);
             const auto* data = this->m_data.get();
             result.clear();
-            for (const auto i : enum_iterator<LengthType>(length))
+            for (const auto i : enum_iterator1D<LengthType>(length))
             {
                 const auto tok = data[static_cast<size_t>(i)];
                 result.push_back(tok);

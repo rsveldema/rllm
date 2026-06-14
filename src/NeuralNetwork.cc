@@ -77,7 +77,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator<EmbeddingDimension>(), (dh_last, dh, last_pos))
+        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator1D<EmbeddingDimension>(), (dh_last, dh, last_pos))
         dh[last_pos, d] = dh_last[d];
         ENDFOR
     }
@@ -150,7 +150,7 @@ namespace rllm
         copy_hidden_row_to_vector(ws.h, last_pos, ws.h_last);
 
         // TODO: inline forward_from_hidden to turn this into a OFFLOAD_PARFOR_2D_PARAM
-        PARFOR(output_index, enum_iterator<MultiTokenPredictionIndex>())
+        PARFOR_1D(output_index, enum_iterator1D<MultiTokenPredictionIndex>())
             m_output_layers[output_index].forward_from_hidden(ws.h_last);
         ENDFOR
     }
@@ -304,7 +304,7 @@ namespace rllm
 
         // Accumulate dh_last contributions from every valid output head.
         ws.dh_last.zero();
-        for (const auto oi : enum_iterator<MultiTokenPredictionIndex>(num_valid))
+        for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>(num_valid))
         {
             ws.output_layer_delta = scores[oi].values;
             m_output_layers[oi].backward_and_update(ws.output_layer_delta, ws.h_last_vec, ws.dh_last, learning_rate);
@@ -332,7 +332,7 @@ namespace rllm
         for (auto& block : m_transformer_blocks)
             block.randomize();
 
-        for (const auto output_index : enum_iterator<MultiTokenPredictionIndex>())
+        for (const auto output_index : enum_iterator1D<MultiTokenPredictionIndex>())
             m_output_layers[output_index].set_random_weights();
     }
 
@@ -398,7 +398,7 @@ namespace rllm
     )
     {
         InputLine line;
-        for (const auto& line_substring_length : enum_iterator<PositionIndex>(line_of_file.size()))
+        for (const auto& line_substring_length : enum_iterator1D<PositionIndex>(line_of_file.size()))
         {
             line_of_file.sub_array(line, line_substring_length);
             if (line.empty())
@@ -950,7 +950,7 @@ namespace rllm
             propagate_forward();
 
             scores_storage->set_size(num_valid_heads);
-            for (const auto _k : enum_iterator<MultiTokenPredictionIndex>(num_valid_heads))
+            for (const auto _k : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
             {
                 Score& s = (*scores_storage)[_k];
                 const auto _target = train_output[static_cast<PositionIndex>(_input_len + static_cast<int>(_k))];

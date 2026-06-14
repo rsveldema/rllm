@@ -2,7 +2,7 @@
 
 #include <OutputLayer.hpp>
 
-#include <enum_iterator.hpp>
+#include <enum_iterator1D.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -10,14 +10,13 @@
 #include <cmath>
 #include <vector>
 
-using rllm::rlmm_float;
 
 namespace
 {
     std::vector<rllm::TokenID> first_n_tokens(size_t count)
     {
         std::vector<rllm::TokenID> tokens;
-        for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+        for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         {
             tokens.push_back(tok);
             if (tokens.size() == count)
@@ -103,7 +102,7 @@ TEST(OutputLayerScoreTest, ZeroLogitsMatchReference)
         1e-4f
     );
 
-    for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+    for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         EXPECT_NEAR(score.values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
 
@@ -141,7 +140,7 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
     EXPECT_NEAR(loss, expected_loss, 1e-5f);
     EXPECT_NEAR(score.temp_values[rllm::TempStorage::START], 2.0f, 1e-5f);
 
-    for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+    for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         EXPECT_NEAR(score.values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
 
@@ -178,7 +177,7 @@ TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
 
     EXPECT_NEAR(loss, expected_loss, 1e-5f);
 
-    for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+    for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         EXPECT_NEAR(score.values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
 
@@ -210,7 +209,7 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
     const float loss_first = layer.compute_score(score, tokens[1]);
 
     EXPECT_NEAR(loss_first, expected_loss_first, 1e-5f);
-    for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+    for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         EXPECT_NEAR(score.values[tok], expected_deltas_first[static_cast<size_t>(tok)], 1e-5f);
 
     h_last.zero();
@@ -223,7 +222,7 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
     const float loss_second = layer.compute_score(score, tokens[0]);
 
     EXPECT_NEAR(loss_second, expected_loss_second, 1e-5f);
-    for (const auto tok : rllm::enum_iterator<rllm::TokenID>())
+    for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         EXPECT_NEAR(score.values[tok], expected_deltas_second[static_cast<size_t>(tok)], 1e-5f);
 }
 

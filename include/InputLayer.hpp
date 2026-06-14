@@ -41,7 +41,7 @@ namespace rllm
         {
             fixed_size_vector<rlmm_float_small, EmbeddingDimension> embedding;
             embedding.set_size(EmbeddingDimension::MAX);
-            for (const auto d : enum_iterator<EmbeddingDimension>())
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 embedding[d] = m_embeddings[tok, d];
             return embedding;
         }

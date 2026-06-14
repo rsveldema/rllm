@@ -3,7 +3,7 @@
 #include <InputLayer.hpp>
 #include <LayerPrimitives.hpp>
 #include <device_pointer.hpp>
-#include <enum_iterator.hpp>
+#include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
 #include <fixed_size_matrix.hpp>
 #include <fixed_size_vector.hpp>
@@ -81,7 +81,7 @@ TEST_F(OffloadParForTest, OffloadParForVisitsEachIndexExactlyOnce)
 
     visits.set_size(static_cast<PositionIndex>(N));
     
-    OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
+    OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
     atomicAdd(visits[static_cast<size_t>(i)], 1);
     ENDFOR
 
@@ -104,7 +104,7 @@ TEST_F(OffloadParForTest, OffloadParForParamVisitsEachIndexExactlyOnce)
 
     visits.set_size(static_cast<PositionIndex>(N));
 
-    OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
+    OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
     atomicAdd(visits[static_cast<size_t>(i)], 1);
     ENDFOR
 
@@ -267,7 +267,7 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFix
     visits.set_size(static_cast<PositionIndex>(N));
     fill(visits, 0, static_cast<PositionIndex>(N));
 
-    OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
+    OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
     visits[static_cast<size_t>(i)] = static_cast<int>(i) + 42;
     ENDFOR
 
@@ -289,7 +289,7 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamWritesFixedSizeFloatVector)
     values.set_size(static_cast<PositionIndex>(N));
     fill(values, 0.0f, static_cast<PositionIndex>(N));
 
-    OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(static_cast<PositionIndex>(N)), (values))
+    OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (values))
     values[static_cast<size_t>(i)] = static_cast<rlmm_float>(static_cast<float>(i) + 0.5f);
     ENDFOR
 
@@ -312,8 +312,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (const auto i : enum_iterator<MultiTokenPredictionIndex>())
-        for (const auto j : enum_iterator<HeadsIndex>())
+    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>())
+        for (const auto j : enum_iterator1D<HeadsIndex>())
             ASSERT_FLOAT_EQ(
                 (values[i, j]),
                 static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 1)
@@ -342,12 +342,12 @@ TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
     constexpr float model_dim = static_cast<float>(EmbeddingDimension::MAX);
     constexpr float max_abs_error = 1e-5f;
 
-    for (const auto pos : enum_iterator<PositionIndex>(input.size()))
+    for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
     {
         const auto embedding = input_layer.get_embedding(input[pos]);
         const float pos_f = static_cast<float>(pos);
 
-        for (const auto di : enum_iterator<EmbeddingDimension>())
+        for (const auto di : enum_iterator1D<EmbeddingDimension>())
         {
             const int di_int = static_cast<int>(di);
             const float emb_val = embedding[di];
@@ -379,8 +379,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (const auto i : enum_iterator<MultiTokenPredictionIndex>())
-        for (const auto j : enum_iterator<HeadsIndex>())
+    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>())
+        for (const auto j : enum_iterator1D<HeadsIndex>())
             EXPECT_FLOAT_EQ(
                 (values[i, j]),
                 scale * static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 5)
@@ -481,8 +481,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (const auto i : enum_iterator<EmbeddingDimension>())
-        for (const auto j : enum_iterator<EmbeddingDimension>())
+    for (const auto i : enum_iterator1D<EmbeddingDimension>())
+        for (const auto j : enum_iterator1D<EmbeddingDimension>())
             EXPECT_FLOAT_EQ(
                 (offload_values[i, j]),
                 (parfor_values[i, j])
@@ -509,8 +509,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (const auto i : enum_iterator<MultiTokenPredictionIndex>(MultiTokenPredictionIndex::THREE))
-        for (const auto j : enum_iterator<HeadsIndex>())
+    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(MultiTokenPredictionIndex::THREE))
+        for (const auto j : enum_iterator1D<HeadsIndex>())
         {
             const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(
@@ -538,8 +538,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (const auto i : enum_iterator<MultiTokenPredictionIndex>(static_cast<MultiTokenPredictionIndex>(3)))
-        for (const auto j : enum_iterator<HeadsIndex>())
+    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(static_cast<MultiTokenPredictionIndex>(3)))
+        for (const auto j : enum_iterator1D<HeadsIndex>())
         {
             const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(
@@ -569,8 +569,8 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
-    for (const auto i : enum_iterator<MultiTokenPredictionIndex>(static_cast<MultiTokenPredictionIndex>(3)))
-        for (const auto j : enum_iterator<HeadsIndex>())
+    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(static_cast<MultiTokenPredictionIndex>(3)))
+        for (const auto j : enum_iterator1D<HeadsIndex>())
         {
             const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(

@@ -17,7 +17,7 @@ namespace parallel {
 // Each loop iteration is forked as an independent task.
 // The extra inner scope `{ {` lets ENDFOR use `}}` to close both PARFOR
 // and PARFOR_2D uniformly while still yielding one task per outer row for 2D.
-#define PARFOR(v, ...) \
+#define PARFOR_1D(v, ...) \
     { auto _ff_rng_ = (__VA_ARGS__); \
       fastfork::Context _ff_ctx_; \
       for (auto v : _ff_rng_) \
@@ -151,7 +151,7 @@ namespace parallel {
 #if defined(USE_VULKAN_OFFLOAD) or defined(USE_CUDA_OFFLOAD)
 // Source offload macros are rewritten by vulkanize, but headers are not rewritten.
 // Keep header-time uses valid by falling back to the CPU PARFOR forms.
-#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
 #define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
 #define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
@@ -164,7 +164,7 @@ namespace parallel {
 // vulkanizer script with target-specific offload pragmas and APIs,
 // but for CPU builds they just map to the regular PARFOR* macros.
 #define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) \
-    RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
+    RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
 

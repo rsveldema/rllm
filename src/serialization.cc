@@ -58,8 +58,8 @@ namespace rllm
         {
             const auto& w_j = j.at("W_lm_head");
             size_t i = 0;
-            for (const auto t : enum_iterator<TokenID>())
-                for (const auto d : enum_iterator<EmbeddingDimension>())
+            for (const auto t : enum_iterator1D<TokenID>())
+                for (const auto d : enum_iterator1D<EmbeddingDimension>())
                     W_lm_head[t, d] = w_j.at(i++).template get<float>();
             W_lm_head.copy_to_offload_buffer();
 #if defined(USE_VULKAN_OFFLOAD)
@@ -73,8 +73,8 @@ namespace rllm
     {
         auto w_j = nlohmann::json::array();
         w_j.get_ref<nlohmann::json::array_t&>().reserve(W_lm_head.ROWS * W_lm_head.COLS);
-        for (const auto t : enum_iterator<TokenID>())
-            for (const auto d : enum_iterator<EmbeddingDimension>())
+        for (const auto t : enum_iterator1D<TokenID>())
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 w_j.push_back(W_lm_head[t, d]);
         return {{"W_lm_head", std::move(w_j)}};
     }
@@ -177,7 +177,7 @@ namespace rllm
         j["transformer_blocks"] = std::move(blocks);
 
         auto output_layers = nlohmann::json::array();
-        for (const auto output_index : enum_iterator<MultiTokenPredictionIndex>())
+        for (const auto output_index : enum_iterator1D<MultiTokenPredictionIndex>())
             output_layers.push_back(m_output_layers[output_index].save());
         j["output_layers"] = std::move(output_layers);
 

@@ -309,15 +309,15 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
 
     out = text
 
-    out = out.replace("enum_iterator<TokenID>(", 
+    out = out.replace("enum_iterator1D<TokenID>(", 
                       "limit<TokenID::MAX>(")
-    out = out.replace("enum_iterator<TempStorage>(", 
+    out = out.replace("enum_iterator1D<TempStorage>(", 
                       "limit<TempStorage::MAX>(")
-    out = out.replace("enum_iterator<PositionIndex>(", 
+    out = out.replace("enum_iterator1D<PositionIndex>(", 
                       "limit<PositionIndex::MAX>(")
-    out = out.replace("enum_iterator<EmbeddingDimension>(", 
+    out = out.replace("enum_iterator1D<EmbeddingDimension>(", 
                       "limit<EmbeddingDimension::MAX>(")
-    out = out.replace("enum_iterator<HeadsIndex>(", 
+    out = out.replace("enum_iterator1D<HeadsIndex>(", 
                       "limit<HeadsIndex::MAX>(")
     out = out.replace("InputLine", 
                       "fixed_size_vector<TokenID, PositionIndex>")
@@ -343,17 +343,27 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
 
     
 
-    if out.find("::MAX") < 0:
-        if out.find("_matrix") >= 0 or out.find("_vector") >= 0:
-            out = out.replace("TempStorage", "TempStorage::MAX")
-            out = out.replace("HeadsIndex", "HeadsIndex::MAX")
-            out = out.replace("PositionIndex", "PositionIndex::MAX")
-            out = out.replace("EmbeddingDimension", "EmbeddingDimension::MAX")
+    # MAX suffix fallback: use \b word boundaries to avoid matching inside <...> templates
+    if out.find("::MAX") < 0 and (out.find("_matrix") >= 0 or out.find("_vector") >= 0):
+        out = re.sub(r"\bTempStorage\b", "TempStorage::MAX", out)
+        out = re.sub(r"\bHeadsIndex\b", "HeadsIndex::MAX", out)
+        out = re.sub(r"\bPositionIndex\b", "PositionIndex::MAX", out)
+        out = re.sub(r"\bEmbeddingDimension\b", "EmbeddingDimension::MAX", out)
 
     # enum as a loose parameter type:
     out = out.replace(" PositionIndex ", " int ")
     out = out.replace("EmbeddingDimension ", " int ")
 
+    # Replace bare obsolete enum-type names used as loose parameter types with int.
+    # Use negative lookbehind (?<!<) to exclude matches inside <...> template args,
+    # and negative lookahead (?!::) to avoid corrupting already-suffixed types like PositionIndex::MAX.
+    for _obsolete_type in (
+        "TokenID", "PositionIndex", "EmbeddingDimension", "HeadsIndex",
+        "TempStorage", "FFDimension", "HeadDimension",
+        "RmsNormPartialSumIndex", "MultiTokenPredictionIndex",
+        "NeuronConnectionIndex", "ConflictIndex"
+    ):
+        out = re.sub(rf"(?<!<)\b{_obsolete_type}\b(?!::)(?!\s*>)", "int", out)
     # Kernel dumps are parsed by kernel_compiler, not a C++ compiler. Strip
     # C++ casts and normalize C++-only scalar spellings before parsing.
     out = _strip_static_casts(out)

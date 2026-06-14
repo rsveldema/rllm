@@ -38,8 +38,8 @@ namespace rllm
 
     void InputLayer::set_random_embeddings()
     {
-        for (const auto tok : enum_iterator<TokenID>())
-            for (const auto d : enum_iterator<EmbeddingDimension>())
+        for (const auto tok : enum_iterator1D<TokenID>())
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 m_embeddings[tok, d] = static_cast<rlmm_float>(get_random_value(-0.1f, 0.1f));
         m_embeddings.copy_to_offload_buffer();
     }
@@ -72,7 +72,7 @@ namespace rllm
         m_conflicts.clear();
 
         size_t duplicate_count = 0;
-        for (const auto pos : enum_iterator<PositionIndex>(input.size()))
+        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
         {
             const auto tok = input[pos];
             m_updated_tokens[tok]++;
@@ -88,7 +88,7 @@ namespace rllm
         // Handle duplicates sequentially to avoid race conditions on the same embedding vector
         for (size_t i = 0; i < duplicate_count; i++)
         {
-            for (const auto di : enum_iterator<EmbeddingDimension>())
+            for (const auto di : enum_iterator1D<EmbeddingDimension>())
             {
                 const auto& conflict_tok = m_conflicts[i].tok;
                 const auto& conflict_pos = m_conflicts[i].pos;
@@ -115,7 +115,7 @@ namespace rllm
         ENDFOR
 
         // Clean up per-token counters and copy modified rows to offload buffer
-        for (const auto pos : enum_iterator<PositionIndex>(input.size()))
+        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
         {
             const auto tok = input[pos];
             if (m_updated_tokens[tok] == 0)

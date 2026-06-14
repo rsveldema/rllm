@@ -5,16 +5,16 @@
 namespace rllm
 {
     template <typename Enum>
-    class enum_iterator
+    class enum_iterator1D
     {
       public:
-        enum_iterator(Enum end = Enum::MAX)
+        enum_iterator1D(Enum end = Enum::MAX)
                         : m_start(Enum::START)
                         , m_current(Enum::START)
             , m_end(end)
         {}
 
-        enum_iterator(Enum start, Enum end)
+        enum_iterator1D(Enum start, Enum end)
                         : m_start(start)
                         , m_current(start)
             , m_end(end)
@@ -27,13 +27,13 @@ namespace rllm
         {
             return m_current;
         }
-        enum_iterator& operator++()
+        enum_iterator1D& operator++()
         {
             m_current = inc(m_current);
             return *this;
         }
 
-        bool operator!=(const enum_iterator& other) const
+        bool operator!=(const enum_iterator1D& other) const
         {
             return m_current != other.m_current;
         }
@@ -43,19 +43,19 @@ namespace rllm
             m_current = static_cast<Enum>((static_cast<size_t>(m_current) + offset) % static_cast<size_t>(m_end));
         }
 
-        int operator-(const enum_iterator& other) const
+        int operator-(const enum_iterator1D& other) const
         {
             return static_cast<int>(m_current) - static_cast<int>(other.m_current);
         }
 
-        enum_iterator begin() const
+        enum_iterator1D begin() const
         {
-            return enum_iterator{m_start, m_end};
+            return enum_iterator1D{m_start, m_end};
         }
 
-        enum_iterator end() const
+        enum_iterator1D end() const
         {
-            return enum_iterator{m_end, m_end};
+            return enum_iterator1D{m_end, m_end};
         }
 
       private:

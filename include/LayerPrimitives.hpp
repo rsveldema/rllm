@@ -17,7 +17,7 @@
 #include <RandomHelpers.hpp>
 #include <tokenizer_map.hpp>
 #include <Range.hpp>
-#include <enum_iterator.hpp>
+#include <enum_iterator1D.hpp>
 #include <flexible_cols_matrix.hpp>
 #include <flexible_rows_matrix.hpp>
 #include <flexible_rows_cols_matrix.hpp>
@@ -25,14 +25,11 @@
 #include <fixed_size_vector.hpp>
 
 
+#include "rllm_type_aliases.hpp"
+
+
 namespace rllm
 {
-    // when changing this, also add the compile.py option to enable bfloat16 generation
-    using rlmm_float_small = _Float16;    
-    using rlmm_float = float;
-    static constexpr rlmm_float RLMM_ZERO = rlmm_float{0};
-    static constexpr rlmm_float RLMM_ONE = rlmm_float{1};
-    static constexpr rlmm_float RLMM_NEG_ONE = rlmm_float{-1};
 
     static constexpr float MIN_NEURON_INPUT = -0.01f;
     static constexpr float MAX_NEURON_INPUT = 1.0f;
@@ -230,7 +227,7 @@ namespace rllm
             constexpr uint64_t FNV_PRIME = 1099511628211ull;
 
             uint64_t hash = FNV_OFFSET_BASIS;
-            for (const auto i : enum_iterator<PositionIndex>(size()))
+            for (const auto i : enum_iterator1D<PositionIndex>(size()))
             {
                 uint64_t value = static_cast<uint64_t>(static_cast<int>(operator[](i))) + 1ull;
                 for (int byte = 0; byte < 8; ++byte)

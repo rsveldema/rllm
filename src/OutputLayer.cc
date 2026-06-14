@@ -57,9 +57,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator<TokenID>(), (h_last, W, inputs))
+        OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator1D<TokenID>(), (h_last, W, inputs))
         float sum = 0.f;
-        for (const auto d : enum_iterator<EmbeddingDimension>())
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
             sum += h_last[d] * W[v, d];
         inputs[v] = sum;
         ENDFOR
@@ -73,9 +73,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator<EmbeddingDimension>(), (delta, dh_last, W))
+        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator1D<EmbeddingDimension>(), (delta, dh_last, W))
         float sum = dh_last[d];
-        for (const auto v : enum_iterator<TokenID>())
+        for (const auto v : enum_iterator1D<TokenID>())
             sum += delta[v] * W[v, d];
         dh_last[d] = sum;
         ENDFOR
@@ -115,7 +115,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TempStorage>(), (temp_values))
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TempStorage>(), (temp_values))
         if (gl_GlobalInvocationID.y != 0u)
             return;
         temp_values[i] = (i == TempStorage::START) ? -3.402823e38f : 0.0f;
@@ -132,7 +132,7 @@ namespace rllm
         // PARFOR_SHARED_VARIABLES(workgroup_max)
         // ENDPARFOR_SHARED_VARIABLES
 
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, temp_values))
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (inputs, temp_values))
             atomicMax(temp_values[TempStorage::ZERO], inputs[i]);
         ENDFOR
     }
@@ -150,7 +150,7 @@ namespace rllm
 
         temp_values[TempStorage::ONE] = 0;
 
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, values, temp_values))
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (inputs, values, temp_values))
         {
             const float max_val = temp_values[TempStorage::ZERO];
             float exp_value = exp(inputs[i] - max_val);            
@@ -169,7 +169,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (values, temp_values, expected_output_token))
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token))
         if (gl_GlobalInvocationID.y != 0u)
             return;
         const float sum_exp = temp_values[TempStorage::ONE];
@@ -190,8 +190,8 @@ namespace rllm
     {
         const int D = static_cast<int>(EmbeddingDimension::MAX);
         const float scale = 1.0f / std::sqrt(static_cast<float>(D));
-        for (const auto v : enum_iterator<TokenID>())
-            for (const auto d : enum_iterator<EmbeddingDimension>())
+        for (const auto v : enum_iterator1D<TokenID>())
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 W_lm_head[v, d] = get_random_value(-scale, scale);
         W_lm_head.copy_to_offload_buffer();
         V_lm_head.zero();
@@ -220,7 +220,7 @@ namespace rllm
         assert(k != 0);
 
         std::vector<OutputToken> top_k;
-        for (const auto i : enum_iterator<TokenID>())
+        for (const auto i : enum_iterator1D<TokenID>())
         {
             const float logit = m_inputs[i];
             if (top_k.size() < k)
@@ -257,7 +257,7 @@ namespace rllm
         const float expected_logit = m_inputs.get_offload_synced(expected_output_token);
 #else
         float max_val = -std::numeric_limits<float>::infinity();
-        for (const auto token : enum_iterator<TokenID>())
+        for (const auto token : enum_iterator1D<TokenID>())
             max_val = math::max(max_val, m_inputs[token]);
 
         score.temp_values[TempStorage::START] = max_val;

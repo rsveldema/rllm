@@ -96,7 +96,7 @@ namespace rllm
                  const auto token_ids = corpus.get_token_ids(arg);
                  constexpr size_t D = static_cast<size_t>(EmbeddingDimension::MAX);
                  constexpr size_t COLS = 8;
-                 for (const auto pos : enum_iterator<PositionIndex>(token_ids.size()))
+                 for (const auto pos : enum_iterator1D<PositionIndex>(token_ids.size()))
                  {
                      const TokenID tok = token_ids[pos];
                      const auto token_str = corpus.get_token_from_id(tok);
@@ -205,7 +205,7 @@ namespace rllm
             nn.propagate_forward();
 
             bool appended_token = false;
-            for (const auto head : enum_iterator<MultiTokenPredictionIndex>())
+            for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>())
             {
                 if (stop)
                     break;

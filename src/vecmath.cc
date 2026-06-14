@@ -1,5 +1,5 @@
 #include <TransformerBlock.hpp>
-#include <enum_iterator.hpp>
+#include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
 #include <parallel.hpp>
 #include <vecmath.hpp>
@@ -37,7 +37,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(length), (dst, value))
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(length), (dst, value))
         dst[static_cast<size_t>(i)] = value;
         ENDFOR
     }
@@ -50,7 +50,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<PositionIndex>(length), (dst, value))
+        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(length), (dst, value))
         dst[static_cast<size_t>(i)] = value;
         ENDFOR
     }
@@ -89,7 +89,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator<EmbeddingDimension>(), (src, row, dst))
+        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator1D<EmbeddingDimension>(), (src, row, dst))
         dst[d] = src[row, d];
         ENDFOR
     }

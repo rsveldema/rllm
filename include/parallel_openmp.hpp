@@ -10,7 +10,7 @@ namespace parallel {
     inline int  get_thread_num()       { return omp_get_thread_num(); }
 }
 
-#define PARFOR(v, ...)          _Pragma("omp parallel for schedule(static)") \
+#define PARFOR_1D(v, ...)       _Pragma("omp parallel for schedule(static)") \
                                 for (auto v : (__VA_ARGS__)) {
 #define PARFOR_2D(v1, v2, ...)  _Pragma("omp parallel for schedule(static)") \
                                 for (auto [v1, v2] : (__VA_ARGS__)) {
@@ -59,7 +59,7 @@ namespace parallel {
 // Top-level (non-nested) parallel loops that are candidates for future GPU /
 // accelerator offload. Currently they expand identically to the CPU PARFOR*
 // macros; the distinct name marks the intent without changing behaviour.
-#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
 #define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
 #define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
@@ -69,7 +69,7 @@ namespace parallel {
 // Index-space loops intended for target offload-friendly kernels.
 #if defined(USE_VULKAN_OFFLOAD)
 // Vulkan offload mode currently keeps a canonical CPU index loop shape.
-#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
 #define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
@@ -77,7 +77,7 @@ namespace parallel {
 #define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_TRIANGULAR(v1, v2, N)
 #define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
 #else
-#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
 
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
 #define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)

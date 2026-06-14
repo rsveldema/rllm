@@ -81,7 +81,7 @@ add_subdirectory(tests)
 add_executable(rllm src/main.cc
   include/LayerPrimitives.hpp
   include/Range.hpp
-  include/enum_iterator.hpp
+  include/enum_iterator1D.hpp
   include/fixed_size_vector.hpp
   include/fixed_size_matrix.hpp
   include/flexible_size_matrix.hpp

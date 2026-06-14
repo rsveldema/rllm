@@ -54,7 +54,7 @@ namespace rllm
             , ffn_out(seq)
         {
             attn_w.set_size(HeadsIndex::MAX);
-            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
                 attn_w[hi].set_size(seq, seq);
         }
 
@@ -75,7 +75,7 @@ namespace rllm
             attn_proj.set_rows(seq);
             ffn_out.set_rows(seq);
             attn_w.set_size(HeadsIndex::MAX);
-            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
                 attn_w[hi].set_size(seq, seq);
             rms_norm_row_sums.zero();
             rms_norm_inv_rms.zero();
@@ -125,7 +125,7 @@ namespace rllm
         {
             d_scores.set_size(HeadsIndex::MAX);
             d_raw.set_size(HeadsIndex::MAX);
-            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
             {
                 d_scores[hi].set_size(seq, seq);
                 d_raw[hi].set_size(seq, seq);
@@ -146,7 +146,7 @@ namespace rllm
             d_h_norm_attn.set_rows(seq);
             d_scores.set_size(HeadsIndex::MAX);
             d_raw.set_size(HeadsIndex::MAX);
-            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
             {
                 d_scores[hi].set_size(seq, seq);
                 d_raw[hi].set_size(seq, seq);
@@ -164,7 +164,7 @@ namespace rllm
             dW_k.zero();
             dW_v.zero();
             d_h_norm_attn.zero();
-            for (const auto hi : enum_iterator<HeadsIndex>(HeadsIndex::MAX))
+            for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
                 d_raw[hi].zero();
         }
     };
@@ -271,6 +271,8 @@ namespace rllm
         void backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
         void backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
         void backward_compute_attention_dscores_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+
+        void apply_causal_softmax_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi);
         void backward_accumulate_attention_dk_for_heads_hi(BackwardWorkspace& ws, const ForwardWorkspace& fwd, HeadsIndex hi);
         void backward_softmax_attention_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
         void backward_accumulate_attention_dq_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);

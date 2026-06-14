@@ -9,7 +9,7 @@ namespace parallel {
     void init_parallel();
 }
 
-#define PARFOR(v, ...)          for (auto v : (__VA_ARGS__)) {
+#define PARFOR_1D(v, ...)          for (auto v : (__VA_ARGS__)) {
 #define PARFOR_2D(v1, v2, ...)  for (auto [v1, v2] : (__VA_ARGS__)) {
 #define PARFOR_3D(v1, v2, v3, ...)  for (auto [v1, v2, v3] : (__VA_ARGS__)) {
 // Parallelises the lower-triangular iteration space { (v1,v2) | 0 <= v2 <= v1 < N }.
@@ -44,7 +44,7 @@ namespace parallel {
 // Top-level (non-nested) parallel loops that are candidates for future GPU /
 // accelerator offload. Currently they expand identically to the CPU PARFOR*
 // macros; the distinct name marks the intent without changing behaviour.
-#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR(v, n)
+#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
 #define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
 #define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)

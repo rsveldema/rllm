@@ -129,7 +129,7 @@ namespace rllm
             while (std::getline(file, line))
             {
                 const auto input_line = get_token_ids(line);
-                for (const auto i : enum_iterator<PositionIndex>(input_line.size()))
+                for (const auto i : enum_iterator1D<PositionIndex>(input_line.size()))
                 {
                     assert(input_line[i] >= TokenID::START);
                     assert(input_line[i] < TokenID::MAX);
@@ -231,7 +231,7 @@ namespace rllm
     std::optional<std::string> Corpus::get_line(const InputLine& line) const
     {
         std::string result;
-        for (const auto i : enum_iterator<PositionIndex>(line.size()))
+        for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
         {
             auto& token_id = line[i];
             auto& token_info = tokenizer_map[token_id];
@@ -260,7 +260,7 @@ namespace rllm
         auto make_line_key = [](const InputLine& line) {
             std::string key;
             key.reserve(static_cast<size_t>(line.size()) * 6);
-            for (const auto i : enum_iterator<PositionIndex>(line.size()))
+            for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
             {
                 key += std::to_string(static_cast<int>(line[i]));
                 key.push_back(',');

@@ -85,10 +85,10 @@ namespace rllm
             const size_t seq_len = static_cast<size_t>(m_seq_len);
             if (seq_len == 0)
                 return result;
-            for (const auto d : enum_iterator<EmbeddingDimension>())
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
             {
                 float sum = 0.0f;
-                for (const auto pos : enum_iterator<PositionIndex>(m_seq_len))
+                for (const auto pos : enum_iterator1D<PositionIndex>(m_seq_len))
                     sum += static_cast<float>(m_last_hidden[pos, d]);
                 result[d] = static_cast<rlmm_float>(sum / static_cast<float>(seq_len));
             }
