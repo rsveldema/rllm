@@ -227,8 +227,8 @@ TEST(SerializationTest, BenchmarkJsonVsSafetensorsSpeed)
         std::chrono::duration_cast<std::chrono::microseconds>(t_sf_end - t_sf_start).count();
 
     std::printf("\n=== Serialization speed (%d iterations each) ===\n", kIters);
-    std::printf("  JSON       : %d us total  (%.2f us/op)\n", dur_json, dur_json / (double)kIters);
-    std::printf("  safetensors: %d us total  (%.2f us/op)\n", dur_sf, dur_sf / (double)kIters);
+    std::printf("  JSON       : %ld us total  (%.2f us/op)\n", dur_json, dur_json / (double)kIters);
+    std::printf("  safetensors: %ld us total  (%.2f us/op)\n", dur_sf, dur_sf / (double)kIters);
 
     if (dur_json < dur_sf) {
         std::printf("  => JSON is %.1fx faster\n\n", (double)dur_sf / dur_json);

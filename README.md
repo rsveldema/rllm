@@ -10,23 +10,11 @@ Build requirements (minimum):
 - C++23 compiler
 - Python 3 (used during tokenizer code generation)
 
-Backend/offload dependencies:
-
-- FastFork backend: hwloc development package
-    - Fedora: sudo dnf install hwloc-devel
-- OpenMP backend: OpenMP runtime/dev package for your compiler
-- Vulkan offload mode: Vulkan headers/runtime and `glslc`
-
-Parallel backends:
-
-- fastfork
-- openmp
-- sequential
-
-Offload modes:
-
-- none
-- vulkan
+```bash
+git submodules update --init --recursive
+sudo apt install libhwloc-dev
+sudo apt install glslc
+```
 
 Offload dispatch note:
 

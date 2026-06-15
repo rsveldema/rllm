@@ -103,10 +103,6 @@ namespace rllm
 
 #if !defined(USE_VULKAN_OFFLOAD)
 #define gl_GlobalInvocationID rllm_cpu_zero_invocation_id()
-#define gl_LocalInvocationID rllm_cpu_zero_invocation_id()
-#define gl_LocalInvocationIndex 0u
-#define gl_WorkGroupSize rllm_cpu_workgroup_size()
-#define rllm_push rllm_cpu_push()
 #endif
 
     [[maybe_unused]] static void initialize_softmax_temp_values(
@@ -116,8 +112,6 @@ namespace rllm
     )
     {
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TempStorage>(), (temp_values))
-        if (gl_GlobalInvocationID.y != 0u)
-            return;
         temp_values[i] = (i == TempStorage::START) ? -3.402823e38f : 0.0f;
         ENDFOR
     }
@@ -170,8 +164,6 @@ namespace rllm
     )
     {
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token))
-        if (gl_GlobalInvocationID.y != 0u)
-            return;
         const float sum_exp = temp_values[TempStorage::ONE];
         float delta = OutputLayer::smooth - values[i] / sum_exp;
         if (i == expected_output_token)
@@ -274,9 +266,5 @@ namespace rllm
 } // namespace rllm
 
 #if !defined(USE_VULKAN_OFFLOAD)
-#undef rllm_push
-#undef gl_WorkGroupSize
-#undef gl_LocalInvocationIndex
-#undef gl_LocalInvocationID
 #undef gl_GlobalInvocationID
 #endif
