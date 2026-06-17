@@ -82,6 +82,11 @@ set_target_properties(generate_domain_replace_json PROPERTIES RUNTIME_OUTPUT_DIR
 
 add_subdirectory(src)
 
+option(RLLM_BUILD_KERNEL_COMPILER "Build kernel_compiler subproject (runtime + tests)" ON)
+if(RLLM_BUILD_KERNEL_COMPILER AND EXISTS "${CMAKE_SOURCE_DIR}/kernel_compiler/CMakeLists.txt")
+    add_subdirectory(kernel_compiler)
+endif()
+
 # Enable testing for the project
 enable_testing()
 add_subdirectory(tests)
