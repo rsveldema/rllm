@@ -158,27 +158,6 @@ namespace rllm
         ENDFOR
     }
 
-    /** dscores[T×T] += ∂L/∂scores  via the softmax Jacobian.
-     * dp/dscores use stride T; p uses p_stride (the cached matrix's row stride).
-     */
-    void TransformerBlock::softmax_backward(
-        // OFFLOAD_PARAMETERS(dp, p, dscores, T)
-        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dp,
-        const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& p,
-        flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dscores,
-        PositionIndex T
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(T), (dp, p, dscores, T))
-        rlmm_float dot = 0.f;
-        for (const auto j : enum_iterator1D<PositionIndex>(inc(i)))
-            dot += dp[i, j] * p[i, j];
-        for (const auto j : enum_iterator1D<PositionIndex>(inc(i)))
-            dscores[i, j] += p[i, j] * (dp[i, j] - dot);
-        ENDFOR
-    }
-
     // ── SwiGLU backward ───────────────────────────────────────────────────────
 
     void TransformerBlock::swiglu_backward(
@@ -482,7 +461,7 @@ namespace rllm
         }
     }
 
-    inline void softmax_attention_for_head(
+    void TransformerBlock::softmax_attention_for_head(
         // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, attn_w_h, seq_len)
         const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h,
         fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h,

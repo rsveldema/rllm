@@ -370,75 +370,74 @@ TEST(TransformerBlockTest, CausalSoftmaxMasksFutureTokensAndNormalizesRows)
     }
 }
 
-TEST(TransformerBlockTest, SoftmaxBackwardMatchesJacobianAndAccumulates)
+TEST(TransformerBlockTest, SoftmaxAttentionForHeadMatchesJacobian)
 {
     using namespace rllm;
 
     const auto T = static_cast<PositionIndex>(4);
-    flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> dp(T, T);
-    flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> p(T, T);
-    flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> dscores(T, T);
+    fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex> d_scores;
+    fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex> attn_w;
+    fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex> d_raw;
 
-    dp.zero();
-    p.zero();
-    fill(dscores, 0.1f); // Verify accumulation semantics: dscores += ...
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j <= i; ++j)
+        {
+            d_scores.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), 0.0f);
+            attn_w.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), 0.0f);
+            d_raw.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), -7.0f);
+        }
 
     // Row 0 (single active element)
-    p.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 1.0f);
-    dp.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 3.0f);
+    attn_w.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 1.0f);
+    d_scores.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 3.0f);
 
     // Row 1: active j in [0,1], p sums to 1
-    p.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 0.2f);
-    p.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), 0.8f);
-    dp.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 1.0f);
-    dp.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), -2.0f);
+    attn_w.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 0.2f);
+    attn_w.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), 0.8f);
+    d_scores.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 1.0f);
+    d_scores.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), -2.0f);
 
     // Row 2: active j in [0,2], p sums to 1
-    p.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 0.1f);
-    p.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), 0.3f);
-    p.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.6f);
-    dp.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 2.0f);
-    dp.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), -1.0f);
-    dp.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.5f);
+    attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 0.1f);
+    attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), 0.3f);
+    attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.6f);
+    d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 2.0f);
+    d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), -1.0f);
+    d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.5f);
 
     // Row 3: active j in [0,3], p sums to 1
-    p.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), 0.25f);
-    p.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.25f);
-    p.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 0.25f);
-    p.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 0.25f);
-    dp.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), -1.0f);
-    dp.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.0f);
-    dp.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 1.0f);
-    dp.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 2.0f);
+    attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), 0.25f);
+    attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.25f);
+    attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 0.25f);
+    attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 0.25f);
+    d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), -1.0f);
+    d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.0f);
+    d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 1.0f);
+    d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 2.0f);
 
-    TransformerBlock::softmax_backward_for_test(dp, p, dscores, T);
+    TransformerBlock::softmax_attention_for_head_for_test(d_scores, d_raw, attn_w, T);
 
     // Expected updates per row: p_j * (dp_j - dot), where dot = sum_k dp_k * p_k.
     // Row 0: dot=3, update=[0]
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)), 0.1f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)), 0.0f, 1e-6f);
 
     // Row 1: dot = 1*0.2 + (-2)*0.8 = -1.4
     // updates: j0=0.2*(1+1.4)=0.48, j1=0.8*(-2+1.4)=-0.48
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)), 0.58f, 1e-6f);
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)), -0.38f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)), 0.48f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)), -0.48f, 1e-6f);
 
     // Row 2: dot = 2*0.1 + (-1)*0.3 + 0.5*0.6 = 0.2
     // updates: [0.18, -0.36, 0.18]
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)), 0.28f, 1e-6f);
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)), -0.26f, 1e-6f);
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)), 0.28f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)), 0.18f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)), -0.36f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)), 0.18f, 1e-6f);
 
     // Row 3: dot = (-1 + 0 + 1 + 2) * 0.25 = 0.5
     // updates: [-0.375, -0.125, 0.125, 0.375]
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)), -0.275f, 1e-6f);
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)), -0.025f, 1e-6f);
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)), 0.225f, 1e-6f);
-    EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)), 0.475f, 1e-6f);
-
-    // Entries outside the causal region are untouched (remain baseline 0.1f).
-    for (int i = 0; i < 4; ++i)
-        for (int j = i + 1; j < 4; ++j)
-            EXPECT_NEAR(dscores.get(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)), 0.1f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)), -0.375f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)), -0.125f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)), 0.125f, 1e-6f);
+    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)), 0.375f, 1e-6f);
 }
 
 // ---------------------------------------------------------------------------

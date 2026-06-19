@@ -214,10 +214,14 @@ namespace rllm
             causal_softmax(x, T);
         }
 
-        // Test helper: expose softmax backward Jacobian application.
-        static void softmax_backward_for_test(const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dp, const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& p, flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dscores, PositionIndex T)
+        // Test helper: expose per-head softmax backward Jacobian application.
+        static void softmax_attention_for_head_for_test(
+            const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores,
+            fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw,
+            const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& attn_w,
+            PositionIndex T)
         {
-            softmax_backward(dp, p, dscores, T);
+            softmax_attention_for_head(d_scores, d_raw, attn_w, T);
         }
 
 
@@ -256,9 +260,12 @@ namespace rllm
         // In-place causal softmax over the active [T × T] block of x.
         static void causal_softmax(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T);
 
-        // Accumulates softmax backward into dscores (stride T).
-        // dp is the per-head d_scores matrix; p is the cached per-head softmax matrix.
-        static void softmax_backward(const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dp, const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& p, flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dscores, PositionIndex T);
+        // Per-head softmax backward into d_raw.
+        static void softmax_attention_for_head(
+            const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h,
+            fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h,
+            const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& attn_w_h,
+            PositionIndex seq_len);
 
         // SwiGLU backward: computes d_gate_pre and d_up_pre from d_ffn_act.
         static void swiglu_backward(PositionIndex seq, const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& gate_pre, const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& up_pre, const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_ffn_act, flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_gate_pre, flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_up_pre);
