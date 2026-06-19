@@ -134,6 +134,7 @@ function(rllm_define_lib target_name)
         ${ARGN}
     )
     #target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_OVERFLOW_CHECK_ADD)
+    target_compile_definitions(${target_name} PUBLIC PREFER_SPEED_OVER_MEMORY=$<BOOL:${PREFER_SPEED_OVER_MEMORY}>)
     if(RLLM_ENABLE_STATISTICS)
         target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_STATISTICS)
     endif()

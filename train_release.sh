@@ -24,18 +24,18 @@ if [ ! -d "$TRAIN_DIR" ]; then
     exit 1
 fi
 
-# Resume from an explicit model path, then after_training.json, then latest checkpoint.
-# Use RESUME_MODEL=/path/to/model.json to override.
+# Resume from an explicit model path, then after_training.st, then latest checkpoint.
+# Use RESUME_MODEL=/path/to/model.st to override.
 if [ -n "${RESUME_MODEL:-}" ] && [ -f "${RESUME_MODEL}" ]; then
     echo "Resuming from ${RESUME_MODEL}"
     input_arg="-i ${RESUME_MODEL}"
-elif [ -f "models/after_training.json" ]; then
-    echo "Resuming from models/after_training.json"
-    input_arg="-i models/after_training.json"
+elif [ -f "models/after_training.st" ]; then
+    echo "Resuming from models/after_training.st"
+    input_arg="-i models/after_training.st"
 else
     shopt -s nullglob
     latest_checkpoint=""
-    for checkpoint in models/checkpoint-*.json; do
+    for checkpoint in models/checkpoint-*.st; do
         if [[ -z "$latest_checkpoint" || "$checkpoint" -nt "$latest_checkpoint" ]]; then
             latest_checkpoint="$checkpoint"
         fi
@@ -54,30 +54,29 @@ fi
 echo "--- Starting training ---"
 
 ./build_release/rllm --train $input_arg \
-    -o models/after_training.json \
+    -o models/after_training.st \
     --train-dir "$TRAIN_DIR" \
      --filter iuring \
      --filter simple \
      --filter self \
      --filter preprocessing \
-     --method increasingly_longer \
+     --method random_line_random_len \
      --epochs 20 \
      --layers 4 \
      --checkpoint-interval 30
 
 
-
-
+# training Options:
 #     --method random_line_random_len \
 #     --method window:32 --epochs 20
 #     --filter simple --method increasingly_longer --epochs 50
 #     --method increasingly_longer
 
-# ./build/rllm --train -i models/start.json \
-#     -o models/after_training.json \
+# ./build/rllm --train -i models/start.st \
+#     -o models/after_training.st \
 #      --filter simple --method three_tok --epochs 50
 #
 
-#./build/rllm --train -i models/start.json \
-#    -o models/after_training.json \
+#./build/rllm --train -i models/start.st \
+#    -o models/after_training.st \
 #     --filter simple --method increasingly_longer --epochs 50

@@ -511,7 +511,7 @@ namespace rllm
             if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
             {
                 LOG_INFO(
-                    "Creating timed checkpoint at epoch {}, line {}, total lines visited {}",
+                    "Creating timed checkpoint at epoch: {}, line: {}, total lines todo: {}",
                     epoch,
                     lines_visited,
                     total_lines

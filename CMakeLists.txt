@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(PREFER_SPEED_OVER_MEMORY 0 CACHE BOOL "Use faster full attention matrices instead of compact triangular storage")
+
 include(CheckIPOSupported)
 include(CTest)
 
