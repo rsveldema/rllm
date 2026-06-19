@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CheckIPOSupported)
+include(CTest)
 
 # Build type default
 if(NOT CMAKE_BUILD_TYPE)
@@ -87,9 +88,9 @@ if(RLLM_BUILD_KERNEL_COMPILER AND EXISTS "${CMAKE_SOURCE_DIR}/kernel_compiler/CM
     add_subdirectory(kernel_compiler)
 endif()
 
-# Enable testing for the project
-enable_testing()
-add_subdirectory(tests)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 add_executable(rllm src/main.cc
   include/LayerPrimitives.hpp

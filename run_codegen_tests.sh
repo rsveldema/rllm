@@ -6,6 +6,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")"  # change to project root
 
+PYTHON="${PYTHON:-}"
+if [[ -z "$PYTHON" ]]; then
+    if [[ -x ".venv/bin/python" ]]; then
+        PYTHON=".venv/bin/python"
+    else
+        PYTHON="python3"
+    fi
+fi
+
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -25,4 +34,4 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-python3 -m pytest tests/test_codegen.py "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+"$PYTHON" -m pytest kernel_compiler/tests/test_codegen.py "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

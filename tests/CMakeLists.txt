@@ -50,7 +50,7 @@ add_executable(test_rllm
     test_enum_iterator2D.cc
     test_serialization.cc
 )
-target_link_libraries(test_rllm PRIVATE rllm_lib_debug GTest::gtest_main)
+target_link_libraries(test_rllm PRIVATE rllm_lib GTest::gtest_main)
 target_compile_options(test_rllm PRIVATE -march=native -O3)
 if(PARALLEL_BACKEND STREQUAL "openmp")
     find_package(OpenMP REQUIRED)
@@ -71,7 +71,7 @@ set_source_files_properties(${RLLM_TEST_OFFLOAD_SRC} PROPERTIES GENERATED TRUE)
 if(RLLM_TEST_OFFLOAD_PREPROCESS_TARGET)
     add_dependencies(test_offload ${RLLM_TEST_OFFLOAD_PREPROCESS_TARGET})
 endif()
-target_link_libraries(test_offload PRIVATE rllm_lib_debug GTest::gtest_main)
+target_link_libraries(test_offload PRIVATE rllm_lib GTest::gtest_main)
 target_compile_options(test_offload PRIVATE -march=native -O3)
 if(PARALLEL_BACKEND STREQUAL "openmp")
     find_package(OpenMP REQUIRED)
@@ -87,7 +87,7 @@ if(PARALLEL_BACKEND STREQUAL "fastfork")
     add_executable(test_fastfork
         test_fastfork.cc
     )
-    target_link_libraries(test_fastfork PRIVATE rllm_lib_debug GTest::gtest_main)
+    target_link_libraries(test_fastfork PRIVATE rllm_lib GTest::gtest_main)
     target_compile_options(test_fastfork PRIVATE -march=native -O3)
     target_include_directories(test_fastfork PRIVATE ${CMAKE_SOURCE_DIR}/include)
     gtest_discover_tests(test_fastfork WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Release builds do not need tests; keeping them off avoids Vulkan test-kernel
-# generation from polluting the main release kernel umbrella header.
+# Keep generated kernels fresh when switching between source and test codegen.
 rm -rf build_release/generated/vulkanized/kernels
 
-cmake -B build_release -DCMAKE_BUILD_TYPE=Release -DPARALLEL_BACKEND=fastfork -DOFFLOAD_BACKEND=vulkan -DBUILD_TESTING=OFF
+PYTHON="${PYTHON:-}"
+if [[ -z "$PYTHON" ]]; then
+    if [[ -x ".venv/bin/python" ]]; then
+        PYTHON=".venv/bin/python"
+    else
+        PYTHON="python3"
+    fi
+fi
+if [[ "$PYTHON" != /* ]]; then
+    PYTHON="$(pwd)/$PYTHON"
+fi
+
+cmake -B build_release -DCMAKE_BUILD_TYPE=Release -DPARALLEL_BACKEND=fastfork -DOFFLOAD_BACKEND=vulkan -DBUILD_TESTING=ON -DRLLM_BUILD_KERNEL_COMPILER=ON -DPython3_EXECUTABLE:FILEPATH="$PYTHON"
 cmake --build build_release --parallel
