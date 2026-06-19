@@ -328,6 +328,8 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "limit<EmbeddingDimension::MAX>(")
     out = out.replace("enum_iterator1D<HeadsIndex>(", 
                       "limit<HeadsIndex::MAX>(")
+    out = out.replace("enum_iterator1D<HeadDimension>(",
+                      "limit<HeadDimension::MAX>(")
     out = out.replace("InputLine", 
                       "fixed_size_vector<TokenID, PositionIndex>")
     out = out.replace("PositionIndex::START", "0")

@@ -346,21 +346,21 @@ namespace rllm
     // ── backward pass ─────────────────────────────────────────────────────────
 
     inline void accumulate_attention_dv_for_head(
-        // OFFLOAD_PARAMETERS(d_V, attn_w_h, d_attn_concat, seq_len, hi)
+        // OFFLOAD_PARAMETERS(d_V, attn_w_h, d_attn_concat, seq_len, hStart)
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_V,
         const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& attn_w_h,
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_attn_concat,
         PositionIndex seq_len,
-        HeadsIndex hi
+        int hStart
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (d_V, attn_w_h, d_attn_concat, seq_len, hi))
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (d_V, attn_w_h, d_attn_concat, seq_len, hStart))
         {
             const float w = attn_w_h[i, j];
             for (const auto d_head : enum_iterator1D<HeadDimension>())
             {
-                const int d = int(hi) * static_cast<int>(HeadDimension::MAX) + int(d_head);
+                const int d = hStart + int(d_head);
                 d_V[j, d] += w * d_attn_concat[i, d];
             }
         }
@@ -377,7 +377,8 @@ namespace rllm
         // d_V_h[j, d] += sum_i attn_w[hi,i,j] * d_attn_concat[i, d]  (causal: j <= i)
         for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
         {
-            accumulate_attention_dv_for_head(d_V, attn_w[hi], d_attn_concat, seq_len, hi);
+            const int hStart = static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX);
+            accumulate_attention_dv_for_head(d_V, attn_w[hi], d_attn_concat, seq_len, hStart);
         }
     }
 
@@ -463,20 +464,21 @@ namespace rllm
         const ForwardWorkspace& fwd,
         HeadsIndex hi)
     {
-        // OFFLOAD_PARAMETERS(d_Q, d_raw_h, K, seq_len, hi)
+        // OFFLOAD_PARAMETERS(d_Q, d_raw_h, K, seq_len, hStart)
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_Q = ws.d_Q;
         fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws.d_raw[hi];
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& K = fwd.K;
         const PositionIndex seq_len = fwd.seq_len;
+        const int hStart = static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX);
         // END_OFFLOAD_PARAMETERS
 
         // d_Q and d_K are triangular reductions over j/i respectively.
         // Offload per output cell to avoid cross-thread accumulation races.
         const auto dq_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
 
-        OFFLOAD_PARFOR_2D_PARAM(i, d_head, dq_grid, (d_Q, d_raw_h, K, seq_len, hi))
+        OFFLOAD_PARFOR_2D_PARAM(i, d_head, dq_grid, (d_Q, d_raw_h, K, seq_len, hStart))
         {
-            const int d = int(hi) * static_cast<int>(HeadDimension::MAX) + int(d_head);
+            const int d = hStart + int(d_head);
             const float head_scale = 1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)));
             float sum_q = 0.f;
             for (const auto j : enum_iterator1D<PositionIndex>(inc(i)))
@@ -488,18 +490,19 @@ namespace rllm
 
     void TransformerBlock::backward_accumulate_attention_dk_for_heads_hi(BackwardWorkspace& ws, const ForwardWorkspace& fwd, HeadsIndex hi)
     {
-        // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, seq_len, hi)
+        // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, seq_len, hStart)
         flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& d_K = ws.d_K;
         const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h = ws.d_raw[hi];
         const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
         PositionIndex seq_len = fwd.seq_len;
+        const int hStart = static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX);
         // END_OFFLOAD_PARAMETERS
         
 
         const auto dk_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
-        OFFLOAD_PARFOR_2D_PARAM(j, d_head, dk_grid, (d_K, d_raw_h, Q, seq_len, hi))
+        OFFLOAD_PARFOR_2D_PARAM(j, d_head, dk_grid, (d_K, d_raw_h, Q, seq_len, hStart))
         {
-            const int d = int(hi) * static_cast<int>(HeadDimension::MAX) + int(d_head);
+            const int d = hStart + int(d_head);
             float sum_k = 0.f;
             for (const auto i : enum_iterator1D<PositionIndex>(j, seq_len))
                 sum_k += d_raw_h[i, j] * (1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX)))) * Q[i, d];
