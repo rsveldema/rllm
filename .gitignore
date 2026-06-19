@@ -1,4 +1,5 @@
 __pycache__
+training-log.txt
 kernels
 build
 build_release_cpu

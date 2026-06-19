@@ -8,12 +8,23 @@
 #include <nlohmann/json.hpp>
 #include <print>
 #include <string>
+#include <string_view>
 
 
 namespace rllm
 {
     namespace
     {
+        bool is_safetensors_model_filename(std::string_view filename)
+        {
+            const auto extension_pos = filename.rfind('.');
+            if (extension_pos == std::string_view::npos)
+                return false;
+
+            const auto extension = filename.substr(extension_pos);
+            return extension == ".st" || extension == ".safetensors";
+        }
+
         // Stable checksum of tokenizer contents to detect model/tokenizer mismatch.
         uint64_t tokenizer_signature()
         {
@@ -83,7 +94,7 @@ namespace rllm
 
     bool NeuralNetwork::load(const std::string& filename)
     {
-        if (!filename.empty() && filename.size() >= 4 && filename.compare(filename.size() - 4, 4, ".st") == 0)
+        if (is_safetensors_model_filename(filename))
             return load_from_safetensors(filename);
 
         if (filename.empty() || filename.size() < 5 || filename.compare(filename.size() - 5, 5, ".json") != 0)
@@ -146,7 +157,7 @@ namespace rllm
 
     void NeuralNetwork::save(const std::string& filename) const
     {
-        if (!filename.empty() && filename.size() >= 4 && filename.compare(filename.size() - 4, 4, ".st") == 0)
+        if (is_safetensors_model_filename(filename))
         {
             save_to_safetensors(filename);
             return;
@@ -418,7 +429,8 @@ namespace rllm
 
         // Output layer (friend grants access to m_output_layers internals)
         std::string out_key = "output_layers.W_lm_head";
-        auto& last_out = m_output_layers[MultiTokenPredictionIndex::MAX];
+        constexpr auto last_output_index = static_cast<MultiTokenPredictionIndex>(static_cast<size_t>(MultiTokenPredictionIndex::MAX) - 1);
+        auto& last_out = m_output_layers[last_output_index];
         push_matrix(st, out_key, last_out.W_lm_head, storage);
 
         // Tokenizer metadata for validation on load.

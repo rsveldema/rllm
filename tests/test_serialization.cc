@@ -152,6 +152,26 @@ TEST(SerializationTest, OutputLayerSafetensorsRoundTrip)
 }
 
 // ---------------------------------------------------------------------------
+// Safetensors model round-trip: checkpoint-style .st extension
+// ---------------------------------------------------------------------------
+
+TEST(SerializationTest, NeuralNetworkShortSafetensorsExtensionRoundTrip)
+{
+    rllm::Corpus corpus({});
+    rllm::Statistics stats;
+    rllm::NeuralNetwork network(0, corpus, stats);
+
+    const std::string sf_file = (std::filesystem::temp_directory_path() / "checkpoint-short-extension.st").string();
+    network.save(sf_file);
+    ASSERT_TRUE(std::filesystem::exists(sf_file));
+
+    rllm::NeuralNetwork loaded(0, corpus, stats);
+    EXPECT_TRUE(loaded.load(sf_file));
+
+    std::filesystem::remove(sf_file);
+}
+
+// ---------------------------------------------------------------------------
 // Safetensors layer round-trip: TransformerBlock (JSON-only test)
 // The raw safetensors API requires direct member access which is private.
 // The JSON save/load test covers TransformerBlock serialization.
