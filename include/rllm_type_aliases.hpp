@@ -1,16 +1,7 @@
 #pragma once
 
-#if USE_VULKAN_BACKEND
-#include <_type_aliases.hpp>
-using rlmm_float_small = kfloat;    
-#else
-using rlmm_float_small = _Float16;  
-#endif
+using float16 = _Float16;
 
-
-
-
-using rlmm_float = float;
-static constexpr rlmm_float RLMM_ZERO = rlmm_float{0};
-static constexpr rlmm_float RLMM_ONE = rlmm_float{1};
-static constexpr rlmm_float RLMM_NEG_ONE = rlmm_float{-1};
+static constexpr float RLMM_ZERO = float{0};
+static constexpr float RLMM_ONE = float{1};
+static constexpr float RLMM_NEG_ONE = float{-1};

@@ -80,7 +80,7 @@ TEST(OutputLayerScoreTest, ZeroLogitsMatchReference)
     rllm::OutputLayer layer;
     layer.load(zero_output_layer_weights_json());
 
-    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> h_last;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
     h_last.set_size(rllm::EmbeddingDimension::MAX);
     h_last.zero();
 
@@ -119,7 +119,7 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
     rllm::OutputLayer layer;
     layer.load(weights);
 
-    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> h_last;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
     h_last.set_size(rllm::EmbeddingDimension::MAX);
     h_last.zero();
     h_last[rllm::EmbeddingDimension::START] = 1.0f;
@@ -157,7 +157,7 @@ TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
     rllm::OutputLayer layer;
     layer.load(weights);
 
-    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> h_last;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
     h_last.set_size(rllm::EmbeddingDimension::MAX);
     h_last.zero();
     h_last[rllm::EmbeddingDimension::START] = 1.0f;
@@ -194,7 +194,7 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
     rllm::OutputLayer layer;
     layer.load(weights);
 
-    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> h_last;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
     h_last.set_size(rllm::EmbeddingDimension::MAX);
     h_last.zero();
 
@@ -231,16 +231,16 @@ TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
     rllm::OutputLayer layer;
     layer.load(zero_output_layer_weights_json());
 
-    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> h_last;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
     h_last.set_size(rllm::EmbeddingDimension::MAX);
     h_last.zero();
     h_last[rllm::EmbeddingDimension::START] = 1.0f;
 
     const auto expected_token = first_n_tokens(1).front();
     rllm::Score score;
-    rllm::fixed_size_vector<rlmm_float, rllm::TokenID> delta;
+    rllm::fixed_size_vector<float, rllm::TokenID> delta;
     delta.set_size(rllm::TokenID::MAX);
-    rllm::fixed_size_vector<rlmm_float, rllm::EmbeddingDimension> dh_last;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> dh_last;
     dh_last.set_size(rllm::EmbeddingDimension::MAX);
 
     layer.forward_from_hidden(h_last);

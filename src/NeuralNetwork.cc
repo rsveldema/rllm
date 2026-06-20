@@ -71,8 +71,8 @@ namespace rllm
 {
     static void scatter_dh_last_to_row(
         // OFFLOAD_PARAMETERS(dh_last, dh, last_pos)
-        const fixed_size_vector<rlmm_float, EmbeddingDimension>& dh_last,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dh,
+        const fixed_size_vector<float, EmbeddingDimension>& dh_last,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
         PositionIndex last_pos
         // END_OFFLOAD_PARAMETERS
     )
@@ -104,8 +104,8 @@ namespace rllm
 
     struct NeuralNetworkForwardWorkspace
     {
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h;
-        fixed_size_vector<rlmm_float, EmbeddingDimension> h_last;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;
+        fixed_size_vector<float, EmbeddingDimension> h_last;
 
         ForwardWorkspace workspace;
 
@@ -237,11 +237,11 @@ namespace rllm
 
     struct BackwardPropWorkspace
     {
-        fixed_size_vector<rlmm_float, TokenID> output_layer_delta;
-        fixed_size_vector<rlmm_float, EmbeddingDimension> h_last_vec;
-        fixed_size_vector<rlmm_float, EmbeddingDimension> dh_last;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dh;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din;
+        fixed_size_vector<float, TokenID> output_layer_delta;
+        fixed_size_vector<float, EmbeddingDimension> h_last_vec;
+        fixed_size_vector<float, EmbeddingDimension> dh_last;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dh;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din;
         BackwardWorkspace transformer_block;
         
         explicit BackwardPropWorkspace(PositionIndex seq_len)
@@ -867,7 +867,7 @@ namespace rllm
         const size_t params_ffn = 3 * d_model * d_ff; // W_gate, W_up, W_down per block (2*d_ff*d_model + d_model*d_ff)
         const size_t params_per_block = params_attn + params_ffn;
         const size_t total_params = params_embed + params_lm_head + n_layers * params_per_block;
-        const float total_params_mib = static_cast<float>(total_params * sizeof(rlmm_float)) / (1024.0f * 1024.0f);
+        const float total_params_mib = static_cast<float>(total_params * sizeof(float)) / (1024.0f * 1024.0f);
 
         static constexpr size_t CORPUS_SIZE_WARNING_THRESHOLD = 100000;
         if (corpus_size > CORPUS_SIZE_WARNING_THRESHOLD)

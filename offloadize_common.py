@@ -381,8 +381,6 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
 
     out = re.sub(r"\bsize_t\b", "int", out)
     out = out.replace(" auto ", " int ")
-    out = out.replace("rlmm_float_small", " float16 ")
-    out = out.replace("rlmm_float", " float ")
     out = out.replace("std::pow", " pow ")
     out = out.replace("std::exp", " exp ")
     out = out.replace("std::sin", " sin ")

@@ -266,7 +266,7 @@ TEST(TransformerBlockTest, ForwardOutputShape)
 
     const int T = TEST_SEQ_LEN;
     const int D = static_cast<int>(EmbeddingDimension::MAX);
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h(
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(
         static_cast<PositionIndex>(T)
     );
     fill(h, 0.1f);
@@ -287,18 +287,18 @@ TEST(TransformerBlockTest, BackwardOutputShape)
 
     const int T = TEST_SEQ_LEN;
     const int D = static_cast<int>(EmbeddingDimension::MAX);
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h(
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(
         static_cast<PositionIndex>(T)
     );
     fill(h, 0.05f);
     auto forward_workspace = std::make_unique<ForwardWorkspace>(static_cast<PositionIndex>(T));
     block->forward(h, static_cast<PositionIndex>(T), *forward_workspace);
 
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dout(
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dout(
         static_cast<PositionIndex>(T)
     );
     fill(dout, 0.01f);
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din(
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din(
         static_cast<PositionIndex>(T)
     );
     auto backward_workspace = std::make_unique<BackwardWorkspace>(static_cast<PositionIndex>(T));
@@ -314,7 +314,7 @@ TEST(TransformerBlockTest, CausalSoftmaxMasksFutureTokensAndNormalizesRows)
     using namespace rllm;
 
     const auto T = static_cast<PositionIndex>(4);
-    flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex> scores(T, T);
+    flexible_rows_cols_matrix<float, PositionIndex, PositionIndex> scores(T, T);
 
     // Distinct values per row; future positions (j > i) should be ignored then zeroed.
     scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)] = 1.0f;
@@ -375,9 +375,9 @@ TEST(TransformerBlockTest, SoftmaxAttentionForHeadMatchesJacobian)
     using namespace rllm;
 
     const auto T = static_cast<PositionIndex>(4);
-    fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex> d_scores;
-    fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex> attn_w;
-    fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex> d_raw;
+    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_scores;
+    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> attn_w;
+    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_raw;
 
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j <= i; ++j)
@@ -455,7 +455,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
 
     const int T = BENCH_SEQ_LEN;
     const int D = static_cast<int>(EmbeddingDimension::MAX);
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_template(
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_template(
         static_cast<PositionIndex>(T)
     );
     fill(h_template, 0.1f);
@@ -525,11 +525,11 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     auto forward_workspace = std::make_unique<ForwardWorkspace>(static_cast<PositionIndex>(BENCH_SEQ_LEN));
     auto backward_workspace = std::make_unique<BackwardWorkspace>(static_cast<PositionIndex>(T));
 
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_template(
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_template(
         static_cast<PositionIndex>(T)
     );
     fill(h_template, 0.1f);
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dout_template(
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dout_template(
         static_cast<PositionIndex>(T)
     );
     fill(dout_template, 0.01f);
@@ -546,7 +546,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
         std::print("Backward iter {}/{}\n", iter + 1, BENCH_ITERS);
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din(
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din(
             static_cast<PositionIndex>(T)
         );
         block->backward(dout_template, din, *backward_workspace, 0.01f, *forward_workspace);
@@ -559,7 +559,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     for (int iter = 0; iter < BENCH_ITERS; ++iter)
     {
         std::println("Backward par iter {}/{}", iter + 1, BENCH_ITERS);
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> din(
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din(
             static_cast<PositionIndex>(T)
         );
         block->backward(dout_template, din, *backward_workspace, 0.01f, *forward_workspace);
@@ -897,10 +897,10 @@ TEST(TransformerBlockTest, RmsNormBackwardMatchesCpuReference)
     std::srand(42);
 
     // --- allocate dy, x, dx ---
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dy(seq);
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> x(seq);
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dx(seq);
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> dx_ref(seq);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dy(seq);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> x(seq);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dx(seq);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dx_ref(seq);
 
     // Fill with random values in [-1, 1]
     for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq)) {

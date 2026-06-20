@@ -229,7 +229,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     );
 
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
-    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
+    const size_t idx = ((static_cast<size_t>(i) * COLS) + static_cast<size_t>(j));
     atomicAdd(visits[idx], 1);
     ENDFOR
 
@@ -237,7 +237,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
-    const size_t idx = static_cast<size_t>(i) * COLS + static_cast<size_t>(j);
+    const size_t idx = ((static_cast<size_t>(i) * COLS) + static_cast<size_t>(j));
     atomicAdd(visits[idx], 1);
     ENDFOR
 
@@ -266,14 +266,14 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFix
     fill(visits, 0, static_cast<PositionIndex>(N));
 
     OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
-    visits[static_cast<size_t>(i)] = static_cast<int>(i) + 42;
+    visits[static_cast<size_t>(i)] = (static_cast<int>(i) + 42);
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     for (size_t i = 0; i < N; ++i)
-        EXPECT_EQ(visits[i], static_cast<int>(i) + 42) << "Wrong value at i=" << i;
+        EXPECT_EQ(visits[i], (static_cast<int>(i) + 42)) << "Wrong value at i=" << i;
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
@@ -282,17 +282,17 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamWritesFixedSizeFloatVector)
 {
     // OFFLOAD_PARAMETERS(values,N)
     constexpr size_t N = 21;
-    fixed_size_vector<rlmm_float, PositionIndex> values;
+    fixed_size_vector<float, PositionIndex> values;
     // END_OFFLOAD_PARAMETERS
     values.set_size(static_cast<PositionIndex>(N));
     fill(values, 0.0f, static_cast<PositionIndex>(N));
 
     OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (values))
-    values[static_cast<size_t>(i)] = static_cast<rlmm_float>(static_cast<float>(i) + 0.5f);
+    values[static_cast<size_t>(i)] = static_cast<float>((static_cast<float>(i) + 0.5f));
     ENDFOR
 
     for (size_t i = 0; i < N; ++i)
-        EXPECT_FLOAT_EQ(values[i], static_cast<float>(i) + 0.5f) << "Wrong value at i=" << i;
+        EXPECT_FLOAT_EQ(values[i], (static_cast<float>(i) + 0.5f)) << "Wrong value at i=" << i;
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
@@ -304,7 +304,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
 
     const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
-    values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 1);
+    values[i, j] = static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 1)));
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
@@ -314,7 +314,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
         for (const auto j : enum_iterator1D<HeadsIndex>())
             ASSERT_FLOAT_EQ(
                 (values[i, j]),
-                static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 1)
+                static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 1)))
             );
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
@@ -334,7 +334,7 @@ TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
     input.push_back(static_cast<TokenID>(11));
     input.push_back(static_cast<TokenID>(19));
 
-    flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> actual(input.size());
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> actual(input.size());
     input_layer.propagate_forward(input, actual);
 
     constexpr float model_dim = static_cast<float>(EmbeddingDimension::MAX);
@@ -372,7 +372,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
 
     const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values, scale))
-    values[i, j] = scale * static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 5);
+    values[i, j] = (scale * static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 5))));
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
@@ -382,7 +382,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
         for (const auto j : enum_iterator1D<HeadsIndex>())
             EXPECT_FLOAT_EQ(
                 (values[i, j]),
-                scale * static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 5)
+                (scale * static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 5))))
             );
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
@@ -405,12 +405,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     auto run_parfor = [&]() {
         const auto t0 = std::chrono::steady_clock::now();
         PARFOR_2D(j, i, grid)
-        const float base = static_cast<float>(static_cast<size_t>(j) * 3 + static_cast<size_t>(i));
+        const float base = static_cast<float>(((static_cast<size_t>(j) * 3) + static_cast<size_t>(i)));
         float v = parfor_values[j, i];
         for (int it = 0; it < ITERS; ++it)
         {
             for (int k = 0; k < WORK_PER_CELL; ++k)
-                v += scale * (base + static_cast<float>(k));
+                v += (scale * (base + static_cast<float>(k)));
         }
         parfor_values[j, i] = v;
         ENDFOR
@@ -421,12 +421,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     auto run_offload = [&]() {
         const auto t0 = std::chrono::steady_clock::now();
         OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (offload_values, scale, WORK_PER_CELL, ITERS))
-        const float base = static_cast<float>(static_cast<size_t>(j) * 3 + static_cast<size_t>(i));
+        const float base = static_cast<float>(((static_cast<size_t>(j) * 3) + static_cast<size_t>(i)));
         float v = offload_values[j, i];
         for (int it = 0; it < ITERS; ++it)
         {
             for (int k = 0; k < WORK_PER_CELL; ++k)
-                v += scale * (base + static_cast<float>(k));
+                v += (scale * (base + static_cast<float>(k)));
         }
         offload_values[j, i] = v;
         ENDFOR
@@ -502,7 +502,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
         static_cast<MultiTokenPredictionIndex>(3)
     );
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
-    values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 2);
+    values[i, j] = static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 2)));
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
@@ -514,7 +514,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
             const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(
                 actual_value,
-                static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 2)
+                static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 2)))
             );
         }
 
@@ -531,7 +531,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
 
     const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>();
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
-    values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 3);
+    values[i, j] = static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 3)));
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
@@ -543,7 +543,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
             const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(
                 actual_value,
-                static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 3)
+                static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 3)))
             );
         }
 
@@ -562,7 +562,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
         static_cast<MultiTokenPredictionIndex>(3)
     );
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (values))
-    values[i, j] = static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 4);
+    values[i, j] = static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 4)));
     ENDFOR
 
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
@@ -574,7 +574,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
             const float actual_value = values[i, j];
             EXPECT_FLOAT_EQ(
                 actual_value,
-                static_cast<float>(static_cast<size_t>(i) * 100 + static_cast<size_t>(j) + 4)
+                static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 4)))
             );
         }
 

@@ -51,53 +51,53 @@ namespace rllm
 
     static void output_layer_forward_from_hidden_impl(
         // OFFLOAD_PARAMETERS(h_last, W, inputs)
-        const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
-        const fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension>& W,
-        fixed_size_vector<rlmm_float, TokenID>& inputs
+        const fixed_size_vector<float, EmbeddingDimension>& h_last,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
+        fixed_size_vector<float, TokenID>& inputs
         // END_OFFLOAD_PARAMETERS
     )
     {
         OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator1D<TokenID>(), (h_last, W, inputs))
         float sum = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>())
-            sum += h_last[d] * W[v, d];
+            sum += (h_last[d] * W[v, d]);
         inputs[v] = sum;
         ENDFOR
     }
 
     static void accumulate_output_layer_dh_last(
         // OFFLOAD_PARAMETERS(delta, dh_last, W)
-        const fixed_size_vector<rlmm_float, TokenID>& delta,
-        fixed_size_vector<rlmm_float, EmbeddingDimension>& dh_last,
-        const fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension>& W
+        const fixed_size_vector<float, TokenID>& delta,
+        fixed_size_vector<float, EmbeddingDimension>& dh_last,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W
         // END_OFFLOAD_PARAMETERS
     )
     {
         OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator1D<EmbeddingDimension>(), (delta, dh_last, W))
         float sum = dh_last[d];
         for (const auto v : enum_iterator1D<TokenID>())
-            sum += delta[v] * W[v, d];
+            sum += (delta[v] * W[v, d]);
         dh_last[d] = sum;
         ENDFOR
     }
 
     static void update_output_layer_weights(
         // OFFLOAD_PARAMETERS(delta, h_last, W, V, learning_rate)
-        const fixed_size_vector<rlmm_float, TokenID>& delta,
-        const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
-        fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension>& W,
-        fixed_size_matrix<rlmm_float, TokenID, EmbeddingDimension>& V,
+        const fixed_size_vector<float, TokenID>& delta,
+        const fixed_size_vector<float, EmbeddingDimension>& h_last,
+        fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
+        fixed_size_matrix<float, TokenID, EmbeddingDimension>& V,
         float learning_rate
         // END_OFFLOAD_PARAMETERS
     )
     {
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(v, d, grid, (delta, h_last, W, V, learning_rate))
-        const float g = math::clamp(delta[v] * h_last[d], -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
+        const float g = math::clamp((delta[v] * h_last[d]), -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
         V[v, d] = math::clamp(
-            OutputLayer::MOMENTUM_BETA * V[v, d] + learning_rate * g, -OutputLayer::VEL_CLIP, OutputLayer::VEL_CLIP
+            ((OutputLayer::MOMENTUM_BETA * V[v, d]) + (learning_rate * g)), -OutputLayer::VEL_CLIP, OutputLayer::VEL_CLIP
         );
-        W[v, d] = math::clamp(W[v, d] + V[v, d], -OutputLayer::WEIGHT_CLAMP, OutputLayer::WEIGHT_CLAMP);
+        W[v, d] = math::clamp((W[v, d] + V[v, d]), -OutputLayer::WEIGHT_CLAMP, OutputLayer::WEIGHT_CLAMP);
         ENDFOR
     }
 
@@ -107,7 +107,7 @@ namespace rllm
 
     [[maybe_unused]] static void initialize_softmax_temp_values(
         // OFFLOAD_PARAMETERS(temp_values)
-        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+        fixed_size_vector<float, TempStorage>& temp_values
         // END_OFFLOAD_PARAMETERS
     )
     {
@@ -118,8 +118,8 @@ namespace rllm
 
     [[maybe_unused]] static void reduce_logits_max_to_temp(
         // OFFLOAD_PARAMETERS(inputs, temp_values)
-        const fixed_size_vector<rlmm_float, TokenID>& inputs,
-        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+        const fixed_size_vector<float, TokenID>& inputs,
+        fixed_size_vector<float, TempStorage>& temp_values
         // END_OFFLOAD_PARAMETERS
     )
     {
@@ -133,9 +133,9 @@ namespace rllm
 
     [[maybe_unused]] static void compute_exp_and_accumulate_sum(
         // OFFLOAD_PARAMETERS(inputs, values, temp_values)
-        const fixed_size_vector<rlmm_float, TokenID>& inputs,
-        fixed_size_vector<rlmm_float, TokenID>& values,
-        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+        const fixed_size_vector<float, TokenID>& inputs,
+        fixed_size_vector<float, TokenID>& values,
+        fixed_size_vector<float, TempStorage>& temp_values
         // END_OFFLOAD_PARAMETERS
     )
     {
@@ -147,7 +147,7 @@ namespace rllm
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (inputs, values, temp_values))
         {
             const float max_val = temp_values[TempStorage::ZERO];
-            float exp_value = exp(inputs[i] - max_val);            
+            float exp_value = exp((inputs[i] - max_val));            
             values[i] = exp_value;
             
             atomicAdd(temp_values[TempStorage::ONE], exp_value);
@@ -157,15 +157,15 @@ namespace rllm
 
     [[maybe_unused]] static void finalize_softmax_delta(
         // OFFLOAD_PARAMETERS(values, temp_values, expected_output_token)
-        fixed_size_vector<rlmm_float, TokenID>& values,
-        const fixed_size_vector<rlmm_float, TempStorage>& temp_values,
+        fixed_size_vector<float, TokenID>& values,
+        const fixed_size_vector<float, TempStorage>& temp_values,
         TokenID expected_output_token
         // END_OFFLOAD_PARAMETERS
     )
     {
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token))
         const float sum_exp = temp_values[TempStorage::ONE];
-        float delta = OutputLayer::smooth - values[i] / sum_exp;
+        float delta = (OutputLayer::smooth - (values[i] / sum_exp));
         if (i == expected_output_token)
             delta += (1.0f - OutputLayer::LABEL_SMOOTHING);
         values[i] = delta;
@@ -190,16 +190,16 @@ namespace rllm
     }
 
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
-    void OutputLayer::forward_from_hidden(const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last)
+    void OutputLayer::forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last)
     {
         output_layer_forward_from_hidden_impl(h_last, W_lm_head, m_inputs);
     }
 
     // Accumulates dL/dh_last[D] and updates W_lm_head.
     void OutputLayer::backward_and_update(
-        const fixed_size_vector<rlmm_float, TokenID>& delta,
-        const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
-        fixed_size_vector<rlmm_float, EmbeddingDimension>& dh_last,
+        const fixed_size_vector<float, TokenID>& delta,
+        const fixed_size_vector<float, EmbeddingDimension>& h_last,
+        fixed_size_vector<float, EmbeddingDimension>& dh_last,
         float learning_rate
     )
     {
@@ -239,13 +239,28 @@ namespace rllm
     float OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
 #if defined(USE_VULKAN_OFFLOAD)
-        initialize_softmax_temp_values(score.temp_values);
-        reduce_logits_max_to_temp(m_inputs, score.temp_values);
-        compute_exp_and_accumulate_sum(m_inputs, score.values, score.temp_values);
-        finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
+        float max_val = -std::numeric_limits<float>::infinity();
+        for (const auto token : enum_iterator1D<TokenID>())
+            max_val = math::max(max_val, m_inputs.get_offload_synced(token));
 
-        const float max_val = score.temp_values[TempStorage::START];
+        score.temp_values[TempStorage::START] = max_val;
+        score.temp_values[TempStorage::ONE] = 0.0f;
+        for (const auto token : enum_iterator1D<TokenID>())
+        {
+            const float exp_value = std::exp(m_inputs[token] - max_val);
+            score.values[token] = exp_value;
+            score.temp_values[TempStorage::ONE] += exp_value;
+        }
+
         const float sum_exp = score.temp_values[TempStorage::ONE];
+        for (const auto token : enum_iterator1D<TokenID>())
+        {
+            float delta = OutputLayer::smooth - score.values[token] / sum_exp;
+            if (token == expected_output_token)
+                delta += (1.0f - OutputLayer::LABEL_SMOOTHING);
+            score.values[token] = delta;
+        }
+
         const float expected_logit = m_inputs.get_offload_synced(expected_output_token);
 #else
         float max_val = -std::numeric_limits<float>::infinity();

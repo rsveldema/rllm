@@ -83,9 +83,9 @@ namespace rllm
         // Mean-pool the last transformer block's hidden state over the sequence dimension.
         // Equivalent to last_hidden_state.mean(dim=1) in PyTorch.
         // Must be called after propagate_forward().
-        fixed_size_vector<rlmm_float, EmbeddingDimension> get_last_hidden_mean() const
+        fixed_size_vector<float, EmbeddingDimension> get_last_hidden_mean() const
         {
-            fixed_size_vector<rlmm_float, EmbeddingDimension> result;
+            fixed_size_vector<float, EmbeddingDimension> result;
             const size_t seq_len = static_cast<size_t>(m_seq_len);
             if (seq_len == 0)
                 return result;
@@ -94,7 +94,7 @@ namespace rllm
                 float sum = 0.0f;
                 for (const auto pos : enum_iterator1D<PositionIndex>(m_seq_len))
                     sum += static_cast<float>(m_last_hidden[pos, d]);
-                result[d] = static_cast<rlmm_float>(sum / static_cast<float>(seq_len));
+                result[d] = static_cast<float>(sum / static_cast<float>(seq_len));
             }
             return result;
         }
@@ -120,7 +120,7 @@ namespace rllm
         fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
 
         // Hidden state at the final position after the last transformer block.
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> m_last_hidden;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_last_hidden;
         PositionIndex m_seq_len{PositionIndex::START};
         std::unique_ptr<NeuralNetworkForwardWorkspace> m_forward_workspace;
         std::unique_ptr<BackwardPropWorkspace> m_backward_workspace;

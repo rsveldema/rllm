@@ -12,8 +12,8 @@ namespace rllm
     static void fill_embeddings_with_positional_encoding(
         // OFFLOAD_PARAMETERS(tokens, embeddings, h, model_dim)
         const InputLine& tokens,
-        const fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension>& embeddings,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
         float model_dim
         // END_OFFLOAD_PARAMETERS
     )
@@ -24,10 +24,10 @@ namespace rllm
         const int tok = static_cast<int>(tokens[pos]);
         const int di_int = static_cast<int>(di);
         const float emb_val = embeddings[tok, di];
-        const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / model_dim);
+        const float freq = (1.0f / std::pow(10000.0f, (static_cast<float>((di_int & ~1)) / model_dim)));
         const float pos_f = static_cast<float>(pos);
-        const float pe = (di_int % 2 == 0) ? std::sin(pos_f * freq) : std::cos(pos_f * freq);
-        h[pos, di] = static_cast<rlmm_float>(emb_val + pe);
+        const float pe = ((di_int % 2) == 0) ? std::sin((pos_f * freq)) : std::cos((pos_f * freq));
+        h[pos, di] = static_cast<float>((emb_val + pe));
         ENDFOR
     }
 
@@ -40,7 +40,7 @@ namespace rllm
     {
         for (const auto tok : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                m_embeddings[tok, d] = static_cast<rlmm_float>(get_random_value(-0.1f, 0.1f));
+                m_embeddings[tok, d] = static_cast<float>(get_random_value(-0.1f, 0.1f));
         m_embeddings.copy_to_offload_buffer();
     }
 
@@ -49,7 +49,7 @@ namespace rllm
     // PE[pos, 2i+1] = cos(pos / 10000^(2i / D_MODEL))
     void InputLayer::propagate_forward(
         const InputLine& input,
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
     ) const
     {
         h.set_rows(static_cast<PositionIndex>(input.size()));
@@ -62,7 +62,7 @@ namespace rllm
     // Positional encodings are fixed, so only the embedding contribution is updated.
     void InputLayer::propagate_backward(
         const InputLine& input,
-        const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dh,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
         float learning_rate
     )
     {

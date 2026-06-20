@@ -284,8 +284,8 @@ namespace rllm
             temp_values.zero();
         }
 
-        fixed_size_vector<rlmm_float, TokenID> values;
-        fixed_size_vector<rlmm_float, TempStorage> temp_values; // for use in softmax computation, to avoid modifying the original logits
+        fixed_size_vector<float, TokenID> values;
+        fixed_size_vector<float, TempStorage> temp_values; // for use in softmax computation, to avoid modifying the original logits
     };
 
     struct OutputToken

@@ -23,22 +23,22 @@ namespace rllm
     {
         PositionIndex seq_len;
         // Activations cached for the backward pass
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_in;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_norm_attn;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> Q, K, V;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_in;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_attn;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> Q, K, V;
         // Per-head softmax weight matrices; only the [H x T x T] block is live.
-        fixed_size_obj_vector<fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> attn_w;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> attn_concat;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_mid;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> h_norm_ff;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> gate_pre;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> up_pre;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> ffn_act;
+        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> attn_w;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_mid;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_ff;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> gate_pre;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> up_pre;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> ffn_act;
         // Temporaries used only within forward() itself
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> attn_proj;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> ffn_out;
-        fixed_size_vector<rlmm_float, RmsNormPartialSumIndex> rms_norm_row_sums;
-        fixed_size_vector<rlmm_float, PositionIndex> rms_norm_inv_rms;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
+        fixed_size_vector<float, RmsNormPartialSumIndex> rms_norm_row_sums;
+        fixed_size_vector<float, PositionIndex> rms_norm_inv_rms;
 
         explicit ForwardWorkspace(PositionIndex seq)
             : seq_len(seq)
@@ -87,28 +87,28 @@ namespace rllm
     struct BackwardWorkspace
     {
         // FFN backward
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_mid;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_ffn_act;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> dW_down;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_gate_pre;
-        flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension> d_up_pre;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> dW_gate;
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> dW_up;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_mid;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> d_ffn_act;
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension> dW_down;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> d_gate_pre;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> d_up_pre;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> dW_gate;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> dW_up;
 
         // Attention backward
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_attn_concat;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_o;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_Q;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_K;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_V;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_q;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_k;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> dW_v;
-        flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_attn_concat;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_o;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_Q;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_K;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_V;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_q;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_k;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
 
-        fixed_size_obj_vector<fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
-        fixed_size_obj_vector<fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
+        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
+        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
 
         explicit BackwardWorkspace(PositionIndex seq)
             : d_h_mid(seq)
@@ -187,11 +187,11 @@ namespace rllm
 
         // Forward pass.  h[seq_len × D_MODEL] is modified in-place.
         // Caches intermediate activations for the backward pass.
-        void forward(flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, ForwardWorkspace& workspace);
+        void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, ForwardWorkspace& workspace);
 
         // Backward pass.  dout[seq_len × D_MODEL] = dL/dh_out.
         // Writes dL/dh_in into din (same shape) and updates all weights.
-        void backward(const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate, ForwardWorkspace& fwd_workspace);
+        void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate, ForwardWorkspace& fwd_workspace);
 
         void randomize();
 
@@ -203,22 +203,22 @@ namespace rllm
                                          std::string* err = nullptr) const;
 
         // Public RMS norm: used by NeuralNetwork to apply the final pre-LM-head norm.
-        static void apply_rms_norm(const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y)
+        static void apply_rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y)
         {
             rms_norm(x, y);
         }
 
         // Test helper: expose causal softmax without exposing internals broadly.
-        static void causal_softmax_for_test(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T)
+        static void causal_softmax_for_test(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, PositionIndex T)
         {
             causal_softmax(x, T);
         }
 
         // Test helper: expose per-head softmax backward Jacobian application.
         static void softmax_attention_for_head_for_test(
-            const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores,
-            fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw,
-            const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& attn_w,
+            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores,
+            fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw,
+            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w,
             PositionIndex T)
         {
             softmax_attention_for_head(d_scores, d_raw, attn_w, T);
@@ -227,9 +227,9 @@ namespace rllm
 
         // Test helper: expose RMSNorm backward for correctness tests.
         static void rms_norm_backward_for_test(
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dy,
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
-            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dx)
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx)
         {
             rms_norm_backward(dy, x, dx);
         }
@@ -238,37 +238,37 @@ namespace rllm
     friend class NeuralNetwork;
       private:
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
+        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
 
         // SwiGLU FFN:
         //   gate, up:  [FFDimension::MAX    × D_MODEL]  (out × in)
         //   down:      [D_MODEL × FFDimension::MAX   ]  (out × in)
-        fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension> W_gate, W_up;
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> V_gate, V_up;
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension> W_down;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> V_down;
+        fixed_size_matrix<float16, FFDimension, EmbeddingDimension> W_gate, W_up;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> V_gate, V_up;
+        fixed_size_matrix<float16, EmbeddingDimension, FFDimension> W_down;
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension> V_down;
 
         void copy_weights_to_offload_buffer();
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
-        static void rms_norm(const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y);
+        static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y);
 
         // RMSNorm backward: dx += ∂L/∂x  given dy = ∂L/∂y and the original x
-        static void rms_norm_backward(const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dy, const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dx);
+        static void rms_norm_backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx);
 
         // In-place causal softmax over the active [T × T] block of x.
-        static void causal_softmax(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T);
+        static void causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, PositionIndex T);
 
         // Per-head softmax backward into d_raw.
         static void softmax_attention_for_head(
-            const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_scores_h,
-            fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& d_raw_h,
-            const fixed_size_triangular_matrix<rlmm_float, PositionIndex, PositionIndex>& attn_w_h,
+            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores_h,
+            fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h,
+            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
             PositionIndex seq_len);
 
         // SwiGLU backward: computes d_gate_pre and d_up_pre from d_ffn_act.
-        static void swiglu_backward(PositionIndex seq, const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& gate_pre, const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& up_pre, const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_ffn_act, flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_gate_pre, flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_up_pre);
+        static void swiglu_backward(PositionIndex seq, const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre);
 
         void forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void compute_attention_scores_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);

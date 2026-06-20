@@ -24,7 +24,6 @@ _SIMD_REDUCTION_PLUS_RE = re.compile(r"^\s*RLLM_OMP_SIMD_REDUCTION_PLUS\s*\([^)]
 _STATIC_CAST_SIZE_T_RE = re.compile(r"static_cast\s*<\s*size_t\s*>\s*\(([^()]*)\)")
 _STATIC_CAST_GENERIC_RE = re.compile(r"static_cast\s*<\s*([^>]+?)\s*>\s*\(")
 _SIZE_T_WORD_RE = re.compile(r"\bsize_t\b")
-_RLMM_FLOAT_WORD_RE = re.compile(r"\brlmm_float(?:_small)?\b")
 _STD_SQRT_RE = re.compile(r"\bstd\s*::\s*sqrt\s*\(")
 _STD_EXP_RE = re.compile(r"\bstd\s*::\s*exp\s*\(")
 _STD_SIN_RE = re.compile(r"\bstd\s*::\s*sin\s*\(")
@@ -43,7 +42,7 @@ _COMMA_INDEX_RE = re.compile(r"\[\s*([^\[\],]+?)\s*,\s*([^\[\],]+?)\s*\]")
 # Scalar kernel args are passed via push constants, so we only match by-value
 # float aliases here and leave reference/pointer forms on the buffer path.
 _FLOAT_SCALAR_RE = re.compile(
-    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*(?:float|rlmm_float(?:_small)?)\s*(?P<ref>[&*])?\s*$"
+    r"^(?P<const>const\s+)?(?:[A-Za-z_]\w*::)*float\s*(?P<ref>[&*])?\s*$"
 )
 _OFFLOAD_SHARED_MEMORY_RE = re.compile(r"^\s*OFFLOAD_SHARED_MEMORY\s*\((?P<args>.*)\)\s*;?\s*$")
 
@@ -56,8 +55,6 @@ def _sanitize_kernel_line_for_glsl(line: str) -> str:
     # Replace remaining C++ static_cast<T>(...) with C-style casts before further cleanup.
     line = _STATIC_CAST_GENERIC_RE.sub(r"(\1)(", line)
     line = _SIZE_T_WORD_RE.sub("uint", line)
-    # Map project scalar aliases to GLSL scalar type.
-    line = _RLMM_FLOAT_WORD_RE.sub("float", line)
     # GLSL primitive types cannot be namespace-qualified (e.g. rllm::float).
     line = _QUALIFIED_GLSL_SCALAR_RE.sub(r"\1", line)
     # GLSL builtins are unqualified (no std:: namespace).
@@ -195,8 +192,10 @@ def _map_cpp_buffer_scalar_to_glsl(raw_scalar: str) -> str | None:
 
     if token in {"int", "int32_t"}:
         return "int"
-    if token in {"float", "rlmm_float", "rlmm_float_small"}:
+    if token == "float":
         return "float"
+    if token == "float16":
+        return "float16_t"
     return None
 
 
@@ -542,8 +541,6 @@ def _load_vulkan_config(config_path: Path) -> VulkanConfig:
 def _sanitize_cpp_type_to_glsl(cpp_type: str) -> str:
     """Convert a C++ type to GLSL type for shared variables."""
     glsl_type = _sanitize_kernel_line_for_glsl(cpp_type)
-    # Convert C++ floating point types to float
-    glsl_type = re.sub(r"\brlmm_float(?:_small)?\b", "float", glsl_type)
     glsl_type = re.sub(r"\bsize_t\b", "uint", glsl_type)
     # Remove qualifiers that don't apply in shared context
     glsl_type = re.sub(r"\bconst\b", "", glsl_type).strip()
