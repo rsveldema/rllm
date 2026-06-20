@@ -27,6 +27,7 @@ namespace
     {
         void OnTestStart(const ::testing::TestInfo&) override
         {
+            ::parallel::statistics.reset();
             if (std::filesystem::exists("models"))
                 for (const auto& entry : std::filesystem::directory_iterator("models"))
                     std::filesystem::remove(entry.path());

@@ -9,6 +9,12 @@
 
 namespace rllm
 {
+    void output_layer_forward_from_hidden_impl(
+        const fixed_size_vector<float, EmbeddingDimension>& h_last,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
+        fixed_size_vector<float, TokenID>& inputs
+    );
+
     // OutputLayer holds the learned linear projection ("LM head") from the last
     // transformer block's hidden state at the final sequence position to
     // vocabulary logits, plus the scoring and serialisation logic.

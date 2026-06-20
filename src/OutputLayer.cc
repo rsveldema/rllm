@@ -14,55 +14,50 @@ namespace rllm
 {
     using uint = unsigned int;
 
-#if !defined(USE_VULKAN_OFFLOAD)
-    struct cpu_invocation_id
+    static inline float finite_or_zero(float value)
     {
-        uint x;
-        uint y;
-        uint z;
-    };
-
-    struct cpu_push_constants
-    {
-        int rllm_bound_x;
-    };
-
-    static inline cpu_invocation_id rllm_cpu_zero_invocation_id()
-    {
-        return {0u, 0u, 0u};
+        return std::isfinite(value) ? value : 0.0f;
     }
 
-    static inline cpu_invocation_id rllm_cpu_workgroup_size()
+    static inline float finite_clamp(float value, float lo, float hi)
     {
-        return {1u, 1u, 1u};
+        if (!std::isfinite(value))
+            return 0.0f;
+        return math::clamp(value, lo, hi);
     }
-
-    static inline cpu_push_constants rllm_cpu_push()
-    {
-        return {std::numeric_limits<int>::max()};
-    }
-
-#endif
 
     OutputLayer::OutputLayer()
     {
         m_inputs.set_size(TokenID::MAX);
     }
 
-    static void output_layer_forward_from_hidden_impl(
-        // OFFLOAD_PARAMETERS(h_last, W, inputs)
+    static void output_layer_forward_from_hidden_float_impl(
+        // OFFLOAD_PARAMETERS(h_last, W_float, inputs)
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
-        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
+        const fixed_size_matrix<float, TokenID, EmbeddingDimension>& W_float,
         fixed_size_vector<float, TokenID>& inputs
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator1D<TokenID>(), (h_last, W, inputs))
+        OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator1D<TokenID>(), (h_last, W_float, inputs))
         float sum = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>())
-            sum += (h_last[d] * W[v, d]);
+            sum += (h_last[d] * W_float[v, d]);
         inputs[v] = sum;
         ENDFOR
+    }
+
+    void output_layer_forward_from_hidden_impl(
+        const fixed_size_vector<float, EmbeddingDimension>& h_last,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
+        fixed_size_vector<float, TokenID>& inputs
+    )
+    {
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> W_float;
+        for (const auto v : enum_iterator1D<TokenID>())
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
+                W_float[v, d] = finite_or_zero(static_cast<float>(W[v, d]));
+        output_layer_forward_from_hidden_float_impl(h_last, W_float, inputs);
     }
 
     static void accumulate_output_layer_dh_last(
@@ -100,10 +95,6 @@ namespace rllm
         W[v, d] = math::clamp((W[v, d] + V[v, d]), -OutputLayer::WEIGHT_CLAMP, OutputLayer::WEIGHT_CLAMP);
         ENDFOR
     }
-
-#if !defined(USE_VULKAN_OFFLOAD)
-#define gl_GlobalInvocationID rllm_cpu_zero_invocation_id()
-#endif
 
     [[maybe_unused]] static void initialize_softmax_temp_values(
         // OFFLOAD_PARAMETERS(temp_values)
@@ -203,8 +194,42 @@ namespace rllm
         float learning_rate
     )
     {
+#if ! USE_VULKAN_OFFLOAD
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+        {
+            float sum = finite_or_zero(dh_last[d]);
+            for (const auto v : enum_iterator1D<TokenID>())
+                sum += (finite_or_zero(delta[v]) * finite_or_zero(static_cast<float>(W_lm_head[v, d])));
+            dh_last[d] = finite_or_zero(sum);
+        }
+
+        for (const auto v : enum_iterator1D<TokenID>())
+        {
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            {
+                const float g = finite_clamp(
+                    (finite_or_zero(delta[v]) * finite_or_zero(h_last[d])),
+                    -OutputLayer::GRAD_CLIP,
+                    OutputLayer::GRAD_CLIP
+                );
+                const float velocity = finite_clamp(
+                    ((OutputLayer::MOMENTUM_BETA * finite_or_zero(V_lm_head[v, d])) + (learning_rate * g)),
+                    -OutputLayer::VEL_CLIP,
+                    OutputLayer::VEL_CLIP
+                );
+                V_lm_head[v, d] = velocity;
+                const float weight = finite_clamp(
+                    (finite_or_zero(static_cast<float>(W_lm_head[v, d])) + velocity),
+                    -OutputLayer::WEIGHT_CLAMP,
+                    OutputLayer::WEIGHT_CLAMP
+                );
+                W_lm_head[v, d] = static_cast<float16>(weight);
+            }
+        }
+#else
         accumulate_output_layer_dh_last(delta, dh_last, W_lm_head);
         update_output_layer_weights(delta, h_last, W_lm_head, V_lm_head, learning_rate);
+#endif
     }
 
     std::vector<OutputToken> OutputLayer::get_top_k_by_logit(size_t k) const
@@ -238,21 +263,30 @@ namespace rllm
     // cross-entropy loss -log(softmax[target]) in a single pass over the logits.
     float OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
-#if defined(USE_VULKAN_OFFLOAD)
+#if !USE_VULKAN_OFFLOAD
         float max_val = -std::numeric_limits<float>::infinity();
-        for (const auto token : enum_iterator1D<TokenID>())
-            max_val = math::max(max_val, m_inputs.get_offload_synced(token));
+        for (const auto token : enum_iterator1D<TokenID>()) {
+            const auto v = finite_or_zero(m_inputs.get_offload_synced(token));
+            assert(! std::isnan(v));
+            max_val = math::max(max_val, v);
+        }
+        if (!std::isfinite(max_val))
+            max_val = 0.0f;
 
         score.temp_values[TempStorage::START] = max_val;
         score.temp_values[TempStorage::ONE] = 0.0f;
         for (const auto token : enum_iterator1D<TokenID>())
         {
-            const float exp_value = std::exp(m_inputs[token] - max_val);
+            const float exp_arg = finite_clamp((finite_or_zero(m_inputs[token]) - max_val), -80.0f, 80.0f);
+            const float exp_value = finite_or_zero(std::exp(exp_arg));
+            assert(! std::isnan((exp_value)));
             score.values[token] = exp_value;
             score.temp_values[TempStorage::ONE] += exp_value;
         }
 
-        const float sum_exp = score.temp_values[TempStorage::ONE];
+        float sum_exp = score.temp_values[TempStorage::ONE];
+        if (!std::isfinite(sum_exp) || sum_exp <= 0.0f)
+            sum_exp = static_cast<float>(TokenID::MAX);
         for (const auto token : enum_iterator1D<TokenID>())
         {
             float delta = OutputLayer::smooth - score.values[token] / sum_exp;
@@ -261,11 +295,12 @@ namespace rllm
             score.values[token] = delta;
         }
 
-        const float expected_logit = m_inputs.get_offload_synced(expected_output_token);
+        const float expected_logit = finite_or_zero(m_inputs.get_offload_synced(expected_output_token));
 #else
         float max_val = -std::numeric_limits<float>::infinity();
-        for (const auto token : enum_iterator1D<TokenID>())
+        for (const auto token : enum_iterator1D<TokenID>()) {
             max_val = math::max(max_val, m_inputs[token]);
+        }
 
         score.temp_values[TempStorage::START] = max_val;
         score.temp_values[TempStorage::ONE] = 0.0f;
@@ -275,11 +310,11 @@ namespace rllm
         const float sum_exp = score.temp_values[TempStorage::ONE];
         const float expected_logit = m_inputs[expected_output_token];
 #endif
+        assert(! std::isnan(expected_logit));
+        assert(! std::isnan(max_val));
+        assert(! std::isnan(sum_exp));
         const float log_prob = expected_logit - max_val - std::log(sum_exp);
+        assert(! std::isnan(log_prob));
         return -log_prob;
     }
 } // namespace rllm
-
-#if !defined(USE_VULKAN_OFFLOAD)
-#undef gl_GlobalInvocationID
-#endif

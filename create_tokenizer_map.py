@@ -156,6 +156,19 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
         tokens.append(ch)
     tokens.append(EOW_MARKER)  # end-of-word marker used by BPE
 
+    # Multi-character operators — added explicitly so longest-match-first
+    # tokenization prefers them over their single-character constituents.
+    # Without these, "==" would match only the first "=" and the second "="
+    # would be skipped as unmatched, shortening the sequence and causing NaN loss.
+    MULTI_CHAR_OPS = [
+        '==', '!=', '<=', '>=',
+        '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=',
+        '<<', '>>', '<<=', '>>=',
+        '->', '::', '...',
+        '&&', '||', '!!',
+    ]
+    tokens.extend(MULTI_CHAR_OPS)
+
     # a-z, A-Z and accented latin characters (U+00C0–U+024F) as single-char tokens
     # so that every letter can always be tokenized without skipping.
     import unicodedata

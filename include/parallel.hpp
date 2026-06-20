@@ -82,10 +82,14 @@ namespace parallel::detail
 namespace parallel {
     const char* backend_name();
     void print_vulkan_provider();
+    inline std::string bytes_to_mbyte(size_t b) { return std::format("{:.2f}", b / 1048576.0); }
+
 
     class Statistics
     {
       public:
+
+      
         struct CopySiteBreakdown
         {
             std::string site;
@@ -257,19 +261,36 @@ namespace parallel {
 #endif
         }
 
+        void reset()
+        {
+#if defined(RLLM_ENABLE_STATISTICS)
+            reset_buffer_copy_counters();
+
+            m_copy_sites.clear();
+            m_copy_parameters.clear();
+
+            {
+                std::lock_guard<std::mutex> lock(m_kernel_timing_mutex);
+                m_kernel_timings.clear();
+            }
+
+            exit_statistics_instance() = nullptr;
+#endif
+        }
+
         void print_statistics() const
         {
 #if defined(RLLM_ENABLE_STATISTICS)
             std::println("Parallel statistics:");
             std::println(
-                "  Host-to-device buffer copies: {} ({} bytes)",
+                "  Host-to-device buffer copies: {} ({} MB)",
                 host_to_device_buffer_copies(),
-                host_to_device_buffer_copy_bytes()
+                bytes_to_mbyte(host_to_device_buffer_copy_bytes())
             );
             std::println(
-                "  Device-to-host buffer copies: {} ({} bytes)",
+                "  Device-to-host buffer copies: {} ({} MB)",
                 device_to_host_buffer_copies(),
-                device_to_host_buffer_copy_bytes()
+                bytes_to_mbyte(device_to_host_buffer_copy_bytes())
             );
 
 #if defined(USE_VULKAN_OFFLOAD)
@@ -302,12 +323,12 @@ namespace parallel {
                 for (const auto& item : stats)
                 {
                     std::println(
-                        "    {}: H2D={} ({} bytes), D2H={} ({} bytes)",
+                        "    {}: H2D={} ({} MB), D2H={} ({} MB)",
                         item.kernel_name,
                         item.host_to_device,
-                        item.host_to_device_bytes,
+                        bytes_to_mbyte(item.host_to_device_bytes),
                         item.device_to_host,
-                        item.device_to_host_bytes
+                        bytes_to_mbyte(item.device_to_host_bytes)
                     );
                 }
             };
@@ -323,12 +344,12 @@ namespace parallel {
                 for (const auto& site : top_sites)
                 {
                     std::println(
-                        "    {}: H2D={} ({} bytes), D2H={} ({} bytes)",
+                        "    {}: H2D={} ({} MB), D2H={} ({} MB)",
                         site.site,
                         site.host_to_device,
-                        site.host_to_device_bytes,
+                        bytes_to_mbyte(site.host_to_device_bytes),
                         site.device_to_host,
-                        site.device_to_host_bytes
+                        bytes_to_mbyte(site.device_to_host_bytes)
                     );
                 }
             }
@@ -340,13 +361,13 @@ namespace parallel {
                 for (const auto& item : top_parameters)
                 {
                     std::println(
-                        "    {} [{}]: H2D={} ({} bytes), D2H={} ({} bytes)",
+                        "    {} [{}]: H2D={} ({} MB), D2H={} ({} MB)",
                         item.site,
                         item.parameter,
                         item.host_to_device,
-                        item.host_to_device_bytes,
+                        bytes_to_mbyte(item.host_to_device_bytes),
                         item.device_to_host,
-                        item.device_to_host_bytes
+                        bytes_to_mbyte(item.device_to_host_bytes)
                     );
                 }
             }

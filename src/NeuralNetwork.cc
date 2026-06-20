@@ -955,6 +955,22 @@ namespace rllm
                 Score& s = (*scores_storage)[_k];
                 const auto _target = train_output[static_cast<PositionIndex>(_input_len + static_cast<int>(_k))];
                 const float _k_loss = m_output_layers[_k].compute_score(s, _target);
+                if (std::isnan(_k_loss)) {
+                    LOG_ERROR("loss became NaN!");
+                }
+                if (!std::isfinite(_k_loss))
+                {
+                    LOG_INFO(
+                        "Non-finite loss detected for head {}, target '{}' ({}), full string: '{}', input size: {}.",
+                        static_cast<size_t>(_k),
+                        m_corpus.get_token_from_id(_target),
+                        _target,
+                        full_string,
+                        static_cast<size_t>(train_input.size())
+                    );
+                    m_stats.record_learning_failure();
+                    return;
+                }
                 if (_k == MultiTokenPredictionIndex::START)
                     loss = _k_loss;
             }

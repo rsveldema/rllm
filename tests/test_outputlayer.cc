@@ -25,6 +25,18 @@ namespace
         return tokens;
     }
 
+    std::vector<rllm::EmbeddingDimension> first_n_dimensions(size_t count)
+    {
+        std::vector<rllm::EmbeddingDimension> dims;
+        for (const auto dim : rllm::enum_iterator1D<rllm::EmbeddingDimension>())
+        {
+            dims.push_back(dim);
+            if (dims.size() == count)
+                break;
+        }
+        return dims;
+    }
+
     nlohmann::json zero_output_layer_weights_json()
     {
         const size_t vocab = static_cast<size_t>(rllm::TokenID::MAX);
@@ -74,6 +86,60 @@ namespace
         return -(logits[expected_index] - max_val - std::log(sum_exp));
     }
 } // namespace
+
+TEST(OutputLayerForwardFromHiddenTest, PublicForwardMatchesImplementationHelper)
+{
+    auto weights_json = zero_output_layer_weights_json();
+    rllm::fixed_size_matrix<float16, rllm::TokenID, rllm::EmbeddingDimension> weights;
+    weights.zero();
+
+    const auto tokens = first_n_tokens(4);
+    const auto dims = first_n_dimensions(5);
+    ASSERT_EQ(tokens.size(), 4u);
+    ASSERT_EQ(dims.size(), 5u);
+
+    const float weight_values[4][5] = {
+        {0.5f, -0.25f, 1.0f, 0.0f, -0.5f},
+        {-1.0f, 0.75f, 0.25f, -0.125f, 0.5f},
+        {1.5f, 0.0f, -0.5f, 0.25f, -0.75f},
+        {-0.25f, -0.5f, 0.75f, 1.0f, 0.125f},
+    };
+
+    for (size_t token_i = 0; token_i < tokens.size(); ++token_i)
+    {
+        for (size_t dim_i = 0; dim_i < dims.size(); ++dim_i)
+        {
+            const float value = weight_values[token_i][dim_i];
+            weight_at(weights_json, tokens[token_i], dims[dim_i]) = value;
+            weights[tokens[token_i], dims[dim_i]] = static_cast<float16>(value);
+        }
+    }
+
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
+    h_last.set_size(rllm::EmbeddingDimension::MAX);
+    h_last.zero();
+    h_last[dims[0]] = 1.0f;
+    h_last[dims[1]] = -2.0f;
+    h_last[dims[2]] = 0.5f;
+    h_last[dims[3]] = 4.0f;
+    h_last[dims[4]] = -1.5f;
+
+    rllm::fixed_size_vector<float, rllm::TokenID> impl_logits;
+    impl_logits.set_size(rllm::TokenID::MAX);
+    impl_logits.zero();
+    rllm::output_layer_forward_from_hidden_impl(h_last, weights, impl_logits);
+
+    rllm::OutputLayer layer;
+    layer.load(weights_json);
+    layer.forward_from_hidden(h_last);
+
+    const auto public_logits = logits_from_output_layer(layer);
+    for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
+    {
+        const size_t index = static_cast<size_t>(tok);
+        EXPECT_NEAR(public_logits[index], impl_logits.get_offload_synced(tok), 1e-5f) << "token index " << index;
+    }
+}
 
 TEST(OutputLayerScoreTest, ZeroLogitsMatchReference)
 {

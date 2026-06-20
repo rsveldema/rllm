@@ -1,4 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 ./build_debug.sh
+
+TRAIN_DIR="${TRAIN_DIR:-training_data1}"
+
 
 echo "Normalizing training_data1 with training_postprocessor.py..."
 python3 ./training_postprocessor.py --dir training_data1
@@ -10,22 +16,52 @@ else
     echo "No .cpp files found in training_data0"
 fi
 
-# Resume from the latest checkpoint if one exists, otherwise start fresh.
-latest_checkpoint=$(ls -t models/checkpoint-*.json 2>/dev/null | head -1)
-if [ -n "$latest_checkpoint" ]; then
-    echo "Resuming from $latest_checkpoint"
-    input_arg="-i $latest_checkpoint"
-else
-    echo "No checkpoint found, starting from random weights."
-    input_arg=""
+if [ ! -d "$TRAIN_DIR" ]; then
+    echo "Training directory '$TRAIN_DIR' does not exist. Set TRAIN_DIR to an existing folder."
+    exit 1
 fi
 
+
+# Resume from an explicit model path, then after_training.st, then latest checkpoint.
+# Use RESUME_MODEL=/path/to/model.st to override.
+if [ -n "${RESUME_MODEL:-}" ] && [ -f "${RESUME_MODEL}" ]; then
+    echo "Resuming from ${RESUME_MODEL}"
+    input_arg="-i ${RESUME_MODEL}"
+elif [ -f "models/after_training.st" ]; then
+    echo "Resuming from models/after_training.st"
+    input_arg="-i models/after_training.st"
+else
+    shopt -s nullglob
+    latest_checkpoint=""
+    for checkpoint in models/checkpoint-*.st; do
+        if [[ -z "$latest_checkpoint" || "$checkpoint" -nt "$latest_checkpoint" ]]; then
+            latest_checkpoint="$checkpoint"
+        fi
+    done
+    shopt -u nullglob
+
+    if [ -n "$latest_checkpoint" ]; then
+        echo "Resuming from $latest_checkpoint"
+        input_arg="-i $latest_checkpoint"
+    else
+        echo "No checkpoint found, starting from random weights."
+        input_arg=""
+    fi
+fi
+
+echo "--- Starting training ---"
+
 ./build_debug/rllm --train $input_arg \
-    -o models/after_training.json \
-     --filter simple \
-     --filter preprocessor \
+    -o models/after_training.st \
+    --train-dir "$TRAIN_DIR" \
      --filter iuring \
-     --method window:32 --epochs 20
+     --filter simple \
+     --filter self \
+     --filter preprocessing \
+     --method random_line_random_len \
+     --epochs 20 \
+     --layers 4 \
+     --checkpoint-interval 30
 
 # ./build/rllm --train -i models/start.json \
 #     -o models/after_training.json \
