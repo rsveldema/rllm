@@ -921,8 +921,7 @@ def _generate_kernel_compiler_artifacts(
     compiler: str | None,
     kernel_specs: list[VulkanKernelSpec],
     kernel_root: Path,
-    parfor_dump_dir: Path,
-    enable_parallelization: bool = True,
+    parfor_dump_dir: Path
 ) -> tuple[list[Path], list[Path], list[Path]]:
     repo_root = Path(__file__).resolve().parent
     compile_py = repo_root / "kernel_compiler" / "codegen" / "compile.py"
@@ -949,8 +948,6 @@ def _generate_kernel_compiler_artifacts(
             rel_spv,
             dump.as_posix(),
         ]
-        if enable_parallelization:
-            cmd.append("--parallelize")
         proc = subprocess.run(cmd, text=True, capture_output=True)
         if proc.returncode != 0:
             raise RuntimeError(
@@ -996,12 +993,6 @@ def parse_args() -> argparse.Namespace:
         "--shader-compiler",
         required=False,
         help="Path to Vulkan GLSL compiler (glslc or glslangValidator)",
-    )
-    parser.add_argument(
-        "--parallelize",
-        action="store_true",
-        default=False,
-        help="Enable workgroup partitioning parallelization pass",
     )
     return parser.parse_args()
 
@@ -1052,8 +1043,7 @@ def main() -> int:
         args.shader_compiler,
         kernel_specs,
         kernel_root,
-        parfor_dump_dir,
-        getattr(args, "parallelize", False),
+        parfor_dump_dir
     )
 
     if args.manifest:

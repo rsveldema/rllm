@@ -45,6 +45,7 @@ static std::ofstream s_nn_log;
 #endif
 
 #define LOG_INFO(...) (s_nn_log << std::format(__VA_ARGS__) << '\n' << std::flush)
+#define LOG_ERROR(...) (s_nn_log << std::format(__VA_ARGS__) << '\n' << std::flush)
 
 
 #define LOG_INFO_EVERY_N(...) \

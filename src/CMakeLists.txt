@@ -79,7 +79,7 @@ if(OFFLOAD_BACKEND STREQUAL "vulkan")
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/compile.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/parser.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/transforms.py"
-            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/optim.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/tree_rewriter.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/vulkan_kernel_visitor.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/rllm_vulkan_dispatch_stub_visitor.py"
             "${CMAKE_SOURCE_DIR}/vulkan-config.json"
