@@ -37,6 +37,7 @@ def load_json(path: Path) -> dict | list | str | int | float | bool | None:
 def save_json(path: Path, data: dict | list | str | int | float | bool | None) -> None:
     """Write data as JSON to a file."""
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    
 @dataclass
 class LoopContext:
     indent: str
@@ -58,6 +59,7 @@ class LoopContext:
     raw_offload_param_lines: list[str] | None = None  # unmodified OFFLOAD_PARAMETERS content
     shared_vars: dict[str, str] | None = field(default=None)  # var_name -> type (extracted from PARFOR_SHARED_VARIABLES blocks)
     constexpr_defines: list[tuple[str, str]] | None = field(default=None)  # [(name, expr), ...] extracted from body
+    triangular_kind: str | None = None  # "upper" or "lower" for triangular parfors
 
 
 _OFFLOAD_PARAMETERS_START_RE = re.compile(
@@ -1195,9 +1197,48 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
     
     # Write the body lines
     lines.append("BEGIN")
-    if ctx.raw_body_lines:
-        for l in ctx.raw_body_lines:
-            lines.append( hard_apply_symbol_values(l, symbol_values))
+    # Initialize PARFOR loop variables from gl_GlobalInvocationID
+    _DIM_NAMES = ("x", "y", "z")
+    _init_lines_added: list[str] = []
+    if ctx.vars:
+        for _idx, _var_name in enumerate(ctx.vars):
+            _dim = _DIM_NAMES[min(_idx, 2)]
+            lines.append(f'const int {_var_name} = int(gl_GlobalInvocationID.{_dim});')
+            lines.append(f"if ({_var_name} >= rllm_bound_{_dim}) return;")
+            _init_lines_added.extend([
+                f'const int {_var_name} = int(gl_GlobalInvocationID.{_dim});',
+                f"if ({_var_name} >= rllm_bound_{_dim}) return;",
+            ])
+
+    # Remove leading init-line duplicates from raw_body_lines to avoid redefinition.
+    # Some .kernel files already contain these lines in the body (e.g. from the original
+    # C++ source); the dump generator now always emits them, so deduplicate.
+    body_idx = 0
+    if ctx.raw_body_lines and _init_lines_added:
+        for body_line in ctx.raw_body_lines:
+            if body_idx < len(_init_lines_added) and body_line.strip() == _init_lines_added[body_idx]:
+                body_idx += 1
+            else:
+                break
+        remaining_body = ctx.raw_body_lines[body_idx:]
+    else:
+        remaining_body = ctx.raw_body_lines or []
+
+    # Triangular guard (if applicable)
+    if ctx.triangular_kind:
+        parts = []
+        row_var = ctx.vars[-2]
+        col_var = ctx.vars[-1]
+        if ctx.triangular_kind == "upper":
+            parts.append(f"{row_var} > {col_var}")
+        else:
+            parts.append(f"{col_var} > {row_var}")
+        guard_expr = " || ".join(parts)
+        lines.append(f"if ({guard_expr}) return;")
+
+    if remaining_body:
+        for l in remaining_body:
+            lines.append(hard_apply_symbol_values(l, symbol_values))
         lines.append("")
 
     # Extract constexpr declarations for Vulkan compatibility.
@@ -1220,6 +1261,125 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
     lines.append("END_PROGRAM")
     
     dump_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+PARFOR_LINE_RE = re.compile(r'PROGRAM\("([^:]+):(\d+)"\)')
+PARAMETERS_RE = re.compile(r"^PARAMETERS\s*$")
+BEGIN_RE = re.compile(r"^BEGIN$")
+END_PROGRAM_RE = re.compile(r"^END_PROGRAM$")
+
+
+def _parse_kernel_file(kernel_path: Path) -> LoopContext | None:
+    """Parse a .kernel file and return a LoopContext suitable for _write_parfor_dump."""
+    text = kernel_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    # Parse PROGRAM line for rel_path and lineno
+    prog_match = None
+    rel_path = "unknown"
+    lineno = 0
+    for line in lines:
+        m = PARFOR_LINE_RE.match(line.strip())
+        if m:
+            prog_match = m
+            rel_path = m.group(1)
+            lineno = int(m.group(2))
+            break
+    if not prog_match:
+        return None
+
+    # Parse PARFOR invocation line to extract vars and macro type
+    parfor_invocation = None
+    vars_list: list[str] = []
+    macro_name = None
+    triangular_kind = None
+    for line in lines:
+        parsed = parse_macro_invocation(line)
+        if parsed:
+            macro_name, args, _ = parsed
+            parfor_invocation = line.strip()
+            if macro_name in OFFLOAD_1D_PARAM_MACROS and len(args) >= 1:
+                vars_list = [args[0]]
+            elif macro_name in OFFLOAD_2D_MACROS and len(args) >= 2:
+                vars_list = [args[0], args[1]]
+            elif macro_name in OFFLOAD_2D_PARAM_MACROS and len(args) >= 2:
+                vars_list = [args[0], args[1]]
+            elif macro_name in OFFLOAD_3D_PARAM_MACROS and len(args) >= 3:
+                vars_list = [args[0], args[1], args[2]]
+            elif macro_name in OFFLOAD_3D_TRIANGULAR_PARAM_MACROS and len(args) >= 3:
+                vars_list = [args[0], args[1], args[2]]
+                triangular_kind = "lower"
+            elif macro_name in OFFLOAD_2D_TRIANGULAR_PARAM_MACROS and len(args) >= 2:
+                vars_list = [args[0], args[1]]
+                triangular_kind = "lower"
+            elif macro_name in OFFLOAD_2D_UPPER_TRIANGULAR_PARAM_MACROS and len(args) >= 2:
+                vars_list = [args[0], args[1]]
+                triangular_kind = "upper"
+            break
+
+    if not vars_list:
+        return None
+
+    is_2d = len(vars_list) == 2
+    is_3d = len(vars_list) == 3
+
+    # Parse PARAMETERS block and BEGIN/END body
+    offload_param_lines: list[str] = []
+    raw_body_lines: list[str] = []
+    in_parameters = False
+    in_begin = False
+
+    for line in lines:
+        stripped = line.strip()
+        if PARAMETERS_RE.match(stripped):
+            in_parameters = True
+            in_begin = False
+            continue
+        if BEGIN_RE.match(stripped):
+            in_parameters = False
+            in_begin = True
+            continue
+        if END_PROGRAM_RE.match(stripped):
+            in_parameters = False
+            in_begin = False
+            continue
+        if in_parameters:
+            offload_param_lines.append(line)
+        if in_begin:
+            raw_body_lines.append(line)
+
+    # Build LoopContext
+    ctx = LoopContext(
+        indent="",
+        backend_namespace="vulkan",
+        rel_path=rel_path,
+        lineno=lineno,
+        is_2d=is_2d,
+        is_3d=is_3d,
+        vars=vars_list,
+        range_expr="grid",
+        kernel_guard_expr=None,
+        extra_params=None,
+        extra_param_types=None,
+        offload_param_lines=offload_param_lines,
+        emit_named_kernel=False,
+        body_lines=[],
+        raw_body_lines=raw_body_lines,
+        parfor_invocation=parfor_invocation,
+        triangular_kind=triangular_kind,
+        shared_vars=None,
+    )
+    return ctx
+
+
+def write_parfor_dump_from_kernel(kernel_path: Path, dump_dir: Path,
+        symbol_values: dict[str, str] | None = None) -> Path:
+    """Parse a .kernel file and write a dump file with PARFOR loop variable init lines."""
+    ctx = _parse_kernel_file(kernel_path)
+    if ctx is None:
+        raise ValueError(f"Could not parse PARFOR info from {kernel_path}")
+    _write_parfor_dump(ctx, dump_dir, symbol_values)
+    return dump_dir / f"offload_parfor_{ctx.rel_path.rsplit('/', 1)[-1].rsplit('.', 1)[0]}_{ctx.lineno}.kernel"
 
 
 def write_manifest(manifest: Path, variable_name: str, generated_files: list[Path]) -> None:
