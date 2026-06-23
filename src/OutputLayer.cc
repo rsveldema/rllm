@@ -31,33 +31,20 @@ namespace rllm
         m_inputs.set_size(TokenID::MAX);
     }
 
-    static void output_layer_forward_from_hidden_float_impl(
-        // OFFLOAD_PARAMETERS(h_last, W_float, inputs)
+    void output_layer_forward_from_hidden_impl(
+        // OFFLOAD_PARAMETERS(h_last, W, inputs)
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
-        const fixed_size_matrix<float, TokenID, EmbeddingDimension>& W_float,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
         fixed_size_vector<float, TokenID>& inputs
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator1D<TokenID>(), (h_last, W_float, inputs))
+        OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator1D<TokenID>(), (h_last, W, inputs))
         float sum = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>())
-            sum += (h_last[d] * W_float[v, d]);
+            sum += (h_last[d] * static_cast<float>(W[v, d]));
         inputs[v] = sum;
         ENDFOR
-    }
-
-    void output_layer_forward_from_hidden_impl(
-        const fixed_size_vector<float, EmbeddingDimension>& h_last,
-        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
-        fixed_size_vector<float, TokenID>& inputs
-    )
-    {
-        fixed_size_matrix<float, TokenID, EmbeddingDimension> W_float;
-        for (const auto v : enum_iterator1D<TokenID>())
-            for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                W_float[v, d] = finite_or_zero(static_cast<float>(W[v, d]));
-        output_layer_forward_from_hidden_float_impl(h_last, W_float, inputs);
     }
 
     static void accumulate_output_layer_dh_last(

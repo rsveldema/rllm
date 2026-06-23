@@ -141,9 +141,6 @@ namespace rllm
         for (auto& block : m_transformer_blocks)
             block.forward(ws.h, m_seq_len, ws.workspace);
 
-        // Keep full hidden state for backward pass
-        m_last_hidden = ws.h;
-
         // Project the last-position hidden state to vocabulary logits.
         // Given a string of N tokens, the model learns to predict the N+1'th token,
         // so the final output is based on the hidden state at the last input position.
@@ -301,7 +298,7 @@ namespace rllm
         ws.din.set_rows(m_seq_len);
 
         const auto last_pos = dec(m_seq_len);
-        copy_hidden_row_to_vector(m_last_hidden, last_pos, ws.h_last_vec);
+        copy_hidden_row_to_vector(m_forward_workspace->h, last_pos, ws.h_last_vec);
 
         // Accumulate dh_last contributions from every valid output head.
         ws.dh_last.zero();
@@ -316,13 +313,15 @@ namespace rllm
         ws.din.zero();
         scatter_dh_last_to_row(ws.dh_last, ws.dh, last_pos);
 
+        auto* p_dh  = &ws.dh;
+        auto* p_din = &ws.din;
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
-            m_transformer_blocks[i].backward(ws.dh, ws.din, ws.transformer_block, learning_rate, m_forward_workspace->workspace);
-            ws.dh = ws.din;
+            m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, learning_rate, m_forward_workspace->workspace);
+            std::swap(p_dh, p_din);
         }
 
-        m_input_layer.propagate_backward(m_last_input, ws.dh, learning_rate);
+        m_input_layer.propagate_backward(m_last_input, *p_dh, learning_rate);
     }
 
 
