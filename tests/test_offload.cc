@@ -9,6 +9,11 @@
 #include <fixed_size_vector.hpp>
 #include <parallel.hpp>
 #include <vecmath.hpp>
+#include <cpu/cpu_fixed_vector.hpp>
+#include <cpu/cpu_fixed_matrix.hpp>
+#include <cpu/cpu_flex_rows_matrix.hpp>
+#include <cpu/cpu_flex_cols_matrix.hpp>
+#include <cpu/cpu_flex_rows_cols_matrix.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -86,8 +91,10 @@ TEST_F(OffloadParForTest, OffloadParForVisitsEachIndexExactlyOnce)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
+    cpu_fixed_vector<int, PositionIndex> cpu_visits;
+    visits.copy_to_cpu(cpu_visits);
     for (size_t i = 0; i < N; ++i)
-        EXPECT_EQ(visits[i], 1) << "Wrong visit count at i=" << i;
+        EXPECT_EQ(cpu_visits[i], 1) << "Wrong visit count at i=" << i;
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ);
 }
@@ -106,8 +113,10 @@ TEST_F(OffloadParForTest, OffloadParForParamVisitsEachIndexExactlyOnce)
     atomicAdd(visits[static_cast<size_t>(i)], 1);
     ENDFOR
 
+    cpu_fixed_vector<int, PositionIndex> cpu_visits2;
+    visits.copy_to_cpu(cpu_visits2);
     for (size_t i = 0; i < N; ++i)
-        EXPECT_EQ(visits[i], 1) << "Wrong visit count at i=" << i;
+        EXPECT_EQ(cpu_visits2[i], 1) << "Wrong visit count at i=" << i;
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
@@ -125,10 +134,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
     atomicAdd((visits[i, j]), 1);
     ENDFOR
 
+    cpu_fixed_matrix<int, PositionIndex, HeadDimension> cpu_visits3;
+    visits.copy_to_cpu(cpu_visits3);
     for (size_t i = 0; i < ROWS; ++i)
         for (size_t j = 0; j < COLS; ++j)
         {
-            EXPECT_EQ((visits[static_cast<PositionIndex>(i), static_cast<HeadDimension>(j)]), 1)
+            EXPECT_EQ((cpu_visits3[static_cast<PositionIndex>(i), static_cast<HeadDimension>(j)]), 1)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
 }
@@ -152,10 +163,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
+    cpu_fixed_matrix<int, PositionIndex, HeadDimension> cpu_visits4;
+    visits.copy_to_cpu(cpu_visits4);
     for (size_t i = 0; i < ROWS; ++i)
         for (size_t j = 0; j < COLS; ++j)
         {
-            EXPECT_EQ((visits[static_cast<PositionIndex>(i), static_cast<HeadDimension>(j)]), 1)
+            EXPECT_EQ((cpu_visits4[static_cast<PositionIndex>(i), static_cast<HeadDimension>(j)]), 1)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
 
@@ -174,11 +187,13 @@ TEST_F(OffloadParForTest, OffloadParFor2DTriangularParamVisitsLowerTriangle)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
+    cpu_fixed_matrix<int, PositionIndex, PositionIndex> cpu_tri_lower;
+    visits.copy_to_cpu(cpu_tri_lower);
     for (size_t i = 0; i < N; ++i)
         for (size_t j = 0; j < N; ++j)
         {
             const int expected = (j <= i) ? 1 : 0;
-            EXPECT_EQ((visits[static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)]), expected)
+            EXPECT_EQ((cpu_tri_lower[static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)]), expected)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
 
@@ -197,11 +212,13 @@ TEST_F(OffloadParForTest, OffloadParFor2DUpperTriangularParamVisitsUpperTriangle
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
+    cpu_fixed_matrix<int, PositionIndex, PositionIndex> cpu_tri_upper;
+    visits.copy_to_cpu(cpu_tri_upper);
     for (size_t i = 0; i < N; ++i)
         for (size_t j = 0; j < N; ++j)
         {
             const int expected = (i <= j) ? 1 : 0;
-            EXPECT_EQ((visits[static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)]), expected)
+            EXPECT_EQ((cpu_tri_upper[static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)]), expected)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
 
@@ -221,8 +238,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     // END_OFFLOAD_PARAMETERS
     visits.set_size(static_cast<PositionIndex>(ROWS * COLS));
 
-    for (size_t idx = 0; idx < static_cast<size_t>(visits.size()); ++idx)
-        visits[idx] = 0;
+    visits.zero();
 
     const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(
         static_cast<PositionIndex>(ROWS), static_cast<HeadDimension>(COLS)
@@ -233,7 +249,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     atomicAdd(visits[idx], 1);
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 0u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
     OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (visits))
@@ -241,14 +257,16 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     atomicAdd(visits[idx], 1);
     ENDFOR
 
-    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), 0u);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
+    cpu_fixed_vector<int, PositionIndex> cpu_twice;
+    visits.copy_to_cpu(cpu_twice);
     for (size_t i = 0; i < ROWS; ++i)
         for (size_t j = 0; j < COLS; ++j)
         {
             const size_t idx = i * COLS + j;
-            EXPECT_EQ(visits[idx], 2) // by reading the DevicePointer we cause ONE device-to-host copy.
+            EXPECT_EQ(cpu_twice[idx], 2)
                 << "Wrong visit count at (" << i << "," << j << ")";
         }
 
@@ -272,8 +290,10 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFix
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
+    cpu_fixed_vector<int, PositionIndex> cpu_int_vec;
+    visits.copy_to_cpu(cpu_int_vec);
     for (size_t i = 0; i < N; ++i)
-        EXPECT_EQ(visits[i], (static_cast<int>(i) + 42)) << "Wrong value at i=" << i;
+        EXPECT_EQ(cpu_int_vec[i], (static_cast<int>(i) + 42)) << "Wrong value at i=" << i;
 
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
 }
@@ -291,8 +311,10 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamWritesFixedSizeFloatVector)
     values[static_cast<size_t>(i)] = static_cast<float>((static_cast<float>(i) + 0.5f));
     ENDFOR
 
+    cpu_fixed_vector<float, PositionIndex> cpu_float_vec;
+    values.copy_to_cpu(cpu_float_vec);
     for (size_t i = 0; i < N; ++i)
-        EXPECT_FLOAT_EQ(values[i], (static_cast<float>(i) + 0.5f)) << "Wrong value at i=" << i;
+        EXPECT_FLOAT_EQ(cpu_float_vec[i], (static_cast<float>(i) + 0.5f)) << "Wrong value at i=" << i;
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
@@ -310,10 +332,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
+    cpu_fixed_matrix<float, MultiTokenPredictionIndex, HeadsIndex> cpu_mat1;
+    values.copy_to_cpu(cpu_mat1);
     for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>())
         for (const auto j : enum_iterator1D<HeadsIndex>())
             ASSERT_FLOAT_EQ(
-                (values[i, j]),
+                (cpu_mat1[i, j]),
                 static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 1)))
             );
 
@@ -337,6 +361,9 @@ TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> actual(input.size());
     input_layer.propagate_forward(input, actual);
 
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_actual;
+    actual.copy_to_cpu(cpu_actual);
+
     constexpr float model_dim = static_cast<float>(EmbeddingDimension::MAX);
     constexpr float max_abs_error = 1e-5f;
 
@@ -353,7 +380,7 @@ TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
             const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / model_dim);
             const float pe = (di_int % 2 == 0) ? std::sin(pos_f * freq) : std::cos(pos_f * freq);
             const float expected = emb_val + pe;
-            const float actual_value = actual[pos, di];
+            const float actual_value = cpu_actual[pos, di];
 
             ASSERT_NEAR(actual_value, expected, max_abs_error)
                 << "Mismatch at pos=" << static_cast<size_t>(pos)
@@ -378,10 +405,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
+    cpu_fixed_matrix<float, MultiTokenPredictionIndex, HeadsIndex> cpu_mat2;
+    values.copy_to_cpu(cpu_mat2);
     for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>())
         for (const auto j : enum_iterator1D<HeadsIndex>())
             EXPECT_FLOAT_EQ(
-                (values[i, j]),
+                (cpu_mat2[i, j]),
                 (scale * static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 5))))
             );
 
@@ -398,7 +427,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     const int WORK_PER_CELL = 64;
     const int ITERS = 40;
     // END_OFFLOAD_PARAMETERS
-    fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> parfor_values;
+    cpu_fixed_matrix<float, EmbeddingDimension, EmbeddingDimension> parfor_values;
 
     const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
 
@@ -480,10 +509,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
+    cpu_fixed_matrix<float, EmbeddingDimension, EmbeddingDimension> cpu_offload;
+    offload_values.copy_to_cpu(cpu_offload);
     for (const auto i : enum_iterator1D<EmbeddingDimension>())
         for (const auto j : enum_iterator1D<EmbeddingDimension>())
             EXPECT_FLOAT_EQ(
-                (offload_values[i, j]),
+                (cpu_offload[i, j]),
                 (parfor_values[i, j])
             );
 
@@ -508,17 +539,19 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
+    cpu_flex_rows_matrix<float, MultiTokenPredictionIndex, HeadsIndex> cpu_flex_rows;
+    values.copy_to_cpu(cpu_flex_rows);
     for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(MultiTokenPredictionIndex::THREE))
         for (const auto j : enum_iterator1D<HeadsIndex>())
         {
-            const float actual_value = values[i, j];
+            const float actual_value = cpu_flex_rows[i, j];
             EXPECT_FLOAT_EQ(
                 actual_value,
                 static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 2)))
             );
         }
 
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
@@ -537,17 +570,19 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
+    cpu_flex_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> cpu_flex_cols;
+    values.copy_to_cpu(cpu_flex_cols);
     for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(static_cast<MultiTokenPredictionIndex>(3)))
         for (const auto j : enum_iterator1D<HeadsIndex>())
         {
-            const float actual_value = values[i, j];
+            const float actual_value = cpu_flex_cols[i, j];
             EXPECT_FLOAT_EQ(
                 actual_value,
                 static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 3)))
             );
         }
 
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 }
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
@@ -568,17 +603,19 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 
+    cpu_flex_rows_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> cpu_flex_rc;
+    values.copy_to_cpu(cpu_flex_rc);
     for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(static_cast<MultiTokenPredictionIndex>(3)))
         for (const auto j : enum_iterator1D<HeadsIndex>())
         {
-            const float actual_value = values[i, j];
+            const float actual_value = cpu_flex_rc[i, j];
             EXPECT_FLOAT_EQ(
                 actual_value,
                 static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 4)))
             );
         }
 
-    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 1u);
+    EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), 0u);
 }
 
 #endif

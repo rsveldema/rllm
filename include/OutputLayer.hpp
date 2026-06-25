@@ -69,6 +69,8 @@ namespace rllm
       private:
         // Vocabulary logits computed by forward_from_hidden().
         fixed_size_vector<float, TokenID> m_inputs;
+        // CPU-side copy of m_inputs, updated after each forward pass.
+        cpu_fixed_vector<float, TokenID> m_inputs_cpu;
 
         // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> W_lm_head;

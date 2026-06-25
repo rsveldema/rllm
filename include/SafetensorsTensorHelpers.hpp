@@ -3,16 +3,17 @@
 #include <safetensors.hh>
 
 #include <LayerPrimitives.hpp>
+#include <cpu/cpu_fixed_matrix.hpp>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace rllm::safetensors_helpers
 {
-    // Convert a fixed_size_matrix to a safetensors tensor (always kFLOAT32).
+    // Convert a cpu_fixed_matrix to a safetensors tensor (always kFLOAT32).
     template <typename T, typename X, typename Y>
     safetensors::tensor_t
-    serialize_matrix(const fixed_size_matrix<T, X, Y>& m, std::vector<uint8_t>& storage)
+    serialize_matrix(const cpu_fixed_matrix<T, X, Y>& m, std::vector<uint8_t>& storage)
     {
         safetensors::tensor_t tensor;
         tensor.dtype = safetensors::dtype::kFLOAT32;
@@ -40,9 +41,9 @@ namespace rllm::safetensors_helpers
         return tensor;
     }
 
-    // Deserialize a safetensors tensor into a fixed_size_matrix.
+    // Deserialize a safetensors tensor into a cpu_fixed_matrix.
     template <typename T, typename X, typename Y>
-    void deserialize_matrix(const safetensors::tensor_t& tensor, fixed_size_matrix<T, X, Y>& m, std::string* err)
+    void deserialize_matrix(const safetensors::tensor_t& tensor, cpu_fixed_matrix<T, X, Y>& m, std::string* err)
     {
         if (tensor.dtype != safetensors::dtype::kFLOAT32)
         {

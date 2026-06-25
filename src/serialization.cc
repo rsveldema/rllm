@@ -54,13 +54,13 @@ namespace rllm
         if (!j.contains("embeddings"))
             return;
 
-        json_helpers::deserialize_matrix(j.at("embeddings"), m_embeddings);
-        m_embeddings.copy_to_offload_buffer();
+        json_helpers::deserialize_matrix(j.at("embeddings"), m_embeddings_cpu);
+        m_embeddings.copy_from_cpu(m_embeddings_cpu);
     }
 
     nlohmann::json InputLayer::save() const
     {
-        return {{"embeddings", *json_helpers::serialize_matrix(m_embeddings)}};
+        return {{"embeddings", *json_helpers::serialize_matrix(m_embeddings_cpu)}};
     }
 
     void OutputLayer::load(const nlohmann::json& j)
@@ -69,23 +69,25 @@ namespace rllm
         if (j.contains("W_lm_head"))
         {
             const auto& w_j = j.at("W_lm_head");
+            cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> cpu_tmp;
             size_t i = 0;
             for (const auto t : enum_iterator1D<TokenID>())
                 for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                    W_lm_head[t, d] = w_j.at(i++).template get<float>();
-            W_lm_head.copy_to_offload_buffer();
-            (void) W_lm_head.data();
+                    cpu_tmp.set(t, d, static_cast<float16>(w_j.at(i++).template get<float>()));
+            W_lm_head.copy_from_cpu(cpu_tmp);
         }
         V_lm_head.zero();
     }
 
     nlohmann::json OutputLayer::save() const
     {
+        cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> cpu_tmp;
+        W_lm_head.copy_to_cpu(cpu_tmp);
         auto w_j = nlohmann::json::array();
         w_j.get_ref<nlohmann::json::array_t&>().reserve(W_lm_head.ROWS * W_lm_head.COLS);
         for (const auto t : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                w_j.push_back(W_lm_head[t, d]);
+                w_j.push_back(static_cast<float>(cpu_tmp.get(t, d)));
         return {{"W_lm_head", std::move(w_j)}};
     }
 
@@ -216,6 +218,10 @@ namespace rllm
         template <typename T, typename X, typename Y>
         void push_matrix(safetensors::safetensors_t& st, const std::string& key, const fixed_size_matrix<T, X, Y>& m, std::vector<uint8_t>& storage)
         {
+            // D2H: download GPU matrix to cpu intermediate first
+            cpu_fixed_matrix<T, X, Y> cpu_tmp;
+            m.copy_to_cpu(cpu_tmp);
+
             safetensors::tensor_t tensor;
             tensor.dtype = safetensors::dtype::kFLOAT32;
             size_t rows = static_cast<size_t>(X::MAX);
@@ -231,7 +237,7 @@ namespace rllm
             std::vector<float> flat(n);
             for (size_t x = 0; x < rows; ++x)
                 for (size_t y = 0; y < cols; ++y)
-                    flat[x * cols + y] = static_cast<float>(m.get(static_cast<X>(x), static_cast<Y>(y)));
+                    flat[x * cols + y] = static_cast<float>(cpu_tmp.get(static_cast<X>(x), static_cast<Y>(y)));
 
             storage.resize(storage.size() + data_size);
             std::copy(flat.begin(), flat.end(), reinterpret_cast<float*>(storage.data() + dst_offset));
@@ -268,9 +274,13 @@ namespace rllm
             assert(base != nullptr);
             auto* data = reinterpret_cast<float const*>(base + tensor.data_offsets[0]);
             assert(data != nullptr);
+
+            // Fill cpu intermediate then H2D upload
+            cpu_fixed_matrix<T, X, Y> cpu_tmp;
             for (size_t x = 0; x < rows; ++x)
                 for (size_t y = 0; y < cols; ++y)
-                    m.set(static_cast<X>(x), static_cast<Y>(y), static_cast<T>(data[x * cols + y]));
+                    cpu_tmp.set(static_cast<X>(x), static_cast<Y>(y), static_cast<T>(data[x * cols + y]));
+            m.copy_from_cpu(cpu_tmp);
         }
 
     } // anonymous namespace
@@ -289,17 +299,15 @@ namespace rllm
         }
 
         pull_matrix("input_layer.embeddings", st, m_embeddings);
-        m_embeddings.copy_to_offload_buffer();
     }
 
     void InputLayer::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
     {
         (void) warn;
         safetensors::safetensors_t st = make_safetensors_metadata();
-        auto h_embeddings = m_embeddings;
         std::vector<uint8_t> storage;
 
-        push_matrix(st, "input_layer.embeddings", h_embeddings, storage);
+        push_matrix(st, "input_layer.embeddings", m_embeddings, storage);
         st.storage = std::move(storage);
 
         if (!safetensors::save_to_file(st, filename, warn, err))
@@ -378,8 +386,6 @@ namespace rllm
 
         pull_matrix("output_layers.W_lm_head", st, W_lm_head);
         m_inputs.zero();
-        W_lm_head.copy_to_offload_buffer();
-        (void) W_lm_head.data();
         V_lm_head.zero();
     }
 
@@ -387,10 +393,9 @@ namespace rllm
     {
         (void) warn;
         safetensors::safetensors_t st = make_safetensors_metadata();
-        auto h_W_lm_head = W_lm_head;
         std::vector<uint8_t> storage;
 
-        push_matrix(st, "output_layers.W_lm_head", h_W_lm_head, storage);
+        push_matrix(st, "output_layers.W_lm_head", W_lm_head, storage);
         st.storage = std::move(storage);
 
         if (!safetensors::save_to_file(st, filename, warn, err))

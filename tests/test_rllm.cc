@@ -9,6 +9,9 @@
 #include <enum_iterator2D.hpp>
 
 #include <vecmath.hpp>
+#include <cpu/cpu_flex_rows_cols_matrix.hpp>
+#include <cpu/cpu_flex_rows_matrix.hpp>
+#include <cpu/cpu_fixed_triangular_matrix.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -315,59 +318,66 @@ TEST(TransformerBlockTest, CausalSoftmaxMasksFutureTokensAndNormalizesRows)
     using namespace rllm;
 
     const auto T = static_cast<PositionIndex>(4);
-    flexible_rows_cols_matrix<float, PositionIndex, PositionIndex> scores(T, T);
+    cpu_flex_rows_cols_matrix<float, PositionIndex, PositionIndex> cpu_scores;
+    cpu_scores.set_size(T, T);
 
     // Distinct values per row; future positions (j > i) should be ignored then zeroed.
-    scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)] = 1.0f;
-    scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(1)] = 999.0f;
-    scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(2)] = 999.0f;
-    scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(3)] = 999.0f;
+    cpu_scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)] = 1.0f;
+    cpu_scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(1)] = 999.0f;
+    cpu_scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(2)] = 999.0f;
+    cpu_scores[static_cast<PositionIndex>(0), static_cast<PositionIndex>(3)] = 999.0f;
 
-    scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)] = 1.0f;
-    scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)] = 2.0f;
-    scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(2)] = 999.0f;
-    scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(3)] = 999.0f;
+    cpu_scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)] = 1.0f;
+    cpu_scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)] = 2.0f;
+    cpu_scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(2)] = 999.0f;
+    cpu_scores[static_cast<PositionIndex>(1), static_cast<PositionIndex>(3)] = 999.0f;
 
-    scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)] = 0.0f;
-    scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)] = 1.0f;
-    scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)] = 2.0f;
-    scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(3)] = 999.0f;
+    cpu_scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)] = 0.0f;
+    cpu_scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)] = 1.0f;
+    cpu_scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)] = 2.0f;
+    cpu_scores[static_cast<PositionIndex>(2), static_cast<PositionIndex>(3)] = 999.0f;
 
-    scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)] = -1.0f;
-    scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)] = 0.0f;
-    scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)] = 1.0f;
-    scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)] = 2.0f;
+    cpu_scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)] = -1.0f;
+    cpu_scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)] = 0.0f;
+    cpu_scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)] = 1.0f;
+    cpu_scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)] = 2.0f;
+
+    flexible_rows_cols_matrix<float, PositionIndex, PositionIndex> scores(T, T);
+    scores.copy_from_cpu(cpu_scores);
 
     TransformerBlock::causal_softmax_for_test(scores, T);
 
+    cpu_flex_rows_cols_matrix<float, PositionIndex, PositionIndex> result_cpu;
+    scores.copy_to_cpu(result_cpu);
+
     // Row 0: only self is allowed.
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)), 1.0f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)]), 1.0f, 1e-6f);
 
     // Row 1 expected softmax([1,2]).
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)), 0.26894143f, 1e-6f);
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)), 0.73105860f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)]), 0.26894143f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)]), 0.73105860f, 1e-6f);
 
     // Row 2 expected softmax([0,1,2]).
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)), 0.09003057f, 1e-6f);
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)), 0.24472848f, 1e-6f);
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)), 0.66524094f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)]), 0.09003057f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)]), 0.24472848f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)]), 0.66524094f, 1e-6f);
 
     // Row 3 expected softmax([-1,0,1,2]).
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)), 0.03205860f, 1e-6f);
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)), 0.08714432f, 1e-6f);
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)), 0.23688284f, 1e-6f);
-    EXPECT_NEAR(scores.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)), 0.64391428f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)]), 0.03205860f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)]), 0.08714432f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)]), 0.23688284f, 1e-6f);
+    EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)]), 0.64391428f, 1e-6f);
 
     // Row-wise normalization over active (causal) region and strict masking for j > i.
     for (int i = 0; i < 4; ++i)
     {
         float row_sum = 0.0f;
         for (int j = 0; j <= i; ++j)
-            row_sum += scores.get(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j));
+            row_sum += (result_cpu[static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)]);
         EXPECT_NEAR(row_sum, 1.0f, 1e-6f);
 
         for (int j = i + 1; j < 4; ++j)
-            EXPECT_FLOAT_EQ(scores.get(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)), 0.0f);
+            EXPECT_FLOAT_EQ((result_cpu[static_cast<PositionIndex>(i), static_cast<PositionIndex>(j)]), 0.0f);
     }
 }
 
@@ -376,69 +386,77 @@ TEST(TransformerBlockTest, SoftmaxAttentionForHeadMatchesJacobian)
     using namespace rllm;
 
     const auto T = static_cast<PositionIndex>(4);
-    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_scores;
-    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> attn_w;
-    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_raw;
+    cpu_fixed_triangular_matrix<float, PositionIndex, PositionIndex> cpu_d_scores;
+    cpu_fixed_triangular_matrix<float, PositionIndex, PositionIndex> cpu_attn_w;
+    cpu_fixed_triangular_matrix<float, PositionIndex, PositionIndex> cpu_d_raw;
 
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j <= i; ++j)
         {
-            d_scores.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), 0.0f);
-            attn_w.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), 0.0f);
-            d_raw.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), -7.0f);
+            cpu_d_scores.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), 0.0f);
+            cpu_attn_w.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), 0.0f);
+            cpu_d_raw.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), -7.0f);
         }
 
     // Row 0 (single active element)
-    attn_w.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 1.0f);
-    d_scores.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 3.0f);
+    cpu_attn_w.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 3.0f);
 
     // Row 1: active j in [0,1], p sums to 1
-    attn_w.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 0.2f);
-    attn_w.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), 0.8f);
-    d_scores.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 1.0f);
-    d_scores.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), -2.0f);
+    cpu_attn_w.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 0.2f);
+    cpu_attn_w.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), 0.8f);
+    cpu_d_scores.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), -2.0f);
 
     // Row 2: active j in [0,2], p sums to 1
-    attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 0.1f);
-    attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), 0.3f);
-    attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.6f);
-    d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 2.0f);
-    d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), -1.0f);
-    d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.5f);
+    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 0.1f);
+    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), 0.3f);
+    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.6f);
+    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 2.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), -1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.5f);
 
     // Row 3: active j in [0,3], p sums to 1
-    attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), 0.25f);
-    attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.25f);
-    attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 0.25f);
-    attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 0.25f);
-    d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), -1.0f);
-    d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.0f);
-    d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 1.0f);
-    d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 2.0f);
+    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), 0.25f);
+    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.25f);
+    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 0.25f);
+    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 0.25f);
+    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), -1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 2.0f);
+
+    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_scores;
+    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> attn_w;
+    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_raw;
+    d_scores.copy_from_cpu(cpu_d_scores);
+    attn_w.copy_from_cpu(cpu_attn_w);
+    d_raw.copy_from_cpu(cpu_d_raw);
 
     TransformerBlock::softmax_attention_for_head_for_test(d_scores, d_raw, attn_w, T);
+    d_raw.copy_to_cpu(cpu_d_raw);
 
     // Expected updates per row: p_j * (dp_j - dot), where dot = sum_k dp_k * p_k.
     // Row 0: dot=3, update=[0]
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)), 0.0f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)), 0.0f, 1e-6f);
 
     // Row 1: dot = 1*0.2 + (-2)*0.8 = -1.4
     // updates: j0=0.2*(1+1.4)=0.48, j1=0.8*(-2+1.4)=-0.48
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)), 0.48f, 1e-6f);
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)), -0.48f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)), 0.48f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)), -0.48f, 1e-6f);
 
     // Row 2: dot = 2*0.1 + (-1)*0.3 + 0.5*0.6 = 0.2
     // updates: [0.18, -0.36, 0.18]
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)), 0.18f, 1e-6f);
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)), -0.36f, 1e-6f);
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)), 0.18f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)), 0.18f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)), -0.36f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)), 0.18f, 1e-6f);
 
     // Row 3: dot = (-1 + 0 + 1 + 2) * 0.25 = 0.5
     // updates: [-0.375, -0.125, 0.125, 0.375]
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)), -0.375f, 1e-6f);
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)), -0.125f, 1e-6f);
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)), 0.125f, 1e-6f);
-    EXPECT_NEAR(d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)), 0.375f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)), -0.375f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)), -0.125f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)), 0.125f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)), 0.375f, 1e-6f);
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +487,8 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     for (int iter = 0; iter < BENCH_FORWARD_ITERS; ++iter)
     {
         std::println("Forward seq iter {}/{}", iter + 1, BENCH_FORWARD_ITERS);
-        auto h = h_template;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(static_cast<PositionIndex>(T));
+        h = h_template;
         block->forward(h, static_cast<PositionIndex>(T), forward_workspace);
     }
     const auto t1 = std::chrono::steady_clock::now();
@@ -480,7 +499,8 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     for (int iter = 0; iter < BENCH_FORWARD_ITERS; ++iter)
     {
         std::println("Forward par iter {}/{}", iter + 1, BENCH_FORWARD_ITERS);
-        auto h = h_template;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(static_cast<PositionIndex>(T));
+        h = h_template;
         block->forward(h, static_cast<PositionIndex>(T), forward_workspace);
     }
     const auto t3 = std::chrono::steady_clock::now();
@@ -537,7 +557,8 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
 
     // Prime the block with a forward pass so backward has valid cached state.
     {
-        auto h = h_template;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(static_cast<PositionIndex>(T));
+        h = h_template;
         block->forward(h, static_cast<PositionIndex>(T), *forward_workspace);
     }
 
@@ -898,46 +919,54 @@ TEST(TransformerBlockTest, RmsNormBackwardMatchesCpuReference)
     std::srand(42);
 
     // --- allocate dy, x, dx ---
-    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dy(seq);
-    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> x(seq);
-    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dx(seq);
-    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dx_ref(seq);
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_dy(seq);
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_x(seq);
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_dx_ref(seq);
 
     // Fill with random values in [-1, 1]
     for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq)) {
         float v = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 2.0f - 1.0f;
-        dy[t, d] = v;
-        x[t, d]  = v * 0.5f;           // smaller values for stability
-        dx[t, d]  = 0.f;
-        dx_ref[t, d] = 0.f;
+        cpu_dy[t, d] = v;
+        cpu_x[t, d]  = v * 0.5f;           // smaller values for stability
+        cpu_dx_ref[t, d] = 0.f;
     }
+
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dy(seq);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> x(seq);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dx(seq);
+    dy.copy_from_cpu(cpu_dy);
+    x.copy_from_cpu(cpu_x);
+    dx.zero();
 
     // --- run the existing rms_norm_backward (parallel or not — we compare to ref) ---
     TransformerBlock::rms_norm_backward_for_test(dy, x, dx);
+
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_dx(seq);
+    dx.copy_to_cpu(cpu_dx);
 
     // --- independent sequential CPU reference ---
     for (const auto t : enum_iterator1D<PositionIndex>(seq)) {
         float sq = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>()) {
-            sq += static_cast<float>(x[t, d]) * static_cast<float>(x[t, d]);
+            sq += static_cast<float>(cpu_x[t, d]) * static_cast<float>(cpu_x[t, d]);
         }
         const float inv_rms = 1.0f / std::sqrt(sq / fd + eps);
 
         float dot = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>()) {
-            dot += static_cast<float>(dy[t, d]) * static_cast<float>(x[t, d]) * inv_rms;
+            dot += static_cast<float>(cpu_dy[t, d]) * static_cast<float>(cpu_x[t, d]) * inv_rms;
         }
         dot /= fd;   // mean over embedding dimension
 
         for (const auto d : enum_iterator1D<EmbeddingDimension>()) {
-            dx_ref[t, d] += inv_rms * (static_cast<float>(dy[t, d]) - static_cast<float>(x[t, d]) * inv_rms * dot);
+            cpu_dx_ref[t, d] += inv_rms * (static_cast<float>(cpu_dy[t, d]) - static_cast<float>(cpu_x[t, d]) * inv_rms * dot);
         }
     }
 
     // --- compare ---
     float max_diff = 0.f;
     for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(seq)) {
-        const float diff = std::abs(static_cast<float>(dx[t, d]) - static_cast<float>(dx_ref[t, d]));
+        const float diff = std::abs(static_cast<float>(cpu_dx[t, d]) - static_cast<float>(cpu_dx_ref[t, d]));
         if (diff > max_diff) max_diff = diff;
     }
 

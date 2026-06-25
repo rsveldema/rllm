@@ -1,5 +1,6 @@
 #include <InputLayer.hpp>
 #include <RandomHelpers.hpp>
+#include <cpu/cpu_flex_rows_matrix.hpp>
 #include <enum_iterator2D.hpp>
 #include <parallel.hpp>
 
@@ -34,14 +35,15 @@ namespace rllm
     void InputLayer::reset_embeddings()
     {
         m_embeddings.zero();
+        m_embeddings_cpu.zero();
     }
 
     void InputLayer::set_random_embeddings()
     {
         for (const auto tok : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                m_embeddings[tok, d] = static_cast<float>(get_random_value(-0.1f, 0.1f));
-        m_embeddings.copy_to_offload_buffer();
+                m_embeddings_cpu.set(tok, d, static_cast<float16>(get_random_value(-0.1f, 0.1f)));
+        m_embeddings.copy_from_cpu(m_embeddings_cpu);
     }
 
     // Fill h[T × D_MODEL] = token_embedding + sinusoidal positional encoding.
@@ -66,6 +68,10 @@ namespace rllm
         float learning_rate
     )
     {
+        // D2H: download the gradient matrix to CPU before element access
+        cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dh_cpu;
+        const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(dh_cpu);
+
         // Use per-instance state (not static) to avoid data race with PARFOR_2D.
         // Previously: static local variables shared across threads → heap corruption.
         m_updated_tokens.zero();
@@ -74,8 +80,8 @@ namespace rllm
         size_t duplicate_count = 0;
         for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
         {
-            const auto tok = input[pos];
-            m_updated_tokens[tok]++;
+            const auto tok = input.get(pos);
+            m_updated_tokens[tok]++;;
 
             if (m_updated_tokens[tok] > 1)
             {
@@ -92,16 +98,18 @@ namespace rllm
             {
                 const auto& conflict_tok = m_conflicts[i].tok;
                 const auto& conflict_pos = m_conflicts[i].pos;
-                auto& e = m_embeddings[conflict_tok, di];
                 const auto rate = learning_rate / static_cast<float>(m_updated_tokens[conflict_tok]);
-                e = math::clamp(e + rate * dh[conflict_pos, di], RLMM_NEG_ONE, RLMM_ONE);
+                m_embeddings_cpu.set(conflict_tok, di,
+                    math::clamp(
+                        static_cast<float>(m_embeddings_cpu.get(conflict_tok, di)) + rate * dh_cpu.get(conflict_pos, di),
+                        RLMM_NEG_ONE, RLMM_ONE));
             }
         }
 
         // Tokens appearing exactly once can be updated in parallel safely
         PARFOR_2D(pos, di, enum_iterator2D<PositionIndex, EmbeddingDimension>(input.size()))
         {
-            const auto tok = input[pos];
+            const auto tok = input.get(pos);
             const auto count = m_updated_tokens[tok];
             assert(count > 0);
             if (count > 1)
@@ -109,18 +117,20 @@ namespace rllm
 
             assert(count == 1);
 
-            auto& e = m_embeddings[tok, di];
-            e = math::clamp(e + learning_rate * dh[pos, di], RLMM_NEG_ONE, RLMM_ONE);
+            m_embeddings_cpu.set(tok, di,
+                math::clamp(
+                    static_cast<float>(m_embeddings_cpu.get(tok, di)) + learning_rate * dh_cpu.get(pos, di),
+                    RLMM_NEG_ONE, RLMM_ONE));
         }
         ENDFOR
 
         // Clean up per-token counters and copy modified rows to offload buffer
         for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
         {
-            const auto tok = input[pos];
+            const auto tok = input.get(pos);
             if (m_updated_tokens[tok] == 0)
                 continue;
-            m_embeddings.copy_row_to_offload_buffer(tok);
+            m_embeddings.copy_row_to_offload_buffer(tok, m_embeddings_cpu);
             m_updated_tokens[tok] = 0;
         }
     }
@@ -128,7 +138,7 @@ namespace rllm
 
     void InputLayer::get_embedding(TokenID tok, embedding_row_t& out) const
     {
-        m_embeddings.export_row(tok, out);
+        fixed_size_matrix<float16, TokenID, EmbeddingDimension>::export_row(tok, m_embeddings_cpu, out);
     }
 
 } // namespace rllm

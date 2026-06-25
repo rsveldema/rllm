@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <cpu/cpu_fixed_matrix.hpp>
 
 #include <nlohmann/json.hpp>
 #include <cstdio>
@@ -43,7 +44,7 @@ namespace rllm::json_helpers
     }
 
     template <typename T, typename X, typename Y>
-    std::unique_ptr<nlohmann::json> serialize_matrix(const fixed_size_matrix<T, X, Y>& m)
+    std::unique_ptr<nlohmann::json> serialize_matrix(const cpu_fixed_matrix<T, X, Y>& m)
     {
         auto rows = std::make_unique<nlohmann::json>(nlohmann::json::array());
 
@@ -61,7 +62,7 @@ namespace rllm::json_helpers
     }
 
     template <typename T, typename X, typename Y>
-    void deserialize_matrix(const nlohmann::json& j, fixed_size_matrix<T, X, Y>& m)
+    void deserialize_matrix(const nlohmann::json& j, cpu_fixed_matrix<T, X, Y>& m)
     {
         if (!j.is_array() || j.size() != enum_max<X>())
         {

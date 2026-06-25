@@ -1,6 +1,8 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <cpu/cpu_fixed_vector.hpp>
+#include <cpu/cpu_fixed_matrix.hpp>
 #include <safetensors.hh>
 
 #include <nlohmann/json_fwd.hpp>
@@ -58,13 +60,15 @@ namespace rllm
     private:
         // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> m_embeddings;
+        // CPU-side copy used for gradient updates and serialization.
+        cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> m_embeddings_cpu;
 
         void reset_embeddings();
 
         // Per-call state for propagate_backward (moved out of the parallel loop to fix data race)
         // These are class members so each InputLayer instance has its own copy — no static shared state.
-        fixed_size_vector<uint16_t, TokenID> m_updated_tokens;
-        fixed_size_vector<ConflictingToken, ConflictIndex> m_conflicts;
+        cpu_fixed_vector<uint16_t, TokenID> m_updated_tokens;
+        cpu_fixed_vector<ConflictingToken, ConflictIndex> m_conflicts;
     };
 
 } // namespace rllm

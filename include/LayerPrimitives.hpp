@@ -203,22 +203,60 @@ namespace rllm
     {
       public:
         using Base = fixed_size_vector<TokenID, PositionIndex>;
-        using Base::Base;
 
         InputLine() = default;
-        InputLine(const Base& other)
-            : Base(other)
-        {}
 
-        InputLine& operator=(const Base& other)
+        InputLine(const InputLine& other)
+            : Base()
+            , m_cpu(other.m_cpu)
         {
-            Base::operator=(other);
+            sync_to_device();
+        }
+
+        InputLine& operator=(const InputLine& other)
+        {
+            if (this != &other)
+            {
+                m_cpu = other.m_cpu;
+                sync_to_device();
+            }
             return *this;
         }
 
+        InputLine(InputLine&&) = default;
+        InputLine& operator=(InputLine&&) = default;
+
+        void push_back(TokenID t)
+        {
+            m_cpu.push_back(t);
+            Base::set_size(m_cpu.size());
+        }
+
+        const TokenID& back() const { return m_cpu.back(); }
+
+        void pop_back()
+        {
+            m_cpu.pop_back();
+            Base::set_size(m_cpu.size());
+        }
+
+        const TokenID& get(PositionIndex pos) const { return m_cpu[pos]; }
+        const TokenID& get(size_t pos) const { return m_cpu[pos]; }
+        const TokenID& operator[](PositionIndex pos) const { return m_cpu[pos]; }
+
+        void clear()
+        {
+            m_cpu.clear();
+            Base::clear();
+        }
+
+        /** Upload m_cpu to device. Call after modifying m_cpu. */
+        void sync_to_device() { Base::copy_from_cpu(m_cpu); }
+
         void sub_array(InputLine& result, PositionIndex length) const
         {
-            Base::sub_array(result, length);
+            m_cpu.sub_array(result.m_cpu, length);
+            result.sync_to_device();
         }
 
         uint64_t hash() const
@@ -227,9 +265,9 @@ namespace rllm
             constexpr uint64_t FNV_PRIME = 1099511628211ull;
 
             uint64_t hash = FNV_OFFSET_BASIS;
-            for (const auto i : enum_iterator1D<PositionIndex>(size()))
+            for (const auto i : enum_iterator1D<PositionIndex>(m_cpu.size()))
             {
-                uint64_t value = static_cast<uint64_t>(static_cast<int>(operator[](i))) + 1ull;
+                uint64_t value = static_cast<uint64_t>(static_cast<int>(m_cpu[i])) + 1ull;
                 for (int byte = 0; byte < 8; ++byte)
                 {
                     hash ^= (value & 0xffull);
@@ -239,6 +277,9 @@ namespace rllm
             }
             return hash;
         }
+
+      private:
+        cpu_fixed_vector<TokenID, PositionIndex> m_cpu;
     };
 
     class InputLineView
@@ -255,7 +296,7 @@ namespace rllm
             const TokenID& operator[](PositionIndex index) const
             {
                 assert(((int)index+(int)m_start) < (int)m_length);
-                return m_data[static_cast<size_t>(m_start) + static_cast<size_t>(index)];
+                return m_data.get(static_cast<size_t>(m_start) + static_cast<size_t>(index));
             }
     
             PositionIndex size() const
@@ -276,6 +317,7 @@ namespace rllm
         {
             values.set_size(TokenID::MAX);
             temp_values.set_size(TempStorage::MAX);
+            temp_values_cpu.set_size(TempStorage::MAX);
         }
 
         void reset()
@@ -286,6 +328,7 @@ namespace rllm
 
         fixed_size_vector<float, TokenID> values;
         fixed_size_vector<float, TempStorage> temp_values; // for use in softmax computation, to avoid modifying the original logits
+        cpu_fixed_vector<float, TempStorage> temp_values_cpu;
     };
 
     struct OutputToken

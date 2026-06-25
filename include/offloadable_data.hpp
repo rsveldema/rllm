@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <device_pointer.hpp>
 
 namespace rllm
@@ -18,35 +17,9 @@ namespace rllm
             m_data.zero();
         }
 
-        T* data()
-        {
-            return m_data.get();
-        }
-
-        const T* data() const
-        {
-            return m_data.get();
-        }
-
-        T* raw_staging_data() const
-        {
-            return m_data.raw_staging_data();
-        }
-
         VBaseDeviceBuffer& device_buffer() const
         {
             return m_data.device_buffer();
-        }
-
-
-        DeviceMemoryOwner device_memory_owner() const
-        {
-            return m_data.device_memory_owner();
-        }
-
-        void set_pending_flush(std::function<void()> flush_fn)
-        {
-            m_data.set_pending_flush(std::move(flush_fn));
         }
 
         void mark_device_latest()
@@ -54,17 +27,31 @@ namespace rllm
             m_data.mark_device_latest();
         }
 
-        void copy_to_offload_buffer(std::string_view site = {}, std::string_view parameter = {})
+        /** H2D: upload from an external host-visible buffer.
+         *  Called explicitly from copy_from_cpu() on the concrete gpu_* types. */
+        void copy_to_offload_buffer(VBaseHostBuffer& src,
+                                    std::string_view site = {},
+                                    std::string_view parameter = {})
         {
-            m_data.copy_to_offload_buffer(site, parameter);
+            m_data.copy_to_offload_buffer(src, site, parameter);
         }
 
-        bool needs_offload_sync() const
+        /** No-op kept for generated-code compatibility.
+         *  The actual upload happens through copy_from_cpu(cpu_T&). */
+        void copy_to_offload_buffer(std::string_view = {}, std::string_view = {}) {}
+
+        /** D2H: download to an external host-visible buffer.
+         *  Called explicitly from copy_to_cpu() on the concrete gpu_* types. */
+        void copy_from_offload_buffer(VBaseHostBuffer& dst)
         {
-            return m_data.needs_offload_sync();
+            m_data.copy_from_offload_buffer(dst);
         }
-        
+
+        /** No-op kept for compatibility; use copy_to_cpu(cpu_T&) for D2H. */
+        void sync_from_device() {}
+
       protected:
         DevicePointer<T> m_data;
     };
 } // namespace rllm
+

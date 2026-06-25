@@ -596,27 +596,47 @@ namespace rllm
      std::unique_ptr<nlohmann::json> TransformerBlock::save() const
     {
         using namespace json_helpers;
+        cpu_fixed_matrix<float16, EmbeddingDimension, EmbeddingDimension> cpu_Wq, cpu_Wk, cpu_Wv, cpu_Wo;
+        cpu_fixed_matrix<float16, FFDimension, EmbeddingDimension> cpu_Wgate, cpu_Wup;
+        cpu_fixed_matrix<float16, EmbeddingDimension, FFDimension> cpu_Wdown;
+        W_q.copy_to_cpu(cpu_Wq);
+        W_k.copy_to_cpu(cpu_Wk);
+        W_v.copy_to_cpu(cpu_Wv);
+        W_o.copy_to_cpu(cpu_Wo);
+        W_gate.copy_to_cpu(cpu_Wgate);
+        W_up.copy_to_cpu(cpu_Wup);
+        W_down.copy_to_cpu(cpu_Wdown);
         return std::make_unique<nlohmann::json>(nlohmann::json{
-            {"W_q", *serialize_matrix(W_q)},
-            {"W_k", *serialize_matrix(W_k)},
-            {"W_v", *serialize_matrix(W_v)},
-            {"W_o", *serialize_matrix(W_o)},
-            {"W_gate", *serialize_matrix(W_gate)},
-            {"W_up", *serialize_matrix(W_up)},
-            {"W_down", *serialize_matrix(W_down)}
+            {"W_q", *serialize_matrix(cpu_Wq)},
+            {"W_k", *serialize_matrix(cpu_Wk)},
+            {"W_v", *serialize_matrix(cpu_Wv)},
+            {"W_o", *serialize_matrix(cpu_Wo)},
+            {"W_gate", *serialize_matrix(cpu_Wgate)},
+            {"W_up", *serialize_matrix(cpu_Wup)},
+            {"W_down", *serialize_matrix(cpu_Wdown)}
         });
     }
 
     void TransformerBlock::load(const nlohmann::json& j)
     {
         using namespace json_helpers;
-        deserialize_matrix(j.at("W_q"), W_q);
-        deserialize_matrix(j.at("W_k"), W_k);
-        deserialize_matrix(j.at("W_v"), W_v);
-        deserialize_matrix(j.at("W_o"), W_o);
-        deserialize_matrix(j.at("W_gate"), W_gate);
-        deserialize_matrix(j.at("W_up"), W_up);
-        deserialize_matrix(j.at("W_down"), W_down);
+        cpu_fixed_matrix<float16, EmbeddingDimension, EmbeddingDimension> cpu_Wq, cpu_Wk, cpu_Wv, cpu_Wo;
+        cpu_fixed_matrix<float16, FFDimension, EmbeddingDimension> cpu_Wgate, cpu_Wup;
+        cpu_fixed_matrix<float16, EmbeddingDimension, FFDimension> cpu_Wdown;
+        deserialize_matrix(j.at("W_q"), cpu_Wq);
+        deserialize_matrix(j.at("W_k"), cpu_Wk);
+        deserialize_matrix(j.at("W_v"), cpu_Wv);
+        deserialize_matrix(j.at("W_o"), cpu_Wo);
+        deserialize_matrix(j.at("W_gate"), cpu_Wgate);
+        deserialize_matrix(j.at("W_up"), cpu_Wup);
+        deserialize_matrix(j.at("W_down"), cpu_Wdown);
+        W_q.copy_from_cpu(cpu_Wq);
+        W_k.copy_from_cpu(cpu_Wk);
+        W_v.copy_from_cpu(cpu_Wv);
+        W_o.copy_from_cpu(cpu_Wo);
+        W_gate.copy_from_cpu(cpu_Wgate);
+        W_up.copy_from_cpu(cpu_Wup);
+        W_down.copy_from_cpu(cpu_Wdown);
         copy_weights_to_offload_buffer();
 
         // Reset momentum on load — do not persist transient training state

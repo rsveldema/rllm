@@ -1,5 +1,6 @@
 #include <OutputLayer.hpp>
 #include <RandomHelpers.hpp>
+#include <cpu/cpu_fixed_matrix.hpp>
 #include <parallel.hpp>
 
 #include <enum_iterator2D.hpp>
@@ -120,8 +121,6 @@ namespace rllm
         // PARFOR_SHARED_VARIABLES()
         // ENDPARFOR_SHARED_VARIABLES
 
-        temp_values[TempStorage::ONE] = 0;
-
         OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (inputs, values, temp_values))
         {
             const float max_val = temp_values[TempStorage::ZERO];
@@ -160,10 +159,11 @@ namespace rllm
     {
         const int D = static_cast<int>(EmbeddingDimension::MAX);
         const float scale = 1.0f / std::sqrt(static_cast<float>(D));
+        cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> cpu_tmp;
         for (const auto v : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                W_lm_head[v, d] = get_random_value(-scale, scale);
-        W_lm_head.copy_to_offload_buffer();
+                cpu_tmp.set(v, d, static_cast<float16>(get_random_value(-scale, scale)));
+        W_lm_head.copy_from_cpu(cpu_tmp);
         V_lm_head.zero();
     }
 
@@ -171,6 +171,7 @@ namespace rllm
     void OutputLayer::forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last)
     {
         output_layer_forward_from_hidden_impl(h_last, W_lm_head, m_inputs);
+        m_inputs.copy_to_cpu(m_inputs_cpu);
     }
 
     // Accumulates dL/dh_last[D] and updates W_lm_head.
@@ -192,7 +193,7 @@ namespace rllm
         std::vector<OutputToken> top_k;
         for (const auto i : enum_iterator1D<TokenID>())
         {
-            const float logit = m_inputs[i];
+            const float logit = m_inputs_cpu[i];
             if (top_k.size() < k)
             {
                 top_k.push_back({i, logit});
@@ -218,16 +219,18 @@ namespace rllm
     {
         float max_val = -std::numeric_limits<float>::infinity();
         for (const auto token : enum_iterator1D<TokenID>()) {
-            max_val = math::max(max_val, m_inputs[token]);
+            max_val = math::max(max_val, m_inputs_cpu[token]);
         }
 
-        score.temp_values[TempStorage::START] = max_val;
-        score.temp_values[TempStorage::ONE] = 0.0f;
+        score.temp_values_cpu[TempStorage::START] = max_val;
+        score.temp_values_cpu[TempStorage::ONE] = 0.0f;
+        score.temp_values.copy_from_cpu(score.temp_values_cpu);
         compute_exp_and_accumulate_sum(m_inputs, score.values, score.temp_values);
         finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
+        score.temp_values.copy_to_cpu(score.temp_values_cpu);
 
-        const float sum_exp = score.temp_values[TempStorage::ONE];
-        const float expected_logit = m_inputs[expected_output_token];
+        const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
+        const float expected_logit = m_inputs_cpu[expected_output_token];
         assert(! std::isnan(expected_logit));
         assert(! std::isnan(max_val));
         assert(! std::isnan(sum_exp));

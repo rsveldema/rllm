@@ -2,6 +2,8 @@
 
 #include <OutputLayer.hpp>
 
+#include <cpu/cpu_fixed_vector.hpp>
+#include <cpu/cpu_fixed_matrix.hpp>
 #include <enum_iterator1D.hpp>
 
 #include <nlohmann/json.hpp>
@@ -90,8 +92,8 @@ namespace
 TEST(OutputLayerForwardFromHiddenTest, PublicForwardMatchesImplementationHelper)
 {
     auto weights_json = zero_output_layer_weights_json();
-    rllm::fixed_size_matrix<float16, rllm::TokenID, rllm::EmbeddingDimension> weights;
-    weights.zero();
+    rllm::cpu_fixed_matrix<float16, rllm::TokenID, rllm::EmbeddingDimension> cpu_weights;
+    cpu_weights.zero();
 
     const auto tokens = first_n_tokens(4);
     const auto dims = first_n_dimensions(5);
@@ -111,23 +113,29 @@ TEST(OutputLayerForwardFromHiddenTest, PublicForwardMatchesImplementationHelper)
         {
             const float value = weight_values[token_i][dim_i];
             weight_at(weights_json, tokens[token_i], dims[dim_i]) = value;
-            weights[tokens[token_i], dims[dim_i]] = static_cast<float16>(value);
+            cpu_weights[tokens[token_i], dims[dim_i]] = static_cast<float16>(value);
         }
     }
+    rllm::fixed_size_matrix<float16, rllm::TokenID, rllm::EmbeddingDimension> weights;
+    weights.copy_from_cpu(cpu_weights);
 
+    rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
+    h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
+    h_last_cpu.zero();
+    h_last_cpu[dims[0]] = 1.0f;
+    h_last_cpu[dims[1]] = -2.0f;
+    h_last_cpu[dims[2]] = 0.5f;
+    h_last_cpu[dims[3]] = 4.0f;
+    h_last_cpu[dims[4]] = -1.5f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.set_size(rllm::EmbeddingDimension::MAX);
-    h_last.zero();
-    h_last[dims[0]] = 1.0f;
-    h_last[dims[1]] = -2.0f;
-    h_last[dims[2]] = 0.5f;
-    h_last[dims[3]] = 4.0f;
-    h_last[dims[4]] = -1.5f;
+    h_last.copy_from_cpu(h_last_cpu);
 
     rllm::fixed_size_vector<float, rllm::TokenID> impl_logits;
     impl_logits.set_size(rllm::TokenID::MAX);
     impl_logits.zero();
     rllm::output_layer_forward_from_hidden_impl(h_last, weights, impl_logits);
+    rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_impl_logits;
+    impl_logits.copy_to_cpu(cpu_impl_logits);
 
     rllm::OutputLayer layer;
     layer.load(weights_json);
@@ -137,7 +145,7 @@ TEST(OutputLayerForwardFromHiddenTest, PublicForwardMatchesImplementationHelper)
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
     {
         const size_t index = static_cast<size_t>(tok);
-        EXPECT_NEAR(public_logits[index], impl_logits.get_offload_synced(tok), 1e-5f) << "token index " << index;
+        EXPECT_NEAR(public_logits[index], cpu_impl_logits[tok], 1e-5f) << "token index " << index;
     }
 }
 
@@ -146,9 +154,11 @@ TEST(OutputLayerScoreTest, ZeroLogitsMatchReference)
     rllm::OutputLayer layer;
     layer.load(zero_output_layer_weights_json());
 
+    rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
+    h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
+    h_last_cpu.zero();
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.set_size(rllm::EmbeddingDimension::MAX);
-    h_last.zero();
+    h_last.copy_from_cpu(h_last_cpu);
 
     layer.forward_from_hidden(h_last);
 
@@ -161,15 +171,17 @@ TEST(OutputLayerScoreTest, ZeroLogitsMatchReference)
     const float expected_loss = reference_compute_score(logits, expected_deltas, expected_token);
 
     EXPECT_NEAR(loss, expected_loss, 1e-5f);
-    EXPECT_NEAR(score.temp_values[rllm::TempStorage::START], 0.0f, 1e-6f);
+    EXPECT_NEAR(score.temp_values_cpu[rllm::TempStorage::START], 0.0f, 1e-6f);
     EXPECT_NEAR(
-        score.temp_values[rllm::TempStorage::ONE],
+        score.temp_values_cpu[rllm::TempStorage::ONE],
         static_cast<float>(static_cast<int>(rllm::TokenID::MAX)),
         1e-4f
     );
 
+    rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
+    score.values.copy_to_cpu(cpu_values);
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
-        EXPECT_NEAR(score.values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
+        EXPECT_NEAR(cpu_values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
 
 TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
@@ -185,10 +197,12 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
     rllm::OutputLayer layer;
     layer.load(weights);
 
+    rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
+    h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
+    h_last_cpu.zero();
+    h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.set_size(rllm::EmbeddingDimension::MAX);
-    h_last.zero();
-    h_last[rllm::EmbeddingDimension::START] = 1.0f;
+    h_last.copy_from_cpu(h_last_cpu);
 
     layer.forward_from_hidden(h_last);
 
@@ -204,10 +218,12 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
     const float expected_loss = reference_compute_score(logits, expected_deltas, expected_token);
 
     EXPECT_NEAR(loss, expected_loss, 1e-5f);
-    EXPECT_NEAR(score.temp_values[rllm::TempStorage::START], 2.0f, 1e-5f);
+    EXPECT_NEAR(score.temp_values_cpu[rllm::TempStorage::START], 2.0f, 1e-5f);
 
+    rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
+    score.values.copy_to_cpu(cpu_values);
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
-        EXPECT_NEAR(score.values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
+        EXPECT_NEAR(cpu_values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
 
 TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
@@ -223,10 +239,12 @@ TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
     rllm::OutputLayer layer;
     layer.load(weights);
 
+    rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
+    h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
+    h_last_cpu.zero();
+    h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.set_size(rllm::EmbeddingDimension::MAX);
-    h_last.zero();
-    h_last[rllm::EmbeddingDimension::START] = 1.0f;
+    h_last.copy_from_cpu(h_last_cpu);
 
     layer.forward_from_hidden(h_last);
 
@@ -243,8 +261,10 @@ TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
 
     EXPECT_NEAR(loss, expected_loss, 1e-5f);
 
+    rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
+    score.values.copy_to_cpu(cpu_values);
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
-        EXPECT_NEAR(score.values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
+        EXPECT_NEAR(cpu_values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
 
 TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
@@ -260,13 +280,15 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
     rllm::OutputLayer layer;
     layer.load(weights);
 
-    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.set_size(rllm::EmbeddingDimension::MAX);
-    h_last.zero();
+    rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
+    h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
+    h_last_cpu.zero();
 
     rllm::Score score;
 
-    h_last[rllm::EmbeddingDimension::START] = 1.0f;
+    h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
+    h_last.copy_from_cpu(h_last_cpu);
     layer.forward_from_hidden(h_last);
 
     std::vector<float> expected_deltas_first;
@@ -275,11 +297,16 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
     const float loss_first = layer.compute_score(score, tokens[1]);
 
     EXPECT_NEAR(loss_first, expected_loss_first, 1e-5f);
-    for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
-        EXPECT_NEAR(score.values[tok], expected_deltas_first[static_cast<size_t>(tok)], 1e-5f);
+    {
+        rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
+        score.values.copy_to_cpu(cpu_values);
+        for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
+            EXPECT_NEAR(cpu_values[tok], expected_deltas_first[static_cast<size_t>(tok)], 1e-5f);
+    }
 
-    h_last.zero();
-    h_last[rllm::EmbeddingDimension::START] = -1.0f;
+    h_last_cpu.zero();
+    h_last_cpu[rllm::EmbeddingDimension::START] = -1.0f;
+    h_last.copy_from_cpu(h_last_cpu);
     layer.forward_from_hidden(h_last);
 
     std::vector<float> expected_deltas_second;
@@ -288,8 +315,12 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
     const float loss_second = layer.compute_score(score, tokens[0]);
 
     EXPECT_NEAR(loss_second, expected_loss_second, 1e-5f);
-    for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
-        EXPECT_NEAR(score.values[tok], expected_deltas_second[static_cast<size_t>(tok)], 1e-5f);
+    {
+        rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
+        score.values.copy_to_cpu(cpu_values);
+        for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
+            EXPECT_NEAR(cpu_values[tok], expected_deltas_second[static_cast<size_t>(tok)], 1e-5f);
+    }
 }
 
 TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
@@ -297,10 +328,12 @@ TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
     rllm::OutputLayer layer;
     layer.load(zero_output_layer_weights_json());
 
+    rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
+    h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
+    h_last_cpu.zero();
+    h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.set_size(rllm::EmbeddingDimension::MAX);
-    h_last.zero();
-    h_last[rllm::EmbeddingDimension::START] = 1.0f;
+    h_last.copy_from_cpu(h_last_cpu);
 
     const auto expected_token = first_n_tokens(1).front();
     rllm::Score score;
