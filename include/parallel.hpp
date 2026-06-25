@@ -21,9 +21,7 @@
 
 #include <memory_spaces/host_memory_space.hpp>
 
-#if defined(USE_VULKAN_OFFLOAD)
 #include <vulkan_session.hpp>
-#endif
 
 template <typename T>
 T* allocate_aligned(IMemorySpace& mem_space, std::size_t count)
@@ -36,48 +34,6 @@ void deallocate_aligned(IMemorySpace& mem_space, T* ptr, std::size_t count)
 {
     mem_space.release_staging(ptr, count * sizeof(T));
 }
-
-#if !defined(USE_VULKAN_OFFLOAD)
-namespace parallel::detail
-{
-    inline void cpu_barrier()
-    {
-    }
-
-    template<typename T>
-    inline void cpu_atomic_add(T& dst, const float value)
-    {
-        std::atomic_ref<T> atomic_dst(dst);
-        T current = atomic_dst.load(std::memory_order_relaxed);
-        while (!atomic_dst.compare_exchange_weak(
-            current,
-            current + value,
-            std::memory_order_relaxed,
-            std::memory_order_relaxed
-        ))
-        {
-        }
-    }
-
-    inline void cpu_atomic_max(float& dst, const float value)
-    {
-        std::atomic_ref<float> atomic_dst(dst);
-        float current = atomic_dst.load(std::memory_order_relaxed);
-        while (current < value && !atomic_dst.compare_exchange_weak(
-            current,
-            value,
-            std::memory_order_relaxed,
-            std::memory_order_relaxed
-        ))
-        {
-        }
-    }
-}
-
-#define barrier() ::parallel::detail::cpu_barrier()
-#define atomicAdd(dst, value) ::parallel::detail::cpu_atomic_add((dst), (value))
-#define atomicMax(dst, value) ::parallel::detail::cpu_atomic_max((dst), (value))
-#endif
 
 namespace parallel {
     const char* backend_name();
@@ -255,9 +211,7 @@ namespace parallel {
             std::lock_guard<std::mutex> lock(m_copy_site_mutex);
             m_copy_sites.clear();
             m_copy_parameters.clear();
-#if defined(USE_VULKAN_OFFLOAD)
             ComputeKernelRegistry::instance().resetStatistics();
-#endif
 #endif
         }
 
@@ -293,7 +247,7 @@ namespace parallel {
                 bytes_to_mbyte(device_to_host_buffer_copy_bytes())
             );
 
-#if defined(USE_VULKAN_OFFLOAD)
+#if defined(RLLM_ENABLE_STATISTICS)
             const auto print_top_kernel_transfers = [](std::string_view title, bool host_to_device) {
                 auto stats = ComputeKernelRegistry::instance().getStatistics(-1);
                 std::erase_if(stats, [host_to_device](const VStatistics& item) {
@@ -669,8 +623,4 @@ namespace parallel {
 #define RLLM_STRINGIZE(x) RLLM_STRINGIZE_IMPL(x)
 #define RLLM_DO_PRAGMA(x) _Pragma(RLLM_STRINGIZE(x))
 
-#if defined(USE_OPENMP) && !defined(USE_VULKAN_OFFLOAD)
-#define RLLM_OMP_SIMD RLLM_DO_PRAGMA(omp simd)
-#else
 #define RLLM_OMP_SIMD
-#endif

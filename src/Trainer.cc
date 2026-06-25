@@ -4,9 +4,7 @@
 #include <print>
 #include <string>
 
-#if defined(USE_VULKAN_OFFLOAD)
 #include <vulkan_session.hpp>
-#endif
 
 namespace rllm
 {
@@ -28,15 +26,7 @@ namespace rllm
     {
         std::println("Training mode");
         set_nn_log_file("train.log");
-#if defined(USE_VULKAN_OFFLOAD)
         ComputeKernelRegistry::instance().enableRegistrationLog("training-log.txt");
-#else
-        {
-            std::ofstream out("training-log.txt", std::ios::trunc);
-            out << "compute kernels\n";
-            out << "name\ttiled\n";
-        }
-#endif
 
         Corpus corpus{m_filters};
         corpus.load_files_from_dir(train_corpus_dir);

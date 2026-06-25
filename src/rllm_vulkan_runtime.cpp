@@ -1,7 +1,5 @@
 #include <rllm_vulkan_runtime.hpp>
 
-#if defined(USE_VULKAN_OFFLOAD)
-
 namespace rllm::vulkan_runtime
 {
     namespace
@@ -52,5 +50,3 @@ namespace rllm::vulkan_runtime
         return g_mutex;
     }
 }
-
-#endif

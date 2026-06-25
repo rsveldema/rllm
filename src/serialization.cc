@@ -74,9 +74,7 @@ namespace rllm
                 for (const auto d : enum_iterator1D<EmbeddingDimension>())
                     W_lm_head[t, d] = w_j.at(i++).template get<float>();
             W_lm_head.copy_to_offload_buffer();
-#if defined(USE_VULKAN_OFFLOAD)
             (void) W_lm_head.data();
-#endif
         }
         V_lm_head.zero();
     }
@@ -381,9 +379,7 @@ namespace rllm
         pull_matrix("output_layers.W_lm_head", st, W_lm_head);
         m_inputs.zero();
         W_lm_head.copy_to_offload_buffer();
-#if defined(USE_VULKAN_OFFLOAD)
         (void) W_lm_head.data();
-#endif
         V_lm_head.zero();
     }
 

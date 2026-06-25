@@ -33,12 +33,10 @@ namespace rllm
             return m_data.raw_staging_data();
         }
 
-#if defined(USE_VULKAN_OFFLOAD)
         VBaseDeviceBuffer& device_buffer() const
         {
             return m_data.device_buffer();
         }
-#endif
 
 
         DeviceMemoryOwner device_memory_owner() const

@@ -1,7 +1,5 @@
 #pragma once
 
-#if defined(USE_VULKAN_OFFLOAD)
-
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -58,5 +56,3 @@ namespace rllm::vulkan_runtime
         value[index].mark_device_latest();
     }
 }
-
-#endif

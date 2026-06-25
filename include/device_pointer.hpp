@@ -12,10 +12,8 @@
 #include <utility>
 #include <vector>
 
-#if defined(USE_VULKAN_OFFLOAD)
 #include <rllm_vulkan_runtime.hpp>
 #include <parallel.hpp>
-#endif
 
 enum class DeviceMemoryOwner {
     INVALID,
@@ -72,10 +70,8 @@ public:
         std::lock_guard<std::mutex> lock(m_state_mutex);
         assert(m_bytes > 0);
         std::memset(host_bytes(), 0, m_bytes);
-#if defined(USE_VULKAN_OFFLOAD)
         m_device->write(rllm::vulkan_runtime::context(), *m_host);
         m_owner = DeviceMemoryOwner::REPLICATED;
-#endif
     }
 
     void fill(T value)
@@ -138,9 +134,7 @@ public:
         std::lock_guard<std::mutex> lock(m_state_mutex);
         m_pending_flush = nullptr;
         m_owner = DeviceMemoryOwner::ON_DEVICE;
-#if defined(USE_VULKAN_OFFLOAD)
         m_last_device_writer = std::string(ComputeKernelRegistry::activeKernelName());
-#endif
     }
 
     DeviceMemoryOwner device_memory_owner() const
@@ -194,18 +188,12 @@ public:
 
     void copy_to_offload_buffer(std::string_view site = {}, std::string_view parameter = {})
     {
-#if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
         copy_to_offload_buffer_unlocked(site, parameter);
-#else
-        static_cast<void>(site);
-        static_cast<void>(parameter);
-#endif
     }
 
     void copy_range_to_offload_buffer(size_t start_element, size_t element_count, std::string_view site = {}, std::string_view parameter = {})
     {
-#if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
         assert(start_element <= m_count);
         assert(element_count <= m_count - start_element);
@@ -218,49 +206,31 @@ public:
             ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), static_cast<size_t>(bytes));
             m_owner = DeviceMemoryOwner::REPLICATED;
         }
-#else
-        static_cast<void>(start_element);
-        static_cast<void>(element_count);
-        static_cast<void>(site);
-        static_cast<void>(parameter);
-#endif
     }
 
     void copy_from_offload_buffer(std::string_view = {}, std::string_view = {})
     {
-#if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
         copy_from_offload_buffer_unlocked();
-#endif
     }
 
     bool needs_offload_sync() const
     {
-#if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
         return m_owner == DeviceMemoryOwner::ON_HOST || m_owner == DeviceMemoryOwner::INVALID;
-#else
-        return false;
-#endif
     }
 
-#if defined(USE_VULKAN_OFFLOAD)
     VBaseDeviceBuffer& device_buffer() const
     {
         ensure_device_data();
         return *m_device;
     }
-#endif
 
 private:
     void allocate_internal()
     {
-#if defined(USE_VULKAN_OFFLOAD)
         m_host = std::make_unique<VDynamicHostBuffer>(rllm::vulkan_runtime::session(), static_cast<VkDeviceSize>(m_bytes));
         m_device = std::make_unique<VDynamicDeviceBuffer>(rllm::vulkan_runtime::session(), static_cast<VkDeviceSize>(m_bytes));
-#else
-        m_host.resize(m_count);
-#endif
         m_owner = DeviceMemoryOwner::ON_HOST;
     }
 
@@ -276,12 +246,8 @@ private:
         std::lock_guard<std::mutex> other_lock(other.m_state_mutex);
         m_count = other.m_count;
         m_bytes = other.m_bytes;
-#if defined(USE_VULKAN_OFFLOAD)
         m_host = std::move(other.m_host);
         m_device = std::move(other.m_device);
-#else
-        m_host = std::move(other.m_host);
-#endif
         m_owner = other.m_owner;
         m_pending_flush = std::move(other.m_pending_flush);
 
@@ -293,7 +259,6 @@ private:
 
     void ensure_host_data() const
     {
-#if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
         if (m_owner == DeviceMemoryOwner::ON_DEVICE)
             copy_from_offload_buffer_unlocked();
@@ -302,31 +267,23 @@ private:
             m_pending_flush();
             m_pending_flush = nullptr;
         }
-#endif
     }
 
     void ensure_device_data() const
     {
-#if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
         copy_to_offload_buffer_unlocked();
-#endif
     }
 
     void mark_host_modified() const
     {
-#if defined(USE_VULKAN_OFFLOAD)
         std::lock_guard<std::mutex> lock(m_state_mutex);
         m_owner = DeviceMemoryOwner::ON_HOST;
         m_pending_flush = nullptr;
-#else
-        m_owner = DeviceMemoryOwner::ON_HOST;
-#endif
     }
 
     void copy_to_offload_buffer_unlocked(std::string_view site = {}, std::string_view parameter = {}) const
     {
-#if defined(USE_VULKAN_OFFLOAD)
         if (m_owner == DeviceMemoryOwner::ON_HOST || m_owner == DeviceMemoryOwner::INVALID)
         {
             m_device->write(rllm::vulkan_runtime::context(), *m_host);
@@ -334,12 +291,10 @@ private:
             ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), m_bytes);
             m_owner = DeviceMemoryOwner::REPLICATED;
         }
-#endif
     }
 
     void copy_from_offload_buffer_unlocked() const
     {
-#if defined(USE_VULKAN_OFFLOAD)
         if (m_pending_flush)
         {
             m_pending_flush();
@@ -352,31 +307,20 @@ private:
             ComputeKernelRegistry::instance().recordDeviceToHost(m_last_device_writer, m_bytes);
             m_owner = DeviceMemoryOwner::REPLICATED;
         }
-#endif
     }
 
     T* host_data() const { return reinterpret_cast<T*>(host_bytes()); }
     uint8_t* host_bytes() const
     {
-#if defined(USE_VULKAN_OFFLOAD)
         return m_host->bytes();
-#else
-        return reinterpret_cast<uint8_t*>(const_cast<T*>(m_host.data()));
-#endif
     }
 
     size_t m_count = 0;
     size_t m_bytes = 0;
-#if defined(USE_VULKAN_OFFLOAD)
     std::unique_ptr<VDynamicHostBuffer> m_host;
     std::unique_ptr<VDynamicDeviceBuffer> m_device;
-#else
-    std::vector<T> m_host;
-#endif
     mutable DeviceMemoryOwner m_owner = DeviceMemoryOwner::INVALID;
     mutable std::function<void()> m_pending_flush;
     mutable std::mutex m_state_mutex;
-#if defined(USE_VULKAN_OFFLOAD)
     mutable std::string m_last_device_writer;
-#endif
 };

@@ -5,10 +5,8 @@
 #include <cstdlib>
 #include <string>
 
-#if defined(USE_VULKAN_OFFLOAD)
 #include <vector>
 #include <vulkan/vulkan.h>
-#endif
 
 IMemorySpace& IMemorySpace::get_instance()
 {
@@ -30,7 +28,6 @@ const char* backend_name() {
 #endif
 }
 
-#if defined(USE_VULKAN_OFFLOAD)
 struct VulkanCandidate
 {
     VkPhysicalDevice device = VK_NULL_HANDLE;
@@ -211,9 +208,6 @@ void print_vulkan_provider()
 
     vkDestroyInstance(instance, nullptr);
 }
-#else
-void print_vulkan_provider() {}
-#endif
 
 } // namespace parallel
 

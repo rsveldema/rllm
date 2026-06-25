@@ -4,9 +4,7 @@
 #include <Prompter.hpp>
 #include <Trainer.hpp>
 #include <parallel.hpp>
-#if defined(USE_VULKAN_OFFLOAD)
 #include <rllm_vulkan_runtime.hpp>
-#endif
 
 #include <algorithm>
 #include <chrono>
@@ -258,14 +256,10 @@ int main(int argc, char* argv[])
     std::println("Build type: Debug (NDEBUG not defined)");
 #endif
 
-#if defined(USE_VULKAN_OFFLOAD)
     VulkanSession vulkan_session;
     rllm::vulkan_runtime::set_session(vulkan_session);
     std::println("Offload type: Vulkan");
     parallel::print_vulkan_provider();
-#else
-    std::println("Offload type: Host");
-#endif
 
     CommandLineParser parser;
     parser.parse(argc, argv);

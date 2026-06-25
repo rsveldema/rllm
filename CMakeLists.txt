@@ -77,7 +77,9 @@ add_executable(generate_domain_replace_json src/generate_domain_replace_json.cc)
 target_include_directories(generate_domain_replace_json PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_BINARY_DIR}/generated
+        "${CMAKE_SOURCE_DIR}/kernel_compiler/runtime/include"
 )
+target_compile_definitions(generate_domain_replace_json PRIVATE USE_VULKAN_OFFLOAD)
 target_link_libraries(generate_domain_replace_json PUBLIC safetensors-cpp::safetensors_cpp)
 target_link_libraries(generate_domain_replace_json PRIVATE nlohmann_json::nlohmann_json)
 add_dependencies(generate_domain_replace_json generate_tokenizer_map)
