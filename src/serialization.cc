@@ -299,6 +299,7 @@ namespace rllm
         }
 
         pull_matrix("input_layer.embeddings", st, m_embeddings);
+        m_embeddings.copy_to_cpu(m_embeddings_cpu);
     }
 
     void InputLayer::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
