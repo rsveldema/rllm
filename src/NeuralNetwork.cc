@@ -585,7 +585,7 @@ namespace rllm
         float best_validation_loss = std::numeric_limits<float>::infinity();
         size_t epochs_without_improvement = 0;
         bool has_best_checkpoint = false;
-        static constexpr const char* BEST_CHECKPOINT_FILENAME = "models/checkpoint-best.json";
+        static constexpr const char* BEST_CHECKPOINT_FILENAME = "models/checkpoint-best.st";
 
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {

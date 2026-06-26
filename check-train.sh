@@ -10,16 +10,17 @@ else
 fi
 
 echo "Normalizing training_data1 with training_postprocessor.py..."
-python3 ./training_postprocessor.py --dir training_data1
+python3 ./training_postprocessor.py --dir training_data0
 
-./build_release/rllm --train $input_arg \
-    -o models/after_training.json \
+TRAIN_DIR="${TRAIN_DIR:-training_data0}"
+
+gdb --args ./build_release/rllm --train $input_arg \
+    --train-dir "$TRAIN_DIR" \
+    -o models/after_training.st \
      --filter guaranteed \
      --method random_line_random_len \
      --epochs 50 \
      --checkpoint-interval 30
-
-
 
 
 #     --method window:32 --epochs 20
