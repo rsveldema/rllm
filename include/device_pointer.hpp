@@ -76,29 +76,29 @@ public:
     size_t storage_size_bytes() const { return m_bytes; }
 
     /** H2D: upload from an external host-visible Vulkan buffer. */
-    void copy_to_offload_buffer(VBaseHostBuffer& src,
+    void copy_to_offload_buffer(VulkanQueue& queue, VBaseHostBuffer& src,
                                 std::string_view site = {},
                                 std::string_view parameter = {})
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_device->write(rllm::vulkan_runtime::get_queue(0), src);
+        m_device->write(queue, src);
         parallel::statistics.record_host_to_device_buffer_copy(site, parameter, m_bytes);
         ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), m_bytes);
     }
 
     /** D2H: download to an external host-visible Vulkan buffer. */
-    void copy_from_offload_buffer(VBaseHostBuffer& dst,
+    void copy_from_offload_buffer(VulkanQueue& queue, VBaseHostBuffer& dst,
                                   std::string_view = {},
                                   std::string_view = {}) const
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_device->read(rllm::vulkan_runtime::get_queue(0), dst);
+        m_device->read(queue, dst);
         parallel::statistics.record_device_to_host_buffer_copy({}, {}, m_bytes);
         ComputeKernelRegistry::instance().recordDeviceToHost(m_last_device_writer, m_bytes);
     }
 
     /** H2D partial: upload a contiguous element range from an external host buffer. */
-    void copy_range_to_offload_buffer(VBaseHostBuffer& src,
+    void copy_range_to_offload_buffer(VulkanQueue& queue, VBaseHostBuffer& src,
                                       size_t start_element,
                                       size_t element_count,
                                       std::string_view site = {},
@@ -109,7 +109,7 @@ public:
         assert(element_count <= m_count - start_element);
         const auto offset = static_cast<VkDeviceSize>(start_element * sizeof(T));
         const auto bytes  = static_cast<VkDeviceSize>(element_count  * sizeof(T));
-        m_device->write(rllm::vulkan_runtime::get_queue(0), src, bytes, offset, offset);
+        m_device->write(queue, src, bytes, offset, offset);
         parallel::statistics.record_host_to_device_buffer_copy(site, parameter, static_cast<size_t>(bytes));
         ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), static_cast<size_t>(bytes));
     }

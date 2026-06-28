@@ -32,7 +32,7 @@ namespace rllm
         m_inputs.set_size(TokenID::MAX);
     }
 
-    void output_layer_forward_from_hidden_impl(
+    void output_layer_forward_from_hidden_impl(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(h_last, W, inputs)
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
@@ -40,7 +40,6 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, v, enum_iterator1D<TokenID>(), (h_last, W, inputs))
         float sum = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>())
@@ -175,9 +174,10 @@ namespace rllm
     }
 
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
-    void OutputLayer::forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last)
+    void OutputLayer::forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last,
+              VulkanQueue& queue)
     {
-        output_layer_forward_from_hidden_impl(h_last, W_lm_head, m_inputs);
+        output_layer_forward_from_hidden_impl(queue, h_last, W_lm_head, m_inputs);
         m_inputs.copy_to_cpu(m_inputs_cpu);
     }
 

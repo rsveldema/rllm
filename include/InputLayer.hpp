@@ -14,7 +14,7 @@ namespace rllm
     /** the embedding for a given TokenID */    
     using embedding_row_t = std::array<float16, static_cast<size_t>(EmbeddingDimension::MAX)>;
 
-    /**  InputLayer converts an InputLine (sequence of token IDs) into a
+      /**  InputLayer converts an CpuInputLine (sequence of token IDs) into a
     * flat hidden-state vector h[seq_len × EmbeddingDimension::MAX].
     * Each position receives its learned token embedding plus a
     * fixed sinusoidal positional encoding.
@@ -32,13 +32,13 @@ namespace rllm
         InputLayer& operator=(const InputLayer&) = delete;
 
         // Fill h[seq_len × D_MODEL] with (token_embedding + positional_encoding).
-        void propagate_forward(const InputLine& input,
+        void propagate_forward(const CpuInputLine& input,
                 flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h) const;
 
         // Update token embeddings using dh[seq_len × D_MODEL] = ∂L/∂h.
         // Positional encodings are fixed (sinusoidal), so only embeddings change.
         void propagate_backward(
-            const InputLine& input,
+            const CpuInputLine& input,
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
             float learning_rate
         );

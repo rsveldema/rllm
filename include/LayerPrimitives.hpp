@@ -15,14 +15,14 @@
 #include <math_utils.hpp>
 
 #include <RandomHelpers.hpp>
-#include <tokenizer_map.hpp>
 #include <Range.hpp>
 #include <enum_iterator1D.hpp>
-#include <flexible_cols_matrix.hpp>
-#include <flexible_rows_matrix.hpp>
-#include <flexible_rows_cols_matrix.hpp>
 #include <fixed_size_matrix.hpp>
 #include <fixed_size_vector.hpp>
+#include <flexible_cols_matrix.hpp>
+#include <flexible_rows_cols_matrix.hpp>
+#include <flexible_rows_matrix.hpp>
+#include <tokenizer_map.hpp>
 
 
 #include "rllm_type_aliases.hpp"
@@ -80,11 +80,11 @@ namespace rllm
     enum class MultiTokenPredictionIndex : size_t
     {
         START = 0,
-        ONE   = 1,
-        TWO   = 2,
+        ONE = 1,
+        TWO = 2,
         THREE = 3,
-        FOUR  = 4,
-        MAX   = 4
+        FOUR = 4,
+        MAX = 4
     };
 
     enum class RmsNormPartialSumIndex : size_t
@@ -186,9 +186,14 @@ namespace rllm
         return static_cast<NeuronConnectionIndex>(static_cast<size_t>(id) + 1);
     }
 
-    struct ConflictingToken { TokenID tok; PositionIndex pos; };
+    struct ConflictingToken
+    {
+        TokenID tok;
+        PositionIndex pos;
+    };
 
-    enum class ConflictIndex : size_t {
+    enum class ConflictIndex : size_t
+    {
         START = 0,
         MAX = 256
     };
@@ -199,64 +204,53 @@ namespace rllm
         return static_cast<ConflictIndex>(static_cast<size_t>(id) + 1);
     }
 
-    class InputLine : public fixed_size_vector<TokenID, PositionIndex>
+    class CpuInputLine 
     {
-      public:
-        using Base = fixed_size_vector<TokenID, PositionIndex>;
+        public:
 
-        InputLine() = default;
-
-        InputLine(const InputLine& other)
-            : Base()
-            , m_cpu(other.m_cpu)
+        void sub_array(CpuInputLine& result, PositionIndex length) const
         {
-            sync_to_device();
+            m_cpu.sub_array(result.m_cpu, length);
         }
-
-        InputLine& operator=(const InputLine& other)
-        {
-            if (this != &other)
-            {
-                m_cpu = other.m_cpu;
-                sync_to_device();
-            }
-            return *this;
-        }
-
-        InputLine(InputLine&&) = default;
-        InputLine& operator=(InputLine&&) = default;
 
         void push_back(TokenID t)
         {
             m_cpu.push_back(t);
-            Base::set_size(m_cpu.size());
         }
 
-        const TokenID& back() const { return m_cpu.back(); }
+        const TokenID& back() const
+        {
+            return m_cpu.back();
+        }
 
         void pop_back()
         {
             m_cpu.pop_back();
-            Base::set_size(m_cpu.size());
         }
 
-        const TokenID& get(PositionIndex pos) const { return m_cpu[pos]; }
-        const TokenID& get(size_t pos) const { return m_cpu[pos]; }
-        const TokenID& operator[](PositionIndex pos) const { return m_cpu[pos]; }
+        const TokenID& get(PositionIndex pos) const
+        {
+            return m_cpu[pos];
+        }
+
+        const TokenID& get(size_t pos) const
+        {
+            return m_cpu[pos];
+        }
+        
+        const TokenID& operator[](PositionIndex pos) const
+        {
+            return m_cpu[pos];
+        }
 
         void clear()
         {
             m_cpu.clear();
-            Base::clear();
         }
 
-        /** Upload m_cpu to device. Call after modifying m_cpu. */
-        void sync_to_device() { Base::copy_from_cpu(m_cpu); }
-
-        void sub_array(InputLine& result, PositionIndex length) const
+        PositionIndex size() const
         {
-            m_cpu.sub_array(result.m_cpu, length);
-            result.sync_to_device();
+            return m_cpu.size();
         }
 
         uint64_t hash() const
@@ -278,36 +272,65 @@ namespace rllm
             return hash;
         }
 
-      private:
         cpu_fixed_vector<TokenID, PositionIndex> m_cpu;
+    };
+
+    class GpuInputLine : public fixed_size_vector<TokenID, PositionIndex>
+    {
+      public:
+        using Base = fixed_size_vector<TokenID, PositionIndex>;
+
+        GpuInputLine() = default;
+
+        GpuInputLine(const CpuInputLine& other) = delete;
+        /*
+            : Base()
+            , m_cpu(other.m_cpu)
+        {
+            sync_to_device(queue);
+        }*/
+
+        GpuInputLine& operator=(const CpuInputLine& other) = delete;
+        /*
+        {
+            if (this != &other)
+            {
+                m_cpu = other.m_cpu;
+                sync_to_device(queue);
+            }
+            return *this;
+        }*/
+
+        void sub_array(VulkanQueue& queue, CpuInputLine& result, PositionIndex length) const
+        {
+            // sub_array on GPU side - result is a CpuInputLine so no sync needed
+        }
     };
 
     class InputLineView
     {
-        public:
-            InputLineView(const InputLine& data, 
-                PositionIndex start,    
-                PositionIndex length)
-                : m_data(data)
-                , m_start(start)
-                , m_length(length)
-            {}
-    
-            const TokenID& operator[](PositionIndex index) const
-            {
-                assert(((int)index+(int)m_start) < (int)m_length);
-                return m_data.get(static_cast<size_t>(m_start) + static_cast<size_t>(index));
-            }
-    
-            PositionIndex size() const
-            {
-                return m_length;
-            }
-    
-        private:
-            const InputLine& m_data;
-            PositionIndex m_start;
-            PositionIndex m_length;
+      public:
+        InputLineView(const CpuInputLine& data, PositionIndex start, PositionIndex length)
+            : m_data(data)
+            , m_start(start)
+            , m_length(length)
+        {}
+
+        const TokenID& operator[](PositionIndex index) const
+        {
+            assert(((int) index + (int) m_start) < (int) m_length);
+            return m_data.get(static_cast<size_t>(m_start) + static_cast<size_t>(index));
+        }
+
+        PositionIndex size() const
+        {
+            return m_length;
+        }
+
+      private:
+        const CpuInputLine& m_data;
+        PositionIndex m_start;
+        PositionIndex m_length;
     };
 
 

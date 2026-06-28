@@ -368,7 +368,7 @@ TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
     InputLayer input_layer;
     input_layer.set_random_embeddings();
 
-    InputLine input;
+    CpuInputLine input;
     input.push_back(static_cast<TokenID>(1));
     input.push_back(static_cast<TokenID>(7));
     input.push_back(static_cast<TokenID>(11));

@@ -149,9 +149,11 @@ namespace rllm
         copy_hidden_row_to_vector(ws.h, last_pos, ws.h_last);
 
         // TODO: inline forward_from_hidden to turn this into a OFFLOAD_PARFOR_2D_PARAM
-        PARFOR_1D(output_index, enum_iterator1D<MultiTokenPredictionIndex>())
-            m_output_layers[output_index].forward_from_hidden(ws.h_last);
-        ENDFOR
+        for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
+        {
+            auto& queue = rllm::vulkan_runtime::get_queue(static_cast<int>(ix) + 1));
+            m_output_layers[output_index].forward_from_hidden(ws.h_last, queue);
+        }
     }
 
 
@@ -358,7 +360,7 @@ namespace rllm
     }
 
 
-    float NeuralNetwork::evaluate_average_loss(const std::vector<InputLine>& evaluation_lines)
+    float NeuralNetwork::evaluate_average_loss(const std::vector<CpuInputLine>& evaluation_lines)
     {
         if (evaluation_lines.empty())
             return std::numeric_limits<float>::quiet_NaN();
@@ -393,12 +395,12 @@ namespace rllm
     }
 
     void NeuralNetwork::train_with_increasingly_longer_sequences(
-        const InputLine& line_of_file,
+        const CpuInputLine& line_of_file,
         bool verbose,
         size_t max_iterations
     )
     {
-        InputLine line;
+        CpuInputLine line;
         for (const auto& line_substring_length : enum_iterator1D<PositionIndex>(line_of_file.size()))
         {
             line_of_file.sub_array(line, line_substring_length);
@@ -421,7 +423,7 @@ namespace rllm
     }
 
     void NeuralNetwork::train_with_up_to_N(
-        const InputLine& line_of_file,
+        const CpuInputLine& line_of_file,
         bool verbose,
         size_t max_iterations,
         int num_tokens
@@ -438,7 +440,7 @@ namespace rllm
             return;
         }
 
-        InputLine train_input;
+        CpuInputLine train_input;
         line_of_file.sub_array(train_input, static_cast<PositionIndex>(num_tokens));
 
         const auto full_string_opt = m_corpus.get_line(train_input);
@@ -451,7 +453,7 @@ namespace rllm
     }
 
     void NeuralNetwork::train_with_random_len_from_start(
-        const InputLine& line_of_file,
+        const CpuInputLine& line_of_file,
         bool verbose,
         size_t max_iterations,
         std::mt19937& rng
@@ -468,7 +470,7 @@ namespace rllm
         std::uniform_int_distribution<int> len_dist(min_len, line_len);
         const int random_len = len_dist(rng);
 
-        InputLine train_input;
+        CpuInputLine train_input;
         line_of_file.sub_array(train_input, static_cast<PositionIndex>(random_len));
         const auto full_string_opt = m_corpus.get_line(train_input);
         assert(full_string_opt.has_value());
@@ -487,7 +489,7 @@ namespace rllm
 
     void NeuralNetwork::train_random_line_random_len_epoch(
         size_t epoch,
-        const std::vector<InputLine>& training_lines,
+        const std::vector<CpuInputLine>& training_lines,
         bool verbose,
         size_t num_epochs,
         const std::optional<std::chrono::seconds>& checkpointing_interval,
@@ -551,8 +553,8 @@ namespace rllm
     )
     {
         auto split = m_corpus.get_deterministic_training_split(VALIDATION_PERCENT);
-        std::vector<InputLine> training_lines = std::move(split.training_lines);
-        std::vector<InputLine> validation_lines = std::move(split.validation_lines);
+        std::vector<CpuInputLine> training_lines = std::move(split.training_lines);
+        std::vector<CpuInputLine> validation_lines = std::move(split.validation_lines);
 
         // With tiny corpora, a 20% split can leave only one held-out line.
         // That makes early stopping and best-checkpoint restoration extremely noisy
@@ -776,7 +778,7 @@ namespace rllm
             {
                 const float progress = static_cast<float>(j) / static_cast<float>(num_windows);
 
-                InputLine window;
+                CpuInputLine window;
                 int current_try_len = 2 + random_int(0, window_size - 2); // random length between 2 and window_size
                 for (int k = 0; k < current_try_len; ++k)
                 {
@@ -918,7 +920,7 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::do_training(const InputLine& train_output, bool verbose, size_t max_iterations)
+    void NeuralNetwork::do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations)
     {
         // Multi-token prediction (MTP): given a sequence [t0,t1,...,tN-1] we
         // use the first (N - num_valid_heads) tokens as context and train each
@@ -928,7 +930,7 @@ namespace rllm
         const int _max_heads = static_cast<int>(MultiTokenPredictionIndex::MAX);
         const int _num_valid = std::min(_seq_len - 1, _max_heads);
         const int _input_len = _seq_len - _num_valid;
-        InputLine train_input;
+        CpuInputLine train_input;
         train_output.sub_array(train_input, static_cast<PositionIndex>(_input_len));
         const auto num_valid_heads = static_cast<MultiTokenPredictionIndex>(_num_valid);
         // Head-0 target is used for logging and convergence checks.

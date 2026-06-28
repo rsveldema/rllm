@@ -151,9 +151,9 @@ namespace rllm
         }
     }
 
-    InputLine Corpus::get_token_ids(const std::string& text) const
+CpuInputLine Corpus::get_token_ids(const std::string& text) const
     {
-        InputLine result;
+        CpuInputLine result;
 
         size_t ix = 0;
 
@@ -228,7 +228,7 @@ namespace rllm
         return tokenizer_map[id].str;
     }
 
-    std::optional<std::string> Corpus::get_line(const InputLine& line) const
+    std::optional<std::string> Corpus::get_line(const CpuInputLine& line) const
     {
         std::string result;
         for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
@@ -252,12 +252,12 @@ namespace rllm
         return result;
     }
 
-    std::vector<InputLine> Corpus::get_suitable_training_lines() const
+    std::vector<CpuInputLine> Corpus::get_suitable_training_lines() const
     {
-        std::vector<InputLine> training_lines;
+        std::vector<CpuInputLine> training_lines;
         std::unordered_set<std::string> seen_training_line_keys;
 
-        auto make_line_key = [](const InputLine& line) {
+        auto make_line_key = [](const CpuInputLine& line) {
             std::string key;
             key.reserve(static_cast<size_t>(line.size()) * 6);
             for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
@@ -269,11 +269,11 @@ namespace rllm
         };
 
         assert(!m_token_list.empty());
-        this->visit_lines([&](const InputLine& line) {
+        this->visit_lines([&](const CpuInputLine& line) {
             // Strip the trailing TOK_NEWLINE that the corpus appends to every line.
             // Keeping it would make \n the dominant training target (it ends every line),
             // causing the model to collapse to always predicting \n.
-            InputLine stripped = line;
+            CpuInputLine stripped = line;
             if (!stripped.empty() && stripped.back() == TokenID::TOK_NEWLINE)
                 stripped.pop_back();
 

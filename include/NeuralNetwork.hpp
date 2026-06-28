@@ -106,7 +106,7 @@ namespace rllm
         /** set the input for the neural network.
          * Call this just before    propagate_forward() and then call propagate_backward_mtp() to train on this input.
          */
-        InputLine& get_last_input() {
+        CpuInputLine& get_last_input() {
             return m_last_input;
         }
         
@@ -119,7 +119,7 @@ namespace rllm
         Corpus&    m_corpus;
         Statistics& m_stats;
         InputLayer  m_input_layer;
-        InputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
+        CpuInputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
         std::vector<TransformerBlock> m_transformer_blocks;
         fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
 
@@ -135,21 +135,21 @@ namespace rllm
 
         void dump_top_predictions();
         void trace_probes_for_example(const char* phase, size_t iter, float loss_value, const std::string& full_string);
-        void do_training(const InputLine& train_output, bool verbose, size_t max_iterations);
+        void do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations);
         // Accumulates gradients from all valid MTP heads and backpropagates once.
         void propagate_backward_mtp(
             const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
             MultiTokenPredictionIndex num_valid
         );
-        float evaluate_average_loss(const std::vector<InputLine>& evaluation_lines);
+        float evaluate_average_loss(const std::vector<CpuInputLine>& evaluation_lines);
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
         int m_window_size = 2;
 
-        void train_with_up_to_N(const InputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
-        void train_with_increasingly_longer_sequences(const InputLine& line_of_file, bool verbose, size_t max_iterations);
+        void train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
+        void train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations);
         void train_with_random_len_from_start(
-            const InputLine& line_of_file,
+            const CpuInputLine& line_of_file,
             bool verbose,
             size_t max_iterations,
             std::mt19937& rng
@@ -162,7 +162,7 @@ namespace rllm
         );
         void train_random_line_random_len_epoch(
             size_t epoch,
-            const std::vector<InputLine>& training_lines,
+            const std::vector<CpuInputLine>& training_lines,
             bool verbose,
             size_t num_epochs,
             const std::optional<std::chrono::seconds>& checkpointing_interval,

@@ -40,7 +40,8 @@ namespace rllm
         void set_random_weights();
 
         // Project h_last[D_MODEL] to vocabulary logits, storing them in m_inputs.
-        void forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last);
+        void forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last,
+              VulkanQueue& queue);
 
         // Backpropagate the output delta through W_lm_head.
         // Accumulates ∂L/∂h_last into dh_last and updates W_lm_head via SGD+momentum.

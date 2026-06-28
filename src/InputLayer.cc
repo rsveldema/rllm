@@ -12,7 +12,7 @@ namespace rllm
 {
     static void fill_embeddings_with_positional_encoding(
         // OFFLOAD_PARAMETERS(tokens, embeddings, h, model_dim)
-        const InputLine& tokens,
+        const CpuInputLine& tokens,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
         float model_dim
@@ -51,7 +51,7 @@ namespace rllm
     // PE[pos, 2i]   = sin(pos / 10000^(2i / D_MODEL))
     // PE[pos, 2i+1] = cos(pos / 10000^(2i / D_MODEL))
     void InputLayer::propagate_forward(
-        const InputLine& input,
+        const CpuInputLine& input,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
     ) const
     {
@@ -64,7 +64,7 @@ namespace rllm
     // Update token embeddings.  dh[T × D_MODEL] = ∂L/∂h.
     // Positional encodings are fixed, so only the embedding contribution is updated.
     void InputLayer::propagate_backward(
-        const InputLine& input,
+        const CpuInputLine& input,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
         float learning_rate
     )

@@ -18,21 +18,21 @@ namespace rllm
       public:
                 struct TrainingSplit
                 {
-                        std::vector<InputLine> training_lines;
-                        std::vector<InputLine> validation_lines;
+                        std::vector<CpuInputLine> training_lines;
+                        std::vector<CpuInputLine> validation_lines;
                 };
 
         Corpus(const std::vector<std::string>& filters);
         void load_files_from_dir(const std::string& train_corpus_dir);
 
-        using visitor_fn_t       = std::function<void(const InputLine&)>;
+        using visitor_fn_t       = std::function<void(const CpuInputLine&)>;
         using token_visitor_fn_t = std::function<void(TokenID)>;
 
-        InputLine get_token_ids(const std::string& text) const;
+        CpuInputLine get_token_ids(const std::string& text) const;
         Token get_token_from_id(TokenID id) const;
-        std::optional<std::string> get_line(const InputLine& line) const;
+        std::optional<std::string> get_line(const CpuInputLine& line) const;
 
-        std::vector<InputLine> get_suitable_training_lines() const;
+        std::vector<CpuInputLine> get_suitable_training_lines() const;
         TrainingSplit get_deterministic_training_split(size_t validation_percent = 20) const;
 
         void visit_lines(const visitor_fn_t& visitor) const
@@ -83,12 +83,12 @@ namespace rllm
                 }
             }
 
-            InputLine get_training_input_line(size_t min_size) const
+            const CpuInputLine& get_training_input_line(size_t min_size) const
             {
                 while (true)
                 {
                     const auto random_index = static_cast<size_t>(rand()) % m_lines.size();
-                    InputLine result = m_lines[random_index];
+                    const CpuInputLine& result = m_lines[random_index];
                     if (static_cast<int>(result.size()) >= min_size)
                     {
                         return result;
@@ -116,7 +116,7 @@ namespace rllm
 
           private:
             std::string filename;
-            std::vector<InputLine> m_lines; // positions of the token in the corpus
+            std::vector<CpuInputLine> m_lines; // positions of the token in the corpus
             std::vector<TokenID> m_tokens_in_file; // the actual token IDs in the file, in order
         };
 
