@@ -40,7 +40,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator1D<TokenID>(), (h_last, W, inputs))
+        OFFLOAD_PARFOR_1D_PARAM(queue, v, enum_iterator1D<TokenID>(), (h_last, W, inputs))
         float sum = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>())
             sum += (h_last[d] * static_cast<float>(W[v, d]));
@@ -56,7 +56,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator1D<EmbeddingDimension>(), (delta, dh_last, W))
+        OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (delta, dh_last, W))
         float sum = dh_last[d];
         for (const auto v : enum_iterator1D<TokenID>())
             sum += (delta[v] * W[v, d]);
@@ -75,7 +75,7 @@ namespace rllm
     )
     {
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(v, d, grid, (delta, h_last, W, V, learning_rate))
+        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, W, V, learning_rate))
         const float g = math::clamp((delta[v] * h_last[d]), -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
         V[v, d] = math::clamp(
             ((OutputLayer::MOMENTUM_BETA * V[v, d]) + (learning_rate * g)), -OutputLayer::VEL_CLIP, OutputLayer::VEL_CLIP
@@ -90,7 +90,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TempStorage>(), (temp_values))
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TempStorage>(), (temp_values))
         temp_values[i] = (i == TempStorage::START) ? -3.402823e38f : 0.0f;
         ENDFOR
     }
@@ -105,7 +105,7 @@ namespace rllm
         // PARFOR_SHARED_VARIABLES(workgroup_max)
         // ENDPARFOR_SHARED_VARIABLES
 
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (inputs, temp_values))
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (inputs, temp_values))
             atomicMax(temp_values[TempStorage::ZERO], inputs[i]);
         ENDFOR
     }
@@ -121,12 +121,12 @@ namespace rllm
         // PARFOR_SHARED_VARIABLES()
         // ENDPARFOR_SHARED_VARIABLES
 
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (inputs, values, temp_values))
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (inputs, values, temp_values))
         {
             const float max_val = temp_values[TempStorage::ZERO];
-            float exp_value = exp((inputs[i] - max_val));            
+            float exp_value = exp((inputs[i] - max_val));
             values[i] = exp_value;
-            
+
             atomicAdd(temp_values[TempStorage::ONE], exp_value);
         }
         ENDFOR
@@ -140,7 +140,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token))
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token))
         const float sum_exp = temp_values[TempStorage::ONE];
         float delta = (OutputLayer::smooth - (values[i] / sum_exp));
         if (i == expected_output_token)

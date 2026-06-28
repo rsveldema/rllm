@@ -126,6 +126,7 @@ function(rllm_define_lib target_name)
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_BINARY_DIR}/generated
+        ${CMAKE_SOURCE_DIR}/kernel_compiler/runtime/include
     )
 
     # Warning flags common to all variants; optimization flags come from ARGN.

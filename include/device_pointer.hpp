@@ -25,7 +25,7 @@ public:
                        static_cast<VkDeviceSize>(m_bytes)))
     {
         assert(m_count > 0);
-        m_device->zero(rllm::vulkan_runtime::context());
+        m_device->zero(rllm::vulkan_runtime::get_queue(0));
     }
 
     DevicePointer(const DevicePointer&) = delete;
@@ -59,9 +59,14 @@ public:
 
     ~DevicePointer() = default;
 
+    void copy(const DevicePointer& other)
+    {
+        assert(this != &other);
+    }
+
     void zero()
     {
-        m_device->zero(rllm::vulkan_runtime::context());
+        m_device->zero(rllm::vulkan_runtime::get_queue(0));
     }
 
     size_t size() const { return m_count; }
@@ -73,7 +78,7 @@ public:
                                 std::string_view parameter = {})
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_device->write(rllm::vulkan_runtime::context(), src);
+        m_device->write(rllm::vulkan_runtime::get_queue(0), src);
         parallel::statistics.record_host_to_device_buffer_copy(site, parameter, m_bytes);
         ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), m_bytes);
     }
@@ -84,7 +89,7 @@ public:
                                   std::string_view = {}) const
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_device->read(rllm::vulkan_runtime::context(), dst);
+        m_device->read(rllm::vulkan_runtime::get_queue(0), dst);
         parallel::statistics.record_device_to_host_buffer_copy({}, {}, m_bytes);
         ComputeKernelRegistry::instance().recordDeviceToHost(m_last_device_writer, m_bytes);
     }
@@ -101,7 +106,7 @@ public:
         assert(element_count <= m_count - start_element);
         const auto offset = static_cast<VkDeviceSize>(start_element * sizeof(T));
         const auto bytes  = static_cast<VkDeviceSize>(element_count  * sizeof(T));
-        m_device->write(rllm::vulkan_runtime::context(), src, bytes, offset, offset);
+        m_device->write(rllm::vulkan_runtime::get_queue(0), src, bytes, offset, offset);
         parallel::statistics.record_host_to_device_buffer_copy(site, parameter, static_cast<size_t>(bytes));
         ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), static_cast<size_t>(bytes));
     }

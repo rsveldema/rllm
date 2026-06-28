@@ -13,6 +13,11 @@ namespace rllm::vulkan_runtime
     VulkanComputeContext& context();
     std::recursive_mutex& mutex();
 
+    /** Return the VulkanQueue at the given index.
+     *  Queue 0 is the main queue (used by the main thread).
+     *  Queues 1..N are used by parallel sections. */
+    VulkanQueue& get_queue(size_t index);
+
     template <typename T>
     VBaseDeviceBuffer& device_buffer(T& value)
     {

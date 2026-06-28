@@ -64,7 +64,8 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(t, enum_iterator1D<PositionIndex>(x.num_rows()), (x, y))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_1D_PARAM(queue, t, enum_iterator1D<PositionIndex>(x.num_rows()), (x, y))
         constexpr float eps = 1e-6f;
         constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
 
@@ -84,7 +85,7 @@ namespace rllm
 
     // dx += dL/dx  given dy = dL/dy and the original x (not the normalised y).
     // Per row:  dx_j += (1/rms) * (dy_j  -  y_j * mean(dy · y))
-    void TransformerBlock::rms_norm_backward(
+    void TransformerBlock::rms_norm_backward(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(dy, x, dx)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
@@ -92,7 +93,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(t, enum_iterator1D<PositionIndex>(x.num_rows()), (dy, x, dx))
+        OFFLOAD_PARFOR_1D_PARAM(queue, t, enum_iterator1D<PositionIndex>(x.num_rows()), (dy, x, dx))
         constexpr float eps = 1e-6f;
 
         float sq = 0.f;
@@ -101,7 +102,7 @@ namespace rllm
             sq += (value * value);
         }
 
-        constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);            
+        constexpr float fd = static_cast<float>(EmbeddingDimension::MAX);
         const float inv = (1.0f / std::sqrt(((sq / fd) + eps)));
 
         // dot = mean(dy · y) = (1/d) * sum_i dy[i] * x[i] * inv
@@ -134,7 +135,8 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(T), (x, T))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(T), (x, T))
         float max_val = x[i, PositionIndex::START];
         for (const auto j : enum_iterator1D<PositionIndex>(inc(PositionIndex::START), inc(i)))
             max_val = math::max(max_val, x[i, j]);
@@ -172,7 +174,8 @@ namespace rllm
     )
     {
         const auto gate_range = enum_iterator2D<PositionIndex, FFDimension>(seq);
-        OFFLOAD_PARFOR_2D_PARAM(t, f, gate_range, (gate_pre, up_pre, d_ffn_act, d_gate_pre, d_up_pre))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_2D_PARAM(queue, t, f, gate_range, (gate_pre, up_pre, d_ffn_act, d_gate_pre, d_up_pre))
         const float g = gate_pre[t, f];
         const float sg = (1.0f / (1.0f + std::exp(-g))); // sigma(g)
         const float silu = (g * sg);
@@ -204,7 +207,8 @@ namespace rllm
         const PositionIndex active_seq_len = seq_len;
         // END_OFFLOAD_PARAMETERS
 
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, active_seq_len, (attn_w_h, Q, K, active_seq_len))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, active_seq_len, (attn_w_h, Q, K, active_seq_len))
         {
             float dot = 0.f;
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
@@ -240,9 +244,10 @@ namespace rllm
 
         // OFFLOAD_PARAMETERS(attn_w_h)
         fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h = ws.attn_w[hi];
-        // END_OFFLOAD_PARAMETERS        
+        // END_OFFLOAD_PARAMETERS
 
-        OFFLOAD_PARFOR_1D_PARAM(i, softmax_grid, (attn_w_h))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, softmax_grid, (attn_w_h))
         {
             float max_val = attn_w_h[i, 0];
             for (int j = 1; j <= static_cast<int>(i); ++j)
@@ -272,7 +277,8 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, static_cast<PositionIndex>(active_seq_len), (attn_concat, attn_w_h, V, active_seq_len, hi))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, static_cast<PositionIndex>(active_seq_len), (attn_concat, attn_w_h, V, active_seq_len, hi))
         {
             const float w = attn_w_h[i, j];
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
@@ -305,7 +311,7 @@ namespace rllm
         compute_attention_values_for_heads(ws, seq_len);
     }
 
-    void TransformerBlock::forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, 
+    void TransformerBlock::forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len,
         ForwardWorkspace& workspace)
     {
         auto& ws = workspace;
@@ -355,7 +361,8 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (d_V, attn_w_h, d_attn_concat, seq_len, hStart))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (d_V, attn_w_h, d_attn_concat, seq_len, hStart))
         {
             const float w = attn_w_h[i, j];
             for (const auto d_head : enum_iterator1D<HeadDimension>())
@@ -392,7 +399,8 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (d_scores_h, d_attn_concat, V, seq_len, hi))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (d_scores_h, d_attn_concat, V, seq_len, hi))
         {
             float dot = 0.f;
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
@@ -428,7 +436,8 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, seq_len, (d_scores_h, d_raw_h, attn_w_h, seq_len))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (d_scores_h, d_raw_h, attn_w_h, seq_len))
         {
             float row_dot = 0.f;
             for (const auto k : enum_iterator1D<PositionIndex>(inc(i)))
@@ -456,11 +465,11 @@ namespace rllm
     void TransformerBlock::backward_accumulate_attention_dq_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
     {
         PARFOR_1D(hi, enum_iterator1D<HeadsIndex>())
-            backward_accumulate_attention_dq_for_head_hi(ws, fwd, hi);        
+            backward_accumulate_attention_dq_for_head_hi(ws, fwd, hi);
         ENDFOR
     }
 
-    void TransformerBlock::backward_accumulate_attention_dq_for_head_hi(BackwardWorkspace& ws, 
+    void TransformerBlock::backward_accumulate_attention_dq_for_head_hi(BackwardWorkspace& ws,
         const ForwardWorkspace& fwd,
         HeadsIndex hi)
     {
@@ -475,8 +484,9 @@ namespace rllm
         // d_Q and d_K are triangular reductions over j/i respectively.
         // Offload per output cell to avoid cross-thread accumulation races.
         const auto dq_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
 
-        OFFLOAD_PARFOR_2D_PARAM(i, d_head, dq_grid, (d_Q, d_raw_h, K, seq_len, hStart))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, d_head, dq_grid, (d_Q, d_raw_h, K, seq_len, hStart))
         {
             const int d = (hStart + int(d_head));
             const float head_scale = (1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX))));
@@ -497,10 +507,11 @@ namespace rllm
         PositionIndex seq_len = fwd.seq_len;
         const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
         // END_OFFLOAD_PARAMETERS
-        
+
 
         const auto dk_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
-        OFFLOAD_PARFOR_2D_PARAM(j, d_head, dk_grid, (d_K, d_raw_h, Q, seq_len, hStart))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_2D_PARAM(queue, j, d_head, dk_grid, (d_K, d_raw_h, Q, seq_len, hStart))
         {
             const int d = (hStart + int(d_head));
             float sum_k = 0.f;
@@ -535,6 +546,7 @@ namespace rllm
         workspace.reset(seq);
         auto* ws = &workspace;
         auto& fwd = fwd_workspace;
+        VulkanQueue& queue = vulkan_runtime::session().get_queue(0);
 
         // ── FFN backward ──────────────────────────────────────────────────────
         // h_out = h_mid + ffn_out  → d_h_mid += dout,  d_ffn_out = dout (same buffer)
@@ -557,7 +569,7 @@ namespace rllm
         matmul_AtB_acc_2_matrix(ws->d_gate_pre, ws->d_up_pre, fwd.h_norm_ff, ws->dW_gate, ws->dW_up, fwd.seq_len);
 
         // RMSNorm backward for FFN: d_h_mid += rms_bwd(d_h_norm_ff, h_mid)
-        rms_norm_backward(ws->d_h_norm_ff, fwd.h_mid, ws->d_h_mid);
+        rms_norm_backward(queue, ws->d_h_norm_ff, fwd.h_mid, ws->d_h_mid);
 
         // ── Attention backward ─────────────────────────────────────────────────
         // h_mid = h_in + attn_proj  → d_attn_proj = d_h_mid (passed through residual)
@@ -578,17 +590,24 @@ namespace rllm
 
         // ── d_h_in + weight updates ───────────────────────────────────────────
         // d_h_in (residual + RMSNorm backward) and all seven weight updates are
-        // fully independent; run them all concurrently.
-        PARSECTIONS_BEGIN
-        din = ws->d_h_mid;
-        rms_norm_backward(ws->d_h_norm_attn, fwd.h_in, din);
-        PARSECTION
-        sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate);
-        PARSECTION
-        sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate);
-        PARSECTION
-        sgd_update_Wdown_x_Vdown_dWdown(W_down, V_down, ws->dW_down, learning_rate);
-        PARSECTIONS_END
+        // fully independent; run them all concurrently with separate VulkanQueues.
+        {
+            auto& queue1 = rllm::vulkan_runtime::get_queue(1);
+            auto& queue2 = rllm::vulkan_runtime::get_queue(2);
+            auto& queue3 = rllm::vulkan_runtime::get_queue(3);
+            auto& queue4 = rllm::vulkan_runtime::get_queue(3);
+
+            // PARSECTIONS_BEGIN(queue1)
+            din.copy(queue1, ws->d_h_mid);
+            rms_norm_backward(queue1, ws->d_h_norm_attn, fwd.h_in, din);
+            // PARSECTION(queue2)
+            sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue2, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate);
+            // PARSECTION(queue3)
+            sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue3, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate);
+            // PARSECTION(queue4)
+            sgd_update_Wdown_x_Vdown_dWdown(queue4, W_down, V_down, ws->dW_down, learning_rate);
+            // PARSECTIONS_END
+        }
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ namespace rllm
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(len) * sizeof(T));
             if (bytes > 0)
                 this->m_data.device_buffer().copy_from(
-                    rllm::vulkan_runtime::context(),
+                    rllm::vulkan_runtime::get_queue(0),
                     other.m_data.device_buffer(),
                     bytes);
         }
@@ -42,7 +42,7 @@ namespace rllm
                 const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(len) * sizeof(T));
                 if (bytes > 0)
                     this->m_data.device_buffer().copy_from(
-                        rllm::vulkan_runtime::context(),
+                        rllm::vulkan_runtime::get_queue(0),
                         other.m_data.device_buffer(),
                         bytes);
             }

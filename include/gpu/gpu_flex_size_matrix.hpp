@@ -58,7 +58,7 @@ namespace rllm
             m_rows = src.num_rows(); m_cols = src.num_cols();
             m_capacity_elements = std::max<size_t>(1, static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols));
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
-            this->m_data.device_buffer().write(rllm::vulkan_runtime::context(),
+            this->m_data.device_buffer().write(rllm::vulkan_runtime::get_queue(0),
                 const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), bytes);
         }
 
@@ -67,7 +67,7 @@ namespace rllm
         {
             dst.set_size(m_rows, m_cols);
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
-            this->m_data.device_buffer().read(rllm::vulkan_runtime::context(),
+            this->m_data.device_buffer().read(rllm::vulkan_runtime::get_queue(0),
                 dst.vk_host_buffer(), bytes);
         }
 

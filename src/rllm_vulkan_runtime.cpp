@@ -49,4 +49,10 @@ namespace rllm::vulkan_runtime
     {
         return g_mutex;
     }
+
+    VulkanQueue& get_queue(size_t index)
+    {
+        ensure_initialized();
+        return session().get_queue(index);
+    }
 }

@@ -226,12 +226,12 @@ namespace rllm
 
 
         // Test helper: expose RMSNorm backward for correctness tests.
-        static void rms_norm_backward_for_test(
+        static void rms_norm_backward_for_test(VulkanQueue& queue,
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx)
         {
-            rms_norm_backward(dy, x, dx);
+            rms_norm_backward(queue, dy, x, dx);
         }
 
     // Serialization helpers need access to private weight matrices.
@@ -255,7 +255,7 @@ namespace rllm
         static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y);
 
         // RMSNorm backward: dx += ∂L/∂x  given dy = ∂L/∂y and the original x
-        static void rms_norm_backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx);
+        static void rms_norm_backward(VulkanQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx);
 
         // In-place causal softmax over the active [T × T] block of x.
         static void causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, PositionIndex T);
@@ -272,7 +272,7 @@ namespace rllm
 
         void forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void compute_attention_scores_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
-        void backward_accumulate_attention_dq_for_head_hi(BackwardWorkspace& ws, 
+        void backward_accumulate_attention_dq_for_head_hi(BackwardWorkspace& ws,
                 const ForwardWorkspace& fwd,
                 HeadsIndex hi);
         void apply_causal_softmax_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);

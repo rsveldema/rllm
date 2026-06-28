@@ -16,7 +16,7 @@ namespace rllm
         fixed_size_vector<float, EmbeddingDimension>& dst
     );
 
-    void sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(
+    void sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr)
         fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W1,
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel1,
@@ -34,7 +34,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     );
 
-    void sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(
+    void sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, lr)
         fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& W1,
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>& vel1,
@@ -46,7 +46,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     );
 
-    void sgd_update_Wdown_x_Vdown_dWdown(
+    void sgd_update_Wdown_x_Vdown_dWdown(VulkanQueue& queue,
         fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& W,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& vel,
         const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& grad,

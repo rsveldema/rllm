@@ -45,7 +45,7 @@ namespace rllm
                 m_rows = other.m_rows;
                 m_capacity_rows = other.m_capacity_rows;
                 const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
-                this->m_data.device_buffer().copy_from(rllm::vulkan_runtime::context(),
+                this->m_data.device_buffer().copy_from(rllm::vulkan_runtime::get_queue(0),
                     const_cast<VBaseDeviceBuffer&>(other.m_data.device_buffer()), bytes);
             }
             return *this;
@@ -69,7 +69,7 @@ namespace rllm
             m_rows = src.num_rows();
             m_capacity_rows = std::max<size_t>(1, static_cast<size_t>(m_rows));
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
-            this->m_data.device_buffer().write(rllm::vulkan_runtime::context(),
+            this->m_data.device_buffer().write(rllm::vulkan_runtime::get_queue(0),
                 const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), bytes);
         }
 
@@ -78,7 +78,7 @@ namespace rllm
         {
             dst.set_rows(m_rows);
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
-            this->m_data.device_buffer().read(rllm::vulkan_runtime::context(),
+            this->m_data.device_buffer().read(rllm::vulkan_runtime::get_queue(0),
                 dst.vk_host_buffer(), bytes);
         }
 

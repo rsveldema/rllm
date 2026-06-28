@@ -20,8 +20,9 @@ namespace rllm
     )
     {
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(tokens.size());
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
 
-        OFFLOAD_PARFOR_2D_PARAM(pos, di, grid, (tokens, embeddings, h, model_dim))
+        OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, embeddings, h, model_dim))
         const int tok = static_cast<int>(tokens[pos]);
         const int di_int = static_cast<int>(di);
         const float emb_val = embeddings[tok, di];

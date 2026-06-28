@@ -7,10 +7,10 @@
 
 namespace parallel
 {
-    
+
 #if defined(RLLM_ENABLE_STATISTICS)
     thread_local DispatchParams g_vulkan_dispatch_params{};
-    
+
     void set_vulkan_dispatch_params(std::string_view site, std::string_view param)
     {
         g_vulkan_dispatch_params.site = site;
@@ -37,7 +37,8 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(length), (dst, value))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(length), (dst, value))
         dst[static_cast<size_t>(i)] = value;
         ENDFOR
     }
@@ -50,7 +51,8 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator1D<PositionIndex>(length), (dst, value))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(length), (dst, value))
         dst[static_cast<size_t>(i)] = value;
         ENDFOR
     }
@@ -62,8 +64,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(dst.num_rows());
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (dst, value))
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (dst, value))
         dst[r, c] = value;
         ENDFOR
     }
@@ -75,8 +78,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, PositionIndex>(dst.num_rows(), dst.num_cols());
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (dst, value))
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (dst, value))
         dst[r, c] = value;
         ENDFOR
     }
@@ -89,12 +93,13 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator1D<EmbeddingDimension>(), (src, row, dst))
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (src, row, dst))
         dst[d] = src[row, d];
         ENDFOR
     }
 
-    void sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(
+    void sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr)
         fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W1,
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel1,
@@ -113,7 +118,7 @@ namespace rllm
     )
     {
         const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr))
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr))
         const float g1 = math::clamp(grad1[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
         vel1[r, c] = math::clamp(
             ((TransformerBlock::MOMENTUM_BETA * vel1[r, c]) + (lr * g1)),
@@ -148,7 +153,7 @@ namespace rllm
         ENDFOR
     }
 
-    void sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(
+    void sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, lr)
         fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& W1,
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>& vel1,
@@ -161,7 +166,7 @@ namespace rllm
     )
     {
         const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W1, vel1, grad1, W2, vel2, grad2, lr))
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W1, vel1, grad1, W2, vel2, grad2, lr))
         const float g1 = math::clamp(grad1[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
         vel1[r, c] = math::clamp(
             ((TransformerBlock::MOMENTUM_BETA * vel1[r, c]) + (lr * g1)),
@@ -180,7 +185,7 @@ namespace rllm
         ENDFOR
     }
 
-    void sgd_update_Wdown_x_Vdown_dWdown(
+    void sgd_update_Wdown_x_Vdown_dWdown(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(W, vel, grad, lr)
         fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& W,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& vel,
@@ -190,7 +195,7 @@ namespace rllm
     )
     {
         const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W, vel, grad, lr))
         const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
         vel[r, c] = math::clamp(
             ((TransformerBlock::MOMENTUM_BETA * vel[r, c]) + (lr * g)),
@@ -220,9 +225,10 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const PositionIndex m = A.num_rows();
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B1, C1, B2, C2, B3, C3))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B1, C1, B2, C2, B3, C3))
             float sum1 = 0.f;
             float sum2 = 0.f;
             float sum3 = 0.f;
@@ -261,9 +267,10 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const PositionIndex m = A.num_rows();
         const auto grid = enum_iterator2D<PositionIndex, FFDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B1, C1, B2, C2))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B1, C1, B2, C2))
             float sum1 = 0.f;
             float sum2 = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
@@ -291,9 +298,10 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const PositionIndex m = A.num_rows();
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
             float sum = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
             {
@@ -314,9 +322,10 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const PositionIndex m = A.num_rows();
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
             float sum = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(FFDimension::MAX); ++l_idx)
             {
@@ -337,9 +346,10 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const PositionIndex m = A.num_rows();
         const auto grid = enum_iterator2D<PositionIndex, FFDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
             float sum = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
             {
@@ -360,9 +370,10 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const PositionIndex m = A.num_rows();
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
             float sum = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
             {
@@ -383,9 +394,10 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const PositionIndex m = A.num_rows();
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
             float sum = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(FFDimension::MAX); ++l_idx)
             {
@@ -410,9 +422,10 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const PositionIndex m = A1.num_rows();
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A1, B1, A2, B2, A3, B3, C))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A1, B1, A2, B2, A3, B3, C))
             float sum1 = 0.f;
             float sum2 = 0.f;
             float sum3 = 0.f;
@@ -445,8 +458,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C, k_count))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C, k_count))
             float sum = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(k_count); ++l_idx)
             {
@@ -470,8 +484,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A1, A2, B, C1, C2, k_count))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A1, A2, B, C1, C2, k_count))
             float sum1 = 0.f;
             float sum2 = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(k_count); ++l_idx)
@@ -500,8 +515,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B, C, k_count))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C, k_count))
             float sum = 0.f;
             for (size_t l_idx = 0; l_idx < static_cast<size_t>(k_count); ++l_idx)
             {
@@ -527,8 +543,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A1, A2, A3, B, C1, C2, C3, k_count))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A1, A2, A3, B, C1, C2, C3, k_count))
             float sum1 = 0.f;
             float sum2 = 0.f;
             float sum3 = 0.f;
@@ -562,8 +579,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(lhs.num_rows());
-        OFFLOAD_PARFOR_2D_PARAM(t, d, grid, (lhs, rhs, dst))
+        OFFLOAD_PARFOR_2D_PARAM(queue, t, d, grid, (lhs, rhs, dst))
         dst[t, d] = (lhs[t, d] + rhs[t, d]);
         ENDFOR
     }
@@ -577,8 +595,9 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, FFDimension>(seq_len);
-        OFFLOAD_PARFOR_2D_PARAM(t, f, grid, (gate_pre, up_pre, ffn_act))
+        OFFLOAD_PARFOR_2D_PARAM(queue, t, f, grid, (gate_pre, up_pre, ffn_act))
         const float g = gate_pre[t, f];
         const float silu = (g / (1.0f + std::exp(-g)));
         ffn_act[t, f] = (silu * up_pre[t, f]);

@@ -78,7 +78,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        OFFLOAD_PARFOR_1D_PARAM(d, enum_iterator1D<EmbeddingDimension>(), (dh_last, dh, last_pos))
+        OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (dh_last, dh, last_pos))
         dh[last_pos, d] = dh_last[d];
         ENDFOR
     }
@@ -241,7 +241,7 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dh;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din;
         BackwardWorkspace transformer_block;
-        
+
         explicit BackwardPropWorkspace(PositionIndex seq_len)
             : dh(seq_len)
             , din(seq_len)
@@ -288,7 +288,7 @@ namespace rllm
         assert(m_seq_len > PositionIndex::START);
 
         m_backward_workspace->reset(m_seq_len);
-        
+
         static constexpr float BASE_LEARNING_RATE = 0.003f;
         const float learning_rate =
             BASE_LEARNING_RATE / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
@@ -361,9 +361,9 @@ namespace rllm
     {
         if (evaluation_lines.empty())
             return std::numeric_limits<float>::quiet_NaN();
- 
+
         Score score;
- 
+
         double total_loss = 0.0;
         for (const auto& example : evaluation_lines)
         {
@@ -372,7 +372,7 @@ namespace rllm
             const int num_valid = std::min(seq_len - 1, static_cast<int>(MultiTokenPredictionIndex::MAX));
             const int input_len = seq_len - num_valid;
 
-            example.sub_array(get_last_input(), 
+            example.sub_array(get_last_input(),
                         static_cast<PositionIndex>(input_len));
 
             propagate_forward();
@@ -936,7 +936,7 @@ namespace rllm
         const auto full_string_opt = m_corpus.get_line(train_output);
         assert(full_string_opt.has_value());
         const auto& full_string = *full_string_opt;
- 
+
         get_last_input() = train_input; // set the input to the train input for tracing
 
 

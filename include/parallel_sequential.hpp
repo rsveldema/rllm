@@ -35,18 +35,16 @@ namespace parallel {
             const auto v2 = static_cast<decltype(N)>(_utri_j_);
 #define ENDFOR }
 
-#define PARSECTIONS_BEGIN  {
-#define PARSECTION
-#define PARSECTIONS_END    }
 
 #define PARALLEL_DUMP_STATS() ((void)0)
 
 // Top-level (non-nested) parallel loops that are candidates for future GPU /
 // accelerator offload. Currently they expand identically to the CPU PARFOR*
 // macros; the distinct name marks the intent without changing behaviour.
-#define OFFLOAD_PARFOR_1D_PARAM(v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
-#define OFFLOAD_PARFOR_2D_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
-#define OFFLOAD_PARFOR_3D_PARAM(v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
-#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(v1, v2, v3, N1, N2, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
-#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_TRIANGULAR(v1, v2, N)
-#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)
+// The first argument is a VulkanQueue reference (ignored by CPU backends).
+#define OFFLOAD_PARFOR_1D_PARAM(queue, v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
+#define OFFLOAD_PARFOR_2D_PARAM(queue, v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_3D_PARAM(queue, v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(queue, v1, v2, v3, N1, N2, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
+#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_TRIANGULAR(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(queue, v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)

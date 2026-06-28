@@ -17,6 +17,11 @@ namespace rllm
             m_data.zero();
         }
 
+        void copy(const offloadable_data<T>& other)
+        {
+            m_data = other.m_data;
+        }
+
         VBaseDeviceBuffer& device_buffer() const
         {
             return m_data.device_buffer();
@@ -46,9 +51,6 @@ namespace rllm
         {
             m_data.copy_from_offload_buffer(dst);
         }
-
-        /** No-op kept for compatibility; use copy_to_cpu(cpu_T&) for D2H. */
-        void sync_from_device() {}
 
       protected:
         DevicePointer<T> m_data;

@@ -37,7 +37,7 @@ def load_json(path: Path) -> dict | list | str | int | float | bool | None:
 def save_json(path: Path, data: dict | list | str | int | float | bool | None) -> None:
     """Write data as JSON to a file."""
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    
+
 @dataclass
 class LoopContext:
     indent: str
@@ -125,35 +125,35 @@ def extract_shared_variables_from_body_lines(body_lines: list[str]) -> tuple[dic
     shared_vars: dict[str, str] = {}
     filtered: list[str] = []
     i = 0
-    
+
     # Regex to match: // PARFOR_SHARED_VARIABLES(var_name1, var_name2, ...)
     # Regex to extract type and variable name from declaration: float max_val = -std::numeric_limits<float>::infinity();
     var_decl_re = re.compile(
         r"^\s*(?P<type>(?:const\s+)?(?:[a-zA-Z_]\w*(?:::[a-zA-Z_]\w*)*\s*)+)\s+(?P<name>[a-zA-Z_]\w*)\s*(?:=|;|;)"
     )
-    
+
     while i < len(body_lines):
         line = body_lines[i]
         match = _SHARED_VARIABLES_START_RE.match(line)
-        
+
         if match:
             # Found start of shared variables block
             var_names_str = match.group(1)
             var_names = [name.strip() for name in var_names_str.split(",")]
-            
+
             # Skip the PARFOR_SHARED_VARIABLES line
             i += 1
-            
+
             # Collect variable declarations until ENDPARFOR_SHARED_VARIABLES
             while i < len(body_lines):
                 decl_line = body_lines[i]
                 end_match = _SHARED_VARIABLES_END_RE.match(decl_line)
-                
+
                 if end_match:
                     # Skip the ENDPARFOR_SHARED_VARIABLES line
                     i += 1
                     break
-                
+
                 # Try to extract type from the declaration
                 decl_match = var_decl_re.match(decl_line)
                 if decl_match:
@@ -161,12 +161,12 @@ def extract_shared_variables_from_body_lines(body_lines: list[str]) -> tuple[dic
                     var_type = decl_match.group("type").strip()
                     if var_name in var_names:
                         shared_vars[var_name] = var_type
-                
+
                 i += 1
         else:
             filtered.append(line)
             i += 1
-    
+
     return shared_vars, filtered
 
 
@@ -316,23 +316,23 @@ def apply_symbol_values(text: str, symbol_values: dict[str, str] | None) -> str:
 
 def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) -> str:
     if not symbol_values:
-        return text    
+        return text
 
     out = text
 
-    out = out.replace("enum_iterator1D<TokenID>(", 
+    out = out.replace("enum_iterator1D<TokenID>(",
                       "limit<TokenID::MAX>(")
-    out = out.replace("enum_iterator1D<TempStorage>(", 
+    out = out.replace("enum_iterator1D<TempStorage>(",
                       "limit<TempStorage::MAX>(")
-    out = out.replace("enum_iterator1D<PositionIndex>(", 
+    out = out.replace("enum_iterator1D<PositionIndex>(",
                       "limit<PositionIndex::MAX>(")
-    out = out.replace("enum_iterator1D<EmbeddingDimension>(", 
+    out = out.replace("enum_iterator1D<EmbeddingDimension>(",
                       "limit<EmbeddingDimension::MAX>(")
-    out = out.replace("enum_iterator1D<HeadsIndex>(", 
+    out = out.replace("enum_iterator1D<HeadsIndex>(",
                       "limit<HeadsIndex::MAX>(")
     out = out.replace("enum_iterator1D<HeadDimension>(",
                       "limit<HeadDimension::MAX>(")
-    out = out.replace("InputLine", 
+    out = out.replace("InputLine",
                       "fixed_size_vector<TokenID, PositionIndex>")
     out = out.replace("PositionIndex::START", "0")
     out = out.replace("EmbeddingDimension::START", "0")
@@ -352,9 +352,9 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace(", MultiTokenPredictionIndex", ", MultiTokenPredictionIndex::MAX")
     out = out.replace(", NeuronConnectionIndex", ", NeuronConnectionIndex::MAX")
     out = out.replace(", ConflictIndex", ", ConflictIndex::MAX")
-    
 
-    
+
+
 
     # MAX suffix fallback: use \b word boundaries to avoid matching inside <...> templates
     if out.find("::MAX") < 0 and (out.find("_matrix") >= 0 or out.find("_vector") >= 0):
@@ -441,7 +441,7 @@ def _strip_static_casts(text: str) -> str:
 
 def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
     assert enum_value_tool
-        
+
     cmd = [enum_value_tool, "--print-json"]
     proc = subprocess.run(cmd, text=True, capture_output=True)
     if proc.returncode != 0:
@@ -827,12 +827,12 @@ def transform_source(
                 merged_shared_vars.update(shared_vars)
                 ctx.shared_vars = merged_shared_vars
             ctx.body_lines = filtered_body
-            
+
             ctx.body_lines = [apply_symbol_values(body_line, symbol_values) for body_line in ctx.body_lines]
             ctx.body_lines = rewrite_enum_iterator_loops(ctx.body_lines, symbol_values)
             # Set raw body lines before applying symbol substitution
             ctx.raw_body_lines = list(active_raw_body_lines)
-            
+
             # Write PARFOR dump files to build directory if requested
             if parfor_dump_dir is not None and ctx.parfor_invocation is not None:
                 _write_parfor_dump(ctx, parfor_dump_dir, symbol_values)
@@ -849,6 +849,7 @@ def transform_source(
 
         macro, args, indent = parsed
         pending_parfor_invocation = line.strip()
+
         if macro in OFFLOAD_1D_PARAM_MACROS and len(args) >= 3:
             extra_param_names = parse_extra_param_names(", ".join(args[2:]))
             extra_param_types = {
@@ -865,10 +866,10 @@ def transform_source(
                     lineno=lineno,
                     is_2d=False,
                     is_3d=False,
-                    vars=[args[0]],
-                    range_expr=apply_symbol_values(args[1], symbol_values),
+                    vars=[args[1]],
+                    range_expr=apply_symbol_values(args[2], symbol_values),
                     kernel_guard_expr=None,
-                    extra_params=", ".join(args[2:]),
+                    extra_params=", ".join(args[3:]),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
                     emit_named_kernel=emit_named_kernels,
@@ -892,8 +893,8 @@ def transform_source(
                     lineno=lineno,
                     is_2d=True,
                     is_3d=False,
-                    vars=[args[0], args[1]],
-                    range_expr=apply_symbol_values(", ".join(args[2:]), symbol_values),
+                    vars=[args[1], args[2]],
+                    range_expr=apply_symbol_values(", ".join(args[3:]), symbol_values),
                     kernel_guard_expr=None,
                     extra_params=None,
                     extra_param_types=None,
@@ -925,10 +926,10 @@ def transform_source(
                     lineno=lineno,
                     is_2d=True,
                     is_3d=False,
-                    vars=[args[0], args[1]],
-                    range_expr=apply_symbol_values(args[2], symbol_values),
+                    vars=[args[1], args[2]],
+                    range_expr=apply_symbol_values(args[3], symbol_values),
                     kernel_guard_expr=None,
-                    extra_params=", ".join(args[3:]),
+                    extra_params=", ".join(args[4:]),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
                     emit_named_kernel=emit_named_kernels,
@@ -958,10 +959,10 @@ def transform_source(
                     lineno=lineno,
                     is_2d=False,
                     is_3d=True,
-                    vars=[args[0], args[1], args[2]],
-                    range_expr=apply_symbol_values(args[3], symbol_values),
+                    vars=[args[1], args[2], args[3]],
+                    range_expr=apply_symbol_values(args[4], symbol_values),
                     kernel_guard_expr=None,
-                    extra_params=", ".join(args[4:]),
+                    extra_params=", ".join(args[5:]),
                     extra_param_types=extra_param_types,
                     offload_param_lines=list(active_offload_param_lines),
                     emit_named_kernel=emit_named_kernels,
@@ -977,58 +978,11 @@ def transform_source(
             continue
 
         if macro in OFFLOAD_3D_TRIANGULAR_PARAM_MACROS and len(args) >= 6:
-            extra_param_names = parse_extra_param_names(", ".join(args[5:]))
-            head_bound_expr = apply_symbol_values(args[3], symbol_values)
-            seq_bound_expr = apply_symbol_values(args[4], symbol_values)
-            head_bound_param_name = None if "::" in args[3] else parse_bound_param_name(args[3])
-            seq_bound_param_name = None if "::" in args[4] else parse_bound_param_name(args[4])
-            for bound_param_name in (head_bound_param_name, seq_bound_param_name):
-                if bound_param_name and bound_param_name not in extra_param_names:
-                    extra_param_names.append(bound_param_name)
-            extra_param_types = {
-                name: active_offload_param_types[name]
-                for name in extra_param_names
-                if name in active_offload_param_types
-            }
-            guard_terms = [f"{args[2]} > {args[1]}"]
-            if head_bound_param_name:
-                guard_terms.append(f"{args[0]} >= int({head_bound_param_name})")
-            if seq_bound_param_name:
-                guard_terms.append(f"{args[1]} >= int({seq_bound_param_name})")
-                guard_terms.append(f"{args[2]} >= int({seq_bound_param_name})")
-            loop_stack.append(
-                LoopContext(
-                    indent=indent,
-                    backend_namespace=backend_namespace,
-                    rel_path=rel_path,
-                    lineno=lineno,
-                    is_2d=False,
-                    is_3d=True,
-                    vars=[args[0], args[1], args[2]],
-                    range_expr=(
-                        f"rllm::enum_iterator3D<decltype({head_bound_expr}), "
-                        f"decltype({seq_bound_expr}), decltype({seq_bound_expr})>"
-                        f"({head_bound_expr}, {seq_bound_expr}, {seq_bound_expr})"
-                    ),
-                    kernel_guard_expr=" || ".join(guard_terms),
-                    extra_params=", ".join(extra_param_names),
-                    extra_param_types=extra_param_types,
-                    offload_param_lines=list(active_offload_param_lines),
-                    emit_named_kernel=emit_named_kernels,
-                    body_lines=[],
-                    raw_body_lines=list(active_raw_body_lines),
-                    parfor_invocation=pending_parfor_invocation,
-                    shared_vars=dict(pending_shared_vars) if pending_shared_vars else None,
-                )
-            )
-            active_raw_body_lines.clear()
-            pending_shared_vars = None
-            changed = True
-            continue
+            assert False, "obsolete"
 
         if macro in OFFLOAD_2D_TRIANGULAR_PARAM_MACROS and len(args) >= 4:
-            extra_param_names = parse_extra_param_names(", ".join(args[3:]))
-            bound_param_name = parse_bound_param_name(args[2])
+            extra_param_names = parse_extra_param_names(", ".join(args[4:]))
+            bound_param_name = parse_bound_param_name(args[3])
             if bound_param_name and bound_param_name not in extra_param_names:
                 extra_param_names.append(bound_param_name)
             extra_param_types = {
@@ -1036,12 +990,12 @@ def transform_source(
                 for name in extra_param_names
                 if name in active_offload_param_types
             }
-            bound_expr = apply_symbol_values(args[2], symbol_values)
-            guard_expr = f"{args[1]} > {args[0]}"
+            bound_expr = apply_symbol_values(args[3], symbol_values)
+            guard_expr = f"{args[1]} > {args[1]}"
             if bound_param_name:
                 guard_expr = (
-                    f"{args[0]} >= int({bound_param_name}) || "
                     f"{args[1]} >= int({bound_param_name}) || "
+                    f"{args[2]} >= int({bound_param_name}) || "
                     f"{guard_expr}"
                 )
             loop_stack.append(
@@ -1052,7 +1006,7 @@ def transform_source(
                     lineno=lineno,
                     is_2d=True,
                     is_3d=False,
-                    vars=[args[0], args[1]],
+                    vars=[args[1], args[2]],
                     range_expr=f"rllm::enum_iterator2D<decltype({bound_expr}), decltype({bound_expr})>({bound_expr})",
                     kernel_guard_expr=guard_expr,
                     extra_params=", ".join(extra_param_names),
@@ -1071,8 +1025,8 @@ def transform_source(
             continue
 
         if macro in OFFLOAD_2D_UPPER_TRIANGULAR_PARAM_MACROS and len(args) >= 4:
-            extra_param_names = parse_extra_param_names(", ".join(args[3:]))
-            bound_param_name = parse_bound_param_name(args[2])
+            extra_param_names = parse_extra_param_names(", ".join(args[4:]))
+            bound_param_name = parse_bound_param_name(args[3])
             if bound_param_name and bound_param_name not in extra_param_names:
                 extra_param_names.append(bound_param_name)
             extra_param_types = {
@@ -1080,12 +1034,12 @@ def transform_source(
                 for name in extra_param_names
                 if name in active_offload_param_types
             }
-            bound_expr = apply_symbol_values(args[2], symbol_values)
-            guard_expr = f"{args[0]} > {args[1]}"
+            bound_expr = apply_symbol_values(args[3], symbol_values)
+            guard_expr = f"{args[1]} > {args[2]}"
             if bound_param_name:
                 guard_expr = (
-                    f"{args[0]} >= int({bound_param_name}) || "
                     f"{args[1]} >= int({bound_param_name}) || "
+                    f"{args[2]} >= int({bound_param_name}) || "
                     f"{guard_expr}"
                 )
             loop_stack.append(
@@ -1096,7 +1050,7 @@ def transform_source(
                     lineno=lineno,
                     is_2d=True,
                     is_3d=False,
-                    vars=[args[0], args[1]],
+                    vars=[args[1], args[2]],
                     range_expr=f"rllm::enum_iterator2D<decltype({bound_expr}), decltype({bound_expr})>({bound_expr})",
                     kernel_guard_expr=guard_expr,
                     extra_params=", ".join(extra_param_names),
@@ -1162,27 +1116,27 @@ def transform_tree(
 
 
 
-def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path, 
+def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
         symbol_values: dict[str, str] | None = None) -> None:
     """Write a PARFOR block and its OFFLOAD_PARAMETERS to a separate file."""
     dump_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Build filename: offload_parfor_<basename>_<lineno>.cc
     src_basename = ctx.rel_path.rsplit("/", 1)[-1] if "/" in ctx.rel_path else ctx.rel_path
     name_no_ext = src_basename.rsplit(".", 1)[0] if "." in src_basename else src_basename
     filename = f"offload_parfor_{name_no_ext}_{ctx.lineno}.kernel"
     dump_path = dump_dir / filename
-    
+
     lines: list[str] = []
     lines.append(f"PROGRAM(\"{ctx.rel_path}:{ctx.lineno}\")")
     lines.append("")
-    
+
     # Write the original PARFOR invocation line
     if ctx.parfor_invocation:
         #print(f"CHECK: {ctx.parfor_invocation}")
         lines.append(hard_apply_symbol_values(ctx.parfor_invocation, symbol_values))
         lines.append("")
-    
+
     # Write the OFFLOAD_PARAMETERS block content
     lines.append("PARAMETERS")
     if ctx.offload_param_lines:
@@ -1194,21 +1148,25 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
             if lines[-1].endswith(","):
                 lines[-1] = lines[-1][:-2]
         lines.append("")
-    
+
     # Write the body lines
     lines.append("BEGIN")
     # Initialize PARFOR loop variables from gl_GlobalInvocationID
-    _DIM_NAMES = ("x", "y", "z")
     _init_lines_added: list[str] = []
+    _DIM_NAMES = ("x", "y", "z")
     if ctx.vars:
-        for _idx, _var_name in enumerate(ctx.vars):
-            _dim = _DIM_NAMES[min(_idx, 2)]
+        _idx = 0
+        for _var_name in ctx.vars:
+            if 'queue' in _var_name:
+                continue
+            _dim = _DIM_NAMES[_idx]
             lines.append(f'const int {_var_name} = int(gl_GlobalInvocationID.{_dim});')
             lines.append(f"if ({_var_name} >= rllm_bound_{_dim}) return;")
             _init_lines_added.extend([
                 f'const int {_var_name} = int(gl_GlobalInvocationID.{_dim});',
                 f"if ({_var_name} >= rllm_bound_{_dim}) return;",
             ])
+            _idx += 1
 
     # Remove leading init-line duplicates from raw_body_lines to avoid redefinition.
     # Some .kernel files already contain these lines in the body (e.g. from the original
@@ -1259,7 +1217,7 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
     setattr(ctx, '_constexpr_defines_set', True)
 
     lines.append("END_PROGRAM")
-    
+
     dump_path.write_text("\n".join(lines), encoding="utf-8")
 
 
