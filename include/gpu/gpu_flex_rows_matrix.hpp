@@ -55,6 +55,16 @@ namespace rllm
 
         ~gpu_flex_rows_matrix() = default;
 
+        void copy_from(VulkanQueue& queue, const gpu_flex_rows_matrix& other)
+        {
+            ensure_capacity(other.m_rows);
+            m_rows = other.m_rows;
+            m_capacity_rows = other.m_capacity_rows;
+            const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
+            this->m_data.device_buffer().copy_from(queue,
+                const_cast<VBaseDeviceBuffer&>(other.m_data.device_buffer()), bytes);
+        }
+
         void set_rows(X rows)
         {
             assert(static_cast<size_t>(rows) <= ROWS);

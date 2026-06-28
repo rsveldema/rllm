@@ -595,10 +595,10 @@ namespace rllm
             auto& queue1 = rllm::vulkan_runtime::get_queue(1);
             auto& queue2 = rllm::vulkan_runtime::get_queue(2);
             auto& queue3 = rllm::vulkan_runtime::get_queue(3);
-            auto& queue4 = rllm::vulkan_runtime::get_queue(3);
+            auto& queue4 = rllm::vulkan_runtime::get_queue(4);
 
             // PARSECTIONS_BEGIN(queue1)
-            din.copy(queue1, ws->d_h_mid);
+            din.copy_from(queue1, ws->d_h_mid);
             rms_norm_backward(queue1, ws->d_h_norm_attn, fwd.h_in, din);
             // PARSECTION(queue2)
             sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue2, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate);
@@ -607,6 +607,11 @@ namespace rllm
             // PARSECTION(queue4)
             sgd_update_Wdown_x_Vdown_dWdown(queue4, W_down, V_down, ws->dW_down, learning_rate);
             // PARSECTIONS_END
+
+            queue1.wait("TransformerBlock backward queue1 wait idle");
+            queue2.wait("TransformerBlock backward queue2 wait idle");
+            queue3.wait("TransformerBlock backward queue3 wait idle");
+            queue4.wait("TransformerBlock backward queue4 wait idle");
         }
     }
 

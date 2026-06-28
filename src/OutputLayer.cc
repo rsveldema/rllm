@@ -40,6 +40,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, v, enum_iterator1D<TokenID>(), (h_last, W, inputs))
         float sum = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>())
@@ -56,6 +57,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (delta, dh_last, W))
         float sum = dh_last[d];
         for (const auto v : enum_iterator1D<TokenID>())
@@ -74,6 +76,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, W, V, learning_rate))
         const float g = math::clamp((delta[v] * h_last[d]), -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
@@ -90,6 +93,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TempStorage>(), (temp_values))
         temp_values[i] = (i == TempStorage::START) ? -3.402823e38f : 0.0f;
         ENDFOR
@@ -105,6 +109,7 @@ namespace rllm
         // PARFOR_SHARED_VARIABLES(workgroup_max)
         // ENDPARFOR_SHARED_VARIABLES
 
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (inputs, temp_values))
             atomicMax(temp_values[TempStorage::ZERO], inputs[i]);
         ENDFOR
@@ -121,6 +126,7 @@ namespace rllm
         // PARFOR_SHARED_VARIABLES()
         // ENDPARFOR_SHARED_VARIABLES
 
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (inputs, values, temp_values))
         {
             const float max_val = temp_values[TempStorage::ZERO];
@@ -140,6 +146,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token))
         const float sum_exp = temp_values[TempStorage::ONE];
         float delta = (OutputLayer::smooth - (values[i] / sum_exp));

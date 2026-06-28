@@ -78,6 +78,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (dh_last, dh, last_pos))
         dh[last_pos, d] = dh_last[d];
         ENDFOR

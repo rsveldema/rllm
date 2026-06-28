@@ -59,9 +59,12 @@ public:
 
     ~DevicePointer() = default;
 
-    void copy(const DevicePointer& other)
+    void copy_from(VulkanQueue& queue, const DevicePointer& other)
     {
         assert(this != &other);
+        // TODO: implement the copy operation using the specified queue
+        assert(other.m_device);
+        m_device->copy_from(queue, *other.m_device);
     }
 
     void zero()

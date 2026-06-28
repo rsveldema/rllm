@@ -234,6 +234,14 @@ namespace rllm
             rms_norm_backward(queue, dy, x, dx);
         }
 
+        static void rms_norm_backward_for_test(
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx)
+        {
+            rms_norm_backward_for_test(rllm::vulkan_runtime::get_queue(0), dy, x, dx);
+        }
+
     // Serialization helpers need access to private weight matrices.
     friend class NeuralNetwork;
       private:

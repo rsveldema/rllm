@@ -626,14 +626,33 @@ def _kernel_compiler_python() -> str:
     return venv_python.as_posix() if venv_python.exists() else sys.executable
 
 
+def _generate_vulkan_kernel_artifacts(
+    input_file: Path,
+    glsl_output: Path,
+    dispatch_stub: Path,
+    rel_spv: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parent
+    kernel_compiler_root = repo_root / "kernel_compiler"
+    if kernel_compiler_root.as_posix() not in sys.path:
+        sys.path.insert(0, kernel_compiler_root.as_posix())
+
+    from codegen.compile import generate_vulkan
+
+    generate_vulkan(
+        input_file.as_posix(),
+        glsl_output.as_posix(),
+        rllm_dispatch_stub=dispatch_stub.as_posix(),
+        rllm_spv_path=rel_spv,
+    )
+
+
 def _generate_kernel_compiler_artifacts(
     compiler: str | None,
     kernel_specs: list[VulkanKernelSpec],
     kernel_root: Path,
     parfor_dump_dir: Path
 ) -> tuple[list[Path], list[Path], list[Path]]:
-    repo_root = Path(__file__).resolve().parent
-    compile_py = repo_root / "kernel_compiler" / "codegen" / "compile.py"
     generated_glsl: list[Path] = []
     generated_headers: list[Path] = []
     generated_spirv: list[Path] = []
@@ -646,25 +665,10 @@ def _generate_kernel_compiler_artifacts(
         rel_spv = spv.relative_to(kernel_root).as_posix()
         glsl.parent.mkdir(parents=True, exist_ok=True)
         header.parent.mkdir(parents=True, exist_ok=True)
-        cmd = [
-            _kernel_compiler_python(),
-            compile_py.as_posix(),
-            "--vulkan",
-            glsl.as_posix(),
-            "--rllm-dispatch-stub",
-            header.as_posix(),
-            "--rllm-spv-path",
-            rel_spv,
-            dump.as_posix(),
-        ]
-        proc = subprocess.run(cmd, text=True, capture_output=True)
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"kernel_compiler failed for {dump}:\n"
-                f"command: {' '.join(cmd)}\n"
-                f"stdout:\n{proc.stdout}\n"
-                f"stderr:\n{proc.stderr}"
-            )
+        try:
+            _generate_vulkan_kernel_artifacts(dump, glsl, header, rel_spv)
+        except Exception as exc:
+            raise RuntimeError(f"kernel_compiler failed for {dump}: {exc}") from exc
         generated_glsl.append(glsl)
         generated_headers.append(header)
         if compiler:
