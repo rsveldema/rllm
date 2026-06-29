@@ -25,7 +25,10 @@ fi
 
 # Resume from an explicit model path, then after_training.st, then latest checkpoint.
 # Use RESUME_MODEL=/path/to/model.st to override.
-if [ -n "${RESUME_MODEL:-}" ] && [ -f "${RESUME_MODEL}" ]; then
+if [ "${FRESH_START:-0}" != "0" ]; then
+    echo "FRESH_START=${FRESH_START}: ignoring existing checkpoints and starting from random weights."
+    input_arg=""
+elif [ -n "${RESUME_MODEL:-}" ] && [ -f "${RESUME_MODEL}" ]; then
     echo "Resuming from ${RESUME_MODEL}"
     input_arg="-i ${RESUME_MODEL}"
 elif [ -f "models/after_training.st" ]; then
@@ -51,6 +54,9 @@ else
 fi
 
 echo "--- Starting training ---"
+
+export NAN_FINDING_MODE=1
+
 
 ./build_release/rllm --train $input_arg \
     -o models/after_training.st \

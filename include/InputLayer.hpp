@@ -72,6 +72,14 @@ namespace rllm
 
         // GPU-side copy of the input line, synced from CpuInputLine before OFFLOAD regions.
         GpuInputLine m_gpu_input;
+
+        void check_nan_finding_mode_embeddings(const char* phase) const;
+        void check_nan_finding_mode_matrix(
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& values,
+            PositionIndex rows,
+            const char* name,
+            const char* phase
+        ) const;
     };
 
 } // namespace rllm

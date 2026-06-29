@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <OutputLayer.hpp>
+#include <RuntimeConfig.hpp>
 #include <rllm_vulkan_runtime.hpp>
 
 #include <cpu/cpu_fixed_vector.hpp>
@@ -67,6 +68,27 @@ namespace
     {
         return rllm::vulkan_runtime::get_queue(0);
     }
+
+    class ScopedNanFindingMode
+    {
+      public:
+        explicit ScopedNanFindingMode(bool enabled)
+            : m_previous(rllm::nan_finding_mode_enabled())
+        {
+            rllm::set_nan_finding_mode_enabled(enabled);
+        }
+
+        ~ScopedNanFindingMode()
+        {
+            rllm::set_nan_finding_mode_enabled(m_previous);
+        }
+
+        ScopedNanFindingMode(const ScopedNanFindingMode&) = delete;
+        ScopedNanFindingMode& operator=(const ScopedNanFindingMode&) = delete;
+
+      private:
+        bool m_previous;
+    };
 
     float reference_compute_score(
         const std::vector<float>& logits,
@@ -234,6 +256,7 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
 
 TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
 {
+    const ScopedNanFindingMode disable_nan_finding_mode(false);
     auto weights = zero_output_layer_weights_json();
     const auto tokens = first_n_tokens(3);
     ASSERT_EQ(tokens.size(), 3u);

@@ -1,11 +1,14 @@
 #include <NeuralNetwork.hpp>
+#include <RuntimeConfig.hpp>
 #include <TokenIDFormatter.hpp>
+#include <enum_iterator2D.hpp>
 #include <parallel.hpp>
 #include <vecmath.hpp>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <format>
 #include <fstream>
@@ -40,6 +43,8 @@ namespace rllm
 
 namespace rllm
 {
+    static constexpr float NAN_FINDING_HIDDEN_ABS_BOUND = 10000.0f;
+
     static void scatter_dh_last_to_row(
         // OFFLOAD_PARAMETERS(dh_last, dh, last_pos)
         const fixed_size_vector<float, EmbeddingDimension>& dh_last,
@@ -52,6 +57,174 @@ namespace rllm
         OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (dh_last, dh, last_pos))
         dh[last_pos, d] = dh_last[d];
         ENDFOR
+    }
+
+    static fixed_size_vector<int, PositionIndex> make_neural_network_nan_scan_flag(VulkanQueue& queue)
+    {
+        cpu_fixed_vector<int, PositionIndex> cpu_flag;
+        cpu_flag.set_size(PositionIndex::MAX);
+        cpu_flag.zero();
+
+        fixed_size_vector<int, PositionIndex> flag;
+        flag.copy_from_cpu(queue, cpu_flag);
+        return flag;
+    }
+
+    static bool neural_network_nan_scan_failed(VulkanQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
+    {
+        cpu_fixed_vector<int, PositionIndex> cpu_flag;
+        flag.copy_to_cpu(queue, cpu_flag);
+        return cpu_flag[PositionIndex::START] != 0;
+    }
+
+    static void scan_hidden_matrix(
+        VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(h, flag, rows, lower_bound, upper_bound)
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+        fixed_size_vector<int, PositionIndex>& flag,
+        PositionIndex rows,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (h, flag, rows, lower_bound, upper_bound))
+        const float value = h[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_embedding_vector(
+        VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(values, flag, lower_bound, upper_bound)
+        const fixed_size_vector<float, EmbeddingDimension>& values,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<EmbeddingDimension>(), (values, flag, lower_bound, upper_bound))
+        const float value = values[i];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_token_vector(
+        VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(values, flag, lower_bound, upper_bound)
+        const fixed_size_vector<float, TokenID>& values,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (values, flag, lower_bound, upper_bound))
+        const float value = values[i];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void check_hidden_nan_finding_mode(
+        VulkanQueue& queue,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+        PositionIndex rows,
+        const char* phase
+    )
+    {
+        if (!nan_finding_mode_enabled())
+            return;
+
+        auto flag = make_neural_network_nan_scan_flag(queue);
+        scan_hidden_matrix(queue, h, flag, rows, -NAN_FINDING_HIDDEN_ABS_BOUND, NAN_FINDING_HIDDEN_ABS_BOUND);
+        if (neural_network_nan_scan_failed(queue, flag))
+        {
+            std::fprintf(
+                stderr,
+                "NAN_FINDING_MODE: NeuralNetwork hidden state invalid during %s; expected finite values in [%g, %g]\n",
+                phase,
+                static_cast<double>(-NAN_FINDING_HIDDEN_ABS_BOUND),
+                static_cast<double>(NAN_FINDING_HIDDEN_ABS_BOUND)
+            );
+            std::abort();
+        }
+    }
+
+    static void check_hidden_vector_nan_finding_mode(
+        VulkanQueue& queue,
+        const fixed_size_vector<float, EmbeddingDimension>& values,
+        const char* phase
+    )
+    {
+        if (!nan_finding_mode_enabled())
+            return;
+
+        auto flag = make_neural_network_nan_scan_flag(queue);
+        scan_embedding_vector(queue, values, flag, -NAN_FINDING_HIDDEN_ABS_BOUND, NAN_FINDING_HIDDEN_ABS_BOUND);
+        if (neural_network_nan_scan_failed(queue, flag))
+        {
+            std::fprintf(
+                stderr,
+                "NAN_FINDING_MODE: NeuralNetwork hidden vector invalid during %s; expected finite values in [%g, %g]\n",
+                phase,
+                static_cast<double>(-NAN_FINDING_HIDDEN_ABS_BOUND),
+                static_cast<double>(NAN_FINDING_HIDDEN_ABS_BOUND)
+            );
+            std::abort();
+        }
+    }
+
+    static void check_token_vector_nan_finding_mode(
+        VulkanQueue& queue,
+        const fixed_size_vector<float, TokenID>& values,
+        float bound,
+        const char* name,
+        const char* phase
+    )
+    {
+        if (!nan_finding_mode_enabled())
+            return;
+
+        auto flag = make_neural_network_nan_scan_flag(queue);
+        scan_token_vector(queue, values, flag, -bound, bound);
+        if (neural_network_nan_scan_failed(queue, flag))
+        {
+            std::fprintf(
+                stderr,
+                "NAN_FINDING_MODE: NeuralNetwork %s invalid during %s; expected finite values in [%g, %g]\n",
+                name,
+                phase,
+                static_cast<double>(-bound),
+                static_cast<double>(bound)
+            );
+            std::abort();
+        }
     }
 
     // Number of gradient-update passes over all layers per training example per epoch.
@@ -108,10 +281,17 @@ namespace rllm
 
         // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
         m_input_layer.propagate_forward(m_last_input, ws.h);
+        check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, "after input layer forward");
 
         // Pass through each transformer block in order
-        for (auto& block : m_transformer_blocks)
+        for (size_t block_index = 0; block_index < m_transformer_blocks.size(); ++block_index)
+        {
+            auto& block = m_transformer_blocks[block_index];
             block.forward(ws.h, m_seq_len, ws.workspace);
+            char phase[96];
+            std::snprintf(phase, sizeof(phase), "after transformer block %zu forward", block_index);
+            check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, phase);
+        }
 
         // Project the last-position hidden state to vocabulary logits.
         // Given a string of N tokens, the model learns to predict the N+1'th token,
@@ -119,6 +299,7 @@ namespace rllm
         const auto last_pos = dec(m_seq_len);
         copy_hidden_row_to_vector(ws.h, last_pos, ws.h_last);
         queue.wait("NeuralNetwork h_last ready for output layer forward");
+        check_hidden_vector_nan_finding_mode(queue, ws.h_last, "after h_last copy");
 
         const size_t output_head_count = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
         if (rllm::vulkan_runtime::queue_count() > output_head_count)
@@ -325,22 +506,40 @@ namespace rllm
                 if (bytes > 0)
                     ws.output_layer_delta.device_buffer().copy_from(queue, scores[oi].values.device_buffer(), bytes);
             }
+            {
+                const auto phase = std::format("output head {} backward delta", static_cast<size_t>(oi));
+                check_token_vector_nan_finding_mode(queue, ws.output_layer_delta, 10.0f, "output delta", phase.c_str());
+            }
             m_output_layers[oi].backward_and_update(ws.output_layer_delta, ws.h_last_vec, ws.dh_last, learning_rate);
+            {
+                const auto phase = std::format("after output head {} backward", static_cast<size_t>(oi));
+                check_hidden_vector_nan_finding_mode(queue, ws.dh_last, phase.c_str());
+            }
         }
 
         // Propagate the summed gradient through the transformer blocks.
         ws.dh.zero(queue);
         ws.din.zero(queue);
         scatter_dh_last_to_row(ws.dh_last, ws.dh, last_pos);
+        check_hidden_nan_finding_mode(queue, ws.dh, m_seq_len, "after dh_last scatter");
 
         auto* p_dh  = &ws.dh;
         auto* p_din = &ws.din;
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
+            {
+                const auto phase = std::format("before transformer block {} backward", i);
+                check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, phase.c_str());
+            }
             m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, learning_rate, m_forward_workspace->workspace);
+            {
+                const auto phase = std::format("after transformer block {} backward", i);
+                check_hidden_nan_finding_mode(queue, *p_din, m_seq_len, phase.c_str());
+            }
             std::swap(p_dh, p_din);
         }
 
+        check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, "before input layer backward");
         m_input_layer.propagate_backward(m_last_input, *p_dh, learning_rate);
     }
 
@@ -408,7 +607,22 @@ namespace rllm
                 const auto head = static_cast<MultiTokenPredictionIndex>(k);
                 const auto target = example[static_cast<PositionIndex>(input_len + k)];
                 score.reset(queue);
-                example_loss += static_cast<double>(m_output_layers[head].compute_score(score, target));
+                const float loss = m_output_layers[head].compute_score(score, target);
+                if (!std::isfinite(loss) || loss < -1e-4f)
+                {
+                    std::println(
+                        "Invalid evaluation loss detected for head {}, target '{}' ({}), input_len {}, seq_len {}, "
+                        "loss {}.",
+                        static_cast<size_t>(head),
+                        m_corpus.get_token_from_id(target),
+                        target,
+                        input_len,
+                        seq_len,
+                        loss
+                    );
+                    std::abort();
+                }
+                example_loss += static_cast<double>(loss);
             }
             total_loss += example_loss / static_cast<double>(num_valid);
         }

@@ -245,6 +245,8 @@ namespace rllm
     // Serialization helpers need access to private weight matrices.
     friend class NeuralNetwork;
       private:
+        void check_nan_finding_mode(const char* phase);
+
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
         fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;

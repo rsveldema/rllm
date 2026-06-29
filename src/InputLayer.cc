@@ -1,5 +1,6 @@
 #include <InputLayer.hpp>
 #include <RandomHelpers.hpp>
+#include <RuntimeConfig.hpp>
 #include <cpu/cpu_flex_rows_matrix.hpp>
 #include <enum_iterator2D.hpp>
 #include <parallel.hpp>
@@ -7,9 +8,129 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <string_view>
 
 namespace rllm
 {
+    static constexpr float NAN_FINDING_INPUT_HIDDEN_ABS_BOUND = 2.0f;
+    static constexpr float NAN_FINDING_INPUT_GRADIENT_ABS_BOUND = 10000.0f;
+
+    static fixed_size_vector<int, PositionIndex> make_input_layer_nan_scan_flag(VulkanQueue& queue)
+    {
+        cpu_fixed_vector<int, PositionIndex> cpu_flag;
+        cpu_flag.set_size(PositionIndex::MAX);
+        cpu_flag.zero();
+
+        fixed_size_vector<int, PositionIndex> flag;
+        flag.copy_from_cpu(queue, cpu_flag);
+        return flag;
+    }
+
+    static bool input_layer_nan_scan_failed(VulkanQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
+    {
+        cpu_fixed_vector<int, PositionIndex> cpu_flag;
+        flag.copy_to_cpu(queue, cpu_flag);
+        return cpu_flag[PositionIndex::START] != 0;
+    }
+
+    static void scan_input_embedding_matrix(
+        VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(matrix, flag, lower_bound, upper_bound)
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_input_float_matrix(
+        VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(matrix, flag, rows, lower_bound, upper_bound)
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        PositionIndex rows,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, rows, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    void InputLayer::check_nan_finding_mode_embeddings(const char* phase) const
+    {
+        if (!nan_finding_mode_enabled())
+            return;
+
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto flag = make_input_layer_nan_scan_flag(queue);
+        scan_input_embedding_matrix(queue, m_embeddings, flag, -1.0f, 1.0f);
+        if (input_layer_nan_scan_failed(queue, flag))
+        {
+            std::fprintf(stderr, "NAN_FINDING_MODE: InputLayer embeddings invalid during %s\n", phase);
+            std::abort();
+        }
+    }
+
+    void InputLayer::check_nan_finding_mode_matrix(
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& values,
+        PositionIndex rows,
+        const char* name,
+        const char* phase
+    ) const
+    {
+        if (!nan_finding_mode_enabled())
+            return;
+
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto flag = make_input_layer_nan_scan_flag(queue);
+        const float bound = (std::string_view(name) == "hidden state")
+            ? NAN_FINDING_INPUT_HIDDEN_ABS_BOUND
+            : NAN_FINDING_INPUT_GRADIENT_ABS_BOUND;
+        scan_input_float_matrix(queue, values, flag, rows, -bound, bound);
+        if (input_layer_nan_scan_failed(queue, flag))
+        {
+            std::fprintf(
+                stderr,
+                "NAN_FINDING_MODE: InputLayer %s invalid during %s; expected finite values in [%g, %g]\n",
+                name,
+                phase,
+                static_cast<double>(-bound),
+                static_cast<double>(bound)
+            );
+            std::abort();
+        }
+    }
+
     static void fill_embeddings_with_positional_encoding(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(tokens, embeddings, h, model_dim)
         const GpuInputLine& tokens,
@@ -62,7 +183,9 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_gpu_input.sync_to_device(queue, input);
 
+        check_nan_finding_mode_embeddings("forward:start");
         fill_embeddings_with_positional_encoding(queue, m_gpu_input, m_embeddings, h, static_cast<float>(EmbeddingDimension::MAX));
+        check_nan_finding_mode_matrix(h, static_cast<PositionIndex>(input.size()), "hidden state", "forward:end");
     }
 
 
@@ -77,6 +200,8 @@ namespace rllm
         // D2H: download the gradient matrix to CPU before element access
         cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dh_cpu;
         auto& queue = rllm::vulkan_runtime::get_queue(0);
+        check_nan_finding_mode_matrix(dh, static_cast<PositionIndex>(input.size()), "gradient", "backward:dh");
+        check_nan_finding_mode_embeddings("backward:start");
         const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(queue, dh_cpu);
 
         // Use per-instance state (not static) to avoid data race with PARFOR_2D.
@@ -140,6 +265,7 @@ namespace rllm
             m_embeddings.copy_row_to_offload_buffer(queue, tok, m_embeddings_cpu);
             m_updated_tokens[tok] = 0;
         }
+        check_nan_finding_mode_embeddings("backward:end");
     }
 
 

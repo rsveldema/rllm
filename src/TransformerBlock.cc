@@ -1,5 +1,6 @@
 #include <JsonTensorHelpers.hpp>
 #include <RandomHelpers.hpp>
+#include <RuntimeConfig.hpp>
 #include <TransformerBlock.hpp>
 #include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
@@ -11,12 +12,321 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <nlohmann/json.hpp>
 
 namespace rllm
 {
     static_assert(static_cast<int>(EmbeddingDimension::MAX) % static_cast<int>(HeadsIndex::MAX) == 0, "EmbeddingDimension::MAX must be divisible by HeadsIndex::MAX");
+
+    static fixed_size_vector<int, PositionIndex> make_nan_scan_flag(VulkanQueue& queue)
+    {
+        cpu_fixed_vector<int, PositionIndex> cpu_flag;
+        cpu_flag.set_size(PositionIndex::MAX);
+        cpu_flag.zero();
+
+        fixed_size_vector<int, PositionIndex> flag;
+        flag.copy_from_cpu(queue, cpu_flag);
+        return flag;
+    }
+
+    static bool nan_scan_failed(VulkanQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
+    {
+        cpu_fixed_vector<int, PositionIndex> cpu_flag;
+        flag.copy_to_cpu(queue, cpu_flag);
+        return cpu_flag[PositionIndex::START] != 0;
+    }
+
+    static void scan_embedding_embedding_weight_matrix(
+        // OFFLOAD_PARAMETERS(matrix, flag, lower_bound, upper_bound)
+        const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_embedding_embedding_velocity_matrix(
+        // OFFLOAD_PARAMETERS(matrix, flag, lower_bound, upper_bound)
+        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_ff_embedding_weight_matrix(
+        // OFFLOAD_PARAMETERS(matrix, flag, lower_bound, upper_bound)
+        const fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_ff_embedding_velocity_matrix(
+        // OFFLOAD_PARAMETERS(matrix, flag, lower_bound, upper_bound)
+        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_embedding_ff_weight_matrix(
+        // OFFLOAD_PARAMETERS(matrix, flag, lower_bound, upper_bound)
+        const fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_embedding_ff_velocity_matrix(
+        // OFFLOAD_PARAMETERS(matrix, flag, lower_bound, upper_bound)
+        const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    void TransformerBlock::check_nan_finding_mode(const char* phase)
+    {
+        if (!nan_finding_mode_enabled())
+            return;
+
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto flag = make_nan_scan_flag(queue);
+
+        scan_embedding_embedding_weight_matrix(W_q, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
+        scan_embedding_embedding_weight_matrix(W_k, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
+        scan_embedding_embedding_weight_matrix(W_v, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
+        scan_embedding_embedding_weight_matrix(W_o, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
+        scan_embedding_embedding_velocity_matrix(V_q, flag, -VEL_CLIP, VEL_CLIP);
+        scan_embedding_embedding_velocity_matrix(V_k, flag, -VEL_CLIP, VEL_CLIP);
+        scan_embedding_embedding_velocity_matrix(V_v, flag, -VEL_CLIP, VEL_CLIP);
+        scan_embedding_embedding_velocity_matrix(V_o, flag, -VEL_CLIP, VEL_CLIP);
+
+        scan_ff_embedding_weight_matrix(W_gate, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
+        scan_ff_embedding_weight_matrix(W_up, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
+        scan_ff_embedding_velocity_matrix(V_gate, flag, -VEL_CLIP, VEL_CLIP);
+        scan_ff_embedding_velocity_matrix(V_up, flag, -VEL_CLIP, VEL_CLIP);
+
+        scan_embedding_ff_weight_matrix(W_down, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
+        scan_embedding_ff_velocity_matrix(V_down, flag, -VEL_CLIP, VEL_CLIP);
+
+        if (nan_scan_failed(queue, flag))
+        {
+            std::fprintf(stderr, "NAN_FINDING_MODE: TransformerBlock weights/velocities invalid during %s\n", phase);
+            std::abort();
+        }
+    }
+
+    static void scan_transformer_hidden_matrix(
+        VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(matrix, flag, rows, lower_bound, upper_bound)
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        PositionIndex rows,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, rows, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void scan_transformer_ff_matrix(
+        VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(matrix, flag, rows, lower_bound, upper_bound)
+        const flexible_rows_matrix<float, PositionIndex, FFDimension>& matrix,
+        fixed_size_vector<int, PositionIndex>& flag,
+        PositionIndex rows,
+        float lower_bound,
+        float upper_bound
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, FFDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, rows, lower_bound, upper_bound))
+        const float value = matrix[row, col];
+        if (value == value)
+        {
+            if (value < lower_bound)
+                flag[PositionIndex::START] = 1;
+            if (value > upper_bound)
+                flag[PositionIndex::START] = 1;
+        }
+        else
+            flag[PositionIndex::START] = 1;
+        ENDFOR
+    }
+
+    static void check_transformer_hidden_nan_finding_mode(
+        VulkanQueue& queue,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& matrix,
+        PositionIndex rows,
+        const char* name,
+        const char* phase
+    )
+    {
+        if (!nan_finding_mode_enabled())
+            return;
+
+        static constexpr float bound = 10000.0f;
+        auto flag = make_nan_scan_flag(queue);
+        scan_transformer_hidden_matrix(queue, matrix, flag, rows, -bound, bound);
+        if (nan_scan_failed(queue, flag))
+        {
+            std::fprintf(
+                stderr,
+                "NAN_FINDING_MODE: TransformerBlock %s invalid during %s; expected finite values in [%g, %g]\n",
+                name,
+                phase,
+                static_cast<double>(-bound),
+                static_cast<double>(bound)
+            );
+            std::abort();
+        }
+    }
+
+    static void check_transformer_ff_nan_finding_mode(
+        VulkanQueue& queue,
+        const flexible_rows_matrix<float, PositionIndex, FFDimension>& matrix,
+        PositionIndex rows,
+        const char* name,
+        const char* phase
+    )
+    {
+        if (!nan_finding_mode_enabled())
+            return;
+
+        static constexpr float bound = 10000.0f;
+        auto flag = make_nan_scan_flag(queue);
+        scan_transformer_ff_matrix(queue, matrix, flag, rows, -bound, bound);
+        if (nan_scan_failed(queue, flag))
+        {
+            std::fprintf(
+                stderr,
+                "NAN_FINDING_MODE: TransformerBlock %s invalid during %s; expected finite values in [%g, %g]\n",
+                name,
+                phase,
+                static_cast<double>(-bound),
+                static_cast<double>(bound)
+            );
+            std::abort();
+        }
+    }
 
     // ── randomize ─────────────────────────────────────────────────────────────
 
@@ -189,19 +499,21 @@ namespace rllm
 
     void TransformerBlock::compute_attention_scores_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi)
     {
-        // OFFLOAD_PARAMETERS(attn_w_h, Q, K, active_seq_len)
+        // OFFLOAD_PARAMETERS(attn_w_h, Q, K, active_seq_len, hStart)
         fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h = ws.attn_w[hi];
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q = ws.Q;
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K = ws.K;
         const PositionIndex active_seq_len = seq_len;
+        const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
         // END_OFFLOAD_PARAMETERS
 
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, active_seq_len, (attn_w_h, Q, K, active_seq_len))
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, active_seq_len, (attn_w_h, Q, K, active_seq_len, hStart))
         {
             float dot = 0.f;
-            for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            for (const auto d_head : enum_iterator1D<HeadDimension>())
             {
+                const int d = (hStart + int(d_head));
                 dot += (Q[i, d] * K[j, d]);
             }
             const float score = (dot * (1.0f / sqrt(float(HeadDimension::MAX))));
@@ -257,21 +569,22 @@ namespace rllm
     }
 
     inline void compute_attention_values_for_head(
-        // OFFLOAD_PARAMETERS(attn_w_h, V, attn_concat, active_seq_len, hi)
+        // OFFLOAD_PARAMETERS(attn_w_h, V, attn_concat, active_seq_len, hStart)
         const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& attn_concat,
         int active_seq_len,
-        HeadsIndex hi
+        int hStart
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, static_cast<PositionIndex>(active_seq_len), (attn_concat, attn_w_h, V, active_seq_len, hi))
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, static_cast<PositionIndex>(active_seq_len), (attn_concat, attn_w_h, V, active_seq_len, hStart))
         {
             const float w = attn_w_h[i, j];
-            for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            for (const auto d_head : enum_iterator1D<HeadDimension>())
             {
+                const int d = (hStart + int(d_head));
                 attn_concat[i, d] += (w * V[j, d]);
             }
         }
@@ -287,7 +600,10 @@ namespace rllm
 
         // attn_concat[i, d] = sum_j attn_w[hi,i,j] * V[j, d]  (causal: j <= i)
         PARFOR_1D(hi, enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
-            compute_attention_values_for_head(attn_w[hi], V, attn_concat, active_seq_len, hi);
+        {
+            const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
+            compute_attention_values_for_head(attn_w[hi], V, attn_concat, active_seq_len, hStart);
+        }
         ENDFOR
     }
 
@@ -305,6 +621,7 @@ namespace rllm
     {
         auto& ws = workspace;
 
+        check_nan_finding_mode("forward:start");
         ws.h_in = h;
 
         // ── 1. Pre-norm (attention) ──────────────────────────────────────────
@@ -339,6 +656,7 @@ namespace rllm
 
         // ── 7. Residual ───────────────────────────────────────────────────────
         element_wise_sum(ws.h_mid, ws.ffn_out, h);
+        check_nan_finding_mode("forward:end");
     }
 
     // ── backward pass ─────────────────────────────────────────────────────────
@@ -382,21 +700,22 @@ namespace rllm
     }
 
     inline void compute_attention_dscores_for_head(
-        // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, seq_len, hi)
+        // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, seq_len, hStart)
         fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
         PositionIndex seq_len,
-        HeadsIndex hi
+        int hStart
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (d_scores_h, d_attn_concat, V, seq_len, hi))
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (d_scores_h, d_attn_concat, V, seq_len, hStart))
         {
             float dot = 0.f;
-            for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            for (const auto d_head : enum_iterator1D<HeadDimension>())
             {
+                const int d = (hStart + int(d_head));
                 dot += (d_attn_concat[i, d] * V[j, d]);
             }
             d_scores_h[i, j] = dot;
@@ -415,7 +734,8 @@ namespace rllm
         // Safe for offload because each triangular cell writes a unique output element.
         for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
         {
-            compute_attention_dscores_for_head(d_scores[hi], d_attn_concat, V, seq_len, hi);
+            const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
+            compute_attention_dscores_for_head(d_scores[hi], d_attn_concat, V, seq_len, hStart);
         }
     }
 
@@ -540,28 +860,37 @@ namespace rllm
         auto* ws = &workspace;
         auto& fwd = fwd_workspace;
 
+        check_nan_finding_mode("backward:start");
+        check_transformer_hidden_nan_finding_mode(queue, dout, seq, "dout", "backward:start");
+
         // ── FFN backward ──────────────────────────────────────────────────────
         // h_out = h_mid + ffn_out  → d_h_mid += dout,  d_ffn_out = dout (same buffer)
         ws->d_h_mid = dout; // copy first to avoid overwriting dout before it's used in dW_down
+        check_transformer_hidden_nan_finding_mode(queue, ws->d_h_mid, seq, "d_h_mid", "after residual copy from dout");
 
         // d_ffn_act = d_ffn_out @ W_down   (W_down[D × Dff])
         matmul_AB(dout, W_down, ws->d_ffn_act);
+        check_transformer_ff_nan_finding_mode(queue, ws->d_ffn_act, seq, "d_ffn_act", "after FFN down projection backward");
 
         // dW_down[D, Dff] += dout^T @ ffn_act
         matmul_AtB_acc(dout, fwd.ffn_act, ws->dW_down, fwd.seq_len);
 
         // SwiGLU backward: d(silu(g)*u) / dg, du
         swiglu_backward(fwd.seq_len, fwd.gate_pre, fwd.up_pre, ws->d_ffn_act, ws->d_gate_pre, ws->d_up_pre);
+        check_transformer_ff_nan_finding_mode(queue, ws->d_gate_pre, seq, "d_gate_pre", "after SwiGLU backward");
+        check_transformer_ff_nan_finding_mode(queue, ws->d_up_pre, seq, "d_up_pre", "after SwiGLU backward");
 
         // d_h_norm_ff = d_gate_pre @ W_gate  +  d_up_pre @ W_up
         matmul_AB_add(ws->d_gate_pre, W_gate, ws->d_h_norm_ff);
         matmul_AB_add(ws->d_up_pre, W_up, ws->d_h_norm_ff);
+        check_transformer_hidden_nan_finding_mode(queue, ws->d_h_norm_ff, seq, "d_h_norm_ff", "after FFN gate/up projection backward");
 
         // weight gradients for gate, up
         matmul_AtB_acc_2_matrix(ws->d_gate_pre, ws->d_up_pre, fwd.h_norm_ff, ws->dW_gate, ws->dW_up, fwd.seq_len);
 
         // RMSNorm backward for FFN: d_h_mid += rms_bwd(d_h_norm_ff, h_mid)
         rms_norm_backward(queue, ws->d_h_norm_ff, fwd.h_mid, ws->d_h_mid);
+        check_transformer_hidden_nan_finding_mode(queue, ws->d_h_mid, seq, "d_h_mid", "after FFN RMSNorm backward");
 
         // ── Attention backward ─────────────────────────────────────────────────
         // h_mid = h_in + attn_proj  → d_attn_proj = d_h_mid (passed through residual)
@@ -569,16 +898,21 @@ namespace rllm
 
         // d_attn_concat = d_attn_proj @ W_o
         matmul_AB(ws->d_h_mid, W_o, ws->d_attn_concat);
+        check_transformer_hidden_nan_finding_mode(queue, ws->d_attn_concat, seq, "d_attn_concat", "after output projection backward");
         matmul_AtB_acc(ws->d_h_mid, fwd.attn_concat, ws->dW_o, fwd.seq_len);
 
         // Per-head backward
         backward_attention_heads(*ws, fwd);
+        check_transformer_hidden_nan_finding_mode(queue, ws->d_Q, seq, "d_Q", "after attention heads backward");
+        check_transformer_hidden_nan_finding_mode(queue, ws->d_K, seq, "d_K", "after attention heads backward");
+        check_transformer_hidden_nan_finding_mode(queue, ws->d_V, seq, "d_V", "after attention heads backward");
 
         // Weight gradients for W_q, W_k, W_v
         matmul_AtB_acc_3_matrix(ws->d_Q, ws->d_K, ws->d_V, fwd.h_norm_attn, ws->dW_q, ws->dW_k, ws->dW_v, fwd.seq_len);
 
         // d_h_norm_attn = d_Q @ W_q  +  d_K @ W_k  +  d_V @ W_v
         matmul_AB_add_3_matrix_muls(ws->d_Q, W_q, ws->d_K, W_k, ws->d_V, W_v, ws->d_h_norm_attn);
+        check_transformer_hidden_nan_finding_mode(queue, ws->d_h_norm_attn, seq, "d_h_norm_attn", "after QKV projection backward");
 
         // ── d_h_in + weight updates ───────────────────────────────────────────
         // d_h_in (residual + RMSNorm backward) and all seven weight updates are
@@ -605,6 +939,7 @@ namespace rllm
             queue2.wait("TransformerBlock backward queue2 wait idle");
             queue3.wait("TransformerBlock backward queue3 wait idle");
             queue4.wait("TransformerBlock backward queue4 wait idle");
+            check_transformer_hidden_nan_finding_mode(queue, din, seq, "din", "after final RMSNorm backward");
         }
         else
         {
@@ -612,6 +947,7 @@ namespace rllm
             din.copy_from(queue, ws->d_h_mid);
             rms_norm_backward(queue, ws->d_h_norm_attn, fwd.h_in, din);
             queue.wait("TransformerBlock backward din wait idle");
+            check_transformer_hidden_nan_finding_mode(queue, din, seq, "din", "after final RMSNorm backward");
             sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate);
             queue.wait("TransformerBlock backward qkvo wait idle");
             sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate);
@@ -619,6 +955,8 @@ namespace rllm
             sgd_update_Wdown_x_Vdown_dWdown(queue, W_down, V_down, ws->dW_down, learning_rate);
             queue.wait("TransformerBlock backward down wait idle");
         }
+
+        check_nan_finding_mode("backward:end");
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────

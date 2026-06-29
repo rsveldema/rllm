@@ -61,7 +61,7 @@
 #define VERSION_MINOR 5
 #define VERSION_PATCH 1
 #define MAKE_VERSION(major, minor, patch) \
-((major) * 10000 + (minor) * 100 + (patch))
+  ((major) * 10000 + (minor) * 100 + (patch))
 #define CURRENT_VERSION MAKE_VERSION(VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH)
 #if CURRENT_VERSION >= MAKE_VERSION(2, 0, 0)
 #define FEATURE_NEW_API 1
@@ -148,24 +148,24 @@
 #endif
 // Integer type aliases via macros
 #define DEFINE_INT_TYPES     \
-using i8 = std::int8_t;    \
-using i16 = std::int16_t;  \
-using i32 = std::int32_t;  \
-using i64 = std::int64_t;  \
-using u8 = std::uint8_t;   \
-using u16 = std::uint16_t; \
-using u32 = std::uint32_t; \
-using u64 = std::uint64_t; \
-using f32 = float;         \
-using f64 = double;
+  using i8 = std::int8_t;    \
+  using i16 = std::int16_t;  \
+  using i32 = std::int32_t;  \
+  using i64 = std::int64_t;  \
+  using u8 = std::uint8_t;   \
+  using u16 = std::uint16_t; \
+  using u32 = std::uint32_t; \
+  using u64 = std::uint64_t; \
+  using f32 = float;         \
+  using f64 = double;
 DEFINE_INT_TYPES
 // Safe cast macro
 #define SAFE_CAST(T, val)                                \
-([&]() -> T {                                          \
-auto result = static_cast<T>(val);                   \
-ASSERT(static_cast<decltype(val)>(result) == (val)); \
-return result;                                       \
-}())
+  ([&]() -> T {                                          \
+    auto result = static_cast<T>(val);                   \
+    ASSERT(static_cast<decltype(val)>(result) == (val)); \
+    return result;                                       \
+  }())
 // Array size helper
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 // Offset of
@@ -193,7 +193,7 @@ return result;                                       \
 // Static assertions with message
 #define STATIC_ASSERT(cond, msg) static_assert(cond, msg)
 #define STATIC_ASSERT_SIZE(T, sz) STATIC_ASSERT(sizeof(T) == (sz), \
-"sizeof(" #T ") != " STRINGIFY(sz))
+                                                "sizeof(" #T ") != " STRINGIFY(sz))
 STATIC_ASSERT(sizeof(i32) == 4, "i32 must be 4 bytes");
 STATIC_ASSERT(sizeof(i64) == 8, "i64 must be 8 bytes");
 STATIC_ASSERT(sizeof(f32) == 4, "f32 must be 4 bytes");
@@ -231,51 +231,51 @@ STATIC_ASSERT(sizeof(f64) == 8, "f64 must be 8 bytes");
 #define U32_MAX (4294967295u)
 // Enum helper macros
 #define ENUM_CLASS_OPERATORS(E)                                                                                                                  \
-inline E operator|(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) | static_cast<std::underlying_type_t<E>>(b)); } \
-inline E operator&(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) & static_cast<std::underlying_type_t<E>>(b)); } \
-inline E operator^(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) ^ static_cast<std::underlying_type_t<E>>(b)); } \
-inline E operator~(E a) { return static_cast<E>(~static_cast<std::underlying_type_t<E>>(a)); }                                                 \
-inline E &operator|=(E &a, E b) {                                                                                                              \
-a = a | b;                                                                                                                                   \
-return a;                                                                                                                                    \
-}                                                                                                                                              \
-inline E &operator&=(E &a, E b) {                                                                                                              \
-a = a & b;                                                                                                                                   \
-return a;                                                                                                                                    \
-}                                                                                                                                              \
-inline E &operator^=(E &a, E b) {                                                                                                              \
-a = a ^ b;                                                                                                                                   \
-return a;                                                                                                                                    \
-}
+  inline E operator|(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) | static_cast<std::underlying_type_t<E>>(b)); } \
+  inline E operator&(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) & static_cast<std::underlying_type_t<E>>(b)); } \
+  inline E operator^(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) ^ static_cast<std::underlying_type_t<E>>(b)); } \
+  inline E operator~(E a) { return static_cast<E>(~static_cast<std::underlying_type_t<E>>(a)); }                                                 \
+  inline E &operator|=(E &a, E b) {                                                                                                              \
+    a = a | b;                                                                                                                                   \
+    return a;                                                                                                                                    \
+  }                                                                                                                                              \
+  inline E &operator&=(E &a, E b) {                                                                                                              \
+    a = a & b;                                                                                                                                   \
+    return a;                                                                                                                                    \
+  }                                                                                                                                              \
+  inline E &operator^=(E &a, E b) {                                                                                                              \
+    a = a ^ b;                                                                                                                                   \
+    return a;                                                                                                                                    \
+  }
 enum class Flags : u32 {
-None = 0,
-ReadOnly = BIT(0),
-WriteOnly = BIT(1),
-ReadWrite = ReadOnly | WriteOnly,
-Append = BIT(2),
-Create = BIT(3),
-Truncate = BIT(4),
-Sync = BIT(5),
+  None = 0,
+  ReadOnly = BIT(0),
+  WriteOnly = BIT(1),
+  ReadWrite = ReadOnly | WriteOnly,
+  Append = BIT(2),
+  Create = BIT(3),
+  Truncate = BIT(4),
+  Sync = BIT(5),
 };
 ENUM_CLASS_OPERATORS(Flags)
 // Compile-time string hash
 #define FNV1A_BASIS 2166136261u
 #define FNV1A_PRIME 16777619u
 constexpr u32 fnv1a(const char *s, u32 h = FNV1A_BASIS) {
-return (*s == '\0') ? h : fnv1a(s + 1, (h ^ static_cast<u32>(*s)) * FNV1A_PRIME);
+  return (*s == '\0') ? h : fnv1a(s + 1, (h ^ static_cast<u32>(*s)) * FNV1A_PRIME);
 }
 #define HASH(str) fnv1a(str)
 // Macro-based switch dispatch
 #define DISPATCH_ON_TYPE(T, ...)                       \
-if constexpr (std::is_same_v<T, float>) {            \
-__VA_ARGS__                                        \
-} else if constexpr (std::is_same_v<T, double>) {    \
-__VA_ARGS__                                        \
-} else if constexpr (std::is_same_v<T, int>) {       \
-__VA_ARGS__                                        \
-} else {                                             \
-static_assert(sizeof(T) == 0, "unsupported type"); \
-}
+  if constexpr (std::is_same_v<T, float>) {            \
+    __VA_ARGS__                                        \
+  } else if constexpr (std::is_same_v<T, double>) {    \
+    __VA_ARGS__                                        \
+  } else if constexpr (std::is_same_v<T, int>) {       \
+    __VA_ARGS__                                        \
+  } else {                                             \
+    static_assert(sizeof(T) == 0, "unsupported type"); \
+  }
 // Include guard end
 #endif
 // PREPROCESSOR_EXAMPLE_HPP

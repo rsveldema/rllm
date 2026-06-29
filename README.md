@@ -19,6 +19,8 @@ sudo apt install glslc
 Offload dispatch note:
 
 - In `vulkan` offload mode, kernel launch helpers dispatch through kernel_compiler generated stubs and SPIR-V.
+- Set `NAN_FINDING_MODE=1` to run extra offloaded checks around `TransformerBlock` and `OutputLayer` forward/backward passes. The checks abort if model weights or optimizer velocities become NaN or leave their clamp ranges.
+- Set `FRESH_START=1` when running `train_release.sh` to ignore existing checkpoints and start from random weights.
 
 Compatibility matrix:
 
@@ -159,3 +161,12 @@ mob-of-expert support:
             - copy the most likely / token to expert A and B.
         on backward pass:
             - copy the values back to the most likely experts back
+
+======
+valid value ranges, change types to match:
+
+compute_score() now aborts if finite CE loss exceeds 1000, printing target logit, max logit, sum_exp, log prob, and loss.
+NAN_FINDING_MODE activation scans now use sane bounds:InputLayer hidden state: [-2, 2]
+input gradient: [-10000, 10000]
+NeuralNetwork hidden states / h_last: [-10000, 10000]
+OutputLayer logits: [-1000000, 1000000]

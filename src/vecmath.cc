@@ -119,37 +119,33 @@ namespace rllm
     {
         const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr))
-        const float g1 = math::clamp(grad1[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel1[r, c] = math::clamp(
-            ((TransformerBlock::MOMENTUM_BETA * vel1[r, c]) + (lr * g1)),
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W1[r, c] = math::clamp((W1[r, c] + vel1[r, c]), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float raw_g1 = grad1[r, c];
+        const float g1 = math::clamp(raw_g1, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        const float raw_v1 = ((TransformerBlock::MOMENTUM_BETA * vel1[r, c]) + (lr * g1));
+        vel1[r, c] = math::clamp(raw_v1, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
+        const float raw_w1 = (W1[r, c] + vel1[r, c]);
+        W1[r, c] = math::clamp(raw_w1, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
 
-        const float g2 = math::clamp(grad2[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel2[r, c] = math::clamp(
-            ((TransformerBlock::MOMENTUM_BETA * vel2[r, c]) + (lr * g2)),
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W2[r, c] = math::clamp((W2[r, c] + vel2[r, c]), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float raw_g2 = grad2[r, c];
+        const float g2 = math::clamp(raw_g2, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        const float raw_v2 = ((TransformerBlock::MOMENTUM_BETA * vel2[r, c]) + (lr * g2));
+        vel2[r, c] = math::clamp(raw_v2, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
+        const float raw_w2 = (W2[r, c] + vel2[r, c]);
+        W2[r, c] = math::clamp(raw_w2, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
 
-        const float g3 = math::clamp(grad3[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel3[r, c] = math::clamp(
-            ((TransformerBlock::MOMENTUM_BETA * vel3[r, c]) + (lr * g3)),
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W3[r, c] = math::clamp((W3[r, c] + vel3[r, c]), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float raw_g3 = grad3[r, c];
+        const float g3 = math::clamp(raw_g3, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        const float raw_v3 = ((TransformerBlock::MOMENTUM_BETA * vel3[r, c]) + (lr * g3));
+        vel3[r, c] = math::clamp(raw_v3, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
+        const float raw_w3 = (W3[r, c] + vel3[r, c]);
+        W3[r, c] = math::clamp(raw_w3, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
 
-        const float g4 = math::clamp(grad4[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel4[r, c] = math::clamp(
-            ((TransformerBlock::MOMENTUM_BETA * vel4[r, c]) + (lr * g4)),
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W4[r, c] = math::clamp((W4[r, c] + vel4[r, c]), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float raw_g4 = grad4[r, c];
+        const float g4 = math::clamp(raw_g4, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        const float raw_v4 = ((TransformerBlock::MOMENTUM_BETA * vel4[r, c]) + (lr * g4));
+        vel4[r, c] = math::clamp(raw_v4, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
+        const float raw_w4 = (W4[r, c] + vel4[r, c]);
+        W4[r, c] = math::clamp(raw_w4, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
         ENDFOR
     }
 
@@ -167,21 +163,19 @@ namespace rllm
     {
         const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W1, vel1, grad1, W2, vel2, grad2, lr))
-        const float g1 = math::clamp(grad1[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel1[r, c] = math::clamp(
-            ((TransformerBlock::MOMENTUM_BETA * vel1[r, c]) + (lr * g1)),
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W1[r, c] = math::clamp((W1[r, c] + vel1[r, c]), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float raw_g1 = grad1[r, c];
+        const float g1 = math::clamp(raw_g1, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        const float raw_v1 = ((TransformerBlock::MOMENTUM_BETA * vel1[r, c]) + (lr * g1));
+        vel1[r, c] = math::clamp(raw_v1, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
+        const float raw_w1 = (W1[r, c] + vel1[r, c]);
+        W1[r, c] = math::clamp(raw_w1, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
 
-        const float g2 = math::clamp(grad2[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel2[r, c] = math::clamp(
-            ((TransformerBlock::MOMENTUM_BETA * vel2[r, c]) + (lr * g2)),
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W2[r, c] = math::clamp((W2[r, c] + vel2[r, c]), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float raw_g2 = grad2[r, c];
+        const float g2 = math::clamp(raw_g2, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        const float raw_v2 = ((TransformerBlock::MOMENTUM_BETA * vel2[r, c]) + (lr * g2));
+        vel2[r, c] = math::clamp(raw_v2, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
+        const float raw_w2 = (W2[r, c] + vel2[r, c]);
+        W2[r, c] = math::clamp(raw_w2, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
         ENDFOR
     }
 
@@ -196,17 +190,12 @@ namespace rllm
     {
         const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W, vel, grad, lr))
-        const float g = math::clamp(grad[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        vel[r, c] = math::clamp(
-            ((TransformerBlock::MOMENTUM_BETA * vel[r, c]) + (lr * g)),
-            -TransformerBlock::VEL_CLIP,
-            TransformerBlock::VEL_CLIP
-        );
-        W[r, c] = math::clamp(
-            (W[r, c] + vel[r, c]),
-            -TransformerBlock::WEIGHT_CLAMP,
-            TransformerBlock::WEIGHT_CLAMP
-        );
+        const float raw_g = grad[r, c];
+        const float g = math::clamp(raw_g, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        const float raw_v = ((TransformerBlock::MOMENTUM_BETA * vel[r, c]) + (lr * g));
+        vel[r, c] = math::clamp(raw_v, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
+        const float raw_w = (W[r, c] + vel[r, c]);
+        W[r, c] = math::clamp(raw_w, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
         ENDFOR
     }
 

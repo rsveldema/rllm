@@ -109,6 +109,7 @@ function(rllm_define_lib target_name)
         "${RLLM_COMPILE_SRC_DIR}/TransformerBlock.cc"
         "${RLLM_COMPILE_SRC_DIR}/OutputLayer.cc"
         "${RLLM_COMPILE_SRC_DIR}/NeuralNetwork.cc"
+        "${RLLM_COMPILE_SRC_DIR}/RuntimeConfig.cc"
         "${RLLM_COMPILE_SRC_DIR}/serialization.cc"
         "${RLLM_COMPILE_SRC_DIR}/parallel.cc"
     )

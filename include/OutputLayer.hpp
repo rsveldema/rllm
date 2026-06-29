@@ -69,6 +69,8 @@ namespace rllm
 
     friend class NeuralNetwork;
       private:
+        void check_nan_finding_mode(const char* phase);
+
         // Vocabulary logits computed by forward_from_hidden().
         fixed_size_vector<float, TokenID> m_inputs;
         // CPU-side copy of m_inputs, updated after each forward pass.
