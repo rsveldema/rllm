@@ -67,9 +67,9 @@ public:
         m_device->copy_from(queue, *other.m_device);
     }
 
-    void zero()
+    void zero(VulkanQueue& queue)
     {
-        m_device->zero(rllm::vulkan_runtime::get_queue(0));
+        m_device->zero(queue);
     }
 
     size_t size() const { return m_count; }

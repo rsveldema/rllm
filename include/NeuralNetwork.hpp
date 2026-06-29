@@ -18,9 +18,9 @@
 #include <string>
 #include <vector>
 
+
 namespace rllm
 {
-    void set_nn_log_file(const std::string& filename);
     struct NeuralNetworkForwardWorkspace;
     struct BackwardPropWorkspace;
 
@@ -84,24 +84,7 @@ namespace rllm
         // Mean-pool the last transformer block's hidden state over the sequence dimension.
         // Equivalent to last_hidden_state.mean(dim=1) in PyTorch.
         // Must be called after propagate_forward().
-        cpu_fixed_vector<float, EmbeddingDimension> get_last_hidden_mean() const
-        {
-            cpu_fixed_vector<float, EmbeddingDimension> result;
-            const size_t seq_len = static_cast<size_t>(m_seq_len);
-            if (seq_len == 0)
-                return result;
-            // D2H: download the hidden state matrix to CPU before reading elements
-            cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> tmp;
-            const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(m_last_hidden).copy_to_cpu(tmp);
-            for (const auto d : enum_iterator1D<EmbeddingDimension>())
-            {
-                float sum = 0.0f;
-                for (const auto pos : enum_iterator1D<PositionIndex>(m_seq_len))
-                    sum += static_cast<float>(tmp[pos, d]);
-                result[d] = static_cast<float>(sum / static_cast<float>(seq_len));
-            }
-            return result;
-        }
+        cpu_fixed_vector<float, EmbeddingDimension> get_last_hidden_mean(VulkanQueue& queue) const;
 
         /** set the input for the neural network.
          * Call this just before    propagate_forward() and then call propagate_backward_mtp() to train on this input.

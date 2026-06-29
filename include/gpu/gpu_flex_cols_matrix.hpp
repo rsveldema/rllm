@@ -43,20 +43,20 @@ namespace rllm
             m_cols = cols;
         }
         /** H2D: direct Vulkan copy from cpu_flex_cols_matrix's pinned buffer to device. */
-        void copy_from_cpu(const cpu_flex_cols_matrix<ElementType, X, Y>& src)
+        void copy_from_cpu(VulkanQueue& queue, const cpu_flex_cols_matrix<ElementType, X, Y>& src)
         {
             m_cols = src.num_cols();
             const auto bytes = static_cast<VkDeviceSize>(ROWS * static_cast<size_t>(m_cols) * sizeof(ElementType));
-            this->m_data.device_buffer().write(rllm::vulkan_runtime::get_queue(0),
+            this->m_data.device_buffer().write(queue,
                 const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), bytes);
         }
 
         /** D2H: direct Vulkan copy from device into cpu_flex_cols_matrix's pinned buffer. */
-        void copy_to_cpu(cpu_flex_cols_matrix<ElementType, X, Y>& dst) const
+        void copy_to_cpu(VulkanQueue& queue, cpu_flex_cols_matrix<ElementType, X, Y>& dst) const
         {
             dst.set_cols(m_cols);
             const auto bytes = static_cast<VkDeviceSize>(ROWS * static_cast<size_t>(m_cols) * sizeof(ElementType));
-            this->m_data.device_buffer().read(rllm::vulkan_runtime::get_queue(0),
+            this->m_data.device_buffer().read(queue,
                 dst.vk_host_buffer(), bytes);
         }
 

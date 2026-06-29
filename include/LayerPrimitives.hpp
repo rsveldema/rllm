@@ -248,6 +248,11 @@ namespace rllm
             m_cpu.clear();
         }
 
+        bool empty() const
+        {
+            return m_cpu.empty();
+        }
+
         PositionIndex size() const
         {
             return m_cpu.size();
@@ -301,9 +306,10 @@ namespace rllm
             return *this;
         }*/
 
-        void sub_array(VulkanQueue& queue, CpuInputLine& result, PositionIndex length) const
+        /** Upload from CpuInputLine to device. Call after modifying CpuInputLine. */
+        void sync_to_device(VulkanQueue& queue, const CpuInputLine& cpu) const
         {
-            // sub_array on GPU side - result is a CpuInputLine so no sync needed
+            const_cast<GpuInputLine*>(this)->Base::copy_from_cpu(queue, cpu.m_cpu);
         }
     };
 
@@ -343,10 +349,10 @@ namespace rllm
             temp_values_cpu.set_size(TempStorage::MAX);
         }
 
-        void reset()
+        void reset(VulkanQueue& queue)
         {
-            values.zero();
-            temp_values.zero();
+            values.zero(queue);
+            temp_values.zero(queue);
         }
 
         fixed_size_vector<float, TokenID> values;

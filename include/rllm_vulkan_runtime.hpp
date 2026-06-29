@@ -17,6 +17,7 @@ namespace rllm::vulkan_runtime
      *  Queue 0 is the main queue (used by the main thread).
      *  Queues 1..N are used by parallel sections. */
     VulkanQueue& get_queue(size_t index);
+    size_t queue_count();
 
     template <typename T>
     VBaseDeviceBuffer& device_buffer(T& value)

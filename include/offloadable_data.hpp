@@ -12,9 +12,9 @@ namespace rllm
         : m_data(elts)
         {}
 
-        void zero()
+        void zero(VulkanQueue& queue)
         {
-            m_data.zero();
+            m_data.zero(queue);
         }
 
         void copy(const offloadable_data<T>& other)
@@ -56,4 +56,3 @@ namespace rllm
         DevicePointer<T> m_data;
     };
 } // namespace rllm
-

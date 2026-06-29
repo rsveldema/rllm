@@ -255,7 +255,7 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
         }
     }
 
-    EXPECT_TRUE(include_seen) << "Expected 'inclu' in top-5 for prompt '#'";
+    EXPECT_TRUE(include_seen) << "Expected 'in' in top-5 for prompt '#'";
     EXPECT_GT(defin_probability, 0.001f) << "Expected 'defin' probability > 0.1%, got " << (defin_probability * 100.0f)
                                          << "%";
 }
@@ -343,12 +343,18 @@ TEST(TransformerBlockTest, CausalSoftmaxMasksFutureTokensAndNormalizesRows)
     cpu_scores[static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)] = 2.0f;
 
     flexible_rows_cols_matrix<float, PositionIndex, PositionIndex> scores(T, T);
-    scores.copy_from_cpu(cpu_scores);
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        scores.copy_from_cpu(queue, cpu_scores);
+    }
 
     TransformerBlock::causal_softmax_for_test(scores, T);
 
     cpu_flex_rows_cols_matrix<float, PositionIndex, PositionIndex> result_cpu;
-    scores.copy_to_cpu(result_cpu);
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        scores.copy_to_cpu(queue, result_cpu);
+    }
 
     // Row 0: only self is allowed.
     EXPECT_NEAR((result_cpu[static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)]), 1.0f, 1e-6f);
@@ -429,12 +435,18 @@ TEST(TransformerBlockTest, SoftmaxAttentionForHeadMatchesJacobian)
     fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_scores;
     fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> attn_w;
     fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_raw;
-    d_scores.copy_from_cpu(cpu_d_scores);
-    attn_w.copy_from_cpu(cpu_attn_w);
-    d_raw.copy_from_cpu(cpu_d_raw);
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        d_scores.copy_from_cpu(queue, cpu_d_scores);
+        attn_w.copy_from_cpu(queue, cpu_attn_w);
+        d_raw.copy_from_cpu(queue, cpu_d_raw);
+    }
 
     TransformerBlock::softmax_attention_for_head_for_test(d_scores, d_raw, attn_w, T);
-    d_raw.copy_to_cpu(cpu_d_raw);
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        d_raw.copy_to_cpu(queue, cpu_d_raw);
+    }
 
     // Expected updates per row: p_j * (dp_j - dot), where dot = sum_k dp_k * p_k.
     // Row 0: dot=3, update=[0]
@@ -934,15 +946,21 @@ TEST(TransformerBlockTest, RmsNormBackwardMatchesCpuReference)
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dy(seq);
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> x(seq);
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dx(seq);
-    dy.copy_from_cpu(cpu_dy);
-    x.copy_from_cpu(cpu_x);
-    dx.zero();
+    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    {
+        dy.copy_from_cpu(queue, cpu_dy);
+        x.copy_from_cpu(queue, cpu_x);
+    }
+    dx.zero(queue);
 
     // --- run the existing rms_norm_backward (parallel or not — we compare to ref) ---
     TransformerBlock::rms_norm_backward_for_test(dy, x, dx);
 
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_dx(seq);
-    dx.copy_to_cpu(cpu_dx);
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        dx.copy_to_cpu(queue, cpu_dx);
+    }
 
     // --- independent sequential CPU reference ---
     for (const auto t : enum_iterator1D<PositionIndex>(seq)) {

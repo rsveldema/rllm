@@ -10,9 +10,9 @@
 
 namespace rllm
 {
-    static void fill_embeddings_with_positional_encoding(
+    static void fill_embeddings_with_positional_encoding(VulkanQueue& queue,
         // OFFLOAD_PARAMETERS(tokens, embeddings, h, model_dim)
-        const CpuInputLine& tokens,
+        const GpuInputLine& tokens,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
         float model_dim
@@ -20,7 +20,6 @@ namespace rllm
     )
     {
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(tokens.size());
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
 
         OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, embeddings, h, model_dim))
         const int tok = static_cast<int>(tokens[pos]);
@@ -35,7 +34,8 @@ namespace rllm
 
     void InputLayer::reset_embeddings()
     {
-        m_embeddings.zero();
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_embeddings.zero(queue);
         m_embeddings_cpu.zero();
     }
 
@@ -44,7 +44,8 @@ namespace rllm
         for (const auto tok : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 m_embeddings_cpu.set(tok, d, static_cast<float16>(get_random_value(-0.1f, 0.1f)));
-        m_embeddings.copy_from_cpu(m_embeddings_cpu);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
     }
 
     // Fill h[T × D_MODEL] = token_embedding + sinusoidal positional encoding.
@@ -57,7 +58,11 @@ namespace rllm
     {
         h.set_rows(static_cast<PositionIndex>(input.size()));
 
-        fill_embeddings_with_positional_encoding(input, m_embeddings, h, static_cast<float>(EmbeddingDimension::MAX));
+        // Sync CPU input to GPU before OFFLOAD region
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_gpu_input.sync_to_device(queue, input);
+
+        fill_embeddings_with_positional_encoding(queue, m_gpu_input, m_embeddings, h, static_cast<float>(EmbeddingDimension::MAX));
     }
 
 
@@ -71,7 +76,8 @@ namespace rllm
     {
         // D2H: download the gradient matrix to CPU before element access
         cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dh_cpu;
-        const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(dh_cpu);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(queue, dh_cpu);
 
         // Use per-instance state (not static) to avoid data race with PARFOR_2D.
         // Previously: static local variables shared across threads → heap corruption.
@@ -131,7 +137,7 @@ namespace rllm
             const auto tok = input.get(pos);
             if (m_updated_tokens[tok] == 0)
                 continue;
-            m_embeddings.copy_row_to_offload_buffer(tok, m_embeddings_cpu);
+            m_embeddings.copy_row_to_offload_buffer(queue, tok, m_embeddings_cpu);
             m_updated_tokens[tok] = 0;
         }
     }

@@ -357,6 +357,7 @@ class TransformSourceRewriter:
             extra_params=", ".join(extra_param_names),
             extra_param_names=extra_param_names,
             queue_expr=args[0],
+            triangular_kind="upper" if upper else "lower",
         )
         return True
 
@@ -372,6 +373,7 @@ class TransformSourceRewriter:
         extra_params: str | None,
         extra_param_names: list[str] | None,
         queue_expr: str | None,
+        triangular_kind: str | None = None,
     ) -> None:
         extra_param_types = None
         if extra_param_names is not None:
@@ -401,6 +403,7 @@ class TransformSourceRewriter:
                 parfor_invocation=self.pending_parfor_invocation,
                 shared_vars=dict(self.pending_shared_vars) if self.pending_shared_vars else None,
                 queue_expr=queue_expr,
+                triangular_kind=triangular_kind,
             )
         )
         self.active_raw_body_lines.clear()

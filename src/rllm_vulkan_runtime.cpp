@@ -55,4 +55,10 @@ namespace rllm::vulkan_runtime
         ensure_initialized();
         return session().get_queue(index);
     }
+
+    size_t queue_count()
+    {
+        ensure_initialized();
+        return session().queue_count();
+    }
 }

@@ -52,22 +52,22 @@ namespace rllm
         }
 
         /** H2D: direct Vulkan copy from cpu_flex_size_matrix's pinned buffer to device. */
-        void copy_from_cpu(const cpu_flex_size_matrix<ElementType, X, Y>& src)
+        void copy_from_cpu(VulkanQueue& queue, const cpu_flex_size_matrix<ElementType, X, Y>& src)
         {
             ensure_capacity(element_count_for_size(src.num_rows(), src.num_cols()));
             m_rows = src.num_rows(); m_cols = src.num_cols();
             m_capacity_elements = std::max<size_t>(1, static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols));
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
-            this->m_data.device_buffer().write(rllm::vulkan_runtime::get_queue(0),
+            this->m_data.device_buffer().write(queue,
                 const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), bytes);
         }
 
         /** D2H: direct Vulkan copy from device into cpu_flex_size_matrix's pinned buffer. */
-        void copy_to_cpu(cpu_flex_size_matrix<ElementType, X, Y>& dst) const
+        void copy_to_cpu(VulkanQueue& queue, cpu_flex_size_matrix<ElementType, X, Y>& dst) const
         {
             dst.set_size(m_rows, m_cols);
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
-            this->m_data.device_buffer().read(rllm::vulkan_runtime::get_queue(0),
+            this->m_data.device_buffer().read(queue,
                 dst.vk_host_buffer(), bytes);
         }
 

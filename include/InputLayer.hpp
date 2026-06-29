@@ -69,6 +69,9 @@ namespace rllm
         // These are class members so each InputLayer instance has its own copy — no static shared state.
         cpu_fixed_vector<uint16_t, TokenID> m_updated_tokens;
         cpu_fixed_vector<ConflictingToken, ConflictIndex> m_conflicts;
+
+        // GPU-side copy of the input line, synced from CpuInputLine before OFFLOAD regions.
+        GpuInputLine m_gpu_input;
     };
 
 } // namespace rllm

@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <limits>
 #include <omp.h>
 
 namespace rllm
@@ -30,6 +29,8 @@ namespace rllm
     OutputLayer::OutputLayer()
     {
         m_inputs.set_size(TokenID::MAX);
+        W_lm_head_cpu.zero();
+        V_lm_head_cpu.zero();
     }
 
     void output_layer_forward_from_hidden_impl(VulkanQueue& queue,
@@ -86,7 +87,7 @@ namespace rllm
         ENDFOR
     }
 
-    [[maybe_unused]] static void initialize_softmax_temp_values(
+    static void initialize_softmax_temp_values(
         // OFFLOAD_PARAMETERS(temp_values)
         fixed_size_vector<float, TempStorage>& temp_values
         // END_OFFLOAD_PARAMETERS
@@ -98,7 +99,7 @@ namespace rllm
         ENDFOR
     }
 
-    [[maybe_unused]] static void reduce_logits_max_to_temp(
+    static void reduce_logits_max_to_temp(
         // OFFLOAD_PARAMETERS(inputs, temp_values)
         const fixed_size_vector<float, TokenID>& inputs,
         fixed_size_vector<float, TempStorage>& temp_values
@@ -114,7 +115,7 @@ namespace rllm
         ENDFOR
     }
 
-    [[maybe_unused]] static void compute_exp_and_accumulate_sum(
+    static void compute_exp_and_accumulate_sum(
         // OFFLOAD_PARAMETERS(inputs, values, temp_values)
         const fixed_size_vector<float, TokenID>& inputs,
         fixed_size_vector<float, TokenID>& values,
@@ -137,7 +138,7 @@ namespace rllm
         ENDFOR
     }
 
-    [[maybe_unused]] static void finalize_softmax_delta(
+    static void finalize_softmax_delta(
         // OFFLOAD_PARAMETERS(values, temp_values, expected_output_token)
         fixed_size_vector<float, TokenID>& values,
         const fixed_size_vector<float, TempStorage>& temp_values,
@@ -169,8 +170,13 @@ namespace rllm
         for (const auto v : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 cpu_tmp.set(v, d, static_cast<float16>(get_random_value(-scale, scale)));
-        W_lm_head.copy_from_cpu(cpu_tmp);
-        V_lm_head.zero();
+        {
+            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            W_lm_head_cpu = cpu_tmp;
+            V_lm_head_cpu.zero();
+            W_lm_head.copy_from_cpu(queue, cpu_tmp);
+            V_lm_head.zero(queue);
+        }
     }
 
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
@@ -178,7 +184,7 @@ namespace rllm
               VulkanQueue& queue)
     {
         output_layer_forward_from_hidden_impl(queue, h_last, W_lm_head, m_inputs);
-        m_inputs.copy_to_cpu(m_inputs_cpu);
+        m_inputs.copy_to_cpu(queue, m_inputs_cpu);
     }
 
     // Accumulates dL/dh_last[D] and updates W_lm_head.
@@ -189,8 +195,11 @@ namespace rllm
         float learning_rate
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         accumulate_output_layer_dh_last(delta, dh_last, W_lm_head);
         update_output_layer_weights(delta, h_last, W_lm_head, V_lm_head, learning_rate);
+        W_lm_head.copy_to_cpu(queue, W_lm_head_cpu);
+        V_lm_head.copy_to_cpu(queue, V_lm_head_cpu);
     }
 
     std::vector<OutputToken> OutputLayer::get_top_k_by_logit(size_t k) const
@@ -221,21 +230,17 @@ namespace rllm
 
 
     // Compute softmax deltas (with label smoothing) for backprop and return the
-    // cross-entropy loss -log(softmax[target]) in a single pass over the logits.
+    // cross-entropy loss -log(softmax[target]).
     float OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
-        float max_val = -std::numeric_limits<float>::infinity();
-        for (const auto token : enum_iterator1D<TokenID>()) {
-            max_val = math::max(max_val, m_inputs_cpu[token]);
-        }
-
-        score.temp_values_cpu[TempStorage::START] = max_val;
-        score.temp_values_cpu[TempStorage::ONE] = 0.0f;
-        score.temp_values.copy_from_cpu(score.temp_values_cpu);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        initialize_softmax_temp_values(score.temp_values);
+        reduce_logits_max_to_temp(m_inputs, score.temp_values);
         compute_exp_and_accumulate_sum(m_inputs, score.values, score.temp_values);
         finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
-        score.temp_values.copy_to_cpu(score.temp_values_cpu);
+        score.temp_values.copy_to_cpu(queue, score.temp_values_cpu);
 
+        const float max_val = score.temp_values_cpu[TempStorage::START];
         const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
         const float expected_logit = m_inputs_cpu[expected_output_token];
         assert(! std::isnan(expected_logit));

@@ -2,6 +2,9 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdlib>
+
+#include <logging.hpp>
 
 #include <IMemorySpace.hpp>
 #include <cpu/cpu_fixed_vector.hpp>
@@ -20,36 +23,8 @@ namespace rllm
             : offloadable_data<T>(CAPACITY)
         {}
 
-        /** D2D copy constructor — copies device buffer contents via Vulkan. */
         gpu_fixed_vector(const gpu_fixed_vector& other) = delete;
-        /*
-            : offloadable_data<T>(CAPACITY)
-            , len(other.len)
-        {
-            const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(len) * sizeof(T));
-            if (bytes > 0) {
-                this->m_data.device_buffer().copy_from(rllm::vulkan_runtime::get_queue(0), other.m_data.device_buffer(), bytes);
-            }
-        }
-        */
-
-        /** D2D copy assignment — copies device buffer contents via Vulkan. */
         gpu_fixed_vector& operator=(const gpu_fixed_vector& other) = delete;
-        /*
-        {
-            if (this != &other)
-            {
-                len = other.len;
-                const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(len) * sizeof(T));
-                if (bytes > 0)
-                {
-                    this->m_data.device_buffer().copy_from(rllm::vulkan_runtime::get_queue(0), other.m_data.device_buffer(), bytes);
-                }
-            }
-            return *this;
-        }
-        */
-
         gpu_fixed_vector(gpu_fixed_vector&&) = default;
         gpu_fixed_vector& operator=(gpu_fixed_vector&&) = default;
 
@@ -84,20 +59,26 @@ namespace rllm
         {
             len = src.size();
             const auto n = static_cast<size_t>(len);
-            if (n > 0)
+            if (n == 0)
             {
-                this->m_data.copy_range_to_offload_buffer(queue, const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), 0, n);
+                LOG_ERROR("tried to copy zer0 bytes");
+                abort();
             }
+            
+            this->m_data.copy_range_to_offload_buffer(queue, const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), 0, n);
         }
 
         /** D2H: download into a cpu_fixed_vector. Also updates dst size to match. */
         void copy_to_cpu(VulkanQueue& queue, cpu_fixed_vector<T, LengthType>& dst) const
         {
             dst.set_size(len);
-            if (static_cast<size_t>(len) > 0)
+            if (static_cast<size_t>(len) == 0)
             {
-                this->m_data.copy_from_offload_buffer(queue, dst.vk_host_buffer());
+                LOG_ERROR("tried to copy zer0 bytes");
+                abort();
             }
+             
+            this->m_data.copy_from_offload_buffer(queue, dst.vk_host_buffer());
         }
 
       private:

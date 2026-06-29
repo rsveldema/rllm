@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <OutputLayer.hpp>
+#include <rllm_vulkan_runtime.hpp>
 
 #include <cpu/cpu_fixed_vector.hpp>
 #include <cpu/cpu_fixed_matrix.hpp>
@@ -62,6 +63,11 @@ namespace
         return logits;
     }
 
+    VulkanQueue& test_queue()
+    {
+        return rllm::vulkan_runtime::get_queue(0);
+    }
+
     float reference_compute_score(
         const std::vector<float>& logits,
         std::vector<float>& deltas,
@@ -117,7 +123,7 @@ TEST(OutputLayerForwardFromHiddenTest, PublicForwardMatchesImplementationHelper)
         }
     }
     rllm::fixed_size_matrix<float16, rllm::TokenID, rllm::EmbeddingDimension> weights;
-    weights.copy_from_cpu(cpu_weights);
+    weights.copy_from_cpu(test_queue(), cpu_weights);
 
     rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
     h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
@@ -128,18 +134,18 @@ TEST(OutputLayerForwardFromHiddenTest, PublicForwardMatchesImplementationHelper)
     h_last_cpu[dims[3]] = 4.0f;
     h_last_cpu[dims[4]] = -1.5f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.copy_from_cpu(h_last_cpu);
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
 
     rllm::fixed_size_vector<float, rllm::TokenID> impl_logits;
     impl_logits.set_size(rllm::TokenID::MAX);
-    impl_logits.zero();
-    rllm::output_layer_forward_from_hidden_impl(h_last, weights, impl_logits);
+    impl_logits.zero(test_queue());
+    rllm::output_layer_forward_from_hidden_impl(test_queue(), h_last, weights, impl_logits);
     rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_impl_logits;
-    impl_logits.copy_to_cpu(cpu_impl_logits);
+    impl_logits.copy_to_cpu(test_queue(), cpu_impl_logits);
 
     rllm::OutputLayer layer;
     layer.load(weights_json);
-    layer.forward_from_hidden(h_last);
+    layer.forward_from_hidden(h_last, test_queue());
 
     const auto public_logits = logits_from_output_layer(layer);
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
@@ -158,9 +164,9 @@ TEST(OutputLayerScoreTest, ZeroLogitsMatchReference)
     h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
     h_last_cpu.zero();
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.copy_from_cpu(h_last_cpu);
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
 
-    layer.forward_from_hidden(h_last);
+    layer.forward_from_hidden(h_last, test_queue());
 
     rllm::Score score;
     const auto expected_token = first_n_tokens(1).front();
@@ -179,7 +185,7 @@ TEST(OutputLayerScoreTest, ZeroLogitsMatchReference)
     );
 
     rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
-    score.values.copy_to_cpu(cpu_values);
+    score.values.copy_to_cpu(test_queue(), cpu_values);
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         EXPECT_NEAR(cpu_values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
@@ -202,9 +208,9 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
     h_last_cpu.zero();
     h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.copy_from_cpu(h_last_cpu);
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
 
-    layer.forward_from_hidden(h_last);
+    layer.forward_from_hidden(h_last, test_queue());
 
     rllm::Score score;
     const auto expected_token = tokens[1];
@@ -221,7 +227,7 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
     EXPECT_NEAR(score.temp_values_cpu[rllm::TempStorage::START], 2.0f, 1e-5f);
 
     rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
-    score.values.copy_to_cpu(cpu_values);
+    score.values.copy_to_cpu(test_queue(), cpu_values);
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         EXPECT_NEAR(cpu_values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
@@ -244,9 +250,9 @@ TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
     h_last_cpu.zero();
     h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.copy_from_cpu(h_last_cpu);
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
 
-    layer.forward_from_hidden(h_last);
+    layer.forward_from_hidden(h_last, test_queue());
 
     rllm::Score score;
     const auto expected_token = tokens[1];
@@ -262,7 +268,7 @@ TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
     EXPECT_NEAR(loss, expected_loss, 1e-5f);
 
     rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
-    score.values.copy_to_cpu(cpu_values);
+    score.values.copy_to_cpu(test_queue(), cpu_values);
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
         EXPECT_NEAR(cpu_values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
@@ -288,8 +294,8 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
 
     h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.copy_from_cpu(h_last_cpu);
-    layer.forward_from_hidden(h_last);
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
+    layer.forward_from_hidden(h_last, test_queue());
 
     std::vector<float> expected_deltas_first;
     const auto logits_first = logits_from_output_layer(layer);
@@ -299,15 +305,15 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
     EXPECT_NEAR(loss_first, expected_loss_first, 1e-5f);
     {
         rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
-        score.values.copy_to_cpu(cpu_values);
+        score.values.copy_to_cpu(test_queue(), cpu_values);
         for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
             EXPECT_NEAR(cpu_values[tok], expected_deltas_first[static_cast<size_t>(tok)], 1e-5f);
     }
 
     h_last_cpu.zero();
     h_last_cpu[rllm::EmbeddingDimension::START] = -1.0f;
-    h_last.copy_from_cpu(h_last_cpu);
-    layer.forward_from_hidden(h_last);
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
+    layer.forward_from_hidden(h_last, test_queue());
 
     std::vector<float> expected_deltas_second;
     const auto logits_second = logits_from_output_layer(layer);
@@ -317,7 +323,7 @@ TEST(OutputLayerScoreTest, ReusedScoreMatchesReferenceAcrossCalls)
     EXPECT_NEAR(loss_second, expected_loss_second, 1e-5f);
     {
         rllm::cpu_fixed_vector<float, rllm::TokenID> cpu_values;
-        score.values.copy_to_cpu(cpu_values);
+        score.values.copy_to_cpu(test_queue(), cpu_values);
         for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>())
             EXPECT_NEAR(cpu_values[tok], expected_deltas_second[static_cast<size_t>(tok)], 1e-5f);
     }
@@ -333,29 +339,26 @@ TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
     h_last_cpu.zero();
     h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
-    h_last.copy_from_cpu(h_last_cpu);
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
 
     const auto expected_token = first_n_tokens(1).front();
     rllm::Score score;
-    rllm::fixed_size_vector<float, rllm::TokenID> delta;
-    delta.set_size(rllm::TokenID::MAX);
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> dh_last;
     dh_last.set_size(rllm::EmbeddingDimension::MAX);
 
-    layer.forward_from_hidden(h_last);
+    layer.forward_from_hidden(h_last, test_queue());
     const float initial_loss = layer.compute_score(score, expected_token);
 
     for (int step = 0; step < 8; ++step)
     {
-        layer.forward_from_hidden(h_last);
+        layer.forward_from_hidden(h_last, test_queue());
         const float loss = layer.compute_score(score, expected_token);
         (void)loss;
-        delta = score.values;
-        dh_last.zero();
-        layer.backward_and_update(delta, h_last, dh_last, 0.003f);
+        dh_last.zero(test_queue());
+        layer.backward_and_update(score.values, h_last, dh_last, 0.003f);
     }
 
-    layer.forward_from_hidden(h_last);
+    layer.forward_from_hidden(h_last, test_queue());
     const float final_loss = layer.compute_score(score, expected_token);
 
     EXPECT_LT(final_loss, initial_loss);

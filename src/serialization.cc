@@ -55,7 +55,8 @@ namespace rllm
             return;
 
         json_helpers::deserialize_matrix(j.at("embeddings"), m_embeddings_cpu);
-        m_embeddings.copy_from_cpu(m_embeddings_cpu);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
     }
 
     nlohmann::json InputLayer::save() const
@@ -65,29 +66,28 @@ namespace rllm
 
     void OutputLayer::load(const nlohmann::json& j)
     {
-        m_inputs.zero();
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_inputs.zero(queue);
         if (j.contains("W_lm_head"))
         {
             const auto& w_j = j.at("W_lm_head");
-            cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> cpu_tmp;
             size_t i = 0;
             for (const auto t : enum_iterator1D<TokenID>())
                 for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                    cpu_tmp.set(t, d, static_cast<float16>(w_j.at(i++).template get<float>()));
-            W_lm_head.copy_from_cpu(cpu_tmp);
+                    W_lm_head_cpu.set(t, d, static_cast<float16>(w_j.at(i++).template get<float>()));
+            W_lm_head.copy_from_cpu(queue, W_lm_head_cpu);
         }
-        V_lm_head.zero();
+        V_lm_head_cpu.zero();
+        V_lm_head.zero(queue);
     }
 
     nlohmann::json OutputLayer::save() const
     {
-        cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> cpu_tmp;
-        W_lm_head.copy_to_cpu(cpu_tmp);
         auto w_j = nlohmann::json::array();
         w_j.get_ref<nlohmann::json::array_t&>().reserve(W_lm_head.ROWS * W_lm_head.COLS);
         for (const auto t : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                w_j.push_back(static_cast<float>(cpu_tmp.get(t, d)));
+                w_j.push_back(static_cast<float>(W_lm_head_cpu.get(t, d)));
         return {{"W_lm_head", std::move(w_j)}};
     }
 
@@ -216,11 +216,8 @@ namespace rllm
         }
 
         template <typename T, typename X, typename Y>
-        void push_matrix(safetensors::safetensors_t& st, const std::string& key, const fixed_size_matrix<T, X, Y>& m, std::vector<uint8_t>& storage)
+        void push_cpu_matrix(safetensors::safetensors_t& st, const std::string& key, const cpu_fixed_matrix<T, X, Y>& cpu_tmp, std::vector<uint8_t>& storage)
         {
-            // D2H: download GPU matrix to cpu intermediate first
-            cpu_fixed_matrix<T, X, Y> cpu_tmp;
-            m.copy_to_cpu(cpu_tmp);
 
             safetensors::tensor_t tensor;
             tensor.dtype = safetensors::dtype::kFLOAT32;
@@ -245,6 +242,15 @@ namespace rllm
             tensor.data_offsets[0] = dst_offset;
             tensor.data_offsets[1] = dst_offset + data_size;
             st.tensors.insert(key, tensor);
+        }
+
+        template <typename T, typename X, typename Y>
+        void push_matrix(safetensors::safetensors_t& st, const std::string& key, const fixed_size_matrix<T, X, Y>& m, std::vector<uint8_t>& storage)
+        {
+            cpu_fixed_matrix<T, X, Y> cpu_tmp;
+            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            m.copy_to_cpu(queue, cpu_tmp);
+            push_cpu_matrix(st, key, cpu_tmp, storage);
         }
 
         template <typename T, typename X, typename Y>
@@ -280,7 +286,8 @@ namespace rllm
             for (size_t x = 0; x < rows; ++x)
                 for (size_t y = 0; y < cols; ++y)
                     cpu_tmp.set(static_cast<X>(x), static_cast<Y>(y), static_cast<T>(data[x * cols + y]));
-            m.copy_from_cpu(cpu_tmp);
+            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            m.copy_from_cpu(queue, cpu_tmp);
         }
 
     } // anonymous namespace
@@ -299,7 +306,8 @@ namespace rllm
         }
 
         pull_matrix("input_layer.embeddings", st, m_embeddings);
-        m_embeddings.copy_to_cpu(m_embeddings_cpu);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_embeddings.copy_to_cpu(queue, m_embeddings_cpu);
     }
 
     void InputLayer::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
@@ -339,14 +347,14 @@ namespace rllm
         pull_matrix(pfx + "W_up", st, W_up);
         pull_matrix(pfx + "W_down", st, W_down);
 
-        copy_weights_to_offload_buffer();
-        V_q.zero();
-        V_k.zero();
-        V_v.zero();
-        V_o.zero();
-        V_gate.zero();
-        V_up.zero();
-        V_down.zero();
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        V_q.zero(queue);
+        V_k.zero(queue);
+        V_v.zero(queue);
+        V_o.zero(queue);
+        V_gate.zero(queue);
+        V_up.zero(queue);
+        V_down.zero(queue);
     }
 
     void TransformerBlock::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
@@ -386,8 +394,11 @@ namespace rllm
         }
 
         pull_matrix("output_layers.W_lm_head", st, W_lm_head);
-        m_inputs.zero();
-        V_lm_head.zero();
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        W_lm_head.copy_to_cpu(queue, W_lm_head_cpu);
+        V_lm_head_cpu.zero();
+        m_inputs.zero(queue);
+        V_lm_head.zero(queue);
     }
 
     void OutputLayer::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
@@ -429,11 +440,12 @@ namespace rllm
             push_matrix(st, pfx + "W_down", block.W_down, storage);
         }
 
-        // Output layer (friend grants access to m_output_layers internals)
-        std::string out_key = "output_layers.W_lm_head";
-        constexpr auto last_output_index = static_cast<MultiTokenPredictionIndex>(static_cast<size_t>(MultiTokenPredictionIndex::MAX) - 1);
-        auto& last_out = m_output_layers[last_output_index];
-        push_matrix(st, out_key, last_out.W_lm_head, storage);
+        // Output layers (friend grants access to m_output_layers internals)
+        for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
+        {
+            const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
+            push_cpu_matrix(st, out_key, m_output_layers[oi].W_lm_head_cpu, storage);
+        }
 
         // Tokenizer metadata for validation on load.
         st.metadata.insert("tokenizer_vocab_size", std::to_string(static_cast<size_t>(TokenID::MAX)));
@@ -503,13 +515,26 @@ namespace rllm
             pull_matrix(pfx + "W_gate", st, block.W_gate);
             pull_matrix(pfx + "W_up", st, block.W_up);
             pull_matrix(pfx + "W_down", st, block.W_down);
-
-            block.copy_weights_to_offload_buffer();
         }
 
-        if (st.tensors.count("output_layers.W_lm_head"))
+        if (st.tensors.count("output_layers.0.W_lm_head"))
+        {
+            for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
+            {
+                const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
+                pull_matrix(out_key, st, m_output_layers[oi].W_lm_head);
+                auto& queue = rllm::vulkan_runtime::get_queue(0);
+                m_output_layers[oi].W_lm_head.copy_to_cpu(queue, m_output_layers[oi].W_lm_head_cpu);
+                m_output_layers[oi].V_lm_head_cpu.zero();
+                m_output_layers[oi].m_inputs.zero(queue);
+                m_output_layers[oi].V_lm_head.zero(queue);
+            }
+        }
+        else if (st.tensors.count("output_layers.W_lm_head"))
+        {
             for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
                 m_output_layers[oi].load_from_safetensors(filename);
+        }
 
         return true;
     }

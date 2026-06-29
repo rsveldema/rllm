@@ -10,6 +10,7 @@
 namespace rllm
 {
     void output_layer_forward_from_hidden_impl(
+        VulkanQueue& queue,
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
         fixed_size_vector<float, TokenID>& inputs
@@ -76,6 +77,8 @@ namespace rllm
         // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> W_lm_head;
         fixed_size_matrix<float, TokenID, EmbeddingDimension> V_lm_head; // SGD momentum velocities
+        cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> W_lm_head_cpu;
+        cpu_fixed_matrix<float, TokenID, EmbeddingDimension> V_lm_head_cpu;
     };
 
 } // namespace rllm

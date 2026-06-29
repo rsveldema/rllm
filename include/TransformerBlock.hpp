@@ -59,7 +59,7 @@ namespace rllm
             attn_w.set_size(HeadsIndex::MAX);
         }
 
-        void reset(PositionIndex seq)
+        void reset(VulkanQueue& queue, PositionIndex seq)
         {
             h_in.set_rows(seq);
             seq_len = seq;
@@ -76,8 +76,8 @@ namespace rllm
             attn_proj.set_rows(seq);
             ffn_out.set_rows(seq);
             attn_w.set_size(HeadsIndex::MAX);
-            rms_norm_row_sums.zero();
-            rms_norm_inv_rms.zero();
+            rms_norm_row_sums.zero(queue);
+            rms_norm_inv_rms.zero(queue);
         }
     };
 
@@ -126,7 +126,7 @@ namespace rllm
             d_raw.set_size(HeadsIndex::MAX);
         }
 
-        void reset(PositionIndex seq)
+        void reset(VulkanQueue& queue, PositionIndex seq)
         {
             d_h_mid.set_rows(seq);
             d_ffn_act.set_rows(seq);
@@ -140,20 +140,20 @@ namespace rllm
             d_h_norm_attn.set_rows(seq);
             d_scores.set_size(HeadsIndex::MAX);
             d_raw.set_size(HeadsIndex::MAX);
-            dW_down.zero();
-            d_h_norm_ff.zero();
-            dW_gate.zero();
-            dW_up.zero();
-            dW_o.zero();
-            d_Q.zero();
-            d_K.zero();
-            d_V.zero();
-            dW_q.zero();
-            dW_k.zero();
-            dW_v.zero();
-            d_h_norm_attn.zero();
+            dW_down.zero(queue);
+            d_h_norm_ff.zero(queue);
+            dW_gate.zero(queue);
+            dW_up.zero(queue);
+            dW_o.zero(queue);
+            d_Q.zero(queue);
+            d_K.zero(queue);
+            d_V.zero(queue);
+            dW_q.zero(queue);
+            dW_k.zero(queue);
+            dW_v.zero(queue);
+            d_h_norm_attn.zero(queue);
             for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
-                d_raw[hi].zero();
+                d_raw[hi].zero(queue);
         }
     };
 
@@ -256,8 +256,6 @@ namespace rllm
         fixed_size_matrix<float, FFDimension, EmbeddingDimension> V_gate, V_up;
         fixed_size_matrix<float16, EmbeddingDimension, FFDimension> W_down;
         fixed_size_matrix<float, EmbeddingDimension, FFDimension> V_down;
-
-        void copy_weights_to_offload_buffer();
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
         static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y);

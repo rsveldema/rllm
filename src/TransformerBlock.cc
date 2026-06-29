@@ -25,33 +25,22 @@ namespace rllm
         const float sd = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(EmbeddingDimension::MAX)));
         const float sf = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(FFDimension::MAX)));
 
-        W_q.fill_rand(-sd, sd);
-        W_k.fill_rand(-sd, sd);
-        W_v.fill_rand(-sd, sd);
-        W_o.fill_rand(-sd, sd);
-        W_gate.fill_rand(-sd, sd);
-        W_up.fill_rand(-sd, sd);
-        W_down.fill_rand(-sf, sf);
-        copy_weights_to_offload_buffer();
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        W_q.fill_rand(queue, -sd, sd);
+        W_k.fill_rand(queue, -sd, sd);
+        W_v.fill_rand(queue, -sd, sd);
+        W_o.fill_rand(queue, -sd, sd);
+        W_gate.fill_rand(queue, -sd, sd);
+        W_up.fill_rand(queue, -sd, sd);
+        W_down.fill_rand(queue, -sf, sf);
 
-        V_q.zero();
-        V_k.zero();
-        V_v.zero();
-        V_o.zero();
-        V_gate.zero();
-        V_up.zero();
-        V_down.zero();
-    }
-
-    void TransformerBlock::copy_weights_to_offload_buffer()
-    {
-        W_q.copy_to_offload_buffer();
-        W_k.copy_to_offload_buffer();
-        W_v.copy_to_offload_buffer();
-        W_o.copy_to_offload_buffer();
-        W_gate.copy_to_offload_buffer();
-        W_up.copy_to_offload_buffer();
-        W_down.copy_to_offload_buffer();
+        V_q.zero(queue);
+        V_k.zero(queue);
+        V_v.zero(queue);
+        V_o.zero(queue);
+        V_gate.zero(queue);
+        V_up.zero(queue);
+        V_down.zero(queue);
     }
 
     // ── normalisation ──────────────────────────────────────────────────────────
@@ -326,7 +315,10 @@ namespace rllm
         matmul_ABt_3_matrix_muls(ws.h_norm_attn, W_q, ws.Q, W_k, ws.K, W_v, ws.V);
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
-        ws.attn_concat.zero();
+        {
+            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            ws.attn_concat.zero(queue);
+        }
         forward_attention_heads(ws, seq_len);
 
         // ── 4. Output projection + residual ──────────────────────────────────
@@ -543,10 +535,10 @@ namespace rllm
         ForwardWorkspace& fwd_workspace)
     {
         const PositionIndex seq = fwd_workspace.seq_len;
-        workspace.reset(seq);
+        VulkanQueue& queue = vulkan_runtime::session().get_queue(0);
+        workspace.reset(queue, seq);
         auto* ws = &workspace;
         auto& fwd = fwd_workspace;
-        VulkanQueue& queue = vulkan_runtime::session().get_queue(0);
 
         // ── FFN backward ──────────────────────────────────────────────────────
         // h_out = h_mid + ffn_out  → d_h_mid += dout,  d_ffn_out = dout (same buffer)
@@ -591,6 +583,7 @@ namespace rllm
         // ── d_h_in + weight updates ───────────────────────────────────────────
         // d_h_in (residual + RMSNorm backward) and all seven weight updates are
         // fully independent; run them all concurrently with separate VulkanQueues.
+        if (rllm::vulkan_runtime::queue_count() >= 5)
         {
             auto& queue1 = rllm::vulkan_runtime::get_queue(1);
             auto& queue2 = rllm::vulkan_runtime::get_queue(2);
@@ -613,6 +606,19 @@ namespace rllm
             queue3.wait("TransformerBlock backward queue3 wait idle");
             queue4.wait("TransformerBlock backward queue4 wait idle");
         }
+        else
+        {
+            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            din.copy_from(queue, ws->d_h_mid);
+            rms_norm_backward(queue, ws->d_h_norm_attn, fwd.h_in, din);
+            queue.wait("TransformerBlock backward din wait idle");
+            sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate);
+            queue.wait("TransformerBlock backward qkvo wait idle");
+            sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate);
+            queue.wait("TransformerBlock backward gateup wait idle");
+            sgd_update_Wdown_x_Vdown_dWdown(queue, W_down, V_down, ws->dW_down, learning_rate);
+            queue.wait("TransformerBlock backward down wait idle");
+        }
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────
@@ -623,13 +629,16 @@ namespace rllm
         cpu_fixed_matrix<float16, EmbeddingDimension, EmbeddingDimension> cpu_Wq, cpu_Wk, cpu_Wv, cpu_Wo;
         cpu_fixed_matrix<float16, FFDimension, EmbeddingDimension> cpu_Wgate, cpu_Wup;
         cpu_fixed_matrix<float16, EmbeddingDimension, FFDimension> cpu_Wdown;
-        W_q.copy_to_cpu(cpu_Wq);
-        W_k.copy_to_cpu(cpu_Wk);
-        W_v.copy_to_cpu(cpu_Wv);
-        W_o.copy_to_cpu(cpu_Wo);
-        W_gate.copy_to_cpu(cpu_Wgate);
-        W_up.copy_to_cpu(cpu_Wup);
-        W_down.copy_to_cpu(cpu_Wdown);
+        {
+            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            W_q.copy_to_cpu(queue, cpu_Wq);
+            W_k.copy_to_cpu(queue, cpu_Wk);
+            W_v.copy_to_cpu(queue, cpu_Wv);
+            W_o.copy_to_cpu(queue, cpu_Wo);
+            W_gate.copy_to_cpu(queue, cpu_Wgate);
+            W_up.copy_to_cpu(queue, cpu_Wup);
+            W_down.copy_to_cpu(queue, cpu_Wdown);
+        }
         return std::make_unique<nlohmann::json>(nlohmann::json{
             {"W_q", *serialize_matrix(cpu_Wq)},
             {"W_k", *serialize_matrix(cpu_Wk)},
@@ -654,23 +663,23 @@ namespace rllm
         deserialize_matrix(j.at("W_gate"), cpu_Wgate);
         deserialize_matrix(j.at("W_up"), cpu_Wup);
         deserialize_matrix(j.at("W_down"), cpu_Wdown);
-        W_q.copy_from_cpu(cpu_Wq);
-        W_k.copy_from_cpu(cpu_Wk);
-        W_v.copy_from_cpu(cpu_Wv);
-        W_o.copy_from_cpu(cpu_Wo);
-        W_gate.copy_from_cpu(cpu_Wgate);
-        W_up.copy_from_cpu(cpu_Wup);
-        W_down.copy_from_cpu(cpu_Wdown);
-        copy_weights_to_offload_buffer();
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        W_q.copy_from_cpu(queue, cpu_Wq);
+        W_k.copy_from_cpu(queue, cpu_Wk);
+        W_v.copy_from_cpu(queue, cpu_Wv);
+        W_o.copy_from_cpu(queue, cpu_Wo);
+        W_gate.copy_from_cpu(queue, cpu_Wgate);
+        W_up.copy_from_cpu(queue, cpu_Wup);
+        W_down.copy_from_cpu(queue, cpu_Wdown);
 
         // Reset momentum on load — do not persist transient training state
-        V_q.zero();
-        V_k.zero();
-        V_v.zero();
-        V_o.zero();
-        V_gate.zero();
-        V_up.zero();
-        V_down.zero();
+        V_q.zero(queue);
+        V_k.zero(queue);
+        V_v.zero(queue);
+        V_o.zero(queue);
+        V_gate.zero(queue);
+        V_up.zero(queue);
+        V_down.zero(queue);
     }
 
 } // namespace rllm

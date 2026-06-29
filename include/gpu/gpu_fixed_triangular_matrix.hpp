@@ -53,23 +53,23 @@ namespace rllm
 
         ~gpu_fixed_triangular_matrix() = default;
         /** H2D: direct Vulkan copy from cpu_fixed_triangular_matrix's pinned buffer to device. */
-        void copy_from_cpu(const cpu_fixed_triangular_matrix<ElementType, X, Y>& src)
+        void copy_from_cpu(VulkanQueue& queue, const cpu_fixed_triangular_matrix<ElementType, X, Y>& src)
         {
-            this->m_data.copy_to_offload_buffer(const_cast<VBaseHostBuffer&>(src.vk_host_buffer()));
+            this->m_data.copy_to_offload_buffer(queue, const_cast<VBaseHostBuffer&>(src.vk_host_buffer()));
         }
 
         /** D2H: direct Vulkan copy from device into cpu_fixed_triangular_matrix's pinned buffer. */
-        void copy_to_cpu(cpu_fixed_triangular_matrix<ElementType, X, Y>& dst) const
+        void copy_to_cpu(VulkanQueue& queue, cpu_fixed_triangular_matrix<ElementType, X, Y>& dst) const
         {
-            this->m_data.copy_from_offload_buffer(dst.vk_host_buffer());
+            this->m_data.copy_from_offload_buffer(queue, dst.vk_host_buffer());
         }
-        void fill_rand(ElementType lo, ElementType hi)
+        void fill_rand(VulkanQueue& queue, ElementType lo, ElementType hi)
         {
             cpu_fixed_triangular_matrix<ElementType, X, Y> tmp;
             auto* ptr = tmp.data();
             for (size_t i = 0; i < NUM_ELTS; ++i)
                 ptr[i] = static_cast<ElementType>(get_random_value(lo, hi));
-            copy_from_cpu(tmp);
+            copy_from_cpu(queue, tmp);
         }
 
         size_t storage_size_bytes() const { return NUM_ELTS * sizeof(ElementType); }

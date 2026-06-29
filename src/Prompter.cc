@@ -1,4 +1,5 @@
 #include <Prompter.hpp>
+#include <rllm_vulkan_runtime.hpp>
 
 #include <algorithm>
 #include <iostream>
@@ -72,7 +73,8 @@ namespace rllm
                  nn.get_last_input() = token_ids; // set the input to the probe token(s) for tracing
 
                  nn.propagate_forward();
-                 const auto mean_vec = nn.get_last_hidden_mean();
+                 auto& queue = rllm::vulkan_runtime::get_queue(0);
+                 const auto mean_vec = nn.get_last_hidden_mean(queue);
                  constexpr size_t D = static_cast<size_t>(EmbeddingDimension::MAX);
                  constexpr size_t COLS = 8;
                  std::println("Hidden state embedding for '{}' ({} tokens, mean-pooled):", arg, static_cast<size_t>(token_ids.size()));

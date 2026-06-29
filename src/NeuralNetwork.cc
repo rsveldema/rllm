@@ -38,36 +38,6 @@ namespace rllm
     }
 } // namespace rllm
 
-static std::ofstream s_nn_log;
-
-#ifdef LOG_INFO
-#undef LOG_INFO
-#endif
-
-#define LOG_INFO(...) (s_nn_log << std::format(__VA_ARGS__) << '\n' << std::flush)
-#define LOG_ERROR(...) (s_nn_log << std::format(__VA_ARGS__) << '\n' << std::flush)
-
-
-#define LOG_INFO_EVERY_N(...) \
-    do \
-    { \
-        static int counter = 0; \
-        if (counter++ % 100 == 0) \
-        { \
-            LOG_INFO(__VA_ARGS__); \
-        } \
-    } while (0)
-
-namespace rllm
-{
-    void set_nn_log_file(const std::string& filename)
-    {
-        if (s_nn_log.is_open())
-            s_nn_log.close();
-        s_nn_log.open(filename);
-    }
-} // namespace rllm
-
 namespace rllm
 {
     static void scatter_dh_last_to_row(
@@ -118,10 +88,10 @@ namespace rllm
             h_last.set_size(EmbeddingDimension::MAX);
         }
 
-        void reset(PositionIndex seq_len)
+        void reset(VulkanQueue& queue, PositionIndex seq_len)
         {
             h.set_rows(seq_len);
-            workspace.reset(seq_len);
+            workspace.reset(queue, seq_len);
         }
     };
 
@@ -130,7 +100,8 @@ namespace rllm
         assert(!m_transformer_blocks.empty());
 
         m_seq_len = m_last_input.size();
-        m_forward_workspace->reset(m_seq_len);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_forward_workspace->reset(queue, m_seq_len);
 
         auto& ws = *m_forward_workspace;
         ws.h.set_rows(m_seq_len);
@@ -147,12 +118,29 @@ namespace rllm
         // so the final output is based on the hidden state at the last input position.
         const auto last_pos = dec(m_seq_len);
         copy_hidden_row_to_vector(ws.h, last_pos, ws.h_last);
+        queue.wait("NeuralNetwork h_last ready for output layer forward");
 
-        // TODO: inline forward_from_hidden to turn this into a OFFLOAD_PARFOR_2D_PARAM
-        for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
+        const size_t output_head_count = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
+        if (rllm::vulkan_runtime::queue_count() > output_head_count)
         {
-            auto& queue = rllm::vulkan_runtime::get_queue(static_cast<int>(ix) + 1));
-            m_output_layers[output_index].forward_from_hidden(ws.h_last, queue);
+            for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
+            {
+                auto& output_queue = rllm::vulkan_runtime::get_queue(static_cast<size_t>(ix) + 1);
+                m_output_layers[ix].forward_from_hidden(ws.h_last, output_queue);
+            }
+            for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
+            {
+                auto& output_queue = rllm::vulkan_runtime::get_queue(static_cast<size_t>(ix) + 1);
+                output_queue.wait("NeuralNetwork output layer forward");
+            }
+        }
+        else
+        {
+            for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
+            {
+                m_output_layers[ix].forward_from_hidden(ws.h_last, queue);
+                queue.wait("NeuralNetwork output layer forward");
+            }
         }
     }
 
@@ -235,6 +223,29 @@ namespace rllm
         return top_k_pairs;
     }
 
+    cpu_fixed_vector<float, EmbeddingDimension> NeuralNetwork::get_last_hidden_mean(VulkanQueue& queue) const
+    {
+        const size_t seq_len = static_cast<size_t>(m_seq_len);
+        if (seq_len == 0)
+        {
+            LOG_ERROR("seq-len == 0");
+            std::abort();
+        }
+
+        cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> tmp;
+        const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(m_last_hidden).copy_to_cpu(queue, tmp);
+
+        cpu_fixed_vector<float, EmbeddingDimension> result;
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+        {
+            float sum = 0.0f;
+            for (const auto pos : enum_iterator1D<PositionIndex>(m_seq_len))
+                sum += static_cast<float>(tmp[pos, d]);
+            result.push_back(static_cast<float>(sum / static_cast<float>(seq_len)));
+        }
+        return result;
+    }
+
 
     struct BackwardPropWorkspace
     {
@@ -255,14 +266,14 @@ namespace rllm
             dh_last.set_size(EmbeddingDimension::MAX);
         }
 
-        void reset(PositionIndex seq_len)
+        void reset(VulkanQueue& queue, PositionIndex seq_len)
         {
             dh.set_rows(seq_len);
             din.set_rows(seq_len);
-            transformer_block.reset(seq_len);
-            output_layer_delta.zero();
-            h_last_vec.zero();
-            dh_last.zero();
+            transformer_block.reset(queue, seq_len);
+            output_layer_delta.zero(queue);
+            h_last_vec.zero(queue);
+            dh_last.zero(queue);
         }
     };
 
@@ -290,7 +301,8 @@ namespace rllm
     {
         assert(m_seq_len > PositionIndex::START);
 
-        m_backward_workspace->reset(m_seq_len);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_backward_workspace->reset(queue, m_seq_len);
 
         static constexpr float BASE_LEARNING_RATE = 0.003f;
         const float learning_rate =
@@ -304,16 +316,21 @@ namespace rllm
         copy_hidden_row_to_vector(m_forward_workspace->h, last_pos, ws.h_last_vec);
 
         // Accumulate dh_last contributions from every valid output head.
-        ws.dh_last.zero();
+        ws.dh_last.zero(queue);
         for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>(num_valid))
         {
-            ws.output_layer_delta = scores[oi].values;
+            {
+                ws.output_layer_delta.set_size(scores[oi].values.size());
+                const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(scores[oi].values.size()) * sizeof(float));
+                if (bytes > 0)
+                    ws.output_layer_delta.device_buffer().copy_from(queue, scores[oi].values.device_buffer(), bytes);
+            }
             m_output_layers[oi].backward_and_update(ws.output_layer_delta, ws.h_last_vec, ws.dh_last, learning_rate);
         }
 
         // Propagate the summed gradient through the transformer blocks.
-        ws.dh.zero();
-        ws.din.zero();
+        ws.dh.zero(queue);
+        ws.din.zero(queue);
         scatter_dh_last_to_row(ws.dh_last, ws.dh, last_pos);
 
         auto* p_dh  = &ws.dh;
@@ -363,9 +380,14 @@ namespace rllm
     float NeuralNetwork::evaluate_average_loss(const std::vector<CpuInputLine>& evaluation_lines)
     {
         if (evaluation_lines.empty())
+        {
+            LOG_ERROR("evaluation lines are empty!!");
+            std::abort();
             return std::numeric_limits<float>::quiet_NaN();
+        }
 
         Score score;
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
 
         double total_loss = 0.0;
         for (const auto& example : evaluation_lines)
@@ -385,7 +407,7 @@ namespace rllm
             {
                 const auto head = static_cast<MultiTokenPredictionIndex>(k);
                 const auto target = example[static_cast<PositionIndex>(input_len + k)];
-                score.reset();
+                score.reset(queue);
                 example_loss += static_cast<double>(m_output_layers[head].compute_score(score, target));
             }
             total_loss += example_loss / static_cast<double>(num_valid);
