@@ -43,6 +43,8 @@ namespace rllm
         // Higher k = tighter threshold = more gradient steps per example.
         // NOTE: if set too high, we drive a specific example to high confidence but fail to learn from other examples, harming generalization.
         static constexpr float k_convergence_divisor = 2.0f;
+        static constexpr size_t DEFAULT_LEARN_DEPTH = 16;
+        static constexpr float DEFAULT_LEARNING_RATE = 0.003f;
 
         NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats);
         ~NeuralNetwork();
@@ -58,6 +60,8 @@ namespace rllm
 
         void set_training_method(TrainingMethod m) { m_training_method = m; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
+        void set_learn_depth(size_t n) { assert(n > 0); m_learn_depth = n; }
+        void set_learning_rate(float rate) { assert(rate > 0.0f); m_learning_rate = rate; }
 
         void propagate_forward();
 
@@ -116,6 +120,7 @@ namespace rllm
         const float m_fires_nothing_ce_loss;
         const float m_convergence_threshold;
 
+        void reset_workspaces();
         void dump_top_predictions();
         void trace_probes_for_example(const char* phase, size_t iter, float loss_value, const std::string& full_string);
         void do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations);
@@ -128,6 +133,8 @@ namespace rllm
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
         int m_window_size = 2;
+        size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
+        float m_learning_rate = DEFAULT_LEARNING_RATE;
 
         void train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations);

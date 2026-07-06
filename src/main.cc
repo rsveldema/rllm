@@ -2,12 +2,15 @@
 #include <string>
 
 #include <Prompter.hpp>
+#include <RuntimeConfig.hpp>
 #include <Trainer.hpp>
 #include <parallel.hpp>
 #include <rllm_vulkan_runtime.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -46,6 +49,9 @@ struct CommandLineParser
     std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
     std::string executable_name = "./rllm";
     size_t mtp_heads = 1;
+    size_t learn_depth = rllm::NeuralNetwork::DEFAULT_LEARN_DEPTH;
+    float learning_rate = rllm::NeuralNetwork::DEFAULT_LEARNING_RATE;
+    bool nan_finding_mode = false;
 
     static bool option_matches(const std::string& arg, const CommandLineOption& option)
     {
@@ -99,6 +105,40 @@ struct CommandLineParser
                      checkpointing_interval = std::nullopt;
                  else
                      checkpointing_interval = std::chrono::seconds{seconds};
+             }},
+        {.options = {"--learn-depth"},
+         .description = std::format("Gradient-update passes per training example (default: {})", learn_depth),
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int n = std::atoi(args[0].c_str());
+                 if (n <= 0)
+                 {
+                     std::println("--learn-depth requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 learn_depth = static_cast<size_t>(n);
+             }},
+        {.options = {"--learning-rate"},
+         .description = std::format("Base learning rate before layer-count scaling (default: {})", learning_rate),
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const float rate = std::strtof(args[0].c_str(), &end);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE || !std::isfinite(rate) || rate <= 0.0f)
+                 {
+                     std::println("--learning-rate requires a positive number, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 learning_rate = rate;
+             }},
+        {.options = {"--nan-finding"},
+         .description = "Enable expensive NaN/range validation checks (default: disabled)",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 nan_finding_mode = true;
              }},
         {.options = {"--train-dir"},
          .description = "Directory containing training text files",
@@ -263,6 +303,7 @@ int main(int argc, char* argv[])
 
     CommandLineParser parser;
     parser.parse(argc, argv);
+    rllm::set_nan_finding_mode_enabled(parser.nan_finding_mode);
 
     if (parser.train_mode)
     {
@@ -275,6 +316,8 @@ int main(int argc, char* argv[])
             parser.method,
             parser.checkpointing_interval,
             parser.window_size,
+            parser.learn_depth,
+            parser.learning_rate,
             parser.num_epochs,
             parser.train_corpus_dir.value()
         );

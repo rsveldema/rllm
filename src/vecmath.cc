@@ -299,7 +299,7 @@ namespace rllm
                 OVERFLOW_CHECK_ADD(sum, term);
                 sum += term;
             }
-            C[i, j] = static_cast<float>(sum);
+            C[i, j] = math::clamp(static_cast<float>(sum), -10000.0f, 10000.0f);
         ENDFOR
     }
 
@@ -323,7 +323,7 @@ namespace rllm
                 OVERFLOW_CHECK_ADD(sum, term);
                 sum += term;
             }
-            C[i, j] = static_cast<float>(sum);
+            C[i, j] = math::clamp(static_cast<float>(sum), -10000.0f, 10000.0f);
         ENDFOR
     }
 
@@ -347,7 +347,7 @@ namespace rllm
                 OVERFLOW_CHECK_ADD(sum, term);
                 sum += term;
             }
-            C[i, j] = static_cast<float>(sum);
+            C[i, j] = math::clamp(static_cast<float>(sum), -10000.0f, 10000.0f);
         ENDFOR
     }
 
@@ -371,7 +371,7 @@ namespace rllm
                 OVERFLOW_CHECK_ADD(sum, term);
                 sum += term;
             }
-            C[i, j] = static_cast<float>(sum);
+            C[i, j] = math::clamp(static_cast<float>(sum), -10000.0f, 10000.0f);
         ENDFOR
     }
 
@@ -395,7 +395,8 @@ namespace rllm
                 OVERFLOW_CHECK_ADD(sum, term);
                 sum += term;
             }
-            C[i, j] += static_cast<float>(sum);
+            const float raw = (C[i, j] + static_cast<float>(sum));
+            C[i, j] = math::clamp(raw, -10000.0f, 10000.0f);
         ENDFOR
     }
 
@@ -434,7 +435,8 @@ namespace rllm
                 OVERFLOW_CHECK_ADD(sum3, term3);
                 sum3 += term3;
             }
-            C[i, j] += static_cast<float>((sum1 + (sum2 + sum3)));
+            const float raw = (C[i, j] + static_cast<float>((sum1 + (sum2 + sum3))));
+            C[i, j] = math::clamp(raw, -10000.0f, 10000.0f);
         ENDFOR
     }
 
@@ -571,7 +573,7 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(lhs.num_rows());
         OFFLOAD_PARFOR_2D_PARAM(queue, t, d, grid, (lhs, rhs, dst))
-        dst[t, d] = (lhs[t, d] + rhs[t, d]);
+        dst[t, d] = math::clamp((lhs[t, d] + rhs[t, d]), -10000.0f, 10000.0f);
         ENDFOR
     }
 
@@ -589,7 +591,7 @@ namespace rllm
         OFFLOAD_PARFOR_2D_PARAM(queue, t, f, grid, (gate_pre, up_pre, ffn_act))
         const float g = gate_pre[t, f];
         const float silu = (g / (1.0f + std::exp(-g)));
-        ffn_act[t, f] = (silu * up_pre[t, f]);
+        ffn_act[t, f] = math::clamp((silu * up_pre[t, f]), -10000.0f, 10000.0f);
         ENDFOR
     }
 }

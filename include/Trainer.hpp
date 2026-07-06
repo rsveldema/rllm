@@ -23,6 +23,8 @@ namespace rllm
             TrainingMethod method,
             std::optional<std::chrono::seconds> checkpointing_interval,
             int window_size,
+            size_t learn_depth,
+            float learning_rate,
             size_t num_epochs,
             const std::string& train_corpus_dir
         );

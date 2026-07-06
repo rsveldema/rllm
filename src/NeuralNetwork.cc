@@ -1,22 +1,22 @@
 #include <NeuralNetwork.hpp>
 #include <RuntimeConfig.hpp>
 #include <TokenIDFormatter.hpp>
-#include <enum_iterator2D.hpp>
-#include <parallel.hpp>
-#include <vecmath.hpp>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <enum_iterator2D.hpp>
 #include <format>
 #include <fstream>
 #include <limits>
 #include <map>
 #include <numeric>
+#include <parallel.hpp>
 #include <random>
 #include <set>
+#include <vecmath.hpp>
 
 namespace rllm
 {
@@ -44,6 +44,33 @@ namespace rllm
 namespace rllm
 {
     static constexpr float NAN_FINDING_HIDDEN_ABS_BOUND = 10000.0f;
+
+    static int mtp_input_len_for_sequence(int seq_len)
+    {
+        assert(seq_len >= 2);
+        const int max_heads = static_cast<int>(MultiTokenPredictionIndex::MAX);
+        return std::max(1, seq_len - max_heads);
+    }
+
+    static MultiTokenPredictionIndex mtp_valid_head_count_for_sequence(int seq_len, int input_len)
+    {
+        assert(seq_len >= 2);
+        assert(input_len >= 1);
+        assert(input_len < seq_len);
+        const int max_heads = static_cast<int>(MultiTokenPredictionIndex::MAX);
+        const int valid_heads = std::min(max_heads, seq_len - input_len);
+        assert(valid_heads >= 1);
+        return static_cast<MultiTokenPredictionIndex>(valid_heads);
+    }
+
+    static TokenID mtp_target_for_head(const CpuInputLine& line, int input_len, MultiTokenPredictionIndex head)
+    {
+        const int target_index = input_len + static_cast<int>(head);
+        assert(target_index < static_cast<int>(line.size()));
+        if (target_index < static_cast<int>(line.size()))
+            return line[static_cast<PositionIndex>(target_index)];
+        return TokenID::INVALID;
+    }
 
     static void scatter_dh_last_to_row(
         // OFFLOAD_PARAMETERS(dh_last, dh, last_pos)
@@ -151,12 +178,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void check_hidden_nan_finding_mode(
-        VulkanQueue& queue,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
-        PositionIndex rows,
-        const char* phase
-    )
+    static void check_hidden_nan_finding_mode(VulkanQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex rows, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -165,22 +187,46 @@ namespace rllm
         scan_hidden_matrix(queue, h, flag, rows, -NAN_FINDING_HIDDEN_ABS_BOUND, NAN_FINDING_HIDDEN_ABS_BOUND);
         if (neural_network_nan_scan_failed(queue, flag))
         {
+            cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_h;
+            cpu_h.set_rows(rows);
+            h.copy_to_cpu(queue, cpu_h);
+
+            float offending_value = std::nanf("");
+            int offending_row = -1;
+            int offending_col = -1;
+            for (const auto r : enum_iterator1D<PositionIndex>(rows))
+            {
+                for (const auto c : enum_iterator1D<EmbeddingDimension>())
+                {
+                    const float v = cpu_h[r, c];
+                    if (v != v || v < -NAN_FINDING_HIDDEN_ABS_BOUND || v > NAN_FINDING_HIDDEN_ABS_BOUND)
+                    {
+                        offending_value = v;
+                        offending_row = static_cast<int>(static_cast<size_t>(r));
+                        offending_col = static_cast<int>(static_cast<size_t>(c));
+                        break;
+                    }
+                }
+                if (offending_row >= 0)
+                    break;
+            }
+
             std::fprintf(
                 stderr,
-                "NAN_FINDING_MODE: NeuralNetwork hidden state invalid during %s; expected finite values in [%g, %g]\n",
+                "NAN_FINDING_MODE: NeuralNetwork hidden state invalid during %s; expected finite values in [%g, %g], "
+                "actual value=%g at row=%d col=%d\n",
                 phase,
                 static_cast<double>(-NAN_FINDING_HIDDEN_ABS_BOUND),
-                static_cast<double>(NAN_FINDING_HIDDEN_ABS_BOUND)
+                static_cast<double>(NAN_FINDING_HIDDEN_ABS_BOUND),
+                static_cast<double>(offending_value),
+                offending_row,
+                offending_col
             );
             std::abort();
         }
     }
 
-    static void check_hidden_vector_nan_finding_mode(
-        VulkanQueue& queue,
-        const fixed_size_vector<float, EmbeddingDimension>& values,
-        const char* phase
-    )
+    static void check_hidden_vector_nan_finding_mode(VulkanQueue& queue, const fixed_size_vector<float, EmbeddingDimension>& values, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -189,24 +235,12 @@ namespace rllm
         scan_embedding_vector(queue, values, flag, -NAN_FINDING_HIDDEN_ABS_BOUND, NAN_FINDING_HIDDEN_ABS_BOUND);
         if (neural_network_nan_scan_failed(queue, flag))
         {
-            std::fprintf(
-                stderr,
-                "NAN_FINDING_MODE: NeuralNetwork hidden vector invalid during %s; expected finite values in [%g, %g]\n",
-                phase,
-                static_cast<double>(-NAN_FINDING_HIDDEN_ABS_BOUND),
-                static_cast<double>(NAN_FINDING_HIDDEN_ABS_BOUND)
-            );
+            std::fprintf(stderr, "NAN_FINDING_MODE: NeuralNetwork hidden vector invalid during %s; expected finite values in [%g, %g]\n", phase, static_cast<double>(-NAN_FINDING_HIDDEN_ABS_BOUND), static_cast<double>(NAN_FINDING_HIDDEN_ABS_BOUND));
             std::abort();
         }
     }
 
-    static void check_token_vector_nan_finding_mode(
-        VulkanQueue& queue,
-        const fixed_size_vector<float, TokenID>& values,
-        float bound,
-        const char* name,
-        const char* phase
-    )
+    static void check_token_vector_nan_finding_mode(VulkanQueue& queue, const fixed_size_vector<float, TokenID>& values, float bound, const char* name, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -215,28 +249,19 @@ namespace rllm
         scan_token_vector(queue, values, flag, -bound, bound);
         if (neural_network_nan_scan_failed(queue, flag))
         {
-            std::fprintf(
-                stderr,
-                "NAN_FINDING_MODE: NeuralNetwork %s invalid during %s; expected finite values in [%g, %g]\n",
-                name,
-                phase,
-                static_cast<double>(-bound),
-                static_cast<double>(bound)
-            );
+            std::fprintf(stderr, "NAN_FINDING_MODE: NeuralNetwork %s invalid during %s; expected finite values in [%g, %g]\n", name, phase, static_cast<double>(-bound), static_cast<double>(bound));
             std::abort();
         }
     }
 
     // Number of gradient-update passes over all layers per training example per epoch.
-    constexpr size_t NUMBER_OF_LAYER_VISITS_PER_EXAMPLE = 8;
-
-    static size_t training_steps_per_example(size_t num_layers)
+    static size_t training_steps_per_example(size_t num_layers, size_t learn_depth)
     {
         (void) num_layers;
         // Keep a stable update budget across model depth. Scaling linearly with
         // layer count made deeper models (e.g. 4 layers) overfit tiny corpora
         // and collapse to near one-hot predictions in just a few epochs.
-        return NUMBER_OF_LAYER_VISITS_PER_EXAMPLE;
+        return learn_depth;
     }
 
     static void print_parallel_statistics_for_epoch(size_t epoch)
@@ -252,19 +277,23 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;
         fixed_size_vector<float, EmbeddingDimension> h_last;
 
-        ForwardWorkspace workspace;
+        std::vector<ForwardWorkspace> transformer_workspaces;
 
-        explicit NeuralNetworkForwardWorkspace(PositionIndex seq_len)
-            : h(seq_len),
-              workspace(seq_len)
+        NeuralNetworkForwardWorkspace(PositionIndex seq_len, size_t num_transformer_blocks)
+            : h(seq_len)
+            , transformer_workspaces()
         {
+            transformer_workspaces.reserve(num_transformer_blocks);
+            for (size_t i = 0; i < num_transformer_blocks; ++i)
+                transformer_workspaces.emplace_back(seq_len);
             h_last.set_size(EmbeddingDimension::MAX);
         }
 
         void reset(VulkanQueue& queue, PositionIndex seq_len)
         {
             h.set_rows(seq_len);
-            workspace.reset(queue, seq_len);
+            for (auto& workspace : transformer_workspaces)
+                workspace.reset(queue, seq_len);
         }
     };
 
@@ -287,7 +316,7 @@ namespace rllm
         for (size_t block_index = 0; block_index < m_transformer_blocks.size(); ++block_index)
         {
             auto& block = m_transformer_blocks[block_index];
-            block.forward(ws.h, m_seq_len, ws.workspace);
+            block.forward(ws.h, m_seq_len, ws.transformer_workspaces[block_index]);
             char phase[96];
             std::snprintf(phase, sizeof(phase), "after transformer block %zu forward", block_index);
             check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, phase);
@@ -302,16 +331,16 @@ namespace rllm
         check_hidden_vector_nan_finding_mode(queue, ws.h_last, "after h_last copy");
 
         const size_t output_head_count = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
-        if (rllm::vulkan_runtime::queue_count() > output_head_count)
+        if (rllm::vulkan_runtime::queue_count() >= output_head_count)
         {
             for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
             {
-                auto& output_queue = rllm::vulkan_runtime::get_queue(static_cast<size_t>(ix) + 1);
+                auto& output_queue = rllm::vulkan_runtime::get_queue(static_cast<size_t>(ix));
                 m_output_layers[ix].forward_from_hidden(ws.h_last, output_queue);
             }
             for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
             {
-                auto& output_queue = rllm::vulkan_runtime::get_queue(static_cast<size_t>(ix) + 1);
+                auto& output_queue = rllm::vulkan_runtime::get_queue(static_cast<size_t>(ix));
                 output_queue.wait("NeuralNetwork output layer forward");
             }
         }
@@ -330,10 +359,7 @@ namespace rllm
 
     static constexpr std::chrono::seconds MIN_TIME_BETWEEN_CHECKPOINTS{30};
 
-    static bool timed_checkpoint_due(
-        const std::optional<std::chrono::seconds>& checkpointing_interval,
-        std::chrono::steady_clock::time_point& last_checkpoint_at
-    )
+    static bool timed_checkpoint_due(const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at)
     {
         if (!checkpointing_interval.has_value())
             return false;
@@ -348,11 +374,7 @@ namespace rllm
 
     // Save a checkpoint, but skip it if less than MIN_TIME_BETWEEN_CHECKPOINTS
     // has elapsed since the last one (avoids rapid-fire saves at epoch boundaries).
-    static void epoch_checkpoint(
-        std::chrono::steady_clock::time_point& last_checkpoint_at,
-        size_t epoch,
-        const std::function<void()>& do_checkpoint
-    )
+    static void epoch_checkpoint(std::chrono::steady_clock::time_point& last_checkpoint_at, size_t epoch, const std::function<void()>& do_checkpoint)
     {
         const auto now = std::chrono::steady_clock::now();
         if ((now - last_checkpoint_at) < MIN_TIME_BETWEEN_CHECKPOINTS)
@@ -364,10 +386,9 @@ namespace rllm
         do_checkpoint();
     }
 
-    // Returns top-K tokens selected by logit, with probabilities normalized
-    // over the returned top-K set.
-    std::vector<OutputToken>
-    NeuralNetwork::get_best_output_token_ids(size_t top_k, MultiTokenPredictionIndex head) const
+    // Returns top-K tokens selected by logit, with probabilities from the full
+    // vocabulary softmax.
+    std::vector<OutputToken> NeuralNetwork::get_best_output_token_ids(size_t top_k, MultiTokenPredictionIndex head) const
     {
         assert(!m_transformer_blocks.empty());
         assert(top_k > 0);
@@ -378,22 +399,15 @@ namespace rllm
         if (top_k_pairs.empty())
             return top_k_pairs;
 
-        const double best_logit = static_cast<double>(top_k_pairs.front().activation);
+        double best_logit = -std::numeric_limits<double>::infinity();
+        for (const auto tok : enum_iterator1D<TokenID>())
+            best_logit = std::max(best_logit, static_cast<double>(m_output_layers[head].m_inputs_cpu[tok]));
 
-        // Cap the logit gap so that all top-K tokens have a non-negligible
-        // probability in the softmax (avoids numerical underflow for tokens
-        // that are slightly below the best logit).
-        static constexpr double MAX_LOGIT_GAP = 5.0;
-        for (auto& entry : top_k_pairs)
-        {
-            const double capped = std::max(static_cast<double>(entry.activation), best_logit - MAX_LOGIT_GAP);
-            entry.activation = static_cast<float>(capped);
-        }
-
-        // Stable softmax over the gap-capped logits.
+        // Stable softmax denominator over the full vocabulary. Normalizing only
+        // over top-K makes untrained tied logits misleadingly display as 1/K.
         double sum_exp = 0.0;
-        for (const auto& entry : top_k_pairs)
-            sum_exp += std::exp(static_cast<double>(entry.activation) - best_logit);
+        for (const auto tok : enum_iterator1D<TokenID>())
+            sum_exp += std::exp(static_cast<double>(m_output_layers[head].m_inputs_cpu[tok]) - best_logit);
 
         for (auto& entry : top_k_pairs)
         {
@@ -458,6 +472,12 @@ namespace rllm
         }
     };
 
+    void NeuralNetwork::reset_workspaces()
+    {
+        m_forward_workspace = std::make_unique<NeuralNetworkForwardWorkspace>(PositionIndex::START, m_transformer_blocks.size());
+        m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
+    }
+
     NeuralNetwork::NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats)
         : m_corpus(corpus)
         , m_stats(stats)
@@ -469,25 +489,19 @@ namespace rllm
         for (size_t i = 0; i < num_layers; ++i)
             m_transformer_blocks.emplace_back();
 
-        m_forward_workspace = std::make_unique<NeuralNetworkForwardWorkspace>(PositionIndex::START);
-        m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
+        reset_workspaces();
     }
 
     NeuralNetwork::~NeuralNetwork() = default;
 
-    void NeuralNetwork::propagate_backward_mtp(
-        const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
-        MultiTokenPredictionIndex num_valid
-    )
+    void NeuralNetwork::propagate_backward_mtp(const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores, MultiTokenPredictionIndex num_valid)
     {
         assert(m_seq_len > PositionIndex::START);
 
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_backward_workspace->reset(queue, m_seq_len);
 
-        static constexpr float BASE_LEARNING_RATE = 0.003f;
-        const float learning_rate =
-            BASE_LEARNING_RATE / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
+        const float learning_rate = m_learning_rate / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
 
         auto& ws = *m_backward_workspace;
         ws.dh.set_rows(m_seq_len);
@@ -523,7 +537,7 @@ namespace rllm
         scatter_dh_last_to_row(ws.dh_last, ws.dh, last_pos);
         check_hidden_nan_finding_mode(queue, ws.dh, m_seq_len, "after dh_last scatter");
 
-        auto* p_dh  = &ws.dh;
+        auto* p_dh = &ws.dh;
         auto* p_din = &ws.din;
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
@@ -531,7 +545,7 @@ namespace rllm
                 const auto phase = std::format("before transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, phase.c_str());
             }
-            m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, learning_rate, m_forward_workspace->workspace);
+            m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, learning_rate, m_forward_workspace->transformer_workspaces[static_cast<size_t>(i)]);
             {
                 const auto phase = std::format("after transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_din, m_seq_len, phase.c_str());
@@ -563,14 +577,7 @@ namespace rllm
         for (const auto& entry : predicted_token_id_lists)
         {
             const auto predicted_token = m_corpus.get_token_from_id(entry.token_id);
-            LOG_INFO(
-                "\t prediction[{} of {}] / pred:'{}' (id: '{}'), {}",
-                prediction_index,
-                predicted_token_id_lists.size(),
-                predicted_token,
-                entry.token_id,
-                entry.activation
-            );
+            LOG_INFO("\t prediction[{} of {}] / pred:'{}' (id: '{}'), {}", prediction_index, predicted_token_id_lists.size(), predicted_token, entry.token_id, entry.activation);
             prediction_index++;
         }
     }
@@ -593,19 +600,17 @@ namespace rllm
         {
             const int seq_len = static_cast<int>(example.size());
             assert(seq_len >= 2);
-            const int num_valid = std::min(seq_len - 1, static_cast<int>(MultiTokenPredictionIndex::MAX));
-            const int input_len = seq_len - num_valid;
+            const int input_len = mtp_input_len_for_sequence(seq_len);
+            const auto num_valid_heads = mtp_valid_head_count_for_sequence(seq_len, input_len);
 
-            example.sub_array(get_last_input(),
-                        static_cast<PositionIndex>(input_len));
+            example.sub_array(get_last_input(), static_cast<PositionIndex>(input_len));
 
             propagate_forward();
 
             double example_loss = 0.0;
-            for (int k = 0; k < num_valid; ++k)
+            for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
             {
-                const auto head = static_cast<MultiTokenPredictionIndex>(k);
-                const auto target = example[static_cast<PositionIndex>(input_len + k)];
+                const auto target = mtp_target_for_head(example, input_len, head);
                 score.reset(queue);
                 const float loss = m_output_layers[head].compute_score(score, target);
                 if (!std::isfinite(loss) || loss < -1e-4f)
@@ -624,17 +629,13 @@ namespace rllm
                 }
                 example_loss += static_cast<double>(loss);
             }
-            total_loss += example_loss / static_cast<double>(num_valid);
+            total_loss += example_loss / static_cast<double>(static_cast<size_t>(num_valid_heads));
         }
 
         return static_cast<float>(total_loss / static_cast<double>(evaluation_lines.size()));
     }
 
-    void NeuralNetwork::train_with_increasingly_longer_sequences(
-        const CpuInputLine& line_of_file,
-        bool verbose,
-        size_t max_iterations
-    )
+    void NeuralNetwork::train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations)
     {
         CpuInputLine line;
         for (const auto& line_substring_length : enum_iterator1D<PositionIndex>(line_of_file.size()))
@@ -652,18 +653,13 @@ namespace rllm
                 continue; // skip too-short lines that can't be used for training
             }
 
-            LOG_INFO("Training on line[{}]: '{}'", (int)line_substring_length, full_string);
+            LOG_INFO("Training on line[{}]: '{}'", (int) line_substring_length, full_string);
 
             do_training(line, verbose, max_iterations);
         }
     }
 
-    void NeuralNetwork::train_with_up_to_N(
-        const CpuInputLine& line_of_file,
-        bool verbose,
-        size_t max_iterations,
-        int num_tokens
-    )
+    void NeuralNetwork::train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens)
     {
         assert(num_tokens >= 2);
 
@@ -688,20 +684,14 @@ namespace rllm
         do_training(train_input, verbose, max_iterations);
     }
 
-    void NeuralNetwork::train_with_random_len_from_start(
-        const CpuInputLine& line_of_file,
-        bool verbose,
-        size_t max_iterations,
-        std::mt19937& rng
-    )
+    void NeuralNetwork::train_with_random_len_from_start(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, std::mt19937& rng)
     {
         const int line_len = static_cast<int>(line_of_file.size());
         if (line_len < 2)
             return;
 
         // Include short prefixes (len=2) so one-token contexts can learn their next token
-        // (e.g. "# -> define/include"). Longer prefixes are still emphasized by the
-        // effective_max_iterations scaling below.
+        // (e.g. "# -> define/include").
         const int min_len = 2;
         std::uniform_int_distribution<int> len_dist(min_len, line_len);
         const int random_len = len_dist(rng);
@@ -713,25 +703,10 @@ namespace rllm
 
         LOG_INFO("Training on random line prefix ({} toks): '{}'", random_len, *full_string_opt);
 
-        // Reward longer correct sequences with a larger optimization budget.
-        // len=2 keeps the base budget; longer prefixes scale up proportionally
-        // (capped to avoid runaway per-example compute on large corpora).
-        const size_t length_factor = std::max<size_t>(1, static_cast<size_t>(random_len) - 1);
-        const size_t capped_factor = std::min<size_t>(length_factor, 4);
-        const size_t effective_max_iterations = max_iterations * capped_factor;
-
-        do_training(train_input, verbose, effective_max_iterations);
+        do_training(train_input, verbose, max_iterations);
     }
 
-    void NeuralNetwork::train_random_line_random_len_epoch(
-        size_t epoch,
-        const std::vector<CpuInputLine>& training_lines,
-        bool verbose,
-        size_t num_epochs,
-        const std::optional<std::chrono::seconds>& checkpointing_interval,
-        std::chrono::steady_clock::time_point& last_checkpoint_at,
-        std::mt19937& rng
-    )
+    void NeuralNetwork::train_random_line_random_len_epoch(size_t epoch, const std::vector<CpuInputLine>& training_lines, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at, std::mt19937& rng)
     {
         const auto total_lines = training_lines.size();
         assert(total_lines > 0);
@@ -749,44 +724,30 @@ namespace rllm
 
             if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
             {
-                LOG_INFO(
-                    "Creating timed checkpoint at epoch: {}, line: {}, total lines todo: {}",
-                    epoch,
-                    lines_visited,
-                    total_lines
-                );
+                LOG_INFO("Creating timed checkpoint at epoch: {}, line: {}, total lines todo: {}", epoch, lines_visited, total_lines);
                 checkpoint();
             }
 
-            LOG_INFO(
-                "Epoch[{}%] random-line[{}]: {:0.2f}% done",
-                epoch / static_cast<float>(num_epochs) * 100.0f,
-                lines_visited,
-                progress * 100.0f
-            );
+            LOG_INFO("Epoch[{}%] random-line[{}]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, lines_visited, progress * 100.0f);
 
             const auto& random_line = training_lines[line_indices[lines_visited - 1]];
             if (m_training_method == TrainingMethod::RANDOM_LINE_FULL)
             {
                 // Train on the full line — all tokens are visible, last token is target.
                 if (static_cast<int>(random_line.size()) >= 2)
-                    do_training(random_line, verbose, training_steps_per_example(m_transformer_blocks.size()));
+                {
+                    do_training(random_line, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth));
+                }
             }
             else
             {
-                train_with_random_len_from_start(
-                    random_line, verbose, training_steps_per_example(m_transformer_blocks.size()), rng
-                );
+                train_with_random_len_from_start(random_line, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth), rng);
             }
         }
     }
 
 
-    void NeuralNetwork::do_line_based_training(
-        bool verbose,
-        size_t num_epochs,
-        const std::optional<std::chrono::seconds>& checkpointing_interval
-    )
+    void NeuralNetwork::do_line_based_training(bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
         auto split = m_corpus.get_deterministic_training_split(VALIDATION_PERCENT);
         std::vector<CpuInputLine> training_lines = std::move(split.training_lines);
@@ -797,21 +758,12 @@ namespace rllm
         // and can collapse the final model to whichever single line is validated.
         if (validation_lines.size() < 2)
         {
-            training_lines.insert(
-                training_lines.end(),
-                std::make_move_iterator(validation_lines.begin()),
-                std::make_move_iterator(validation_lines.end())
-            );
+            training_lines.insert(training_lines.end(), std::make_move_iterator(validation_lines.begin()), std::make_move_iterator(validation_lines.end()));
             validation_lines.clear();
             LOG_INFO("Validation disabled for tiny corpus (fewer than 2 held-out lines)");
         }
 
-        LOG_INFO(
-            "Using {} training lines and {} validation lines ({}% target validation split)",
-            training_lines.size(),
-            validation_lines.size(),
-            VALIDATION_PERCENT
-        );
+        LOG_INFO("Using {} training lines and {} validation lines ({}% target validation split)", training_lines.size(), validation_lines.size(), VALIDATION_PERCENT);
 
         assert(!training_lines.empty());
 
@@ -830,12 +782,9 @@ namespace rllm
         {
             bool should_stop = false;
 
-            if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN ||
-                m_training_method == TrainingMethod::RANDOM_LINE_FULL)
+            if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN || m_training_method == TrainingMethod::RANDOM_LINE_FULL)
             {
-                train_random_line_random_len_epoch(
-                    epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng
-                );
+                train_random_line_random_len_epoch(epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng);
 
                 epoch_checkpoint(last_checkpoint_at, epoch, [&] {
                     std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
@@ -854,40 +803,24 @@ namespace rllm
 
                     if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
                     {
-                        std::println(
-                            "creating timed checkpoint at epoch {}, line {}, total lines visited {}",
-                            epoch,
-                            lines_visited,
-                            total_lines
-                        );
+                        std::println("creating timed checkpoint at epoch {}, line {}, total lines visited {}", epoch, lines_visited, total_lines);
                         checkpoint();
                     }
 
-                    LOG_INFO(
-                        "Epoch[{}%] line[{}]: {:0.2f}% done",
-                        epoch / static_cast<float>(num_epochs) * 100.0f,
-                        lines_visited,
-                        progress * 100.0f
-                    );
+                    LOG_INFO("Epoch[{}%] line[{}]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, lines_visited, progress * 100.0f);
 
                     switch (m_training_method)
                     {
                     case TrainingMethod::TWO_TOK:
-                        train_with_up_to_N(
-                            line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size()), 2
-                        );
+                        train_with_up_to_N(line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth), 2);
                         break;
 
                     case TrainingMethod::THREE_TOK:
-                        train_with_up_to_N(
-                            line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size()), 3
-                        );
+                        train_with_up_to_N(line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth), 3);
                         break;
 
                     case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
-                        train_with_increasingly_longer_sequences(
-                            line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size())
-                        );
+                        train_with_increasingly_longer_sequences(line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth));
                         break;
 
                     case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
@@ -916,12 +849,7 @@ namespace rllm
             if (!validation_lines.empty())
             {
                 const float validation_loss = evaluate_average_loss(validation_lines);
-                LOG_INFO(
-                    "epoch {} validation loss: {:.6f} across {} held-out lines",
-                    epoch,
-                    validation_loss,
-                    validation_lines.size()
-                );
+                LOG_INFO("epoch {} validation loss: {:.6f} across {} held-out lines", epoch, validation_loss, validation_lines.size());
 
                 if ((validation_loss + VALIDATION_IMPROVEMENT_EPSILON) < best_validation_loss)
                 {
@@ -929,27 +857,15 @@ namespace rllm
                     epochs_without_improvement = 0;
                     save(BEST_CHECKPOINT_FILENAME);
                     has_best_checkpoint = true;
-                    LOG_INFO(
-                        "Saved new best checkpoint '{}' with validation loss {:.6f}",
-                        BEST_CHECKPOINT_FILENAME,
-                        validation_loss
-                    );
+                    LOG_INFO("Saved new best checkpoint '{}' with validation loss {:.6f}", BEST_CHECKPOINT_FILENAME, validation_loss);
                 }
                 else
                 {
                     epochs_without_improvement++;
-                    LOG_INFO(
-                        "Validation loss did not improve for {} epoch(s); best remains {:.6f}",
-                        epochs_without_improvement,
-                        best_validation_loss
-                    );
+                    LOG_INFO("Validation loss did not improve for {} epoch(s); best remains {:.6f}", epochs_without_improvement, best_validation_loss);
                     if (epochs_without_improvement >= EARLY_STOPPING_PATIENCE)
                     {
-                        LOG_INFO(
-                            "early stopping at epoch {} after {} epoch(s) without validation improvement",
-                            epoch,
-                            epochs_without_improvement
-                        );
+                        LOG_INFO("early stopping at epoch {} after {} epoch(s) without validation improvement", epoch, epochs_without_improvement);
                         should_stop = true;
                     }
                 }
@@ -965,11 +881,7 @@ namespace rllm
         {
             if (load(BEST_CHECKPOINT_FILENAME))
             {
-                LOG_INFO(
-                    "restored best checkpoint '{}' with validation loss {:.6f}",
-                    BEST_CHECKPOINT_FILENAME,
-                    best_validation_loss
-                );
+                LOG_INFO("restored best checkpoint '{}' with validation loss {:.6f}", BEST_CHECKPOINT_FILENAME, best_validation_loss);
             }
             else
             {
@@ -978,12 +890,7 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::train_with_window(
-        int window_size,
-        bool verbose,
-        size_t num_epochs,
-        const std::optional<std::chrono::seconds>& checkpointing_interval
-    )
+    void NeuralNetwork::train_with_window(int window_size, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
         assert(window_size >= 2);
 
@@ -1026,12 +933,7 @@ namespace rllm
 
                 if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
                 {
-                    LOG_INFO(
-                        "creating timed checkpoint at epoch {}, window {}, total windows trained {}",
-                        epoch,
-                        j,
-                        total_windows_trained
-                    );
+                    LOG_INFO("creating timed checkpoint at epoch {}, window {}, total windows trained {}", epoch, j, total_windows_trained);
                     checkpoint();
                 }
 
@@ -1039,18 +941,10 @@ namespace rllm
                 if (total_windows_trained % 100 == 0)
                 {
                     const auto line_opt = m_corpus.get_line(window);
-                    LOG_INFO(
-                        "Epoch[{}%] window[{}]: {:0.2f}% done for '{}', successes: {}, failures: {}",
-                        epoch / static_cast<float>(num_epochs) * 100.0f,
-                        j,
-                        progress * 100.0f,
-                        line_opt.has_value() ? line_opt->c_str() : "unknown",
-                        m_stats.num_learning_successes(),
-                        m_stats.num_learning_failures()
-                    );
+                    LOG_INFO("Epoch[{}%] window[{}]: {:0.2f}% done for '{}', successes: {}, failures: {}", epoch / static_cast<float>(num_epochs) * 100.0f, j, progress * 100.0f, line_opt.has_value() ? line_opt->c_str() : "unknown", m_stats.num_learning_successes(), m_stats.num_learning_failures());
                 }
 
-                do_training(window, verbose, training_steps_per_example(m_transformer_blocks.size()));
+                do_training(window, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth));
             }
 
             std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
@@ -1059,11 +953,7 @@ namespace rllm
         }
     }
 
-    void NeuralNetwork::do_whole_corpus_window_based_training(
-        bool verbose,
-        size_t num_epochs,
-        const std::optional<std::chrono::seconds>& checkpointing_interval
-    )
+    void NeuralNetwork::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
         // Window methods operate on the flat token stream rather than per-line.
         assert(m_training_method == TrainingMethod::WINDOW);
@@ -1071,12 +961,7 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::train(
-        bool verbose,
-        size_t num_epochs,
-        const std::optional<std::string>& input_filename,
-        const std::optional<std::chrono::seconds>& checkpointing_interval
-    )
+    void NeuralNetwork::train(bool verbose, size_t num_epochs, const std::optional<std::string>& input_filename, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
@@ -1140,7 +1025,7 @@ namespace rllm
             params_per_block,
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
-            training_steps_per_example(n_layers),
+            training_steps_per_example(n_layers, m_learn_depth),
             num_epochs,
             training_method_to_string(m_training_method)
         );
@@ -1159,18 +1044,23 @@ namespace rllm
     void NeuralNetwork::do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations)
     {
         // Multi-token prediction (MTP): given a sequence [t0,t1,...,tN-1] we
-        // use the first (N - num_valid_heads) tokens as context and train each
-        // head k to predict the token at position (context_len + k).
+        // use the first max(1, N - max_heads) tokens as context and train each
+        // real future head k to predict the token at position (context_len + k).
         assert(static_cast<int>(train_output.size()) >= 2);
         const int _seq_len = static_cast<int>(train_output.size());
-        const int _max_heads = static_cast<int>(MultiTokenPredictionIndex::MAX);
-        const int _num_valid = std::min(_seq_len - 1, _max_heads);
-        const int _input_len = _seq_len - _num_valid;
+        const int _input_len = mtp_input_len_for_sequence(_seq_len);
         CpuInputLine train_input;
         train_output.sub_array(train_input, static_cast<PositionIndex>(_input_len));
-        const auto num_valid_heads = static_cast<MultiTokenPredictionIndex>(_num_valid);
+        const auto num_valid_heads = mtp_valid_head_count_for_sequence(_seq_len, _input_len);
         // Head-0 target is used for logging and convergence checks.
-        const auto expected_output_token = train_output[static_cast<PositionIndex>(_input_len)];
+        const auto expected_output_token = mtp_target_for_head(train_output, _input_len, MultiTokenPredictionIndex::START);
+
+        bool print_loss_verbose = false;
+        static int count = 0;
+        if (count++ % 5 == 0)
+        {
+            print_loss_verbose = true;
+        }
 
         const auto full_string_opt = m_corpus.get_line(train_output);
         assert(full_string_opt.has_value());
@@ -1192,21 +1082,15 @@ namespace rllm
             for (const auto _k : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
             {
                 Score& s = (*scores_storage)[_k];
-                const auto _target = train_output[static_cast<PositionIndex>(_input_len + static_cast<int>(_k))];
+                const auto _target = mtp_target_for_head(train_output, _input_len, _k);
                 const float _k_loss = m_output_layers[_k].compute_score(s, _target);
-                if (std::isnan(_k_loss)) {
+                if (std::isnan(_k_loss))
+                {
                     LOG_ERROR("loss became NaN!");
                 }
                 if (!std::isfinite(_k_loss))
                 {
-                    LOG_INFO(
-                        "Non-finite loss detected for head {}, target '{}' ({}), full string: '{}', input size: {}.",
-                        static_cast<size_t>(_k),
-                        m_corpus.get_token_from_id(_target),
-                        _target,
-                        full_string,
-                        static_cast<size_t>(train_input.size())
-                    );
+                    LOG_INFO("Non-finite loss detected for head {}, target '{}' ({}), full string: '{}', input size: {}.", static_cast<size_t>(_k), m_corpus.get_token_from_id(_target), _target, full_string, static_cast<size_t>(train_input.size()));
                     m_stats.record_learning_failure();
                     return;
                 }
@@ -1218,27 +1102,15 @@ namespace rllm
 
             if (loss < m_convergence_threshold)
             {
-                LOG_INFO_EVERY_N(
-                    "Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}",
-                    i + 1,
-                    m_corpus.get_token_from_id(expected_output_token),
-                    full_string,
-                    static_cast<size_t>(train_input.size())
-                );
+                LOG_INFO("Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}", i + 1, m_corpus.get_token_from_id(expected_output_token), full_string, static_cast<size_t>(train_input.size()));
                 m_stats.record_learning_success();
                 return;
             }
 
-            if (verbose && i % 25 == 0)
+            if (print_loss_verbose)
             {
                 const auto expected_token = m_corpus.get_token_from_id(expected_output_token);
-                LOG_INFO(
-                    "Training iteration[{}], wanted: '{}' ({}), full string: '{}'",
-                    i,
-                    expected_token,
-                    expected_output_token,
-                    full_string
-                );
+                LOG_INFO("Training iteration[{}], wanted: '{}' ({}), full string: '{}'", i, expected_token, expected_output_token, full_string);
                 LOG_INFO("  Loss: {:.6f}", loss);
                 dump_top_predictions();
             }

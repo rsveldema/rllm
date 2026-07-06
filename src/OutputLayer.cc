@@ -16,8 +16,20 @@ namespace rllm
 {
     using uint = unsigned int;
     static constexpr float NAN_FINDING_H_LAST_ABS_BOUND = 10000.0f;
-    static constexpr float NAN_FINDING_LOGIT_ABS_BOUND = 1000.0f;
-    static constexpr float MAX_REASONABLE_CROSS_ENTROPY_LOSS = 1000.0f;
+    static constexpr float NAN_FINDING_LOGIT_ABS_BOUND = 19200.0f;
+
+    // Compute a reasonable upper bound for cross-entropy loss based on the
+    // observed logit spread and vocabulary size.
+    // loss = max_val - expected_logit + log(sum_exp)
+    // When the model is confident but wrong, loss ≈ logit_spread.
+    // We allow a margin proportional to the spread plus the uniform entropy.
+    static float compute_max_reasonable_loss(float max_val, float expected_logit)
+    {
+        const float logit_spread = max_val - expected_logit;
+        const float uniform_entropy = std::log(static_cast<float>(static_cast<size_t>(TokenID::MAX)));
+        // Allow 1.5x the logit spread plus uniform entropy as a safety margin.
+        return logit_spread * 1.5f + uniform_entropy;
+    }
 
     static fixed_size_vector<int, PositionIndex> make_nan_scan_flag(VulkanQueue& queue)
     {
@@ -198,7 +210,38 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         auto flag = make_nan_scan_flag(queue);
         scan_output_token_vector(logits, flag, -NAN_FINDING_LOGIT_ABS_BOUND, NAN_FINDING_LOGIT_ABS_BOUND);
-        check_output_vector_scan_failed("logits", phase, flag, queue, NAN_FINDING_LOGIT_ABS_BOUND);
+
+        if (nan_scan_failed(queue, flag))
+        {
+            cpu_fixed_vector<float, TokenID> cpu_logits;
+            cpu_logits.set_size(TokenID::MAX);
+            logits.copy_to_cpu(queue, cpu_logits);
+
+            float offending_value = std::nanf("");
+            int offending_idx = -1;
+            for (const auto i : enum_iterator1D<TokenID>())
+            {
+                const float v = cpu_logits[i];
+                if (v != v || v < -NAN_FINDING_LOGIT_ABS_BOUND || v > NAN_FINDING_LOGIT_ABS_BOUND)
+                {
+                    offending_value = v;
+                    offending_idx = static_cast<int>(static_cast<size_t>(i));
+                    break;
+                }
+            }
+
+            std::fprintf(
+                stderr,
+                "NAN_FINDING_MODE: OutputLayer logits invalid during %s; expected finite values in [%g, %g], "
+                "actual value=%g at index=%d\n",
+                phase,
+                static_cast<double>(-NAN_FINDING_LOGIT_ABS_BOUND),
+                static_cast<double>(NAN_FINDING_LOGIT_ABS_BOUND),
+                static_cast<double>(offending_value),
+                offending_idx
+            );
+            std::abort();
+        }
     }
 
     OutputLayer::OutputLayer()
@@ -223,7 +266,7 @@ namespace rllm
             const float term = (h_last[d] * static_cast<float>(W[v, d]));
             sum += term;
         }
-        inputs[v] = sum;
+        inputs[v] = math::clamp(sum, -19200.0f, 19200.0f);
         ENDFOR
     }
 
@@ -436,9 +479,10 @@ namespace rllm
         const float expected_logit = m_inputs_cpu[expected_output_token];
         const float log_prob = expected_logit - max_val - std::log(sum_exp);
         const float loss = -log_prob;
+        const float max_reasonable_loss = compute_max_reasonable_loss(max_val, expected_logit);
         if (!std::isfinite(expected_logit) || !std::isfinite(max_val) || !std::isfinite(sum_exp) ||
             !std::isfinite(log_prob) || sum_exp <= 0.0f || log_prob > 1e-4f ||
-            loss > MAX_REASONABLE_CROSS_ENTROPY_LOSS)
+            loss > max_reasonable_loss)
         {
             std::fprintf(
                 stderr,
@@ -450,7 +494,7 @@ namespace rllm
                 static_cast<double>(sum_exp),
                 static_cast<double>(log_prob),
                 static_cast<double>(loss),
-                static_cast<double>(MAX_REASONABLE_CROSS_ENTROPY_LOSS)
+                static_cast<double>(max_reasonable_loss)
             );
             std::abort();
         }

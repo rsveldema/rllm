@@ -171,6 +171,40 @@ TEST(SerializationTest, NeuralNetworkShortSafetensorsExtensionRoundTrip)
     std::filesystem::remove(sf_file);
 }
 
+TEST(SerializationTest, NeuralNetworkJsonLoadCanExtendTransformerBlocks)
+{
+    rllm::Corpus corpus({});
+    rllm::Statistics stats;
+    rllm::NeuralNetwork source(0, corpus, stats);
+
+    const std::string json_file = (std::filesystem::temp_directory_path() / "checkpoint-zero-blocks.json").string();
+    source.save(json_file);
+    ASSERT_TRUE(std::filesystem::exists(json_file));
+
+    rllm::NeuralNetwork loaded(1, corpus, stats);
+    EXPECT_TRUE(loaded.load(json_file));
+    EXPECT_EQ(loaded.get_transformer_block_count(), 1u);
+
+    std::filesystem::remove(json_file);
+}
+
+TEST(SerializationTest, NeuralNetworkSafetensorsLoadCanExtendTransformerBlocks)
+{
+    rllm::Corpus corpus({});
+    rllm::Statistics stats;
+    rllm::NeuralNetwork source(2, corpus, stats);
+
+    const std::string sf_file = (std::filesystem::temp_directory_path() / "checkpoint-two-blocks.st").string();
+    source.save(sf_file);
+    ASSERT_TRUE(std::filesystem::exists(sf_file));
+
+    rllm::NeuralNetwork loaded(3, corpus, stats);
+    EXPECT_TRUE(loaded.load(sf_file));
+    EXPECT_EQ(loaded.get_transformer_block_count(), 3u);
+
+    std::filesystem::remove(sf_file);
+}
+
 // ---------------------------------------------------------------------------
 // Safetensors layer round-trip: TransformerBlock (JSON-only test)
 // The raw safetensors API requires direct member access which is private.

@@ -150,8 +150,11 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
     # and count the frequency of each sequence. We will use this to create a tokenizer map that maps each sequence to a unique ID, sorted by length and frequency.
     seperators = ' \n\t(){}[]<>.,;:"\'`~?!@#$%^&*-_=+|\\/0123456789'
 
+    # Reserved model-control tokens. INVALID is used as the supervised target
+    # for MTP heads whose prediction horizon extends past the available input.
+    tokens = ["INVALID"]
+
     # all seperators are tokens:
-    tokens = []
     for ch in seperators:
         tokens.append(ch)
     tokens.append(EOW_MARKER)  # end-of-word marker used by BPE
@@ -276,6 +279,8 @@ def generate_cpp_table_header(tokenizer_map) -> str:
             cpp_table += f'    TOK_COMMA = TOK_{idx},\n'
         if _token == EOW_MARKER:
             cpp_table += f'    TOK_EOW = TOK_{idx},\n'
+        if _token == "INVALID":
+            cpp_table += f'    INVALID = TOK_{idx},\n'
     cpp_table += "    START = TOK_0,\n"
     cpp_table += f"    MAX = {len(tokenizer_map)},\n"
     cpp_table += "    UNKNOWN_TOKEN_ID = -1\n"

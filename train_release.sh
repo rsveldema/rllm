@@ -5,6 +5,73 @@ echo "Configuring and building release before training..."
 sh ./build_release.sh
 
 TRAIN_DIR="${TRAIN_DIR:-training_data1}"
+RUNTIME_TOKENIZER_HEADER="build_release/generated/tokenizer_map.hpp"
+
+runtime_vocab_size() {
+    python3 - "$RUNTIME_TOKENIZER_HEADER" <<'PY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r"\bMAX\s*=\s*(\d+)", text)
+if not match:
+    raise SystemExit(f"Could not find TokenID::MAX in {sys.argv[1]}")
+print(match.group(1))
+PY
+}
+
+model_vocab_size() {
+    python3 - "$1" <<'PY'
+import json
+import pathlib
+import struct
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    if path.suffix in {".st", ".safetensors"}:
+        with path.open("rb") as f:
+            header_len = struct.unpack("<Q", f.read(8))[0]
+            header = json.loads(f.read(header_len))
+        print(header.get("__metadata__", {}).get("tokenizer_vocab_size", ""))
+    elif path.suffix == ".json":
+        with path.open(encoding="utf-8") as f:
+            header = json.load(f)
+        print(header.get("tokenizer_vocab_size", ""))
+    else:
+        print("")
+except Exception as exc:
+    print(f"ERROR:{exc}")
+PY
+}
+
+resume_arg_for_model() {
+    local candidate="$1"
+    local required="${2:-0}"
+    local runtime_vocab
+    local model_vocab
+
+    runtime_vocab="$(runtime_vocab_size)"
+    model_vocab="$(model_vocab_size "$candidate")"
+
+    if [[ "$model_vocab" == ERROR:* ]]; then
+        echo "Cannot inspect resume model '$candidate': ${model_vocab#ERROR:}" >&2
+        if [ "$required" != "0" ]; then
+            exit 1
+        fi
+        return 1
+    fi
+
+    if [[ -n "$model_vocab" && "$model_vocab" != "$runtime_vocab" ]]; then
+        echo "Skipping incompatible resume model '$candidate' (model vocab=$model_vocab, runtime vocab=$runtime_vocab)." >&2
+        if [ "$required" != "0" ]; then
+            exit 1
+        fi
+        return 1
+    fi
+
+    echo "-i $candidate"
+}
 
 echo "Locating checkpoint to resume from..."
 
@@ -30,10 +97,13 @@ if [ "${FRESH_START:-0}" != "0" ]; then
     input_arg=""
 elif [ -n "${RESUME_MODEL:-}" ] && [ -f "${RESUME_MODEL}" ]; then
     echo "Resuming from ${RESUME_MODEL}"
-    input_arg="-i ${RESUME_MODEL}"
+    input_arg="$(resume_arg_for_model "${RESUME_MODEL}" 1)"
 elif [ -f "models/after_training.st" ]; then
-    echo "Resuming from models/after_training.st"
-    input_arg="-i models/after_training.st"
+    if input_arg="$(resume_arg_for_model "models/after_training.st")"; then
+        echo "Resuming from models/after_training.st"
+    else
+        input_arg=""
+    fi
 else
     shopt -s nullglob
     latest_checkpoint=""
@@ -45,8 +115,12 @@ else
     shopt -u nullglob
 
     if [ -n "$latest_checkpoint" ]; then
-        echo "Resuming from $latest_checkpoint"
-        input_arg="-i $latest_checkpoint"
+        if input_arg="$(resume_arg_for_model "$latest_checkpoint")"; then
+            echo "Resuming from $latest_checkpoint"
+        else
+            echo "No compatible checkpoint found, starting from random weights."
+            input_arg=""
+        fi
     else
         echo "No checkpoint found, starting from random weights."
         input_arg=""
@@ -55,9 +129,7 @@ fi
 
 echo "--- Starting training ---"
 
-export NAN_FINDING_MODE=1
-
-
+#gdb --args 
 ./build_release/rllm --train $input_arg \
     -o models/after_training.st \
     --train-dir "$TRAIN_DIR" \
@@ -67,8 +139,10 @@ export NAN_FINDING_MODE=1
      --filter preprocessing \
      --method random_line_random_len \
      --epochs 20 \
-     --layers 4 \
-     --checkpoint-interval 30
+     --layers 2 \
+     --checkpoint-interval 120 \
+     --learn-depth 20 \
+     --learning-rate 0.01
 
 
 # training Options:

@@ -288,13 +288,40 @@ namespace rllm
         scan_transformer_hidden_matrix(queue, matrix, flag, rows, -bound, bound);
         if (nan_scan_failed(queue, flag))
         {
+            cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_matrix;
+            cpu_matrix.set_rows(rows);
+            matrix.copy_to_cpu(queue, cpu_matrix);
+
+            float offending_value = std::nanf("");
+            int offending_row = -1, offending_col = -1;
+            for (const auto r : enum_iterator1D<PositionIndex>(rows))
+            {
+                for (const auto c : enum_iterator1D<EmbeddingDimension>())
+                {
+                    const float v = cpu_matrix[r, c];
+                    if (v != v || v < -bound || v > bound)
+                    {
+                        offending_value = v;
+                        offending_row = static_cast<int>(static_cast<size_t>(r));
+                        offending_col = static_cast<int>(static_cast<size_t>(c));
+                        break;
+                    }
+                }
+                if (offending_row >= 0)
+                    break;
+            }
+
             std::fprintf(
                 stderr,
-                "NAN_FINDING_MODE: TransformerBlock %s invalid during %s; expected finite values in [%g, %g]\n",
+                "NAN_FINDING_MODE: TransformerBlock %s invalid during %s; expected finite values in [%g, %g], "
+                "actual value=%g at row=%d col=%d\n",
                 name,
                 phase,
                 static_cast<double>(-bound),
-                static_cast<double>(bound)
+                static_cast<double>(bound),
+                static_cast<double>(offending_value),
+                offending_row,
+                offending_col
             );
             std::abort();
         }
@@ -413,7 +440,8 @@ namespace rllm
         dot /= fd;
 
         for (const auto i : enum_iterator1D<EmbeddingDimension>()) {
-            dx[t, i] += (inv * (dy[t, i] - ((x[t, i] * inv) * dot)));
+            const float raw = (dx[t, i] + (inv * (dy[t, i] - ((x[t, i] * inv) * dot))));
+            dx[t, i] = math::clamp(raw, -10000.0f, 10000.0f);
         }
         ENDFOR
     }
@@ -481,8 +509,8 @@ namespace rllm
         // silu'(g) = sigma(g) * (1 + g * (1 - sigma(g)))
         // Avoids exp(-g)*sigma(g) which gives inf*0=NaN for g < -88 in float32.
         const float dsilu_dg = (sg * (1.0f + (g * (1.0f - sg))));
-        d_gate_pre[t, f] = ((d_ffn_act[t, f] * up_pre[t, f]) * dsilu_dg);
-        d_up_pre[t, f] = (d_ffn_act[t, f] * silu);
+        d_gate_pre[t, f] = math::clamp(((d_ffn_act[t, f] * up_pre[t, f]) * dsilu_dg), -10000.0f, 10000.0f);
+        d_up_pre[t, f] = math::clamp((d_ffn_act[t, f] * silu), -10000.0f, 10000.0f);
         ENDFOR
     }
 
@@ -672,14 +700,14 @@ namespace rllm
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (d_V, attn_w_h, d_attn_concat, seq_len, hStart))
+        const auto dv_grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
+        OFFLOAD_PARFOR_2D_PARAM(queue, j, d_head, dv_grid, (d_V, attn_w_h, d_attn_concat, seq_len, hStart))
         {
-            const float w = attn_w_h[i, j];
-            for (const auto d_head : enum_iterator1D<HeadDimension>())
-            {
-                const int d = (hStart + int(d_head));
-                d_V[j, d] += (w * d_attn_concat[i, d]);
-            }
+            const int d = (hStart + int(d_head));
+            float sum_v = 0.f;
+            for (const auto i : enum_iterator1D<PositionIndex>(j, seq_len))
+                sum_v += (attn_w_h[i, j] * d_attn_concat[i, d]);
+            d_V[j, d] = math::clamp(sum_v, -10000.0f, 10000.0f);
         }
         ENDFOR
     }
@@ -718,7 +746,7 @@ namespace rllm
                 const int d = (hStart + int(d_head));
                 dot += (d_attn_concat[i, d] * V[j, d]);
             }
-            d_scores_h[i, j] = dot;
+            d_scores_h[i, j] = math::clamp(dot, -10000.0f, 10000.0f);
         }
         ENDFOR
     }
@@ -756,7 +784,8 @@ namespace rllm
             {
                 row_dot += (d_scores_h[i, k] * attn_w_h[i, k]);
             }
-            d_raw_h[i, j] = (attn_w_h[i, j] * (d_scores_h[i, j] - row_dot));
+            const float raw = (attn_w_h[i, j] * (d_scores_h[i, j] - row_dot));
+            d_raw_h[i, j] = math::clamp(raw, -10000.0f, 10000.0f);
         }
         ENDFOR
     }
@@ -805,7 +834,7 @@ namespace rllm
             float sum_q = 0.f;
             for (const auto j : enum_iterator1D<PositionIndex>(inc(i)))
                 sum_q += ((d_raw_h[i, j] * head_scale) * K[j, d]);
-            d_Q[i, d] = sum_q;
+            d_Q[i, d] = math::clamp(sum_q, -10000.0f, 10000.0f);
         }
         ENDFOR
     }
@@ -829,7 +858,7 @@ namespace rllm
             float sum_k = 0.f;
             for (const auto i : enum_iterator1D<PositionIndex>(j, seq_len))
                 sum_k += ((d_raw_h[i, j] * (1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX))))) * Q[i, d]);
-            d_K[j, d] = sum_k;
+            d_K[j, d] = math::clamp(sum_k, -10000.0f, 10000.0f);
         }
         ENDFOR
     }

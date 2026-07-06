@@ -2,6 +2,8 @@
 #include <Trainer.hpp>
 #include <safetensors.hh>
 
+#include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <format>
 #include <fstream>
@@ -45,6 +47,14 @@ namespace rllm
                 h *= 1099511628211ULL;
             }
             return h;
+        }
+
+        bool parse_metadata_u64(const std::string& text, uint64_t& value)
+        {
+            const auto* begin = text.data();
+            const auto* end = begin + text.size();
+            const auto result = std::from_chars(begin, end, value);
+            return result.ec == std::errc{} && result.ptr == end;
         }
     } // namespace
 
@@ -110,16 +120,20 @@ namespace rllm
         const auto j = nlohmann::json::parse(file);
         const auto version = j.value("version", 0);
         if (version != 1)
+        {
             std::println("Unsupported model version in {}", filename);
-        std::abort();
+            return false;
+        }
 
         const auto expected_vocab_size = static_cast<size_t>(TokenID::MAX);
         if (j.contains("tokenizer_vocab_size"))
         {
             const auto model_vocab_size = j.at("tokenizer_vocab_size").template get<size_t>();
             if (model_vocab_size != expected_vocab_size)
+            {
                 std::println("Tokenizer vocab size mismatch in {}: model={}, runtime={}", filename, model_vocab_size, expected_vocab_size);
-            std::abort();
+                return false;
+            }
         }
 
         if (j.contains("tokenizer_signature"))
@@ -127,8 +141,10 @@ namespace rllm
             const auto model_sig = j.at("tokenizer_signature").template get<uint64_t>();
             const auto runtime_sig = tokenizer_signature();
             if (model_sig != runtime_sig)
+            {
                 std::println("Tokenizer signature mismatch in {}: rebuilding/retraining required", filename);
-            std::abort();
+                return false;
+            }
         }
 
         m_input_layer.load(j.at("input_layer"));
@@ -136,13 +152,31 @@ namespace rllm
         if (j.contains("transformer_blocks"))
         {
             const auto& blocks_j = j.at("transformer_blocks");
+            const size_t requested_blocks = m_transformer_blocks.size();
+            const size_t saved_blocks = blocks_j.size();
+            const size_t target_blocks = std::max(requested_blocks, saved_blocks);
             m_transformer_blocks.clear();
-            m_transformer_blocks.reserve(blocks_j.size());
+            m_transformer_blocks.reserve(target_blocks);
             for (const auto& b : blocks_j)
             {
                 m_transformer_blocks.emplace_back();
                 m_transformer_blocks.back().load(b);
             }
+            for (size_t i = saved_blocks; i < target_blocks; ++i)
+            {
+                auto& block = m_transformer_blocks.emplace_back();
+                block.randomize();
+            }
+            if (target_blocks != saved_blocks)
+            {
+                std::println(
+                    "Extended model from {} to {} transformer block(s) while loading {}",
+                    saved_blocks,
+                    target_blocks,
+                    filename
+                );
+            }
+            reset_workspaces();
         }
 
         if (j.contains("output_layers"))
@@ -467,26 +501,55 @@ namespace rllm
         if (!safetensors::load_from_file(filename, &st, &warn, &ere))
         {
             std::println("Failed to read safetensors file: {}", filename);
-            std::abort();
+            if (!ere.empty())
+                std::println("safetensors error: {}", ere);
+            return false;
         }
 
         const auto& header = st.metadata;
         if (!header.count("version"))
         {
             std::println("Missing version in safetensors metadata for: {}", filename);
-            std::abort();
+            return false;
+        }
+
+        const auto expected_vocab_size = static_cast<size_t>(TokenID::MAX);
+        std::string vocab_size_str;
+        if (header.count("tokenizer_vocab_size") && header.at("tokenizer_vocab_size", &vocab_size_str))
+        {
+            uint64_t model_vocab_size = 0;
+            if (!parse_metadata_u64(vocab_size_str, model_vocab_size))
+            {
+                std::println("Invalid tokenizer vocab size metadata in {}: {}", filename, vocab_size_str);
+                return false;
+            }
+            if (model_vocab_size != expected_vocab_size)
+            {
+                std::println(
+                    "Tokenizer vocab size mismatch in {}: model={}, runtime={}",
+                    filename,
+                    model_vocab_size,
+                    expected_vocab_size
+                );
+                return false;
+            }
         }
 
         // Validate tokenizer if present (matches JSON load behavior).
         std::string sig_str;
         if (header.count("tokenizer_signature") && header.at("tokenizer_signature", &sig_str))
         {
-            const auto model_sig = static_cast<uint64_t>(std::stoull(sig_str));
+            uint64_t model_sig = 0;
+            if (!parse_metadata_u64(sig_str, model_sig))
+            {
+                std::println("Invalid tokenizer signature metadata in {}: {}", filename, sig_str);
+                return false;
+            }
             const auto runtime_sig = tokenizer_signature();
             if (model_sig != runtime_sig)
             {
                 std::println("Tokenizer signature mismatch between safetensors model and runtime tokenizer for: {}", filename);
-                std::abort();
+                return false;
             }
         }
 
@@ -494,12 +557,14 @@ namespace rllm
         size_t num_blocks = 0;
         while (st.tensors.count("transformer_blocks." + std::to_string(num_blocks) + ".W_q"))
             ++num_blocks;
+        const size_t requested_blocks = m_transformer_blocks.size();
+        const size_t target_blocks = std::max(requested_blocks, num_blocks);
 
         m_input_layer.load_from_safetensors(filename);
 
         // Clear existing blocks and create new ones.
         m_transformer_blocks.clear();
-        m_transformer_blocks.reserve(num_blocks);
+        m_transformer_blocks.reserve(target_blocks);
 
         for (size_t bi = 0; bi < num_blocks; ++bi)
         {
@@ -516,6 +581,21 @@ namespace rllm
             pull_matrix(pfx + "W_up", st, block.W_up);
             pull_matrix(pfx + "W_down", st, block.W_down);
         }
+        for (size_t bi = num_blocks; bi < target_blocks; ++bi)
+        {
+            auto& block = m_transformer_blocks.emplace_back();
+            block.randomize();
+        }
+        if (target_blocks != num_blocks)
+        {
+            std::println(
+                "Extended model from {} to {} transformer block(s) while loading {}",
+                num_blocks,
+                target_blocks,
+                filename
+            );
+        }
+        reset_workspaces();
 
         if (st.tensors.count("output_layers.0.W_lm_head"))
         {
