@@ -957,11 +957,11 @@ namespace rllm
             din.copy_from(queue1, ws->d_h_mid);
             rms_norm_backward(queue1, ws->d_h_norm_attn, fwd.h_in, din);
             // PARSECTION(queue2)
-            sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue2, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate);
+            sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue2, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
             // PARSECTION(queue3)
-            sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue3, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate);
+            sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue3, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
             // PARSECTION(queue4)
-            sgd_update_Wdown_x_Vdown_dWdown(queue4, W_down, V_down, ws->dW_down, learning_rate);
+            sgd_update_Wdown_x_Vdown_dWdown(queue4, W_down, V_down, ws->dW_down, learning_rate * FF_LEARNING_RATE_SCALE);
             // PARSECTIONS_END
 
             queue1.wait("TransformerBlock backward queue1 wait idle");
@@ -977,11 +977,11 @@ namespace rllm
             rms_norm_backward(queue, ws->d_h_norm_attn, fwd.h_in, din);
             queue.wait("TransformerBlock backward din wait idle");
             check_transformer_hidden_nan_finding_mode(queue, din, seq, "din", "after final RMSNorm backward");
-            sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate);
+            sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
             queue.wait("TransformerBlock backward qkvo wait idle");
-            sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate);
+            sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
             queue.wait("TransformerBlock backward gateup wait idle");
-            sgd_update_Wdown_x_Vdown_dWdown(queue, W_down, V_down, ws->dW_down, learning_rate);
+            sgd_update_Wdown_x_Vdown_dWdown(queue, W_down, V_down, ws->dW_down, learning_rate * FF_LEARNING_RATE_SCALE);
             queue.wait("TransformerBlock backward down wait idle");
         }
 

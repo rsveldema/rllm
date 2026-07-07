@@ -176,6 +176,8 @@ namespace rllm
         static constexpr float GRAD_CLIP = 1.0f;
         static constexpr float VEL_CLIP = 0.1f;
         static constexpr float WEIGHT_CLAMP = 2.0f;
+        static constexpr float EMBEDDING_LEARNING_RATE_SCALE = 1.0f / static_cast<float>(EmbeddingDimension::MAX);
+        static constexpr float FF_LEARNING_RATE_SCALE = 1.0f / static_cast<float>(FFDimension::MAX);
 
       public:
         TransformerBlock(); // defined in .cc after ForwardWorkspace is complete

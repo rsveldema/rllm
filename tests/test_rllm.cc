@@ -187,6 +187,19 @@ TEST(PredictorRegressionTest, InvalidTokenIsReserved)
     EXPECT_LT(TokenID::INVALID, TokenID::MAX);
 }
 
+TEST(PredictorRegressionTest, UnknownTokenLookupDoesNotCreateNullString)
+{
+    std::vector<std::string> filters = {"include_a_training"};
+    Corpus corpus(filters);
+
+    EXPECT_EQ(corpus.get_token_from_id(TokenID::UNKNOWN_TOKEN_ID), "<UNK>");
+    EXPECT_EQ(corpus.get_token_from_id(static_cast<TokenID>(static_cast<int>(TokenID::MAX) + 1)), "<UNK>");
+
+    CpuInputLine line;
+    line.push_back(static_cast<TokenID>(static_cast<int>(TokenID::MAX) + 1));
+    EXPECT_FALSE(corpus.get_line(line).has_value());
+}
+
 TEST(PredictorRegressionTest, IncludeATrainingKeepsMTPHeadsQueryable)
 {
     std::srand(0);

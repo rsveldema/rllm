@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -487,9 +488,25 @@ namespace rllm
 
         st.storage = std::move(storage);
         std::string warn;
-        if (!safetensors::save_to_file(st, filename, &warn, nullptr))
+        std::string err;
+        const std::string tmp_filename = filename + ".tmp";
+        if (!safetensors::save_to_file(st, tmp_filename, &warn, &err))
         {
-            std::println("Failed to write safetensors file: {}", filename);
+            std::println("Failed to write safetensors file '{}': {}", filename, err);
+            std::abort();
+        }
+        std::error_code ec;
+        std::filesystem::rename(tmp_filename, filename, ec);
+        if (ec)
+        {
+            std::filesystem::remove(filename, ec);
+            ec.clear();
+            std::filesystem::rename(tmp_filename, filename, ec);
+        }
+        if (ec)
+        {
+            std::println("Failed to replace safetensors file '{}': {}", filename, ec.message());
+            std::filesystem::remove(tmp_filename);
             std::abort();
         }
     }

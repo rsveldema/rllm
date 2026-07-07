@@ -224,8 +224,18 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         {
             return "<UNK>";
         }
-        assert(id < TokenID::MAX);
-        return tokenizer_map[id].str;
+        if (id < TokenID::START || id >= TokenID::MAX)
+        {
+            return "<UNK>";
+        }
+
+        const auto it = tokenizer_map.find(id);
+        if (it == tokenizer_map.end() || it->second.str == nullptr)
+        {
+            return "<UNK>";
+        }
+
+        return it->second.str;
     }
 
     std::optional<std::string> Corpus::get_line(const CpuInputLine& line) const
@@ -234,11 +244,18 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
         {
             auto& token_id = line[i];
-            auto& token_info = tokenizer_map[token_id];
             if (token_id == TokenID::UNKNOWN_TOKEN_ID)
             {
                 return std::nullopt; // line contains unknown token ID, cannot convert to string
             }
+
+            const auto it = tokenizer_map.find(token_id);
+            if (it == tokenizer_map.end() || it->second.str == nullptr)
+            {
+                return std::nullopt;
+            }
+
+            const auto& token_info = it->second;
             result += get_token_from_id(token_id);
             if (token_info.end_of_word)
             {

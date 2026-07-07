@@ -296,8 +296,11 @@ int main(int argc, char* argv[])
     std::println("Build type: Debug (NDEBUG not defined)");
 #endif
 
-    VulkanSession vulkan_session;
-    rllm::vulkan_runtime::set_session(vulkan_session);
+    // Generated Vulkan kernels are function-local statics and may destruct
+    // during process teardown. Keep the session alive for the full process so
+    // those destructors never see a dead VkDevice.
+    auto* vulkan_session = new VulkanSession();
+    rllm::vulkan_runtime::set_session(*vulkan_session);
     std::println("Offload type: Vulkan");
     parallel::print_vulkan_provider();
 

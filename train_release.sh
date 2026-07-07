@@ -136,13 +136,13 @@ echo "--- Starting training ---"
      --filter iuring \
      --filter simple \
      --filter self \
-     --filter preprocessing \
+     --filter preprocessor \
      --method random_line_random_len \
      --epochs 20 \
      --layers 2 \
      --checkpoint-interval 120 \
      --learn-depth 20 \
-     --learning-rate 0.01
+     --learning-rate 0.003
 
 
 # training Options:

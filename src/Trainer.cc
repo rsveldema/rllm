@@ -29,12 +29,12 @@ namespace rllm
     {
         const float effective_learning_rate = learning_rate / static_cast<float>(std::max<size_t>(1, num_layers));
         std::println("Training mode: depth {}, learning rate {} (effective per-layer {})", learn_depth, learning_rate, effective_learning_rate);
-        if (effective_learning_rate > 0.01f)
+        if (learning_rate > 0.25f)
         {
             std::println(
-                "Warning: effective learning rate {} is high for the current clipped optimizer and may saturate logits. "
-                "Try --learning-rate 0.01 or lower if losses jump to ~38400.",
-                effective_learning_rate
+                "Warning: base learning rate {} is high for the current clipped optimizer and may saturate logits. "
+                "Try --learning-rate 0.2 or lower if losses jump to ~38400.",
+                learning_rate
             );
         }
         set_nn_log_file("train.log");
