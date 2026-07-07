@@ -51,6 +51,7 @@ struct CommandLineParser
     size_t mtp_heads = 1;
     size_t learn_depth = rllm::NeuralNetwork::DEFAULT_LEARN_DEPTH;
     float learning_rate = rllm::NeuralNetwork::DEFAULT_LEARNING_RATE;
+    std::optional<size_t> epoch_size;
     bool nan_finding_mode = false;
 
     static bool option_matches(const std::string& arg, const CommandLineOption& option)
@@ -153,6 +154,19 @@ struct CommandLineParser
          .action =
              [&](const std::vector<std::string>& args) {
                  num_epochs = static_cast<size_t>(std::atoi(args[0].c_str()));
+             }},
+        {.options = {"--epoch-size"},
+         .description = "Number of training lines to visit per line-based epoch (default: all)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int n = std::atoi(args[0].c_str());
+                 if (n <= 0)
+                 {
+                     std::println("--epoch-size requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 epoch_size = static_cast<size_t>(n);
              }},
         {.options = {"-o"},
          .description = "Specify the model file to save",
@@ -322,6 +336,7 @@ int main(int argc, char* argv[])
             parser.learn_depth,
             parser.learning_rate,
             parser.num_epochs,
+            parser.epoch_size,
             parser.train_corpus_dir.value()
         );
     }

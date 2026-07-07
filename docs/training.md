@@ -18,15 +18,21 @@ For multi-token prediction, each example trains only the heads that have real fu
 
 Training diagnostics render unknown, missing, or out-of-range token IDs as `<UNK>` instead of aborting while formatting a log line. `Corpus::get_line` returns `std::nullopt` for those sequences.
 
+## Epoch Size
+
+`--epoch-size <N>` limits line-based training methods to `N` shuffled training lines per epoch. The default is all training lines. Values larger than the training split are clamped to the full split.
+
+This is useful for faster validation/checkpoint feedback on large corpora. Window training keeps its existing window-based epoch behavior.
+
 ## Learning Rate
 
-`--learning-rate <R>` sets the base learning rate used during training. The default is `0.003`.
+`--learning-rate <R>` sets the base learning rate used during training. The binary default is `0.003`; the training scripts pass `0.03`.
 
 The effective per-update rate is divided by the number of transformer blocks, matching the previous hardcoded behavior.
 
-Transformer dense projection updates additionally scale their weight updates by fan-in: transformer embedding projections scale by the embedding dimension, and the feed-forward down projection scales by the feed-forward dimension. Without that normalization, one example can shift downstream activations by hundreds or thousands of times the base learning rate because every input dimension contributes to the same output value.
+Dense projection updates additionally scale their weight updates by fan-in: the output LM head and transformer embedding projections scale by the embedding dimension, and the feed-forward down projection scales by the feed-forward dimension. Without that normalization, one example can shift downstream activations or logits by hundreds or thousands of times the base learning rate because every input dimension contributes to the same output value.
 
-Large values can still saturate the clipped output weights and produce losses around `38400`, which means the target logit is clamped far below another token. For the current optimizer, prefer `0.003` to `0.01` as the base learning rate.
+Large values can still saturate the clipped output weights and produce losses around `38400`, which means the target logit is clamped far below another token. After fan-in scaling, `0.03` is a practical scripted default; use lower values such as `0.003` when debugging instability, and use higher values only with validation enabled.
 
 If a previous run saturated or learned bad prompt completions, start a new release run with `FRESH_START=1 ./train_release.sh` so the script does not resume from the bad `models/after_training.st`.
 

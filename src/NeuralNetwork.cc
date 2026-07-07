@@ -270,6 +270,14 @@ namespace rllm
         parallel::statistics.print_statistics();
     }
 
+    static size_t lines_per_epoch(size_t total_lines, std::optional<size_t> epoch_size)
+    {
+        assert(total_lines > 0);
+        if (!epoch_size.has_value())
+            return total_lines;
+        return std::min(epoch_size.value(), total_lines);
+    }
+
     // Layers
 
     struct NeuralNetworkForwardWorkspace
@@ -706,25 +714,26 @@ namespace rllm
         do_training(train_input, verbose, max_iterations);
     }
 
-    void NeuralNetwork::train_random_line_random_len_epoch(size_t epoch, const std::vector<CpuInputLine>& training_lines, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at, std::mt19937& rng)
+    void NeuralNetwork::train_random_line_random_len_epoch(size_t epoch, const std::vector<CpuInputLine>& training_lines, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at, std::mt19937& rng, std::optional<size_t> epoch_size)
     {
         const auto total_lines = training_lines.size();
         assert(total_lines > 0);
+        const auto epoch_lines = lines_per_epoch(total_lines, epoch_size);
 
-        // Visit each line exactly once per epoch (in random order).
+        // Visit each selected line exactly once per epoch (in random order).
         // Sampling with replacement over-emphasizes some lines while skipping others,
         // which causes unstable learning and apparent forgetting.
         std::vector<size_t> line_indices(total_lines);
         std::iota(line_indices.begin(), line_indices.end(), 0);
         std::shuffle(line_indices.begin(), line_indices.end(), rng);
 
-        for (size_t lines_visited = 1; lines_visited <= total_lines; ++lines_visited)
+        for (size_t lines_visited = 1; lines_visited <= epoch_lines; ++lines_visited)
         {
-            const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
+            const float progress = static_cast<float>(lines_visited) / static_cast<float>(epoch_lines);
 
             if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
             {
-                LOG_INFO("Creating timed checkpoint at epoch: {}, line: {}, total lines todo: {}", epoch, lines_visited, total_lines);
+                LOG_INFO("Creating timed checkpoint at epoch: {}, line: {}, epoch lines todo: {}", epoch, lines_visited, epoch_lines);
                 checkpoint();
             }
 
@@ -747,7 +756,7 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::do_line_based_training(bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
+    void NeuralNetwork::do_line_based_training(bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval, std::optional<size_t> epoch_size)
     {
         auto split = m_corpus.get_deterministic_training_split(VALIDATION_PERCENT);
         std::vector<CpuInputLine> training_lines = std::move(split.training_lines);
@@ -763,7 +772,16 @@ namespace rllm
             LOG_INFO("Validation disabled for tiny corpus (fewer than 2 held-out lines)");
         }
 
-        LOG_INFO("Using {} training lines and {} validation lines ({}% target validation split)", training_lines.size(), validation_lines.size(), VALIDATION_PERCENT);
+        const auto total_lines = training_lines.size();
+        const auto epoch_lines = lines_per_epoch(total_lines, epoch_size);
+
+        LOG_INFO(
+            "Using {} training lines and {} validation lines ({}% target validation split); {} line(s) per epoch",
+            training_lines.size(),
+            validation_lines.size(),
+            VALIDATION_PERCENT,
+            epoch_lines
+        );
 
         assert(!training_lines.empty());
 
@@ -771,7 +789,6 @@ namespace rllm
         // each example only gets 8*num_layers gradient updates per
         // pass, so no single example can overwrite all the others.
         std::mt19937 rng{42};
-        const auto total_lines = training_lines.size();
         auto last_checkpoint_at = std::chrono::steady_clock::now();
         float best_validation_loss = std::numeric_limits<float>::infinity();
         size_t epochs_without_improvement = 0;
@@ -784,7 +801,7 @@ namespace rllm
 
             if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN || m_training_method == TrainingMethod::RANDOM_LINE_FULL)
             {
-                train_random_line_random_len_epoch(epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng);
+                train_random_line_random_len_epoch(epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng, epoch_size);
 
                 epoch_checkpoint(last_checkpoint_at, epoch, [&] {
                     std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
@@ -798,12 +815,14 @@ namespace rllm
                 size_t lines_visited = 0;
                 for (const auto& line_of_file : training_lines)
                 {
+                    if (lines_visited >= epoch_lines)
+                        break;
                     lines_visited++;
-                    const float progress = static_cast<float>(lines_visited) / static_cast<float>(total_lines);
+                    const float progress = static_cast<float>(lines_visited) / static_cast<float>(epoch_lines);
 
                     if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
                     {
-                        std::println("creating timed checkpoint at epoch {}, line {}, total lines visited {}", epoch, lines_visited, total_lines);
+                        std::println("creating timed checkpoint at epoch {}, line {}, epoch lines visited {}", epoch, lines_visited, epoch_lines);
                         checkpoint();
                     }
 
@@ -961,7 +980,7 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::train(bool verbose, size_t num_epochs, const std::optional<std::string>& input_filename, const std::optional<std::chrono::seconds>& checkpointing_interval)
+    void NeuralNetwork::train(bool verbose, size_t num_epochs, const std::optional<std::string>& input_filename, const std::optional<std::chrono::seconds>& checkpointing_interval, std::optional<size_t> epoch_size)
     {
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
@@ -1013,6 +1032,7 @@ namespace rllm
             "\t fires nothing CE loss:  {:.6f}\n"
             "\t steps per example per epoch: {}\n"
             "\t num epochs: {}\n"
+            "\t epoch size: {}\n"
             "\t training method: {}\n",
             n_layers,
             corpus_size,
@@ -1027,12 +1047,13 @@ namespace rllm
             m_fires_nothing_ce_loss,
             training_steps_per_example(n_layers, m_learn_depth),
             num_epochs,
+            epoch_size.has_value() ? std::format("{} line(s)", epoch_size.value()) : std::string{"all training lines"},
             training_method_to_string(m_training_method)
         );
 
         if (training_method_is_line_based())
         {
-            do_line_based_training(verbose, num_epochs, checkpointing_interval);
+            do_line_based_training(verbose, num_epochs, checkpointing_interval, epoch_size);
         }
         else
         {
@@ -1057,7 +1078,7 @@ namespace rllm
 
         bool print_loss_verbose = false;
         static int count = 0;
-        if (count++ % 5 == 0)
+        if (count++ % 100 == 0)
         {
             print_loss_verbose = true;
         }

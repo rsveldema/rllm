@@ -142,6 +142,7 @@ void append_output_layer_constant_pairs(std::vector<SearchReplace>& pairs)
     append_float_pair(pairs, "OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
     append_float_pair(pairs, "OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
     append_float_pair(pairs, "OutputLayer::WEIGHT_CLAMP", rllm::OutputLayer::WEIGHT_CLAMP);
+    append_float_pair(pairs, "OutputLayer::LM_HEAD_LEARNING_RATE_SCALE", rllm::OutputLayer::LM_HEAD_LEARNING_RATE_SCALE);
     
     append_float_pair(pairs, "OutputLayer::smooth", rllm::OutputLayer::smooth);
     append_float_pair(pairs, "OutputLayer::LABEL_SMOOTHING", rllm::OutputLayer::LABEL_SMOOTHING);
@@ -150,6 +151,7 @@ void append_output_layer_constant_pairs(std::vector<SearchReplace>& pairs)
     append_float_pair(pairs, "rllm::OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
     append_float_pair(pairs, "rllm::OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
     append_float_pair(pairs, "rllm::OutputLayer::WEIGHT_CLAMP", rllm::OutputLayer::WEIGHT_CLAMP);
+    append_float_pair(pairs, "rllm::OutputLayer::LM_HEAD_LEARNING_RATE_SCALE", rllm::OutputLayer::LM_HEAD_LEARNING_RATE_SCALE);
 
     append_float_pair(pairs, "rllm::OutputLayer::smooth", rllm::OutputLayer::smooth);
     append_float_pair(pairs, "rllm::OutputLayer::LABEL_SMOOTHING", rllm::OutputLayer::LABEL_SMOOTHING);

@@ -28,6 +28,7 @@ namespace rllm
         static constexpr float GRAD_CLIP = 1.0f;
         static constexpr float VEL_CLIP = 0.1f;
         static constexpr float WEIGHT_CLAMP = 2.0f;
+        static constexpr float LM_HEAD_LEARNING_RATE_SCALE = 1.0f / static_cast<float>(EmbeddingDimension::MAX);
         static constexpr float LABEL_SMOOTHING = 0.1f;
         static constexpr float smooth = LABEL_SMOOTHING / static_cast<float>(static_cast<int>(TokenID::MAX));
 
@@ -79,8 +80,6 @@ namespace rllm
         // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> W_lm_head;
         fixed_size_matrix<float, TokenID, EmbeddingDimension> V_lm_head; // SGD momentum velocities
-        cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> W_lm_head_cpu;
-        cpu_fixed_matrix<float, TokenID, EmbeddingDimension> V_lm_head_cpu;
     };
 
 } // namespace rllm

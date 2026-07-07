@@ -1,5 +1,6 @@
 from collections import defaultdict
 import argparse
+import json
 import re
 import os
 
@@ -303,10 +304,27 @@ def generate_cpp_table(tokenizer_map, cc_out: str, hpp_out: str):
         cpp_table = generate_cpp_table_header(tokenizer_map)
         f.write(cpp_table)
 
+def generate_json_map(tokenizer_map, json_out: str):
+    runtime_tokenizer_map = {}
+    for token, idx in tokenizer_map.items():
+        if token == " ":
+            continue
+        is_eow = token.endswith(EOW_MARKER)
+        stripped = token[:-len(EOW_MARKER)] if is_eow else token
+        if not stripped:
+            continue
+        runtime_tokenizer_map[stripped] = idx
+
+    os.makedirs(os.path.dirname(json_out), exist_ok=True)
+    with open(json_out, "w", encoding="utf-8") as f:
+        json.dump(runtime_tokenizer_map, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--cc-out",  default="src/tokenizer_map.cc")
     parser.add_argument("--hpp-out", default="include/tokenizer_map.hpp")
+    parser.add_argument("--json-out", help="Optional path for the generated token_map.json")
     parser.add_argument("--support-extra-latin-characters", action="store_true", help="Include additional Latin characters (beyond basic ASCII) as single-character tokens")
     args = parser.parse_args()
 
@@ -317,3 +335,5 @@ if __name__ == "__main__":
     print(f"Total unique tokens: {len(tokenizer_map)}")
 
     generate_cpp_table(tokenizer_map, args.cc_out, args.hpp_out)
+    if args.json_out:
+        generate_json_map(tokenizer_map, args.json_out)

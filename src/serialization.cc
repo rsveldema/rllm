@@ -81,24 +81,28 @@ namespace rllm
         m_inputs.zero(queue);
         if (j.contains("W_lm_head"))
         {
+            cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> w_lm_head_cpu;
             const auto& w_j = j.at("W_lm_head");
             size_t i = 0;
             for (const auto t : enum_iterator1D<TokenID>())
                 for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                    W_lm_head_cpu.set(t, d, static_cast<float16>(w_j.at(i++).template get<float>()));
-            W_lm_head.copy_from_cpu(queue, W_lm_head_cpu);
+                    w_lm_head_cpu.set(t, d, static_cast<float16>(w_j.at(i++).template get<float>()));
+            W_lm_head.copy_from_cpu(queue, w_lm_head_cpu);
         }
-        V_lm_head_cpu.zero();
         V_lm_head.zero(queue);
     }
 
     nlohmann::json OutputLayer::save() const
     {
+        cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> w_lm_head_cpu;
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        W_lm_head.copy_to_cpu(queue, w_lm_head_cpu);
+
         auto w_j = nlohmann::json::array();
         w_j.get_ref<nlohmann::json::array_t&>().reserve(W_lm_head.ROWS * W_lm_head.COLS);
         for (const auto t : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                w_j.push_back(static_cast<float>(W_lm_head_cpu.get(t, d)));
+                w_j.push_back(static_cast<float>(w_lm_head_cpu.get(t, d)));
         return {{"W_lm_head", std::move(w_j)}};
     }
 
@@ -430,8 +434,6 @@ namespace rllm
 
         pull_matrix("output_layers.W_lm_head", st, W_lm_head);
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        W_lm_head.copy_to_cpu(queue, W_lm_head_cpu);
-        V_lm_head_cpu.zero();
         m_inputs.zero(queue);
         V_lm_head.zero(queue);
     }
@@ -479,7 +481,7 @@ namespace rllm
         for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
         {
             const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
-            push_cpu_matrix(st, out_key, m_output_layers[oi].W_lm_head_cpu, storage);
+            push_matrix(st, out_key, m_output_layers[oi].W_lm_head, storage);
         }
 
         // Tokenizer metadata for validation on load.
@@ -621,8 +623,6 @@ namespace rllm
                 const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
                 pull_matrix(out_key, st, m_output_layers[oi].W_lm_head);
                 auto& queue = rllm::vulkan_runtime::get_queue(0);
-                m_output_layers[oi].W_lm_head.copy_to_cpu(queue, m_output_layers[oi].W_lm_head_cpu);
-                m_output_layers[oi].V_lm_head_cpu.zero();
                 m_output_layers[oi].m_inputs.zero(queue);
                 m_output_layers[oi].V_lm_head.zero(queue);
             }

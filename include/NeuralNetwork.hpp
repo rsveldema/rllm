@@ -72,7 +72,8 @@ namespace rllm
             bool verbose,
             size_t num_epochs,
             const std::optional<std::string>& input_filename,
-            const std::optional<std::chrono::seconds>& checkpointing_interval = std::nullopt
+            const std::optional<std::chrono::seconds>& checkpointing_interval = std::nullopt,
+            std::optional<size_t> epoch_size = std::nullopt
         );
 
         void set_random_weights_and_connections();
@@ -157,7 +158,8 @@ namespace rllm
             size_t num_epochs,
             const std::optional<std::chrono::seconds>& checkpointing_interval,
             std::chrono::steady_clock::time_point& last_checkpoint_at,
-            std::mt19937& rng
+            std::mt19937& rng,
+            std::optional<size_t> epoch_size
         );
 
         void do_whole_corpus_window_based_training(
@@ -168,7 +170,8 @@ namespace rllm
         void do_line_based_training(
             bool verbose,
             size_t num_epochs,
-            const std::optional<std::chrono::seconds>& checkpointing_interval
+            const std::optional<std::chrono::seconds>& checkpointing_interval,
+            std::optional<size_t> epoch_size
         );
 
         bool training_method_is_line_based() const

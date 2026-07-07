@@ -135,7 +135,9 @@ echo "--- Starting training ---"
      --method random_line_random_len \
      --epochs 20 \
      --layers 4 \
-     --checkpoint-interval 30
+     --checkpoint-interval 30 \
+     --learn-depth 20 \
+     --learning-rate 0.03
 
 # ./build/rllm --train -i models/start.json \
 #     -o models/after_training.json \

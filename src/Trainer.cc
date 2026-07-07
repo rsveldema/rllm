@@ -24,6 +24,7 @@ namespace rllm
         size_t learn_depth,
         float learning_rate,
         size_t num_epochs,
+        std::optional<size_t> epoch_size,
         const std::string& train_corpus_dir
     )
     {
@@ -50,7 +51,7 @@ namespace rllm
         nn->set_learn_depth(learn_depth);
         nn->set_learning_rate(learning_rate);
 
-        nn->train(verbose, num_epochs, input_filename, checkpointing_interval);
+        nn->train(verbose, num_epochs, input_filename, checkpointing_interval, epoch_size);
 
         stats.print_statistics();
         parallel::statistics.print_statistics();

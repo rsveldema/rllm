@@ -58,6 +58,7 @@ namespace
     constexpr int BENCH_RMS_NORM_ITERS = 50;
     constexpr int TEST_SEQ_LEN = 8; // smoke tests
     constexpr int BENCH_SEQ_LEN = 64; // speedup benchmark needs more work
+    constexpr float TINY_CORPUS_TEST_LEARNING_RATE = 0.3f;
 
     std::unique_ptr<NeuralNetwork> train_guaranteed_model(Corpus& corpus, Statistics& stats)
     {
@@ -65,6 +66,7 @@ namespace
         corpus.load_files_from_dir("training_data0");
         auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
         nn->set_training_method(TrainingMethod::RANDOM_LINE_RANDOM_LEN);
+        nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
         nn->train(false, 3, std::nullopt, std::nullopt);
         return nn;
     }
@@ -103,7 +105,8 @@ TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
     Statistics stats;
     auto nn = std::make_unique<NeuralNetwork>(2, corpus, stats);
     nn->set_training_method(TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
-    nn->train(false, 10, std::nullopt, std::nullopt);
+    nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
+    nn->train(false, 3, std::nullopt, std::nullopt);
 
     const auto top5 = top5_for_prompt(*nn, corpus, "#");
     ASSERT_FALSE(top5.empty());
@@ -154,7 +157,8 @@ TEST(PredictorRegressionTest, MTP_HashPredictsInThenCluInParallel)
     Statistics stats;
     auto nn = std::make_unique<NeuralNetwork>(2, corpus, stats);
     nn->set_training_method(TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
-    nn->train(false, 10, std::nullopt, std::nullopt);
+    nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
+    nn->train(false, 3, std::nullopt, std::nullopt);
 
     // Single forward pass with '#' activates all MTP heads simultaneously.
     const auto hash_toks = corpus.get_token_ids("#");
@@ -213,7 +217,8 @@ TEST(PredictorRegressionTest, IncludeATrainingKeepsMTPHeadsQueryable)
     Statistics stats;
     auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
     nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
-    nn->train(false, 10, std::nullopt, std::nullopt);
+    nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
+    nn->train(false, 3, std::nullopt, std::nullopt);
 
     const auto hash_toks = corpus.get_token_ids("#");
     ASSERT_FALSE(hash_toks.empty());
@@ -237,6 +242,7 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
     Statistics stats;
     auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
     nn->set_training_method(TrainingMethod::RANDOM_LINE_RANDOM_LEN);
+    nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
 
     // 3 epochs is the smallest fast setting that consistently keeps both
     // preprocessor branches visible on this tiny corpus.

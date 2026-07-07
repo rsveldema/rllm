@@ -137,13 +137,16 @@ echo "--- Starting training ---"
      --filter simple \
      --filter self \
      --filter preprocessor \
+     --filter effective \
+     --filter modern \
      --method random_line_random_len \
      --epochs 20 \
-     --layers 2 \
+     --layers 3 \
      --checkpoint-interval 120 \
-     --learn-depth 20 \
-     --learning-rate 0.003
+     --learn-depth 100 \
+     --learning-rate 0.03
 
+#     --epoch-size 32 \
 
 # training Options:
 #     --method random_line_random_len \

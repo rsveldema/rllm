@@ -3,6 +3,7 @@
 #include <NeuralNetwork.hpp>
 
 #include <chrono>
+#include <optional>
 #include <string>
 
 namespace rllm
@@ -26,6 +27,7 @@ namespace rllm
             size_t learn_depth,
             float learning_rate,
             size_t num_epochs,
+            std::optional<size_t> epoch_size,
             const std::string& train_corpus_dir
         );
       private:

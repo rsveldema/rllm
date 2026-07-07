@@ -247,8 +247,6 @@ namespace rllm
     OutputLayer::OutputLayer()
     {
         m_inputs.set_size(TokenID::MAX);
-        W_lm_head_cpu.zero();
-        V_lm_head_cpu.zero();
     }
 
     void output_layer_forward_from_hidden_impl(VulkanQueue& queue,
@@ -399,8 +397,6 @@ namespace rllm
                 cpu_tmp.set(v, d, static_cast<float16>(get_random_value(-scale, scale)));
         {
             auto& queue = rllm::vulkan_runtime::get_queue(0);
-            W_lm_head_cpu = cpu_tmp;
-            V_lm_head_cpu.zero();
             W_lm_head.copy_from_cpu(queue, cpu_tmp);
             V_lm_head.zero(queue);
         }
@@ -426,12 +422,9 @@ namespace rllm
         float learning_rate
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
         check_nan_finding_mode("backward:start");
         accumulate_output_layer_dh_last(delta, dh_last, W_lm_head);
-        update_output_layer_weights(delta, h_last, W_lm_head, V_lm_head, learning_rate);
-        W_lm_head.copy_to_cpu(queue, W_lm_head_cpu);
-        V_lm_head.copy_to_cpu(queue, V_lm_head_cpu);
+        update_output_layer_weights(delta, h_last, W_lm_head, V_lm_head, learning_rate * LM_HEAD_LEARNING_RATE_SCALE);
         check_nan_finding_mode("backward:end");
     }
 

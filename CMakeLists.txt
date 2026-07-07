@@ -39,22 +39,24 @@ file(GLOB TOKENIZER_TRAINING_FILES "${CMAKE_SOURCE_DIR}/tokenizer_training_data/
 set(TOKENIZER_GEN_DIR "${CMAKE_BINARY_DIR}/generated")
 set(TOKENIZER_CC  "${TOKENIZER_GEN_DIR}/tokenizer_map.cc")
 set(TOKENIZER_HPP "${TOKENIZER_GEN_DIR}/tokenizer_map.hpp")
+set(TOKENIZER_JSON "${TOKENIZER_GEN_DIR}/token_map.json")
 
 file(MAKE_DIRECTORY "${TOKENIZER_GEN_DIR}")
 
 add_custom_command(
-    OUTPUT  "${TOKENIZER_CC}" "${TOKENIZER_HPP}"
+    OUTPUT  "${TOKENIZER_CC}" "${TOKENIZER_HPP}" "${TOKENIZER_JSON}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
             "--cc-out"  "${TOKENIZER_CC}"
             "--hpp-out" "${TOKENIZER_HPP}"
+            "--json-out" "${TOKENIZER_JSON}"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     DEPENDS
         "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
         ${TOKENIZER_TRAINING_FILES}
-    COMMENT "Generating tokenizer_map.cc and tokenizer_map.hpp in build/generated"
+    COMMENT "Generating tokenizer_map.cc, tokenizer_map.hpp, and token_map.json in build/generated"
     VERBATIM
 )
-add_custom_target(generate_tokenizer_map DEPENDS "${TOKENIZER_CC}" "${TOKENIZER_HPP}")
+add_custom_target(generate_tokenizer_map DEPENDS "${TOKENIZER_CC}" "${TOKENIZER_HPP}" "${TOKENIZER_JSON}")
 # -----------------------------------------------------------------------------
 
 include(FetchContent)
