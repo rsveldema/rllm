@@ -507,6 +507,17 @@ namespace rllm
         }
     };
 
+    struct BatchTrainingItem
+    {
+        CpuInputLine line;
+        bool finished = false;
+    };
+
+    static double elapsed_ms(const std::chrono::steady_clock::time_point& started_at)
+    {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started_at).count();
+    }
+
     void NeuralNetwork::reset_workspaces()
     {
         m_forward_workspace = std::make_unique<NeuralNetworkForwardWorkspace>(PositionIndex::START, m_transformer_blocks.size());
@@ -559,7 +570,8 @@ namespace rllm
 
     void NeuralNetwork::propagate_backward_mtp(
         const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
-        MultiTokenPredictionIndex num_valid
+        MultiTokenPredictionIndex num_valid,
+        TrainingStepTiming* timing
     )
     {
         assert(m_seq_len > PositionIndex::START);
@@ -576,6 +588,7 @@ namespace rllm
 
         // Accumulate dh_last contributions from every valid output head.
         ws.dh_last.zero(queue);
+        const auto output_started_at = std::chrono::steady_clock::now();
         for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>(num_valid))
         {
             {
@@ -599,6 +612,8 @@ namespace rllm
                 check_hidden_vector_nan_finding_mode(queue, ws.dh_last, phase.c_str());
             }
         }
+        if (timing)
+            timing->backward_output_ms += elapsed_ms(output_started_at);
 
         // Propagate the summed gradient through the transformer blocks.
         ws.dh.zero(queue);
@@ -608,6 +623,7 @@ namespace rllm
 
         auto* p_dh = &ws.dh;
         auto* p_din = &ws.din;
+        const auto transformer_started_at = std::chrono::steady_clock::now();
         for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
         {
             {
@@ -630,9 +646,14 @@ namespace rllm
             }
             std::swap(p_dh, p_din);
         }
+        if (timing)
+            timing->backward_transformer_ms += elapsed_ms(transformer_started_at);
 
+        const auto input_started_at = std::chrono::steady_clock::now();
         check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, "before input layer backward");
         m_input_layer.accumulate_backward(m_last_input, *p_dh, m_gradient_accumulation_workspace->embeddings);
+        if (timing)
+            timing->backward_input_ms += elapsed_ms(input_started_at);
     }
 
 
@@ -805,9 +826,20 @@ namespace rllm
         const size_t total_lines = training_lines.size();
         assert(total_lines > 0);
         const size_t epoch_lines = lines_per_epoch(total_lines, epoch_size);
+        const size_t steps = training_steps_per_example(m_transformer_blocks.size(), m_learn_depth);
         std::vector<size_t> line_indices(total_lines);
         std::iota(line_indices.begin(), line_indices.end(), 0);
-        std::shuffle(line_indices.begin(), line_indices.end(), rng);
+        std::stable_sort(
+            line_indices.begin(),
+            line_indices.end(),
+            [&training_lines](size_t lhs, size_t rhs) {
+                const auto lhs_len = static_cast<size_t>(training_lines[lhs].size());
+                const auto rhs_len = static_cast<size_t>(training_lines[rhs].size());
+                if (lhs_len != rhs_len)
+                    return lhs_len < rhs_len;
+                return lhs < rhs;
+            }
+        );
 
         for (size_t batch_start = 0; batch_start < epoch_lines; batch_start += m_micro_batch_size)
         {
@@ -820,7 +852,7 @@ namespace rllm
                 checkpoint();
             }
 
-            std::vector<CpuInputLine> batch;
+            std::vector<BatchTrainingItem> batch;
             batch.reserve(selected_count);
             for (size_t offset = 0; offset < selected_count; ++offset)
             {
@@ -830,7 +862,7 @@ namespace rllm
 
                 if (m_training_method == TrainingMethod::RANDOM_LINE_FULL)
                 {
-                    batch.push_back(random_line);
+                    batch.push_back(BatchTrainingItem{random_line});
                     continue;
                 }
 
@@ -838,99 +870,103 @@ namespace rllm
                 std::uniform_int_distribution<int> len_dist(2, line_len);
                 CpuInputLine train_input;
                 random_line.sub_array(train_input, static_cast<PositionIndex>(len_dist(rng)));
-                batch.push_back(train_input);
+                batch.push_back(BatchTrainingItem{train_input});
             }
 
             if (batch.empty())
                 continue;
 
-            const float learning_rate_scale = 1.0f / static_cast<float>(batch.size());
             const auto batch_started_at = std::chrono::steady_clock::now();
+            double forward_ms = 0.0;
+            double backward_ms = 0.0;
+            double apply_ms = 0.0;
+            double backward_output_ms = 0.0;
+            double backward_transformer_ms = 0.0;
+            double backward_input_ms = 0.0;
 
-            reset_gradient_accumulators();
-            for (const auto& example : batch)
-                do_training(example, verbose, 1, 1.0f, false);
-            apply_accumulated_gradients(learning_rate_scale);
+            size_t iterations_needed = 0;
+            size_t batch_rounds = 0;
+            size_t active_examples = batch.size();
+            for (size_t step = 0; step < steps && active_examples > 0; ++step)
+            {
+                ++batch_rounds;
+                reset_gradient_accumulators();
+                size_t active_this_step = 0;
+                for (size_t i = 0; i < batch.size(); ++i)
+                {
+                    if (batch[i].finished)
+                        continue;
 
-            const double average_milliseconds_per_line =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - batch_started_at).count() /
-                static_cast<double>(batch.size());
+                    ++active_this_step;
+                    TrainingStepTiming timing;
+                    switch (do_training_step(batch[i].line, verbose && step == 0, step, 1.0f, false, &timing))
+                    {
+                    case TrainingStepOutcome::Continue:
+                        ++iterations_needed;
+                        break;
+                    case TrainingStepOutcome::Converged:
+                        ++iterations_needed;
+                        batch[i].finished = true;
+                        --active_examples;
+                        break;
+                    case TrainingStepOutcome::Failed:
+                        ++iterations_needed;
+                        batch[i].finished = true;
+                        --active_examples;
+                        break;
+                    }
+                    forward_ms += timing.forward_ms;
+                    backward_ms += timing.backward_ms;
+                    backward_output_ms += timing.backward_output_ms;
+                    backward_transformer_ms += timing.backward_transformer_ms;
+                    backward_input_ms += timing.backward_input_ms;
+                    apply_ms += timing.apply_ms;
+                }
+                if (active_this_step > 0)
+                {
+                    const auto apply_started_at = std::chrono::steady_clock::now();
+                    apply_accumulated_gradients(1.0f);
+                    apply_ms += elapsed_ms(apply_started_at);
+                }
+            }
+
+            const double batch_total_ms = elapsed_ms(batch_started_at);
+            const double average_milliseconds_per_line = batch_total_ms / static_cast<double>(batch.size());
+            const double average_iterations_per_line = static_cast<double>(iterations_needed) / static_cast<double>(batch.size());
             LOG_INFO(
-                "Epoch[{}%] random-line[{}..{}]: {:0.2f}% done (micro-batch {}, avg {:.2f} ms/line)",
+                "Epoch[{}%] random-line[{}..{}]: {:0.2f}% done (micro-batch {}, avg {:.2f} ms/line, iterations total {}, avg {:.2f}/line, rounds {}, batch {:.2f} ms, forward {:.2f} ms, backward {:.2f} ms, apply {:.2f} ms, out {:.2f} ms, transformer {:.2f} ms, input {:.2f} ms)",
                 epoch / static_cast<float>(num_epochs) * 100.0f,
                 batch_start + 1,
                 batch_start + selected_count,
                 progress * 100.0f,
                 batch.size(),
-                average_milliseconds_per_line
+                average_milliseconds_per_line,
+                iterations_needed,
+                average_iterations_per_line,
+                batch_rounds,
+                batch_total_ms,
+                forward_ms,
+                backward_ms,
+                apply_ms,
+                backward_output_ms,
+                backward_transformer_ms,
+                backward_input_ms
             );
         }
     }
 
     void NeuralNetwork::train_random_line_random_len_epoch(size_t epoch, const std::vector<CpuInputLine>& training_lines, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at, std::mt19937& rng, std::optional<size_t> epoch_size)
     {
-        if (m_micro_batch_size > 1)
-        {
-            batch_train(
-                epoch,
-                training_lines,
-                verbose,
-                num_epochs,
-                checkpointing_interval,
-                last_checkpoint_at,
-                rng,
-                epoch_size
-            );
-            return;
-        }
-
-        const auto total_lines = training_lines.size();
-        assert(total_lines > 0);
-        const auto epoch_lines = lines_per_epoch(total_lines, epoch_size);
-
-        // Visit each selected line exactly once per epoch (in random order).
-        // Sampling with replacement over-emphasizes some lines while skipping others,
-        // which causes unstable learning and apparent forgetting.
-        std::vector<size_t> line_indices(total_lines);
-        std::iota(line_indices.begin(), line_indices.end(), 0);
-        std::shuffle(line_indices.begin(), line_indices.end(), rng);
-        const auto epoch_started_at = std::chrono::steady_clock::now();
-
-        for (size_t lines_visited = 1; lines_visited <= epoch_lines; ++lines_visited)
-        {
-            const float progress = static_cast<float>(lines_visited) / static_cast<float>(epoch_lines);
-
-            if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
-            {
-                LOG_INFO("Creating timed checkpoint at epoch: {}, line: {}, epoch lines todo: {}", epoch, lines_visited, epoch_lines);
-                checkpoint();
-            }
-
-            const auto& random_line = training_lines[line_indices[lines_visited - 1]];
-            if (m_training_method == TrainingMethod::RANDOM_LINE_FULL)
-            {
-                // Train on the full line — all tokens are visible, last token is target.
-                if (static_cast<int>(random_line.size()) >= 2)
-                {
-                    do_training(random_line, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth));
-                }
-            }
-            else
-            {
-                train_with_random_len_from_start(random_line, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth), rng);
-            }
-
-            const double average_milliseconds_per_line =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - epoch_started_at).count() /
-                static_cast<double>(lines_visited);
-            LOG_INFO(
-                "Epoch[{}%] random-line[{}]: {:0.2f}% done (avg {:.2f} ms/line)",
-                epoch / static_cast<float>(num_epochs) * 100.0f,
-                lines_visited,
-                progress * 100.0f,
-                average_milliseconds_per_line
-            );
-        }
+        batch_train(
+            epoch,
+            training_lines,
+            verbose,
+            num_epochs,
+            checkpointing_interval,
+            last_checkpoint_at,
+            rng,
+            epoch_size
+        );
     }
 
 
@@ -1245,12 +1281,13 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::do_training(
+    TrainingStepOutcome NeuralNetwork::do_training_step(
         const CpuInputLine& train_output,
         bool verbose,
-        size_t max_iterations,
+        size_t iteration_index,
         float learning_rate_scale,
-        bool manage_accumulator
+        bool manage_accumulator,
+        TrainingStepTiming* timing
     )
     {
         // Multi-token prediction (MTP): given a sequence [t0,t1,...,tN-1] we
@@ -1262,8 +1299,79 @@ namespace rllm
         CpuInputLine train_input;
         train_output.sub_array(train_input, static_cast<PositionIndex>(_input_len));
         const auto num_valid_heads = mtp_valid_head_count_for_sequence(_seq_len, _input_len);
-        // Head-0 target is used for logging and convergence checks.
         const auto expected_output_token = mtp_target_for_head(train_output, _input_len, MultiTokenPredictionIndex::START);
+
+        const auto full_string_opt = m_corpus.get_line(train_output);
+        assert(full_string_opt.has_value());
+        const auto& full_string = *full_string_opt;
+
+        get_last_input() = train_input;
+
+        if (manage_accumulator)
+            reset_gradient_accumulators();
+
+        const auto forward_started_at = std::chrono::steady_clock::now();
+        propagate_forward();
+        if (timing)
+            timing->forward_ms += elapsed_ms(forward_started_at);
+
+        m_training_scores.set_size(num_valid_heads);
+        float loss = 0.0f;
+        for (const auto _k : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
+        {
+            Score& s = m_training_scores[_k];
+            const auto _target = mtp_target_for_head(train_output, _input_len, _k);
+            const float _k_loss = m_output_layers[_k].compute_score(s, _target);
+            if (std::isnan(_k_loss))
+            {
+                LOG_ERROR("loss became NaN!");
+            }
+            if (!std::isfinite(_k_loss))
+            {
+                LOG_INFO("Non-finite loss detected for head {}, target '{}' ({}), full string: '{}', input size: {}.", static_cast<size_t>(_k), m_corpus.get_token_from_id(_target), _target, full_string, static_cast<size_t>(train_input.size()));
+                m_stats.record_learning_failure();
+                return TrainingStepOutcome::Failed;
+            }
+            if (_k == MultiTokenPredictionIndex::START)
+                loss = _k_loss;
+        }
+
+        const auto backward_started_at = std::chrono::steady_clock::now();
+        propagate_backward_mtp(m_training_scores, num_valid_heads, timing);
+        if (timing)
+            timing->backward_ms += elapsed_ms(backward_started_at);
+        if (manage_accumulator)
+        {
+            const auto apply_started_at = std::chrono::steady_clock::now();
+            apply_accumulated_gradients(learning_rate_scale);
+            if (timing)
+                timing->apply_ms += elapsed_ms(apply_started_at);
+        }
+
+        if (loss < m_convergence_threshold)
+        {
+            LOG_INFO("Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}", iteration_index + 1, m_corpus.get_token_from_id(expected_output_token), full_string, static_cast<size_t>(train_input.size()));
+            m_stats.record_learning_success();
+            return TrainingStepOutcome::Converged;
+        }
+
+        return TrainingStepOutcome::Continue;
+    }
+
+    size_t NeuralNetwork::do_training(
+        const CpuInputLine& train_output,
+        bool verbose,
+        size_t max_iterations,
+        float learning_rate_scale,
+        bool manage_accumulator
+    )
+    {
+        const int _seq_len = static_cast<int>(train_output.size());
+        const int _input_len = mtp_input_len_for_sequence(_seq_len);
+        const auto expected_output_token = mtp_target_for_head(train_output, _input_len, MultiTokenPredictionIndex::START);
+        const auto full_string_opt = m_corpus.get_line(train_output);
+        assert(full_string_opt.has_value());
+        const auto& full_string = *full_string_opt;
 
         bool print_loss_verbose = false;
         static int count = 0;
@@ -1272,58 +1380,18 @@ namespace rllm
             print_loss_verbose = true;
         }
 
-        const auto full_string_opt = m_corpus.get_line(train_output);
-        assert(full_string_opt.has_value());
-        const auto& full_string = *full_string_opt;
-
-        get_last_input() = train_input; // set the input to the train input for tracing
-
-        // In multi-epoch training each call gets a small fixed budget (max_iterations).
-        // We allow an early return once this example reaches a reasonable confidence target.
-        float loss = 0.0f;
+        size_t iterations = 0;
         for (size_t i = 0; i < max_iterations; ++i)
         {
-            if (manage_accumulator)
-                reset_gradient_accumulators();
-
-            propagate_forward();
-
-            m_training_scores.set_size(num_valid_heads);
-            for (const auto _k : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
-            {
-                Score& s = m_training_scores[_k];
-                const auto _target = mtp_target_for_head(train_output, _input_len, _k);
-                const float _k_loss = m_output_layers[_k].compute_score(s, _target);
-                if (std::isnan(_k_loss))
-                {
-                    LOG_ERROR("loss became NaN!");
-                }
-                if (!std::isfinite(_k_loss))
-                {
-                    LOG_INFO("Non-finite loss detected for head {}, target '{}' ({}), full string: '{}', input size: {}.", static_cast<size_t>(_k), m_corpus.get_token_from_id(_target), _target, full_string, static_cast<size_t>(train_input.size()));
-                    m_stats.record_learning_failure();
-                    return;
-                }
-                if (_k == MultiTokenPredictionIndex::START)
-                    loss = _k_loss;
-            }
-
-            propagate_backward_mtp(m_training_scores, num_valid_heads);
-            if (manage_accumulator)
-                apply_accumulated_gradients(learning_rate_scale);
-
-            if (loss < m_convergence_threshold)
-            {
-                LOG_INFO("Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}", i + 1, m_corpus.get_token_from_id(expected_output_token), full_string, static_cast<size_t>(train_input.size()));
-                m_stats.record_learning_success();
-                return;
-            }
+            const auto outcome = do_training_step(train_output, verbose, i, learning_rate_scale, manage_accumulator);
+            ++iterations;
+            if (outcome == TrainingStepOutcome::Converged || outcome == TrainingStepOutcome::Failed)
+                return iterations;
 
             if (print_loss_verbose)
             {
-                const auto expected_token = m_corpus.get_token_from_id(expected_output_token);
-                LOG_INFO("Training iteration[{}], wanted: '{}' ({}), full string: '{}'", i, expected_token, expected_output_token, full_string);
-                LOG_INFO("  Loss: {:.6f}", loss);
+                LOG_INFO("Training iteration[{}], wanted: '{}' ({}), full string: '{}'", i, m_corpus.get_token_from_id(expected_output_token), expected_output_token, full_string);
+                LOG_INFO("  Loss: {:.6f}", 0.0f);
                 dump_top_predictions();
             }
         }
@@ -1331,18 +1399,18 @@ namespace rllm
         if (manage_accumulator || max_iterations != 1)
         {
             LOG_INFO(
-                "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}, expected token: '{}' ({}), full "
-                "string: '{}', input size: {}.",
+                "Steps exhausted ({}) for this line. threshold = {:.6f}, expected token: '{}' ({}), full string: '{}', input size: {}.",
                 max_iterations,
-                loss,
                 m_convergence_threshold,
                 m_corpus.get_token_from_id(expected_output_token),
                 expected_output_token,
                 full_string,
-                static_cast<size_t>(train_input.size())
+                static_cast<size_t>(_input_len)
             );
             m_stats.record_learning_failure();
         }
+
+        return max_iterations;
     }
 
 

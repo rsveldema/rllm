@@ -129,7 +129,9 @@ fi
 
 echo "--- Starting training ---"
 
-gdb --args  ./build_release/rllm --train $input_arg \
+#gdb --args  
+
+./build_release/rllm --train $input_arg \
     -o models/after_training.st \
     --train-dir "$TRAIN_DIR" \
      --filter iuring \
@@ -144,7 +146,7 @@ gdb --args  ./build_release/rllm --train $input_arg \
      --checkpoint-interval 120 \
      --learn-depth 100 \
      --learning-rate 0.03 \
-     --micro-batch-size 2 \
+     --micro-batch-size 8 \
      --vulkan-device R9700
 
 

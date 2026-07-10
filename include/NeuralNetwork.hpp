@@ -24,6 +24,22 @@ namespace rllm
     struct NeuralNetworkForwardWorkspace;
     struct BackwardPropWorkspace;
     struct GradientAccumulationWorkspace;
+    enum class TrainingStepOutcome
+    {
+        Continue,
+        Converged,
+        Failed,
+    };
+
+    struct TrainingStepTiming
+    {
+        double forward_ms = 0.0;
+        double backward_ms = 0.0;
+        double apply_ms = 0.0;
+        double backward_output_ms = 0.0;
+        double backward_transformer_ms = 0.0;
+        double backward_input_ms = 0.0;
+    };
 
     enum class TrainingMethod
     {
@@ -131,11 +147,20 @@ namespace rllm
         void apply_accumulated_gradients(float learning_rate_scale);
         void dump_top_predictions();
         void trace_probes_for_example(const char* phase, size_t iter, float loss_value, const std::string& full_string);
-        void do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations, float learning_rate_scale = 1.0f, bool manage_accumulator = true);
+        TrainingStepOutcome do_training_step(
+            const CpuInputLine& train_output,
+            bool verbose,
+            size_t iteration_index,
+            float learning_rate_scale = 1.0f,
+            bool manage_accumulator = true,
+            TrainingStepTiming* timing = nullptr
+        );
+        size_t do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations, float learning_rate_scale = 1.0f, bool manage_accumulator = true);
         // Accumulates gradients from all valid MTP heads and backpropagates once.
         void propagate_backward_mtp(
             const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
-            MultiTokenPredictionIndex num_valid
+            MultiTokenPredictionIndex num_valid,
+            TrainingStepTiming* timing = nullptr
         );
         float evaluate_average_loss(const std::vector<CpuInputLine>& evaluation_lines);
 

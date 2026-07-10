@@ -75,6 +75,13 @@ namespace rllm
         MAX = 8
     };
 
+    // Batch axis for batched forward/backward paths.
+    enum class BatchIndex : size_t
+    {
+        START = 0,
+        MAX = 64
+    };
+
     // we are predicting N next tokens in parallel,
     // so we have N parallel sets of attention heads and N parallel output tokens.
     enum class MultiTokenPredictionIndex : size_t
@@ -159,6 +166,12 @@ namespace rllm
     {
         assert(id < HeadsIndex::MAX);
         return static_cast<HeadsIndex>(static_cast<size_t>(id) + 1);
+    }
+
+    static inline BatchIndex inc(BatchIndex id)
+    {
+        assert(id < BatchIndex::MAX);
+        return static_cast<BatchIndex>(static_cast<size_t>(id) + 1);
     }
 
     static inline HeadDimension inc(HeadDimension id)
