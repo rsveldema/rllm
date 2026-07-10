@@ -23,13 +23,20 @@ namespace rllm
         int window_size,
         size_t learn_depth,
         float learning_rate,
+        size_t micro_batch_size,
         size_t num_epochs,
         std::optional<size_t> epoch_size,
         const std::string& train_corpus_dir
     )
     {
         const float effective_learning_rate = learning_rate / static_cast<float>(std::max<size_t>(1, num_layers));
-        std::println("Training mode: depth {}, learning rate {} (effective per-layer {})", learn_depth, learning_rate, effective_learning_rate);
+        std::println(
+            "Training mode: depth {}, learning rate {} (effective per-layer {}), micro-batch size {}",
+            learn_depth,
+            learning_rate,
+            effective_learning_rate,
+            micro_batch_size
+        );
         if (learning_rate > 0.25f)
         {
             std::println(
@@ -50,6 +57,7 @@ namespace rllm
         nn->set_window_size(window_size);
         nn->set_learn_depth(learn_depth);
         nn->set_learning_rate(learning_rate);
+        nn->set_micro_batch_size(micro_batch_size);
 
         nn->train(verbose, num_epochs, input_filename, checkpointing_interval, epoch_size);
 

@@ -23,6 +23,7 @@ namespace rllm
 {
     struct NeuralNetworkForwardWorkspace;
     struct BackwardPropWorkspace;
+    struct GradientAccumulationWorkspace;
 
     enum class TrainingMethod
     {
@@ -62,6 +63,7 @@ namespace rllm
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
         void set_learn_depth(size_t n) { assert(n > 0); m_learn_depth = n; }
         void set_learning_rate(float rate) { assert(rate > 0.0f); m_learning_rate = rate; }
+        void set_micro_batch_size(size_t n);
 
         void propagate_forward();
 
@@ -110,21 +112,26 @@ namespace rllm
         CpuInputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
         std::vector<TransformerBlock> m_transformer_blocks;
         fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
+        fixed_size_obj_vector<Score, MultiTokenPredictionIndex> m_training_scores;
+        Score m_evaluation_score;
 
         // Hidden state at the final position after the last transformer block.
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_last_hidden;
         PositionIndex m_seq_len{PositionIndex::START};
         std::unique_ptr<NeuralNetworkForwardWorkspace> m_forward_workspace;
         std::unique_ptr<BackwardPropWorkspace> m_backward_workspace;
+        std::unique_ptr<GradientAccumulationWorkspace> m_gradient_accumulation_workspace;
 
         // Computed from the actual corpus size.
         const float m_fires_nothing_ce_loss;
         const float m_convergence_threshold;
 
         void reset_workspaces();
+        void reset_gradient_accumulators();
+        void apply_accumulated_gradients(float learning_rate_scale);
         void dump_top_predictions();
         void trace_probes_for_example(const char* phase, size_t iter, float loss_value, const std::string& full_string);
-        void do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations);
+        void do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations, float learning_rate_scale = 1.0f, bool manage_accumulator = true);
         // Accumulates gradients from all valid MTP heads and backpropagates once.
         void propagate_backward_mtp(
             const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
@@ -136,6 +143,7 @@ namespace rllm
         int m_window_size = 2;
         size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
         float m_learning_rate = DEFAULT_LEARNING_RATE;
+        size_t m_micro_batch_size = 1;
 
         void train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations);
@@ -143,7 +151,9 @@ namespace rllm
             const CpuInputLine& line_of_file,
             bool verbose,
             size_t max_iterations,
-            std::mt19937& rng
+            std::mt19937& rng,
+            float learning_rate_scale = 1.0f,
+            bool manage_accumulator = true
         );
         void train_with_window(
             int window_size,
@@ -152,6 +162,16 @@ namespace rllm
             const std::optional<std::chrono::seconds>& checkpointing_interval
         );
         void train_random_line_random_len_epoch(
+            size_t epoch,
+            const std::vector<CpuInputLine>& training_lines,
+            bool verbose,
+            size_t num_epochs,
+            const std::optional<std::chrono::seconds>& checkpointing_interval,
+            std::chrono::steady_clock::time_point& last_checkpoint_at,
+            std::mt19937& rng,
+            std::optional<size_t> epoch_size
+        );
+        void batch_train(
             size_t epoch,
             const std::vector<CpuInputLine>& training_lines,
             bool verbose,

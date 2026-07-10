@@ -81,6 +81,9 @@ cmake --build build/fastfork-vulkan --parallel
 Vulkan device selection (optional):
 
 ```bash
+# Select the device used by rllm by a case-insensitive name substring
+./build/fastfork-vulkan/rllm --vulkan-device radeon
+
 # Prefer AMD Vulkan devices (vendor id 0x1002)
 RLLM_VULKAN_VENDOR=amd ./build/fastfork-vulkan/rllm --help
 

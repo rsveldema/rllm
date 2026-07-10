@@ -18,6 +18,20 @@ namespace rllm::vulkan_runtime
      *  Queues 1..N are used by parallel sections. */
     VulkanQueue& get_queue(size_t index);
     size_t queue_count();
+    bool device_buffer_allocations_allowed();
+    void set_device_buffer_allocations_allowed(bool allowed);
+
+    class ScopedQueueOffset
+    {
+      public:
+        explicit ScopedQueueOffset(size_t offset);
+        ~ScopedQueueOffset();
+        ScopedQueueOffset(const ScopedQueueOffset&) = delete;
+        ScopedQueueOffset& operator=(const ScopedQueueOffset&) = delete;
+
+      private:
+        size_t m_previous_offset = 0;
+    };
 
     template <typename T>
     VBaseDeviceBuffer& device_buffer(T& value)

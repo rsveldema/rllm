@@ -4,6 +4,8 @@
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <utility>
 
 #include <parallel.hpp>
@@ -24,15 +26,15 @@ namespace rllm
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         gpu_flex_rows_cols_matrix()
-            : offloadable_data<ElementType>(1)
+            : offloadable_data<ElementType>(ROWS * COLS)
             , m_rows(X::START), m_cols(Y::START)
-            , m_capacity_elements(1)
+            , m_capacity_elements(ROWS * COLS)
         {}
 
         gpu_flex_rows_cols_matrix(X rows, Y cols)
-            : offloadable_data<ElementType>(element_count_for_size(rows, cols))
+            : offloadable_data<ElementType>(ROWS * COLS)
             , m_rows(rows), m_cols(cols)
-            , m_capacity_elements(element_count_for_size(rows, cols))
+            , m_capacity_elements(ROWS * COLS)
         {}
 
         gpu_flex_rows_cols_matrix(const gpu_flex_rows_cols_matrix&) = delete;
@@ -55,7 +57,6 @@ namespace rllm
         {
             ensure_capacity(src.num_rows(), src.num_cols());
             m_rows = src.num_rows(); m_cols = src.num_cols();
-            m_capacity_elements = std::max<size_t>(1, static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols));
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
             this->m_data.device_buffer().write(queue,
                 const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), bytes);
@@ -87,8 +88,8 @@ namespace rllm
             const size_t requested_elements = element_count_for_size(rows, cols);
             if (requested_elements <= m_capacity_elements)
                 return;
-            this->m_data = DevicePointer<ElementType>(requested_elements);
-            m_capacity_elements = requested_elements;
+            std::fprintf(stderr, "gpu_flex_rows_cols_matrix exceeded its startup device allocation\n");
+            std::abort();
         }
 
         X m_rows;

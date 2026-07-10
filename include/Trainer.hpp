@@ -26,6 +26,7 @@ namespace rllm
             int window_size,
             size_t learn_depth,
             float learning_rate,
+            size_t micro_batch_size,
             size_t num_epochs,
             std::optional<size_t> epoch_size,
             const std::string& train_corpus_dir

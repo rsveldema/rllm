@@ -7,6 +7,10 @@
 #include <type_traits>
 #include <fastfork/fastfork.hpp>
 
+#if defined(USE_VULKAN_OFFLOAD)
+#error "PARFOR* with the FastFork backend is not supported in Vulkan builds; use PARALLEL_BACKEND=sequential or openmp"
+#endif
+
 namespace parallel {
     void init_parallel();
     inline int  get_max_threads()      { return fastfork::get_max_threads(); }

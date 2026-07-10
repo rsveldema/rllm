@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -24,17 +26,17 @@ namespace rllm
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         gpu_fixed_levels_rows_cols_matrix()
-            : offloadable_data<ElementType>(1)
+            : offloadable_data<ElementType>(LEVELS * ROWS * COLS)
             , m_rows(X::START)
             , m_cols(Y::START)
-            , m_capacity_elements(1)
+            , m_capacity_elements(LEVELS * ROWS * COLS)
         {}
 
         gpu_fixed_levels_rows_cols_matrix(X rows, Y cols)
-            : offloadable_data<ElementType>(element_count_for_size(rows, cols))
+            : offloadable_data<ElementType>(LEVELS * ROWS * COLS)
             , m_rows(rows)
             , m_cols(cols)
-            , m_capacity_elements(element_count_for_size(rows, cols))
+            , m_capacity_elements(LEVELS * ROWS * COLS)
         {}
 
         gpu_fixed_levels_rows_cols_matrix(const gpu_fixed_levels_rows_cols_matrix&) = delete;
@@ -110,8 +112,8 @@ namespace rllm
             const size_t requested_elements = element_count_for_size(rows, cols);
             if (requested_elements <= m_capacity_elements)
                 return;
-            this->m_data = DevicePointer<ElementType>(requested_elements);
-            m_capacity_elements = requested_elements;
+            std::fprintf(stderr, "gpu_fixed_levels_rows_cols_matrix exceeded its startup device allocation\n");
+            std::abort();
         }
 
         X m_rows;

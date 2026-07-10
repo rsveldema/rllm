@@ -287,6 +287,10 @@ TEST(FastforkTest, OverheadPerTaskBounded)
 int main(int argc, char** argv)
 {
     fastfork::init();
+#if defined(USE_VULKAN_OFFLOAD)
+    auto* vulkan_session = new VulkanSession();
+    rllm::vulkan_runtime::set_session(*vulkan_session);
+#endif
     std::println("Parallel backend: {}", parallel::backend_name());
 #if defined(USE_VULKAN_OFFLOAD)
     parallel::print_vulkan_provider();

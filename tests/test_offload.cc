@@ -8,6 +8,7 @@
 #include <fixed_size_matrix.hpp>
 #include <fixed_size_vector.hpp>
 #include <parallel.hpp>
+#include <rllm_vulkan_runtime.hpp>
 #include <vecmath.hpp>
 #include <cpu/cpu_fixed_vector.hpp>
 #include <cpu/cpu_fixed_matrix.hpp>
@@ -38,6 +39,8 @@ constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ = 0u;
 int main(int argc, char** argv)
 {
     parallel::init_parallel();
+    auto* vulkan_session = new VulkanSession();
+    rllm::vulkan_runtime::set_session(*vulkan_session);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

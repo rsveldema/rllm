@@ -16,5 +16,5 @@ if [[ "$PYTHON" != /* ]]; then
     PYTHON="$(pwd)/$PYTHON"
 fi
 
-cmake -B build_release -DCMAKE_BUILD_TYPE=Release -DPARALLEL_BACKEND=fastfork -DOFFLOAD_BACKEND=vulkan -DBUILD_TESTING=ON -DRLLM_BUILD_KERNEL_COMPILER=ON -DPython3_EXECUTABLE:FILEPATH="$PYTHON"
+cmake -B build_release -DCMAKE_BUILD_TYPE=Release -DPARALLEL_BACKEND=sequential -DOFFLOAD_BACKEND=vulkan -DBUILD_TESTING=ON -DRLLM_BUILD_KERNEL_COMPILER=ON -DPython3_EXECUTABLE:FILEPATH="$PYTHON"
 cmake --build build_release --parallel

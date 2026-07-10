@@ -5,25 +5,11 @@ namespace rllm::vulkan_runtime
     namespace
     {
         VulkanSession* g_session = nullptr;
-        VulkanSession* g_owned_session = nullptr;
         VulkanComputeContext* g_context = nullptr;
         std::recursive_mutex g_mutex;
+        thread_local size_t g_queue_offset = 0;
+        bool g_device_buffer_allocations_allowed = true;
 
-        void ensure_initialized()
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_mutex);
-            if (g_session == nullptr)
-            {
-                // Tests and tools may link gtest_main instead of rllm's main,
-                // so they never call set_session(). Keep this process-lifetime
-                // default session alive to avoid exit-time destruction ordering
-                // issues with global/static model data.
-                g_owned_session = new VulkanSession();
-                g_session = g_owned_session;
-            }
-            if (g_context == nullptr)
-                g_context = new VulkanComputeContext(*g_session);
-        }
     }
 
     void set_session(VulkanSession& session)
@@ -35,13 +21,11 @@ namespace rllm::vulkan_runtime
 
     VulkanSession& session()
     {
-        ensure_initialized();
         return *g_session;
     }
 
     VulkanComputeContext& context()
     {
-        ensure_initialized();
         return *g_context;
     }
 
@@ -52,13 +36,36 @@ namespace rllm::vulkan_runtime
 
     VulkanQueue& get_queue(size_t index)
     {
-        ensure_initialized();
-        return session().get_queue(index);
+        const size_t n = session().queue_count();
+        return session().get_queue((index + g_queue_offset) % n);
     }
 
     size_t queue_count()
     {
-        ensure_initialized();
         return session().queue_count();
+    }
+
+    bool device_buffer_allocations_allowed()
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_mutex);
+        return g_device_buffer_allocations_allowed;
+    }
+
+    void set_device_buffer_allocations_allowed(bool allowed)
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_mutex);
+        g_device_buffer_allocations_allowed = allowed;
+    }
+
+    ScopedQueueOffset::ScopedQueueOffset(size_t offset)
+        : m_previous_offset(g_queue_offset)
+    {
+        const size_t n = queue_count();
+        g_queue_offset = offset % n;
+    }
+
+    ScopedQueueOffset::~ScopedQueueOffset()
+    {
+        g_queue_offset = m_previous_offset;
     }
 }

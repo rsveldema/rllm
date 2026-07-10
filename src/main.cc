@@ -51,8 +51,10 @@ struct CommandLineParser
     size_t mtp_heads = 1;
     size_t learn_depth = rllm::NeuralNetwork::DEFAULT_LEARN_DEPTH;
     float learning_rate = rllm::NeuralNetwork::DEFAULT_LEARNING_RATE;
+    size_t micro_batch_size = 1;
     std::optional<size_t> epoch_size;
     bool nan_finding_mode = false;
+    std::optional<std::string> vulkan_device;
 
     static bool option_matches(const std::string& arg, const CommandLineOption& option)
     {
@@ -135,11 +137,36 @@ struct CommandLineParser
                  }
                  learning_rate = rate;
              }},
+        {.options = {"--micro-batch-size"},
+         .description = "Number of examples to group into one averaged gradient update (default: 1)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int n = std::atoi(args[0].c_str());
+                 if (n <= 0)
+                 {
+                     std::println("--micro-batch-size requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 micro_batch_size = static_cast<size_t>(n);
+             }},
         {.options = {"--nan-finding"},
          .description = "Enable expensive NaN/range validation checks (default: disabled)",
          .action =
              [&](const std::vector<std::string>&) {
                  nan_finding_mode = true;
+             }},
+        {.options = {"--vulkan-device"},
+         .description = "Select a Vulkan device by a case-insensitive name substring",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 if (args[0].empty())
+                 {
+                     std::println("--vulkan-device requires a non-empty device name substring");
+                     std::exit(1);
+                 }
+                 vulkan_device = args[0];
              }},
         {.options = {"--train-dir"},
          .description = "Directory containing training text files",
@@ -303,23 +330,32 @@ struct CommandLineParser
 int main(int argc, char* argv[])
 {
     std::srand(0);
+
+    CommandLineParser parser;
+    parser.parse(argc, argv);
+    if (parser.vulkan_device)
+        setenv("RLLM_VULKAN_DEVICE_SUBSTRING", parser.vulkan_device->c_str(), 1);
+
     parallel::init_parallel();
+
+    // Generated Vulkan kernels are function-local statics and may destruct
+    // during process teardown. Keep the session alive for the full process so
+    // those destructors never see a dead VkDevice.
+    auto* vulkan_session = new VulkanSession(
+        false,
+        parser.vulkan_device ? parser.vulkan_device->c_str() : nullptr
+    );
+    if (!vulkan_session->has_device())
+        return 1;
+    rllm::vulkan_runtime::set_session(*vulkan_session);
 #ifdef NDEBUG
     std::println("Build type: Release (NDEBUG defined)");
 #else
     std::println("Build type: Debug (NDEBUG not defined)");
 #endif
 
-    // Generated Vulkan kernels are function-local statics and may destruct
-    // during process teardown. Keep the session alive for the full process so
-    // those destructors never see a dead VkDevice.
-    auto* vulkan_session = new VulkanSession();
-    rllm::vulkan_runtime::set_session(*vulkan_session);
     std::println("Offload type: Vulkan");
     parallel::print_vulkan_provider();
-
-    CommandLineParser parser;
-    parser.parse(argc, argv);
     rllm::set_nan_finding_mode_enabled(parser.nan_finding_mode);
 
     if (parser.train_mode)
@@ -335,6 +371,7 @@ int main(int argc, char* argv[])
             parser.window_size,
             parser.learn_depth,
             parser.learning_rate,
+            parser.micro_batch_size,
             parser.num_epochs,
             parser.epoch_size,
             parser.train_corpus_dir.value()

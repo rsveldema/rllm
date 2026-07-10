@@ -368,6 +368,7 @@ TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
     rllm::Score score;
     rllm::fixed_size_vector<float, rllm::EmbeddingDimension> dh_last;
     dh_last.set_size(rllm::EmbeddingDimension::MAX);
+    rllm::OutputLayerGradientAccumulator accumulator;
 
     layer.forward_from_hidden(h_last, test_queue());
     const float initial_loss = layer.compute_score(score, expected_token);
@@ -378,7 +379,9 @@ TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
         const float loss = layer.compute_score(score, expected_token);
         (void)loss;
         dh_last.zero(test_queue());
-        layer.backward_and_update(score.values, h_last, dh_last, 0.003f);
+        accumulator.reset(test_queue());
+        layer.backward_accumulate(score.values, h_last, dh_last, accumulator);
+        layer.apply_accumulated_update(accumulator, 0.003f);
     }
 
     layer.forward_from_hidden(h_last, test_queue());

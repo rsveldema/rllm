@@ -16,6 +16,20 @@
 
 namespace rllm
 {
+    struct TransformerGradientAccumulator
+    {
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension> dW_down;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> dW_gate;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> dW_up;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_o;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_q;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_k;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
+        bool touched = false;
+
+        void reset(VulkanQueue& queue);
+    };
+
     // ── forward workspace ─────────────────────────────────────────────────────
     // All large fixed-size matrices live here so they are heap-allocated via
     // unique_ptr and do not blow the stack (~21 MB of combined fixed-size arrays).
@@ -191,9 +205,16 @@ namespace rllm
         // Caches intermediate activations for the backward pass.
         void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, ForwardWorkspace& workspace);
 
-        // Backward pass.  dout[seq_len × D_MODEL] = dL/dh_out.
-        // Writes dL/dh_in into din (same shape) and updates all weights.
-        void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate, ForwardWorkspace& fwd_workspace);
+        // Backward pass. dout[seq_len x D_MODEL] = dL/dh_out.
+        // Writes dL/dh_in into din and leaves weight gradients in workspace.
+        void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, ForwardWorkspace& fwd_workspace, bool wait_for_completion = true);
+        void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate, ForwardWorkspace& fwd_workspace)
+        {
+            (void) learning_rate;
+            backward(dout, din, workspace, fwd_workspace);
+        }
+        void accumulate_gradients(const BackwardWorkspace& workspace, TransformerGradientAccumulator& accumulator);
+        void apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate);
 
         void randomize();
 

@@ -5,6 +5,8 @@
 #include <cassert>
 #include <concepts>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <utility>
 
 #include <parallel.hpp>
@@ -25,15 +27,15 @@ namespace rllm
         static constexpr size_t COLS = static_cast<size_t>(Y::MAX);
 
         gpu_flex_rows_matrix()
-            : offloadable_data<ElementType>(COLS)
+            : offloadable_data<ElementType>(ROWS * COLS)
             , m_rows(X::START)
-            , m_capacity_rows(1)
+            , m_capacity_rows(ROWS)
         {}
 
         gpu_flex_rows_matrix(X rows)
-            : offloadable_data<ElementType>(element_count_for_rows(rows))
+            : offloadable_data<ElementType>(ROWS * COLS)
             , m_rows(rows)
-            , m_capacity_rows(std::max<size_t>(1, static_cast<size_t>(rows)))
+            , m_capacity_rows(ROWS)
         {}
 
         gpu_flex_rows_matrix(const gpu_flex_rows_matrix&) = delete;
@@ -43,7 +45,6 @@ namespace rllm
             {
                 ensure_capacity(other.m_rows);
                 m_rows = other.m_rows;
-                m_capacity_rows = other.m_capacity_rows;
                 const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
                 this->m_data.device_buffer().copy_from(rllm::vulkan_runtime::get_queue(0),
                     const_cast<VBaseDeviceBuffer&>(other.m_data.device_buffer()), bytes);
@@ -59,7 +60,6 @@ namespace rllm
         {
             ensure_capacity(other.m_rows);
             m_rows = other.m_rows;
-            m_capacity_rows = other.m_capacity_rows;
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
             this->m_data.device_buffer().copy_from(queue,
                 const_cast<VBaseDeviceBuffer&>(other.m_data.device_buffer()), bytes);
@@ -77,7 +77,6 @@ namespace rllm
         {
             ensure_capacity(src.num_rows());
             m_rows = src.num_rows();
-            m_capacity_rows = std::max<size_t>(1, static_cast<size_t>(m_rows));
             const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
             this->m_data.device_buffer().write(queue,
                 const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), bytes);
@@ -108,8 +107,8 @@ namespace rllm
             const size_t requested_rows = std::max<size_t>(1, static_cast<size_t>(rows));
             if (requested_rows <= m_capacity_rows)
                 return;
-            this->m_data = DevicePointer<ElementType>(requested_rows * COLS);
-            m_capacity_rows = requested_rows;
+            std::fprintf(stderr, "gpu_flex_rows_matrix exceeded its startup device allocation\n");
+            std::abort();
         }
 
         X m_rows;

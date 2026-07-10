@@ -14,6 +14,39 @@
 
 namespace rllm
 {
+    static constexpr size_t embedding_gradient_index(TokenID tok, EmbeddingDimension dim)
+    {
+        return static_cast<size_t>(tok) * static_cast<size_t>(EmbeddingDimension::MAX) + static_cast<size_t>(dim);
+    }
+
+    EmbeddingGradientAccumulator::EmbeddingGradientAccumulator()
+        : gradients(static_cast<size_t>(TokenID::MAX) * static_cast<size_t>(EmbeddingDimension::MAX), 0.0f)
+        , touched(static_cast<size_t>(TokenID::MAX), 0)
+    {
+    }
+
+    void EmbeddingGradientAccumulator::reset()
+    {
+        std::fill(gradients.begin(), gradients.end(), 0.0f);
+        std::fill(touched.begin(), touched.end(), 0);
+    }
+
+    void EmbeddingGradientAccumulator::add(TokenID tok, EmbeddingDimension dim, float value)
+    {
+        gradients[embedding_gradient_index(tok, dim)] += value;
+        touched[static_cast<size_t>(tok)] = 1;
+    }
+
+    bool EmbeddingGradientAccumulator::is_touched(TokenID tok) const
+    {
+        return touched[static_cast<size_t>(tok)] != 0;
+    }
+
+    float EmbeddingGradientAccumulator::get(TokenID tok, EmbeddingDimension dim) const
+    {
+        return gradients[embedding_gradient_index(tok, dim)];
+    }
+
     static constexpr float NAN_FINDING_INPUT_HIDDEN_ABS_BOUND = 2.0f;
     static constexpr float NAN_FINDING_INPUT_GRADIENT_ABS_BOUND = 10000.0f;
 
@@ -177,14 +210,24 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
     ) const
     {
+        auto& gpu_input = const_cast<GpuInputLine&>(m_gpu_input);
+        propagate_forward(input, gpu_input, h);
+    }
+
+    void InputLayer::propagate_forward(
+        const CpuInputLine& input,
+        GpuInputLine& gpu_input,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
+    ) const
+    {
         h.set_rows(static_cast<PositionIndex>(input.size()));
 
         // Sync CPU input to GPU before OFFLOAD region
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        m_gpu_input.sync_to_device(queue, input);
+        gpu_input.sync_to_device(queue, input);
 
         check_nan_finding_mode_embeddings("forward:start");
-        fill_embeddings_with_positional_encoding(queue, m_gpu_input, m_embeddings, h, static_cast<float>(EmbeddingDimension::MAX));
+        fill_embeddings_with_positional_encoding(queue, gpu_input, m_embeddings, h, static_cast<float>(EmbeddingDimension::MAX));
         check_nan_finding_mode_matrix(h, static_cast<PositionIndex>(input.size()), "hidden state", "forward:end");
     }
 
@@ -266,6 +309,56 @@ namespace rllm
             m_updated_tokens[tok] = 0;
         }
         check_nan_finding_mode_embeddings("backward:end");
+    }
+
+    void InputLayer::accumulate_backward(
+        const CpuInputLine& input,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
+        EmbeddingGradientAccumulator& accumulator
+    )
+    {
+        cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dh_cpu;
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        check_nan_finding_mode_matrix(dh, static_cast<PositionIndex>(input.size()), "gradient", "accumulate_backward:dh");
+        const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(queue, dh_cpu);
+
+        m_updated_tokens.zero();
+        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
+            m_updated_tokens[input.get(pos)]++;
+
+        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
+        {
+            const auto tok = input.get(pos);
+            const auto count = m_updated_tokens[tok];
+            assert(count > 0);
+            const float scale = 1.0f / static_cast<float>(count);
+            for (const auto di : enum_iterator1D<EmbeddingDimension>())
+                accumulator.add(tok, di, scale * dh_cpu.get(pos, di));
+        }
+
+        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
+            m_updated_tokens[input.get(pos)] = 0;
+    }
+
+    void InputLayer::apply_accumulated_update(EmbeddingGradientAccumulator& accumulator, float learning_rate)
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        check_nan_finding_mode_embeddings("apply_accumulated_update:start");
+        for (const auto tok : enum_iterator1D<TokenID>())
+        {
+            if (!accumulator.is_touched(tok))
+                continue;
+            for (const auto di : enum_iterator1D<EmbeddingDimension>())
+            {
+                m_embeddings_cpu.set(tok, di,
+                    math::clamp(
+                        static_cast<float>(m_embeddings_cpu.get(tok, di)) + learning_rate * accumulator.get(tok, di),
+                        RLMM_NEG_ONE,
+                        RLMM_ONE));
+            }
+            m_embeddings.copy_row_to_offload_buffer(queue, tok, m_embeddings_cpu);
+        }
+        check_nan_finding_mode_embeddings("apply_accumulated_update:end");
     }
 
 

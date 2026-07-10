@@ -9,6 +9,14 @@
 
 namespace rllm
 {
+    struct OutputLayerGradientAccumulator
+    {
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> dW_lm_head;
+        bool touched = false;
+
+        void reset(VulkanQueue& queue);
+    };
+
     void output_layer_forward_from_hidden_impl(
         VulkanQueue& queue,
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
@@ -44,19 +52,31 @@ namespace rllm
         // Project h_last[D_MODEL] to vocabulary logits, storing them in m_inputs.
         void forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last,
               VulkanQueue& queue);
+        void forward_from_hidden(
+            const fixed_size_vector<float, EmbeddingDimension>& h_last,
+            fixed_size_vector<float, TokenID>& inputs,
+            cpu_fixed_vector<float, TokenID>& inputs_cpu,
+            VulkanQueue& queue
+        );
 
-        // Backpropagate the output delta through W_lm_head.
-        // Accumulates ∂L/∂h_last into dh_last and updates W_lm_head via SGD+momentum.
-        void backward_and_update(
+        void backward_accumulate(
             const fixed_size_vector<float, TokenID>& delta,
             const fixed_size_vector<float, EmbeddingDimension>& h_last,
-          fixed_size_vector<float, EmbeddingDimension>& dh_last,
-            float learning_rate
+            fixed_size_vector<float, EmbeddingDimension>& dh_last,
+            OutputLayerGradientAccumulator& accumulator
         );
+
+        void apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate);
 
         // Computes softmax deltas (with label smoothing) into score for backprop,
         // and returns the cross-entropy loss -log(softmax[target]).
         float compute_score(Score& score, const TokenID expected_output_token);
+        float compute_score(
+            const fixed_size_vector<float, TokenID>& inputs,
+            const cpu_fixed_vector<float, TokenID>& inputs_cpu,
+            Score& score,
+            const TokenID expected_output_token
+        );
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;

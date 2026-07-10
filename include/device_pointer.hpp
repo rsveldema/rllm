@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -20,9 +22,7 @@ public:
     explicit DevicePointer(size_t num_elements)
         : m_count(num_elements)
         , m_bytes(sizeof(T) * num_elements)
-        , m_device(std::make_unique<VDynamicDeviceBuffer>(
-                       rllm::vulkan_runtime::session(),
-                       static_cast<VkDeviceSize>(m_bytes)))
+        , m_device(make_device_buffer(static_cast<VkDeviceSize>(m_bytes)))
     {
         assert(m_count > 0);
         m_device->zero(rllm::vulkan_runtime::get_queue(0));
@@ -126,6 +126,18 @@ public:
     }
 
 private:
+    static std::unique_ptr<VDynamicDeviceBuffer> make_device_buffer(VkDeviceSize bytes)
+    {
+        if (!rllm::vulkan_runtime::device_buffer_allocations_allowed())
+        {
+            std::fprintf(stderr, "device buffer allocated after startup allocation phase\n");
+            std::abort();
+        }
+        return std::make_unique<VDynamicDeviceBuffer>(
+            rllm::vulkan_runtime::session(),
+            bytes);
+    }
+
     size_t m_count = 0;
     size_t m_bytes = 0;
     std::unique_ptr<VDynamicDeviceBuffer> m_device;

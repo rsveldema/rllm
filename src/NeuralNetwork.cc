@@ -15,6 +15,7 @@
 #include <numeric>
 #include <parallel.hpp>
 #include <random>
+#include <rllm_vulkan_runtime.hpp>
 #include <set>
 #include <vecmath.hpp>
 
@@ -338,27 +339,10 @@ namespace rllm
         queue.wait("NeuralNetwork h_last ready for output layer forward");
         check_hidden_vector_nan_finding_mode(queue, ws.h_last, "after h_last copy");
 
-        const size_t output_head_count = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
-        if (rllm::vulkan_runtime::queue_count() >= output_head_count)
+        for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
         {
-            for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
-            {
-                auto& output_queue = rllm::vulkan_runtime::get_queue(static_cast<size_t>(ix));
-                m_output_layers[ix].forward_from_hidden(ws.h_last, output_queue);
-            }
-            for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
-            {
-                auto& output_queue = rllm::vulkan_runtime::get_queue(static_cast<size_t>(ix));
-                output_queue.wait("NeuralNetwork output layer forward");
-            }
-        }
-        else
-        {
-            for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
-            {
-                m_output_layers[ix].forward_from_hidden(ws.h_last, queue);
-                queue.wait("NeuralNetwork output layer forward");
-            }
+            m_output_layers[ix].forward_from_hidden(ws.h_last, queue);
+            queue.wait("NeuralNetwork output layer forward");
         }
     }
 
@@ -366,6 +350,27 @@ namespace rllm
     // NeuralNetwork
 
     static constexpr std::chrono::seconds MIN_TIME_BETWEEN_CHECKPOINTS{30};
+
+    class ScopedDeviceBufferAllocationFreeze
+    {
+      public:
+        ScopedDeviceBufferAllocationFreeze()
+            : m_previous(rllm::vulkan_runtime::device_buffer_allocations_allowed())
+        {
+            rllm::vulkan_runtime::set_device_buffer_allocations_allowed(false);
+        }
+
+        ~ScopedDeviceBufferAllocationFreeze()
+        {
+            rllm::vulkan_runtime::set_device_buffer_allocations_allowed(m_previous);
+        }
+
+        ScopedDeviceBufferAllocationFreeze(const ScopedDeviceBufferAllocationFreeze&) = delete;
+        ScopedDeviceBufferAllocationFreeze& operator=(const ScopedDeviceBufferAllocationFreeze&) = delete;
+
+      private:
+        bool m_previous = true;
+    };
 
     static bool timed_checkpoint_due(const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at)
     {
@@ -480,10 +485,60 @@ namespace rllm
         }
     };
 
+    struct GradientAccumulationWorkspace
+    {
+        fixed_size_obj_vector<OutputLayerGradientAccumulator, MultiTokenPredictionIndex> output_layers;
+        std::vector<TransformerGradientAccumulator> transformer_blocks;
+        EmbeddingGradientAccumulator embeddings;
+
+        explicit GradientAccumulationWorkspace(size_t num_transformer_blocks)
+            : transformer_blocks(num_transformer_blocks)
+        {
+            output_layers.set_size(MultiTokenPredictionIndex::MAX);
+        }
+
+        void reset(VulkanQueue& queue)
+        {
+            for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
+                output_layers[oi].reset(queue);
+            for (auto& block : transformer_blocks)
+                block.reset(queue);
+            embeddings.reset();
+        }
+    };
+
     void NeuralNetwork::reset_workspaces()
     {
         m_forward_workspace = std::make_unique<NeuralNetworkForwardWorkspace>(PositionIndex::START, m_transformer_blocks.size());
         m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
+        m_gradient_accumulation_workspace = std::make_unique<GradientAccumulationWorkspace>(m_transformer_blocks.size());
+    }
+
+    void NeuralNetwork::set_micro_batch_size(size_t n)
+    {
+        assert(n > 0);
+        m_micro_batch_size = n;
+    }
+
+    void NeuralNetwork::reset_gradient_accumulators()
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_gradient_accumulation_workspace->reset(queue);
+        queue.wait("NeuralNetwork gradient accumulator reset");
+    }
+
+    void NeuralNetwork::apply_accumulated_gradients(float learning_rate_scale)
+    {
+        const float learning_rate = (m_learning_rate * learning_rate_scale) /
+            static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
+
+        for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
+            m_output_layers[oi].apply_accumulated_update(m_gradient_accumulation_workspace->output_layers[oi], learning_rate);
+
+        for (size_t i = 0; i < m_transformer_blocks.size(); ++i)
+            m_transformer_blocks[i].apply_accumulated_update(m_gradient_accumulation_workspace->transformer_blocks[i], learning_rate);
+
+        m_input_layer.apply_accumulated_update(m_gradient_accumulation_workspace->embeddings, learning_rate);
     }
 
     NeuralNetwork::NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats)
@@ -502,14 +557,15 @@ namespace rllm
 
     NeuralNetwork::~NeuralNetwork() = default;
 
-    void NeuralNetwork::propagate_backward_mtp(const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores, MultiTokenPredictionIndex num_valid)
+    void NeuralNetwork::propagate_backward_mtp(
+        const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
+        MultiTokenPredictionIndex num_valid
+    )
     {
         assert(m_seq_len > PositionIndex::START);
 
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_backward_workspace->reset(queue, m_seq_len);
-
-        const float learning_rate = m_learning_rate / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
 
         auto& ws = *m_backward_workspace;
         ws.dh.set_rows(m_seq_len);
@@ -532,7 +588,12 @@ namespace rllm
                 const auto phase = std::format("output head {} backward delta", static_cast<size_t>(oi));
                 check_token_vector_nan_finding_mode(queue, ws.output_layer_delta, 10.0f, "output delta", phase.c_str());
             }
-            m_output_layers[oi].backward_and_update(ws.output_layer_delta, ws.h_last_vec, ws.dh_last, learning_rate);
+            m_output_layers[oi].backward_accumulate(
+                ws.output_layer_delta,
+                ws.h_last_vec,
+                ws.dh_last,
+                m_gradient_accumulation_workspace->output_layers[oi]
+            );
             {
                 const auto phase = std::format("after output head {} backward", static_cast<size_t>(oi));
                 check_hidden_vector_nan_finding_mode(queue, ws.dh_last, phase.c_str());
@@ -553,7 +614,16 @@ namespace rllm
                 const auto phase = std::format("before transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, phase.c_str());
             }
-            m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, learning_rate, m_forward_workspace->transformer_workspaces[static_cast<size_t>(i)]);
+            m_transformer_blocks[i].backward(
+                *p_dh,
+                *p_din,
+                ws.transformer_block,
+                m_forward_workspace->transformer_workspaces[static_cast<size_t>(i)]
+            );
+            m_transformer_blocks[i].accumulate_gradients(
+                ws.transformer_block,
+                m_gradient_accumulation_workspace->transformer_blocks[static_cast<size_t>(i)]
+            );
             {
                 const auto phase = std::format("after transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_din, m_seq_len, phase.c_str());
@@ -562,7 +632,7 @@ namespace rllm
         }
 
         check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, "before input layer backward");
-        m_input_layer.propagate_backward(m_last_input, *p_dh, learning_rate);
+        m_input_layer.accumulate_backward(m_last_input, *p_dh, m_gradient_accumulation_workspace->embeddings);
     }
 
 
@@ -600,7 +670,7 @@ namespace rllm
             return std::numeric_limits<float>::quiet_NaN();
         }
 
-        Score score;
+        Score& score = m_evaluation_score;
         auto& queue = rllm::vulkan_runtime::get_queue(0);
 
         double total_loss = 0.0;
@@ -692,7 +762,14 @@ namespace rllm
         do_training(train_input, verbose, max_iterations);
     }
 
-    void NeuralNetwork::train_with_random_len_from_start(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, std::mt19937& rng)
+    void NeuralNetwork::train_with_random_len_from_start(
+        const CpuInputLine& line_of_file,
+        bool verbose,
+        size_t max_iterations,
+        std::mt19937& rng,
+        float learning_rate_scale,
+        bool manage_accumulator
+    )
     {
         const int line_len = static_cast<int>(line_of_file.size());
         if (line_len < 2)
@@ -711,11 +788,107 @@ namespace rllm
 
         LOG_INFO("Training on random line prefix ({} toks): '{}'", random_len, *full_string_opt);
 
-        do_training(train_input, verbose, max_iterations);
+        do_training(train_input, verbose, max_iterations, learning_rate_scale, manage_accumulator);
+    }
+
+    void NeuralNetwork::batch_train(
+        size_t epoch,
+        const std::vector<CpuInputLine>& training_lines,
+        bool verbose,
+        size_t num_epochs,
+        const std::optional<std::chrono::seconds>& checkpointing_interval,
+        std::chrono::steady_clock::time_point& last_checkpoint_at,
+        std::mt19937& rng,
+        std::optional<size_t> epoch_size
+    )
+    {
+        const size_t total_lines = training_lines.size();
+        assert(total_lines > 0);
+        const size_t epoch_lines = lines_per_epoch(total_lines, epoch_size);
+        const size_t steps = training_steps_per_example(m_transformer_blocks.size(), m_learn_depth);
+
+        std::vector<size_t> line_indices(total_lines);
+        std::iota(line_indices.begin(), line_indices.end(), 0);
+        std::shuffle(line_indices.begin(), line_indices.end(), rng);
+
+        for (size_t batch_start = 0; batch_start < epoch_lines; batch_start += m_micro_batch_size)
+        {
+            const size_t selected_count = std::min(m_micro_batch_size, epoch_lines - batch_start);
+            const float progress = static_cast<float>(batch_start + selected_count) / static_cast<float>(epoch_lines);
+
+            if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
+            {
+                LOG_INFO("Creating timed checkpoint at epoch: {}, line: {}, epoch lines todo: {}", epoch, batch_start + 1, epoch_lines);
+                checkpoint();
+            }
+
+            std::vector<CpuInputLine> batch;
+            batch.reserve(selected_count);
+            for (size_t offset = 0; offset < selected_count; ++offset)
+            {
+                const auto& random_line = training_lines[line_indices[batch_start + offset]];
+                if (static_cast<int>(random_line.size()) < 2)
+                    continue;
+
+                if (m_training_method == TrainingMethod::RANDOM_LINE_FULL)
+                {
+                    batch.push_back(random_line);
+                    continue;
+                }
+
+                const int line_len = static_cast<int>(random_line.size());
+                std::uniform_int_distribution<int> len_dist(2, line_len);
+                CpuInputLine train_input;
+                random_line.sub_array(train_input, static_cast<PositionIndex>(len_dist(rng)));
+                batch.push_back(train_input);
+            }
+
+            if (batch.empty())
+                continue;
+
+            const float learning_rate_scale = 1.0f / static_cast<float>(batch.size());
+            const auto batch_started_at = std::chrono::steady_clock::now();
+
+            for (size_t step = 0; step < steps; ++step)
+            {
+                reset_gradient_accumulators();
+                for (const auto& example : batch)
+                    do_training(example, verbose && step == 0, 1, 1.0f, false);
+                apply_accumulated_gradients(learning_rate_scale);
+            }
+
+            const double average_milliseconds_per_line =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - batch_started_at).count() /
+                static_cast<double>(batch.size() * steps);
+            LOG_INFO(
+                "Epoch[{}%] random-line[{}..{}]: {:0.2f}% done (micro-batch {}, avg {:.2f} ms/line)",
+                epoch / static_cast<float>(num_epochs) * 100.0f,
+                batch_start + 1,
+                batch_start + selected_count,
+                progress * 100.0f,
+                batch.size(),
+                average_milliseconds_per_line
+            );
+        }
     }
 
     void NeuralNetwork::train_random_line_random_len_epoch(size_t epoch, const std::vector<CpuInputLine>& training_lines, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at, std::mt19937& rng, std::optional<size_t> epoch_size)
     {
+        if (m_micro_batch_size > 1)
+        {
+            batch_train(
+                epoch,
+                training_lines,
+                verbose,
+                num_epochs,
+                checkpointing_interval,
+                last_checkpoint_at,
+                rng,
+                epoch_size
+            );
+            return;
+        }
+
         const auto total_lines = training_lines.size();
         assert(total_lines > 0);
         const auto epoch_lines = lines_per_epoch(total_lines, epoch_size);
@@ -726,6 +899,7 @@ namespace rllm
         std::vector<size_t> line_indices(total_lines);
         std::iota(line_indices.begin(), line_indices.end(), 0);
         std::shuffle(line_indices.begin(), line_indices.end(), rng);
+        const auto epoch_started_at = std::chrono::steady_clock::now();
 
         for (size_t lines_visited = 1; lines_visited <= epoch_lines; ++lines_visited)
         {
@@ -736,8 +910,6 @@ namespace rllm
                 LOG_INFO("Creating timed checkpoint at epoch: {}, line: {}, epoch lines todo: {}", epoch, lines_visited, epoch_lines);
                 checkpoint();
             }
-
-            LOG_INFO("Epoch[{}%] random-line[{}]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, lines_visited, progress * 100.0f);
 
             const auto& random_line = training_lines[line_indices[lines_visited - 1]];
             if (m_training_method == TrainingMethod::RANDOM_LINE_FULL)
@@ -752,6 +924,17 @@ namespace rllm
             {
                 train_with_random_len_from_start(random_line, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth), rng);
             }
+
+            const double average_milliseconds_per_line =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - epoch_started_at).count() /
+                static_cast<double>(lines_visited);
+            LOG_INFO(
+                "Epoch[{}%] random-line[{}]: {:0.2f}% done (avg {:.2f} ms/line)",
+                epoch / static_cast<float>(num_epochs) * 100.0f,
+                lines_visited,
+                progress * 100.0f,
+                average_milliseconds_per_line
+            );
         }
     }
 
@@ -795,6 +978,7 @@ namespace rllm
         bool has_best_checkpoint = false;
         static constexpr const char* BEST_CHECKPOINT_FILENAME = "models/checkpoint-best.st";
 
+        auto device_buffer_allocation_freeze = std::make_unique<ScopedDeviceBufferAllocationFreeze>();
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
             bool should_stop = false;
@@ -895,6 +1079,7 @@ namespace rllm
             if (should_stop)
                 break;
         }
+        device_buffer_allocation_freeze.reset();
 
         if (has_best_checkpoint)
         {
@@ -930,6 +1115,7 @@ namespace rllm
         std::mt19937 rng{42};
         size_t total_windows_trained = 0;
         auto last_checkpoint_at = std::chrono::steady_clock::now();
+        ScopedDeviceBufferAllocationFreeze device_buffer_allocation_freeze;
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
             LOG_INFO("Epoch[{}%]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, 0.0f);
@@ -1031,6 +1217,7 @@ namespace rllm
             "\t convergence threshold: {:.6f}\n"
             "\t fires nothing CE loss:  {:.6f}\n"
             "\t steps per example per epoch: {}\n"
+            "\t micro-batch size: {}\n"
             "\t num epochs: {}\n"
             "\t epoch size: {}\n"
             "\t training method: {}\n",
@@ -1046,6 +1233,7 @@ namespace rllm
             m_convergence_threshold,
             m_fires_nothing_ce_loss,
             training_steps_per_example(n_layers, m_learn_depth),
+            m_micro_batch_size,
             num_epochs,
             epoch_size.has_value() ? std::format("{} line(s)", epoch_size.value()) : std::string{"all training lines"},
             training_method_to_string(m_training_method)
@@ -1062,7 +1250,13 @@ namespace rllm
     }
 
 
-    void NeuralNetwork::do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations)
+    void NeuralNetwork::do_training(
+        const CpuInputLine& train_output,
+        bool verbose,
+        size_t max_iterations,
+        float learning_rate_scale,
+        bool manage_accumulator
+    )
     {
         // Multi-token prediction (MTP): given a sequence [t0,t1,...,tN-1] we
         // use the first max(1, N - max_heads) tokens as context and train each
@@ -1089,20 +1283,20 @@ namespace rllm
 
         get_last_input() = train_input; // set the input to the train input for tracing
 
-
         // In multi-epoch training each call gets a small fixed budget (max_iterations).
         // We allow an early return once this example reaches a reasonable confidence target.
-        // Heap-allocate the MTP score array: MAX_HEADS × Score ≈ 4 × 2.4 KB = ~9.6 KB.
-        const auto scores_storage = std::make_unique<fixed_size_obj_vector<Score, MultiTokenPredictionIndex>>();
         float loss = 0.0f;
         for (size_t i = 0; i < max_iterations; ++i)
         {
+            if (manage_accumulator)
+                reset_gradient_accumulators();
+
             propagate_forward();
 
-            scores_storage->set_size(num_valid_heads);
+            m_training_scores.set_size(num_valid_heads);
             for (const auto _k : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
             {
-                Score& s = (*scores_storage)[_k];
+                Score& s = m_training_scores[_k];
                 const auto _target = mtp_target_for_head(train_output, _input_len, _k);
                 const float _k_loss = m_output_layers[_k].compute_score(s, _target);
                 if (std::isnan(_k_loss))
@@ -1119,7 +1313,9 @@ namespace rllm
                     loss = _k_loss;
             }
 
-            propagate_backward_mtp(*scores_storage, num_valid_heads);
+            propagate_backward_mtp(m_training_scores, num_valid_heads);
+            if (manage_accumulator)
+                apply_accumulated_gradients(learning_rate_scale);
 
             if (loss < m_convergence_threshold)
             {
@@ -1137,18 +1333,21 @@ namespace rllm
             }
         }
 
-        LOG_INFO(
-            "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}, expected token: '{}' ({}), full "
-            "string: '{}', input size: {}.",
-            max_iterations,
-            loss,
-            m_convergence_threshold,
-            m_corpus.get_token_from_id(expected_output_token),
-            expected_output_token,
-            full_string,
-            static_cast<size_t>(train_input.size())
-        );
-        m_stats.record_learning_failure();
+        if (manage_accumulator || max_iterations != 1)
+        {
+            LOG_INFO(
+                "Steps exhausted ({}) for this line. loss = {:.6f}, threshold = {:.6f}, expected token: '{}' ({}), full "
+                "string: '{}', input size: {}.",
+                max_iterations,
+                loss,
+                m_convergence_threshold,
+                m_corpus.get_token_from_id(expected_output_token),
+                expected_output_token,
+                full_string,
+                static_cast<size_t>(train_input.size())
+            );
+            m_stats.record_learning_failure();
+        }
     }
 
 

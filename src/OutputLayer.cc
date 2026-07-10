@@ -288,10 +288,27 @@ namespace rllm
         ENDFOR
     }
 
-    static void update_output_layer_weights(
-        // OFFLOAD_PARAMETERS(delta, h_last, W, V, learning_rate)
+    static void accumulate_output_layer_dW(
+        // OFFLOAD_PARAMETERS(delta, h_last, dW)
         const fixed_size_vector<float, TokenID>& delta,
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
+        fixed_size_matrix<float, TokenID, EmbeddingDimension>& dW
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, dW))
+        const float old_value = dW[v, d];
+        const float grad = (delta[v] * h_last[d]);
+        const float new_value = (old_value + grad);
+        dW[v, d] = new_value;
+        ENDFOR
+    }
+
+    static void update_output_layer_weights_from_gradient(
+        // OFFLOAD_PARAMETERS(dW, W, V, learning_rate)
+        const fixed_size_matrix<float, TokenID, EmbeddingDimension>& dW,
         fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
         fixed_size_matrix<float, TokenID, EmbeddingDimension>& V,
         float learning_rate
@@ -300,9 +317,8 @@ namespace rllm
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, W, V, learning_rate))
-        const float raw_g = (delta[v] * h_last[d]);
-        const float g = math::clamp(raw_g, -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
+        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, W, V, learning_rate))
+        const float g = math::clamp(dW[v, d], -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
         const float raw_v = ((OutputLayer::MOMENTUM_BETA * V[v, d]) + (learning_rate * g));
         V[v, d] = math::clamp(raw_v, -OutputLayer::VEL_CLIP, OutputLayer::VEL_CLIP);
         const float raw_w = (W[v, d] + V[v, d]);
@@ -387,6 +403,12 @@ namespace rllm
         (void) corpus;
     }
 
+    void OutputLayerGradientAccumulator::reset(VulkanQueue& queue)
+    {
+        dW_lm_head.zero(queue);
+        touched = false;
+    }
+
     void OutputLayer::set_random_weights()
     {
         const int D = static_cast<int>(EmbeddingDimension::MAX);
@@ -406,26 +428,46 @@ namespace rllm
     void OutputLayer::forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last,
               VulkanQueue& queue)
     {
+        forward_from_hidden(h_last, m_inputs, m_inputs_cpu, queue);
+    }
+
+    void OutputLayer::forward_from_hidden(
+        const fixed_size_vector<float, EmbeddingDimension>& h_last,
+        fixed_size_vector<float, TokenID>& inputs,
+        cpu_fixed_vector<float, TokenID>& inputs_cpu,
+        VulkanQueue& queue
+    )
+    {
         check_nan_finding_mode("forward:start");
         check_output_h_last_nan_finding_mode(h_last, "forward:start");
-        output_layer_forward_from_hidden_impl(queue, h_last, W_lm_head, m_inputs);
-        check_output_logits_nan_finding_mode(m_inputs, "forward:end");
-        m_inputs.copy_to_cpu(queue, m_inputs_cpu);
+        inputs.set_size(TokenID::MAX);
+        output_layer_forward_from_hidden_impl(queue, h_last, W_lm_head, inputs);
+        check_output_logits_nan_finding_mode(inputs, "forward:end");
+        inputs.copy_to_cpu(queue, inputs_cpu);
         check_nan_finding_mode("forward:end");
     }
 
-    // Accumulates dL/dh_last[D] and updates W_lm_head.
-    void OutputLayer::backward_and_update(
+    void OutputLayer::backward_accumulate(
         const fixed_size_vector<float, TokenID>& delta,
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
         fixed_size_vector<float, EmbeddingDimension>& dh_last,
-        float learning_rate
+        OutputLayerGradientAccumulator& accumulator
     )
     {
-        check_nan_finding_mode("backward:start");
+        check_nan_finding_mode("backward_accumulate:start");
         accumulate_output_layer_dh_last(delta, dh_last, W_lm_head);
-        update_output_layer_weights(delta, h_last, W_lm_head, V_lm_head, learning_rate * LM_HEAD_LEARNING_RATE_SCALE);
-        check_nan_finding_mode("backward:end");
+        accumulate_output_layer_dW(delta, h_last, accumulator.dW_lm_head);
+        accumulator.touched = true;
+        check_nan_finding_mode("backward_accumulate:end");
+    }
+
+    void OutputLayer::apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate)
+    {
+        if (!accumulator.touched)
+            return;
+        check_nan_finding_mode("apply_accumulated_update:start");
+        update_output_layer_weights_from_gradient(accumulator.dW_lm_head, W_lm_head, V_lm_head, learning_rate * LM_HEAD_LEARNING_RATE_SCALE);
+        check_nan_finding_mode("apply_accumulated_update:end");
     }
 
     std::vector<OutputToken> OutputLayer::get_top_k_by_logit(size_t k) const
@@ -459,17 +501,27 @@ namespace rllm
     // cross-entropy loss -log(softmax[target]).
     float OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
     {
+        return compute_score(m_inputs, m_inputs_cpu, score, expected_output_token);
+    }
+
+    float OutputLayer::compute_score(
+        const fixed_size_vector<float, TokenID>& inputs,
+        const cpu_fixed_vector<float, TokenID>& inputs_cpu,
+        Score& score,
+        const TokenID expected_output_token
+    )
+    {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         initialize_softmax_temp_values(score.temp_values);
-        check_output_logits_nan_finding_mode(m_inputs, "compute_score:start");
-        reduce_logits_max_to_temp(m_inputs, score.temp_values);
-        compute_exp_and_accumulate_sum(m_inputs, score.values, score.temp_values);
+        check_output_logits_nan_finding_mode(inputs, "compute_score:start");
+        reduce_logits_max_to_temp(inputs, score.temp_values);
+        compute_exp_and_accumulate_sum(inputs, score.values, score.temp_values);
         finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
         score.temp_values.copy_to_cpu(queue, score.temp_values_cpu);
 
         const float max_val = score.temp_values_cpu[TempStorage::START];
         const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
-        const float expected_logit = m_inputs_cpu[expected_output_token];
+        const float expected_logit = inputs_cpu[expected_output_token];
         const float log_prob = expected_logit - max_val - std::log(sum_exp);
         const float loss = -log_prob;
         const float max_reasonable_loss = compute_max_reasonable_loss(max_val, expected_logit);

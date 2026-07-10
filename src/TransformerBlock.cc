@@ -18,6 +18,69 @@
 
 namespace rllm
 {
+    static void add_dmodel_dmodel_gradient(
+        // OFFLOAD_PARAMETERS(src, dst)
+        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& src,
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& dst
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (src, dst))
+        const float old_value = dst[r, c];
+        const float grad = src[r, c];
+        const float new_value = (old_value + grad);
+        dst[r, c] = new_value;
+        ENDFOR
+    }
+
+    static void add_ff_dmodel_gradient(
+        // OFFLOAD_PARAMETERS(src, dst)
+        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& src,
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& dst
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (src, dst))
+        const float old_value = dst[r, c];
+        const float grad = src[r, c];
+        const float new_value = (old_value + grad);
+        dst[r, c] = new_value;
+        ENDFOR
+    }
+
+    static void add_dmodel_ff_gradient(
+        // OFFLOAD_PARAMETERS(src, dst)
+        const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& src,
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension>& dst
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (src, dst))
+        const float old_value = dst[r, c];
+        const float grad = src[r, c];
+        const float new_value = (old_value + grad);
+        dst[r, c] = new_value;
+        ENDFOR
+    }
+
+    void TransformerGradientAccumulator::reset(VulkanQueue& queue)
+    {
+        dW_down.zero(queue);
+        dW_gate.zero(queue);
+        dW_up.zero(queue);
+        dW_o.zero(queue);
+        dW_q.zero(queue);
+        dW_k.zero(queue);
+        dW_v.zero(queue);
+        touched = false;
+    }
+
     static_assert(static_cast<int>(EmbeddingDimension::MAX) % static_cast<int>(HeadsIndex::MAX) == 0, "EmbeddingDimension::MAX must be divisible by HeadsIndex::MAX");
 
     static fixed_size_vector<int, PositionIndex> make_nan_scan_flag(VulkanQueue& queue)
@@ -554,7 +617,6 @@ namespace rllm
     void TransformerBlock::compute_attention_scores_for_heads(ForwardWorkspace& ws, PositionIndex seq_len)
     {
         ws.attn_w.set_size(HeadsIndex::MAX);
-
         PARFOR_1D(hi, enum_iterator1D<HeadsIndex>())
             compute_attention_scores_for_head_hi(ws, seq_len, hi);
         ENDFOR
@@ -625,7 +687,6 @@ namespace rllm
         const auto& V = ws.V;
         auto& attn_concat = ws.attn_concat;
         const int active_seq_len = static_cast<int>(seq_len);
-
         // attn_concat[i, d] = sum_j attn_w[hi,i,j] * V[j, d]  (causal: j <= i)
         PARFOR_1D(hi, enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
         {
@@ -880,11 +941,11 @@ namespace rllm
         backward_accumulate_attention_dk_for_heads(ws, fwd);
     }
 
-    void TransformerBlock::backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate,
-        ForwardWorkspace& fwd_workspace)
+    void TransformerBlock::backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace,
+        ForwardWorkspace& fwd_workspace, bool wait_for_completion)
     {
         const PositionIndex seq = fwd_workspace.seq_len;
-        VulkanQueue& queue = vulkan_runtime::session().get_queue(0);
+        VulkanQueue& queue = vulkan_runtime::get_queue(0);
         workspace.reset(queue, seq);
         auto* ws = &workspace;
         auto& fwd = fwd_workspace;
@@ -943,49 +1004,40 @@ namespace rllm
         matmul_AB_add_3_matrix_muls(ws->d_Q, W_q, ws->d_K, W_k, ws->d_V, W_v, ws->d_h_norm_attn);
         check_transformer_hidden_nan_finding_mode(queue, ws->d_h_norm_attn, seq, "d_h_norm_attn", "after QKV projection backward");
 
-        // ── d_h_in + weight updates ───────────────────────────────────────────
-        // d_h_in (residual + RMSNorm backward) and all seven weight updates are
-        // fully independent; run them all concurrently with separate VulkanQueues.
-        if (rllm::vulkan_runtime::queue_count() >= 5)
-        {
-            auto& queue1 = rllm::vulkan_runtime::get_queue(1);
-            auto& queue2 = rllm::vulkan_runtime::get_queue(2);
-            auto& queue3 = rllm::vulkan_runtime::get_queue(3);
-            auto& queue4 = rllm::vulkan_runtime::get_queue(4);
-
-            // PARSECTIONS_BEGIN(queue1)
-            din.copy_from(queue1, ws->d_h_mid);
-            rms_norm_backward(queue1, ws->d_h_norm_attn, fwd.h_in, din);
-            // PARSECTION(queue2)
-            sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue2, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
-            // PARSECTION(queue3)
-            sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue3, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
-            // PARSECTION(queue4)
-            sgd_update_Wdown_x_Vdown_dWdown(queue4, W_down, V_down, ws->dW_down, learning_rate * FF_LEARNING_RATE_SCALE);
-            // PARSECTIONS_END
-
-            queue1.wait("TransformerBlock backward queue1 wait idle");
-            queue2.wait("TransformerBlock backward queue2 wait idle");
-            queue3.wait("TransformerBlock backward queue3 wait idle");
-            queue4.wait("TransformerBlock backward queue4 wait idle");
-            check_transformer_hidden_nan_finding_mode(queue, din, seq, "din", "after final RMSNorm backward");
-        }
-        else
-        {
-            auto& queue = rllm::vulkan_runtime::get_queue(0);
-            din.copy_from(queue, ws->d_h_mid);
-            rms_norm_backward(queue, ws->d_h_norm_attn, fwd.h_in, din);
+        // d_h_in = residual gradient + RMSNorm backward. Weight updates are applied later
+        // from the accumulated gradient buffers.
+        din.copy_from(queue, ws->d_h_mid);
+        rms_norm_backward(queue, ws->d_h_norm_attn, fwd.h_in, din);
+        if (wait_for_completion)
             queue.wait("TransformerBlock backward din wait idle");
-            check_transformer_hidden_nan_finding_mode(queue, din, seq, "din", "after final RMSNorm backward");
-            sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue, W_q, V_q, ws->dW_q, W_k, V_k, ws->dW_k, W_v, V_v, ws->dW_v, W_o, V_o, ws->dW_o, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
-            queue.wait("TransformerBlock backward qkvo wait idle");
-            sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue, W_gate, V_gate, ws->dW_gate, W_up, V_up, ws->dW_up, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
-            queue.wait("TransformerBlock backward gateup wait idle");
-            sgd_update_Wdown_x_Vdown_dWdown(queue, W_down, V_down, ws->dW_down, learning_rate * FF_LEARNING_RATE_SCALE);
-            queue.wait("TransformerBlock backward down wait idle");
-        }
+        check_transformer_hidden_nan_finding_mode(queue, din, seq, "din", "after final RMSNorm backward");
 
         check_nan_finding_mode("backward:end");
+    }
+
+    void TransformerBlock::accumulate_gradients(const BackwardWorkspace& workspace, TransformerGradientAccumulator& accumulator)
+    {
+        add_dmodel_ff_gradient(workspace.dW_down, accumulator.dW_down);
+        add_ff_dmodel_gradient(workspace.dW_gate, accumulator.dW_gate);
+        add_ff_dmodel_gradient(workspace.dW_up, accumulator.dW_up);
+        add_dmodel_dmodel_gradient(workspace.dW_o, accumulator.dW_o);
+        add_dmodel_dmodel_gradient(workspace.dW_q, accumulator.dW_q);
+        add_dmodel_dmodel_gradient(workspace.dW_k, accumulator.dW_k);
+        add_dmodel_dmodel_gradient(workspace.dW_v, accumulator.dW_v);
+        accumulator.touched = true;
+    }
+
+    void TransformerBlock::apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate)
+    {
+        if (!accumulator.touched)
+            return;
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue, W_q, V_q, accumulator.dW_q, W_k, V_k, accumulator.dW_k, W_v, V_v, accumulator.dW_v, W_o, V_o, accumulator.dW_o, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
+        queue.wait("TransformerBlock accumulated qkvo wait idle");
+        sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue, W_gate, V_gate, accumulator.dW_gate, W_up, V_up, accumulator.dW_up, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
+        queue.wait("TransformerBlock accumulated gateup wait idle");
+        sgd_update_Wdown_x_Vdown_dWdown(queue, W_down, V_down, accumulator.dW_down, learning_rate * FF_LEARNING_RATE_SCALE);
+        queue.wait("TransformerBlock accumulated down wait idle");
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────

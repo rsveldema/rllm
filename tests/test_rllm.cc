@@ -5,6 +5,7 @@
 #include <Statistics.hpp>
 #include <TransformerBlock.hpp>
 #include <parallel.hpp>
+#include <rllm_vulkan_runtime.hpp>
 #include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
 
@@ -41,6 +42,8 @@ namespace
 int main(int argc, char** argv)
 {
     parallel::init_parallel();
+    auto* vulkan_session = new VulkanSession();
+    rllm::vulkan_runtime::set_session(*vulkan_session);
     ::testing::InitGoogleTest(&argc, argv);
     ::testing::UnitTest::GetInstance()->listeners().Append(new CleanModelsListener());
     return RUN_ALL_TESTS();
@@ -229,6 +232,57 @@ TEST(PredictorRegressionTest, IncludeATrainingKeepsMTPHeadsQueryable)
     ASSERT_FALSE(top1.empty());
     EXPECT_GE(top1.front().token_id, TokenID::START);
     EXPECT_LT(top1.front().token_id, TokenID::MAX);
+}
+
+TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeTwoSmoke)
+{
+    std::srand(0);
+    std::vector<std::string> filters = {"include_a_training"};
+    Corpus corpus(filters);
+    corpus.load_files_from_dir("training_data0");
+    Statistics stats;
+    auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+    nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
+    nn->set_micro_batch_size(2);
+    nn->set_learn_depth(1);
+    nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
+
+    nn->train(false, 1, std::nullopt, std::nullopt, 2);
+
+    const auto hash_toks = corpus.get_token_ids("#");
+    ASSERT_FALSE(hash_toks.empty());
+    nn->get_last_input() = hash_toks;
+    nn->propagate_forward();
+    const auto top1 = nn->get_best_output_token_ids(1, MultiTokenPredictionIndex::START);
+    ASSERT_FALSE(top1.empty());
+    EXPECT_GE(top1.front().token_id, TokenID::START);
+    EXPECT_LT(top1.front().token_id, TokenID::MAX);
+}
+
+TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeOneSmoke)
+{
+    std::srand(0);
+    std::vector<std::string> filters = {"guaranteed_to_learn"};
+    Corpus corpus(filters);
+    corpus.load_files_from_dir("training_data0");
+    Statistics stats;
+    auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+    nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
+    nn->set_micro_batch_size(1);
+    nn->set_learn_depth(100);
+    nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
+
+    nn->train(false, 1, std::nullopt, std::nullopt, 1);
+
+    const auto hash_toks = corpus.get_token_ids("#");
+    ASSERT_FALSE(hash_toks.empty());
+    nn->get_last_input() = hash_toks;
+    nn->propagate_forward();
+    const auto top1 = nn->get_best_output_token_ids(1, MultiTokenPredictionIndex::START);
+    ASSERT_FALSE(top1.empty());
+    EXPECT_GE(top1.front().token_id, TokenID::START);
+    EXPECT_LT(top1.front().token_id, TokenID::MAX);
+    EXPECT_EQ(stats.num_learning_failures(), 0u);
 }
 
 TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFloor)
