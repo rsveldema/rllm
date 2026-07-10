@@ -805,8 +805,6 @@ namespace rllm
         const size_t total_lines = training_lines.size();
         assert(total_lines > 0);
         const size_t epoch_lines = lines_per_epoch(total_lines, epoch_size);
-        const size_t steps = training_steps_per_example(m_transformer_blocks.size(), m_learn_depth);
-
         std::vector<size_t> line_indices(total_lines);
         std::iota(line_indices.begin(), line_indices.end(), 0);
         std::shuffle(line_indices.begin(), line_indices.end(), rng);
@@ -849,17 +847,14 @@ namespace rllm
             const float learning_rate_scale = 1.0f / static_cast<float>(batch.size());
             const auto batch_started_at = std::chrono::steady_clock::now();
 
-            for (size_t step = 0; step < steps; ++step)
-            {
-                reset_gradient_accumulators();
-                for (const auto& example : batch)
-                    do_training(example, verbose && step == 0, 1, 1.0f, false);
-                apply_accumulated_gradients(learning_rate_scale);
-            }
+            reset_gradient_accumulators();
+            for (const auto& example : batch)
+                do_training(example, verbose, 1, 1.0f, false);
+            apply_accumulated_gradients(learning_rate_scale);
 
             const double average_milliseconds_per_line =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - batch_started_at).count() /
-                static_cast<double>(batch.size() * steps);
+                static_cast<double>(batch.size());
             LOG_INFO(
                 "Epoch[{}%] random-line[{}..{}]: {:0.2f}% done (micro-batch {}, avg {:.2f} ms/line)",
                 epoch / static_cast<float>(num_epochs) * 100.0f,

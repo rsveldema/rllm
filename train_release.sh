@@ -144,7 +144,7 @@ gdb --args  ./build_release/rllm --train $input_arg \
      --checkpoint-interval 120 \
      --learn-depth 100 \
      --learning-rate 0.03 \
-     --micro-batch-size 1 \
+     --micro-batch-size 2 \
      --vulkan-device R9700
 
 
