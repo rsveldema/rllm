@@ -540,8 +540,7 @@ namespace rllm
 
     void NeuralNetwork::apply_accumulated_gradients(float learning_rate_scale)
     {
-        const float learning_rate = (m_learning_rate * learning_rate_scale) /
-            static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
+        const float learning_rate = (m_learning_rate * learning_rate_scale) / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
 
         for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
             m_output_layers[oi].apply_accumulated_update(m_gradient_accumulation_workspace->output_layers[oi], learning_rate);
@@ -568,11 +567,7 @@ namespace rllm
 
     NeuralNetwork::~NeuralNetwork() = default;
 
-    void NeuralNetwork::propagate_backward_mtp(
-        const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores,
-        MultiTokenPredictionIndex num_valid,
-        TrainingStepTiming* timing
-    )
+    void NeuralNetwork::propagate_backward_mtp(const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores, MultiTokenPredictionIndex num_valid, TrainingStepTiming* timing)
     {
         assert(m_seq_len > PositionIndex::START);
 
@@ -601,12 +596,7 @@ namespace rllm
                 const auto phase = std::format("output head {} backward delta", static_cast<size_t>(oi));
                 check_token_vector_nan_finding_mode(queue, ws.output_layer_delta, 10.0f, "output delta", phase.c_str());
             }
-            m_output_layers[oi].backward_accumulate(
-                ws.output_layer_delta,
-                ws.h_last_vec,
-                ws.dh_last,
-                m_gradient_accumulation_workspace->output_layers[oi]
-            );
+            m_output_layers[oi].backward_accumulate(ws.output_layer_delta, ws.h_last_vec, ws.dh_last, m_gradient_accumulation_workspace->output_layers[oi]);
             {
                 const auto phase = std::format("after output head {} backward", static_cast<size_t>(oi));
                 check_hidden_vector_nan_finding_mode(queue, ws.dh_last, phase.c_str());
@@ -630,16 +620,8 @@ namespace rllm
                 const auto phase = std::format("before transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, phase.c_str());
             }
-            m_transformer_blocks[i].backward(
-                *p_dh,
-                *p_din,
-                ws.transformer_block,
-                m_forward_workspace->transformer_workspaces[static_cast<size_t>(i)]
-            );
-            m_transformer_blocks[i].accumulate_gradients(
-                ws.transformer_block,
-                m_gradient_accumulation_workspace->transformer_blocks[static_cast<size_t>(i)]
-            );
+            m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, m_forward_workspace->transformer_workspaces[static_cast<size_t>(i)]);
+            m_transformer_blocks[i].accumulate_gradients(ws.transformer_block, m_gradient_accumulation_workspace->transformer_blocks[static_cast<size_t>(i)]);
             {
                 const auto phase = std::format("after transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_din, m_seq_len, phase.c_str());
@@ -783,14 +765,7 @@ namespace rllm
         do_training(train_input, verbose, max_iterations);
     }
 
-    void NeuralNetwork::train_with_random_len_from_start(
-        const CpuInputLine& line_of_file,
-        bool verbose,
-        size_t max_iterations,
-        std::mt19937& rng,
-        float learning_rate_scale,
-        bool manage_accumulator
-    )
+    void NeuralNetwork::train_with_random_len_from_start(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, std::mt19937& rng, float learning_rate_scale, bool manage_accumulator)
     {
         const int line_len = static_cast<int>(line_of_file.size());
         if (line_len < 2)
@@ -812,16 +787,7 @@ namespace rllm
         do_training(train_input, verbose, max_iterations, learning_rate_scale, manage_accumulator);
     }
 
-    void NeuralNetwork::batch_train(
-        size_t epoch,
-        const std::vector<CpuInputLine>& training_lines,
-        bool verbose,
-        size_t num_epochs,
-        const std::optional<std::chrono::seconds>& checkpointing_interval,
-        std::chrono::steady_clock::time_point& last_checkpoint_at,
-        std::mt19937& rng,
-        std::optional<size_t> epoch_size
-    )
+    void NeuralNetwork::batch_train(size_t epoch, const std::vector<CpuInputLine>& training_lines, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at, std::mt19937& rng, std::optional<size_t> epoch_size)
     {
         const size_t total_lines = training_lines.size();
         assert(total_lines > 0);
@@ -829,17 +795,13 @@ namespace rllm
         const size_t steps = training_steps_per_example(m_transformer_blocks.size(), m_learn_depth);
         std::vector<size_t> line_indices(total_lines);
         std::iota(line_indices.begin(), line_indices.end(), 0);
-        std::stable_sort(
-            line_indices.begin(),
-            line_indices.end(),
-            [&training_lines](size_t lhs, size_t rhs) {
-                const auto lhs_len = static_cast<size_t>(training_lines[lhs].size());
-                const auto rhs_len = static_cast<size_t>(training_lines[rhs].size());
-                if (lhs_len != rhs_len)
-                    return lhs_len < rhs_len;
-                return lhs < rhs;
-            }
-        );
+        std::stable_sort(line_indices.begin(), line_indices.end(), [&training_lines](size_t lhs, size_t rhs) {
+            const auto lhs_len = static_cast<size_t>(training_lines[lhs].size());
+            const auto rhs_len = static_cast<size_t>(training_lines[rhs].size());
+            if (lhs_len != rhs_len)
+                return lhs_len < rhs_len;
+            return lhs < rhs;
+        });
 
         for (size_t batch_start = 0; batch_start < epoch_lines; batch_start += m_micro_batch_size)
         {
@@ -957,16 +919,7 @@ namespace rllm
 
     void NeuralNetwork::train_random_line_random_len_epoch(size_t epoch, const std::vector<CpuInputLine>& training_lines, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval, std::chrono::steady_clock::time_point& last_checkpoint_at, std::mt19937& rng, std::optional<size_t> epoch_size)
     {
-        batch_train(
-            epoch,
-            training_lines,
-            verbose,
-            num_epochs,
-            checkpointing_interval,
-            last_checkpoint_at,
-            rng,
-            epoch_size
-        );
+        batch_train(epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng, epoch_size);
     }
 
 
@@ -989,13 +942,7 @@ namespace rllm
         const auto total_lines = training_lines.size();
         const auto epoch_lines = lines_per_epoch(total_lines, epoch_size);
 
-        LOG_INFO(
-            "Using {} training lines and {} validation lines ({}% target validation split); {} line(s) per epoch",
-            training_lines.size(),
-            validation_lines.size(),
-            VALIDATION_PERCENT,
-            epoch_lines
-        );
+        LOG_INFO("Using {} training lines and {} validation lines ({}% target validation split); {} line(s) per epoch", training_lines.size(), validation_lines.size(), VALIDATION_PERCENT, epoch_lines);
 
         assert(!training_lines.empty());
 
@@ -1281,14 +1228,7 @@ namespace rllm
     }
 
 
-    TrainingStepOutcome NeuralNetwork::do_training_step(
-        const CpuInputLine& train_output,
-        bool verbose,
-        size_t iteration_index,
-        float learning_rate_scale,
-        bool manage_accumulator,
-        TrainingStepTiming* timing
-    )
+    TrainingStepOutcome NeuralNetwork::do_training_step(const CpuInputLine& train_output, bool verbose, size_t iteration_index, float learning_rate_scale, bool manage_accumulator, TrainingStepTiming* timing)
     {
         // Multi-token prediction (MTP): given a sequence [t0,t1,...,tN-1] we
         // use the first max(1, N - max_heads) tokens as context and train each
@@ -1358,13 +1298,7 @@ namespace rllm
         return TrainingStepOutcome::Continue;
     }
 
-    size_t NeuralNetwork::do_training(
-        const CpuInputLine& train_output,
-        bool verbose,
-        size_t max_iterations,
-        float learning_rate_scale,
-        bool manage_accumulator
-    )
+    size_t NeuralNetwork::do_training(const CpuInputLine& train_output, bool verbose, size_t max_iterations, float learning_rate_scale, bool manage_accumulator)
     {
         const int _seq_len = static_cast<int>(train_output.size());
         const int _input_len = mtp_input_len_for_sequence(_seq_len);
@@ -1398,15 +1332,7 @@ namespace rllm
 
         if (manage_accumulator || max_iterations != 1)
         {
-            LOG_INFO(
-                "Steps exhausted ({}) for this line. threshold = {:.6f}, expected token: '{}' ({}), full string: '{}', input size: {}.",
-                max_iterations,
-                m_convergence_threshold,
-                m_corpus.get_token_from_id(expected_output_token),
-                expected_output_token,
-                full_string,
-                static_cast<size_t>(_input_len)
-            );
+            LOG_INFO("Steps exhausted ({}) for this line. threshold = {:.6f}, expected token: '{}' ({}), full string: '{}', input size: {}.", max_iterations, m_convergence_threshold, m_corpus.get_token_from_id(expected_output_token), expected_output_token, full_string, static_cast<size_t>(_input_len));
             m_stats.record_learning_failure();
         }
 
