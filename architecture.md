@@ -22,7 +22,7 @@ graph TD
         TokenMap["tokenizer_map\n(generated C++)"]
     end
 
-    subgraph NN["NeuralNetwork"]
+    subgraph NN["TextTrainer"]
         IL["InputLayer\nToken Embeddings\n+ Sinusoidal Pos. Enc."]
         TB0["TransformerBlock 0"]
         TBN["TransformerBlock 1..N"]
@@ -204,7 +204,7 @@ flowchart TD
 ```
 include/
   RLLM.hpp              – Top-level orchestrator interface
-  NeuralNetwork.hpp     – Core model: forward / backward / serialization
+  TextTrainer.hpp     – Core model: forward / backward / serialization
   InputLayer.hpp        – Token embeddings + positional encoding
   TransformerBlock.hpp  – Single decoder block (attention + FFN)
   OutputLayer.hpp       – LM head (linear projection to vocab logits)
@@ -214,7 +214,7 @@ include/
 src/
   main.cc               – CLI argument parsing, entry point
   RLLM.cc               – train_mode() and prompt_mode() implementations
-  NeuralNetwork.cc      – Forward pass, backward pass, serialization
+  TextTrainer.cc      – Forward pass, backward pass, serialization
   TransformerBlock.cc   – Attention + SwiGLU forward & backward
   InputLayer.cc         – Embedding lookup + sinusoidal enc.
   OutputLayer.cc        – LM head forward, loss, backward

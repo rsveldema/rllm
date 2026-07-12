@@ -14,6 +14,40 @@
 #include <cmath>
 #include <vector>
 
+TEST(OutputLayerBatchTest, BatchedForwardMatchesIndependentForwards)
+{
+    using namespace rllm;
+    OutputLayer layer;
+    layer.set_random_weights();
+    auto& queue = vulkan_runtime::get_queue(0);
+
+    cpu_fixed_matrix<float, BatchIndex, EmbeddingDimension> h_cpu;
+    for (size_t batch = 0; batch < 2; ++batch)
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            h_cpu.set(static_cast<BatchIndex>(batch), d, static_cast<float>((batch + 1) * (static_cast<size_t>(d) + 1)) / 4096.0f);
+
+    fixed_size_matrix<float, BatchIndex, EmbeddingDimension> h;
+    h.copy_from_cpu(queue, h_cpu);
+    fixed_size_matrix<float, BatchIndex, TokenID> logits;
+    layer.forward_batched(h, static_cast<BatchIndex>(2), logits, queue);
+    cpu_fixed_matrix<float, BatchIndex, TokenID> logits_cpu;
+    logits.copy_to_cpu(queue, logits_cpu);
+
+    for (size_t batch = 0; batch < 2; ++batch)
+    {
+        cpu_fixed_vector<float, EmbeddingDimension> one_h_cpu;
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            one_h_cpu.push_back(h_cpu[static_cast<BatchIndex>(batch), d]);
+        fixed_size_vector<float, EmbeddingDimension> one_h;
+        one_h.copy_from_cpu(queue, one_h_cpu);
+        fixed_size_vector<float, TokenID> one_logits;
+        cpu_fixed_vector<float, TokenID> one_logits_cpu;
+        layer.forward_from_hidden(one_h, one_logits, one_logits_cpu, queue);
+        for (const auto token : enum_iterator1D<TokenID>())
+            EXPECT_NEAR((logits_cpu[static_cast<BatchIndex>(batch), token]), one_logits_cpu[token], 1e-3f);
+    }
+}
+
 
 namespace
 {

@@ -49,8 +49,8 @@ struct CommandLineParser
     std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
     std::string executable_name = "./rllm";
     size_t mtp_heads = 1;
-    size_t learn_depth = rllm::NeuralNetwork::DEFAULT_LEARN_DEPTH;
-    float learning_rate = rllm::NeuralNetwork::DEFAULT_LEARNING_RATE;
+    size_t learn_depth = rllm::TextTrainer::DEFAULT_LEARN_DEPTH;
+    float learning_rate = rllm::TextTrainer::DEFAULT_LEARNING_RATE;
     size_t micro_batch_size = 1;
     std::optional<size_t> epoch_size;
     bool nan_finding_mode = false;

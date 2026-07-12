@@ -36,6 +36,7 @@ namespace rllm
     struct ForwardWorkspace
     {
         PositionIndex seq_len;
+        const GpuPackedBatchInput* packed_batch = nullptr;
         // Activations cached for the backward pass
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_in;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_attn;
@@ -75,6 +76,7 @@ namespace rllm
 
         void reset(VulkanQueue& queue, PositionIndex seq)
         {
+            packed_batch = nullptr;
             h_in.set_rows(seq);
             seq_len = seq;
             h_norm_attn.set_rows(seq);
@@ -204,6 +206,12 @@ namespace rllm
         // Forward pass.  h[seq_len × D_MODEL] is modified in-place.
         // Caches intermediate activations for the backward pass.
         void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, ForwardWorkspace& workspace);
+        void forward_batched(
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+            PositionIndex packed_rows,
+            const GpuPackedBatchInput& batch,
+            ForwardWorkspace& workspace
+        );
 
         // Backward pass. dout[seq_len x D_MODEL] = dL/dh_out.
         // Writes dL/dh_in into din and leaves weight gradients in workspace.
@@ -225,7 +233,7 @@ namespace rllm
                                          std::string* warn = nullptr,
                                          std::string* err = nullptr) const;
 
-        // Public RMS norm: used by NeuralNetwork to apply the final pre-LM-head norm.
+        // Public RMS norm: used by TextTrainer to apply the final pre-LM-head norm.
         static void apply_rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y)
         {
             rms_norm(x, y);
@@ -266,7 +274,7 @@ namespace rllm
         }
 
     // Serialization helpers need access to private weight matrices.
-    friend class NeuralNetwork;
+    friend class TextTrainer;
       private:
         void check_nan_finding_mode(const char* phase);
 
@@ -302,6 +310,7 @@ namespace rllm
         static void swiglu_backward(PositionIndex seq, const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre);
 
         void forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len);
+        void forward_batched_attention_heads(ForwardWorkspace& ws, PositionIndex packed_rows, const GpuPackedBatchInput& batch);
         void compute_attention_scores_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void backward_accumulate_attention_dq_for_head_hi(BackwardWorkspace& ws,
                 const ForwardWorkspace& fwd,

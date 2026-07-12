@@ -16,7 +16,7 @@ namespace rllm
     // This is a tunable hyperparameter.
     static constexpr float VALID_PREDICTION_THRESHOLD = 0.5f / 100.0f;
 
-    static void process_command(const std::string& _command, Prompter::PromptOptions& options, NeuralNetwork& nn)
+    static void process_command(const std::string& _command, Prompter::PromptOptions& options, TextTrainer& nn)
     {
         const auto command = _command.empty() ? "/help" : _command;
 
@@ -146,7 +146,7 @@ namespace rllm
         size_t _num_layers = 2; // overridden when loaded from file
         Statistics stats;
 
-        auto nn = std::make_unique<NeuralNetwork>(_num_layers, corpus, stats);
+        auto nn = std::make_unique<TextTrainer>(_num_layers, corpus, stats);
 
         std::println("Loading '{}'...", filename);
         if (!nn->load(filename))
@@ -181,7 +181,7 @@ namespace rllm
         }
     }
 
-    void Prompter::process_line(const std::string& line, Corpus& corpus, NeuralNetwork& nn, PromptOptions& options)
+    void Prompter::process_line(const std::string& line, Corpus& corpus, TextTrainer& nn, PromptOptions& options)
     {
         if (line.starts_with("/") || line.empty())
         {

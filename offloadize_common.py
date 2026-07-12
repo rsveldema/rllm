@@ -331,6 +331,8 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "limit<EmbeddingDimension::MAX>(")
     out = out.replace("enum_iterator1D<HeadsIndex>(",
                       "limit<HeadsIndex::MAX>(")
+    out = out.replace("enum_iterator1D<BatchIndex>(",
+                      "limit<BatchIndex::MAX>(")
     out = out.replace("enum_iterator1D<HeadDimension>(",
                       "limit<HeadDimension::MAX>(")
     out = out.replace("GpuInputLine",
@@ -349,6 +351,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace(", TokenID>", ", TokenID::MAX>")
     out = out.replace(", TempStorage", ", TempStorage::MAX")
     out = out.replace(", HeadsIndex", ", HeadsIndex::MAX")
+    out = out.replace(", BatchIndex", ", BatchIndex::MAX")
     out = out.replace(", PositionIndex", ", PositionIndex::MAX")
     out = out.replace(", EmbeddingDimension", ", EmbeddingDimension::MAX")
     out = out.replace(", FFDimension", ", FFDimension::MAX")
@@ -365,6 +368,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     if out.find("::MAX") < 0 and (out.find("_matrix") >= 0 or out.find("_vector") >= 0):
         out = re.sub(r"\bTempStorage\b", "TempStorage::MAX", out)
         out = re.sub(r"\bHeadsIndex\b", "HeadsIndex::MAX", out)
+        out = re.sub(r"\bBatchIndex\b", "BatchIndex::MAX", out)
         out = re.sub(r"\bPositionIndex\b", "PositionIndex::MAX", out)
         out = re.sub(r"\bEmbeddingDimension\b", "EmbeddingDimension::MAX", out)
 
@@ -376,7 +380,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     # Use negative lookbehind (?<!<) to exclude matches inside <...> template args,
     # and negative lookahead (?!::) to avoid corrupting already-suffixed types like PositionIndex::MAX.
     for _obsolete_type in (
-        "TokenID", "PositionIndex", "EmbeddingDimension", "HeadsIndex",
+        "TokenID", "PositionIndex", "EmbeddingDimension", "HeadsIndex", "BatchIndex",
         "TempStorage", "FFDimension", "HeadDimension",
         "RmsNormPartialSumIndex", "MultiTokenPredictionIndex",
         "NeuronConnectionIndex", "ConflictIndex"

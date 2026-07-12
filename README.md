@@ -171,5 +171,5 @@ valid value ranges, change types to match:
 compute_score() now aborts if finite CE loss exceeds 1000, printing target logit, max logit, sum_exp, log prob, and loss.
 NAN_FINDING_MODE activation scans now use sane bounds:InputLayer hidden state: [-2, 2]
 input gradient: [-10000, 10000]
-NeuralNetwork hidden states / h_last: [-10000, 10000]
+TextTrainer hidden states / h_last: [-10000, 10000]
 OutputLayer logits: [-1000000, 1000000]

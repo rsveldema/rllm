@@ -186,6 +186,29 @@ namespace rllm
         ENDFOR
     }
 
+    static void fill_packed_embeddings_with_positional_encoding(VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(tokens, local_positions, embeddings, h, model_dim, packed_rows)
+        const GpuInputLine& tokens,
+        const fixed_size_vector<int, PositionIndex>& local_positions,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+        float model_dim,
+        PositionIndex packed_rows
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(packed_rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, di, grid, (tokens, local_positions, embeddings, h, model_dim))
+        const int tok = static_cast<int>(tokens[row]);
+        const int di_int = static_cast<int>(di);
+        const float emb_val = embeddings[tok, di];
+        const float freq = (1.0f / std::pow(10000.0f, (static_cast<float>((di_int & ~1)) / model_dim)));
+        const float pos_f = static_cast<float>(local_positions[row]);
+        const float pe = ((di_int % 2) == 0) ? std::sin((pos_f * freq)) : std::cos((pos_f * freq));
+        h[row, di] = static_cast<float>((emb_val + pe));
+        ENDFOR
+    }
+
     void InputLayer::reset_embeddings()
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
@@ -229,6 +252,28 @@ namespace rllm
         check_nan_finding_mode_embeddings("forward:start");
         fill_embeddings_with_positional_encoding(queue, gpu_input, m_embeddings, h, static_cast<float>(EmbeddingDimension::MAX));
         check_nan_finding_mode_matrix(h, static_cast<PositionIndex>(input.size()), "hidden state", "forward:end");
+    }
+
+    void InputLayer::propagate_forward(
+        const PackedBatchInput& input,
+        GpuPackedBatchInput& gpu_input,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
+    ) const
+    {
+        h.set_rows(input.packed_rows());
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        gpu_input.sync_to_device(queue, input);
+        check_nan_finding_mode_embeddings("batched-forward:start");
+        fill_packed_embeddings_with_positional_encoding(
+            queue,
+            gpu_input.tokens,
+            gpu_input.local_position,
+            m_embeddings,
+            h,
+            static_cast<float>(EmbeddingDimension::MAX),
+            input.packed_rows()
+        );
+        check_nan_finding_mode_matrix(h, input.packed_rows(), "batched hidden state", "batched-forward:end");
     }
 
 
@@ -309,6 +354,23 @@ namespace rllm
             m_updated_tokens[tok] = 0;
         }
         check_nan_finding_mode_embeddings("backward:end");
+    }
+
+    void InputLayer::accumulate_backward_packed(
+        const PackedBatchInput& input,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
+        EmbeddingGradientAccumulator& accumulator
+    )
+    {
+        cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dh_cpu;
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(queue, dh_cpu);
+        for (const auto row : enum_iterator1D<PositionIndex>(input.packed_rows()))
+        {
+            const auto tok = input.tokens()[row];
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
+                accumulator.add(tok, d, dh_cpu[row, d]);
+        }
     }
 
     void InputLayer::accumulate_backward(

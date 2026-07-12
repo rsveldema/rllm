@@ -52,6 +52,9 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     append_enum_pair(pairs, "HeadsIndex::START", static_cast<size_t>(rllm::HeadsIndex::START));
     append_enum_pair(pairs, "HeadsIndex::MAX", static_cast<size_t>(rllm::HeadsIndex::MAX));
 
+    append_enum_pair(pairs, "BatchIndex::START", static_cast<size_t>(rllm::BatchIndex::START));
+    append_enum_pair(pairs, "BatchIndex::MAX", static_cast<size_t>(rllm::BatchIndex::MAX));
+
     append_enum_pair(pairs, "TokenID::MAX", static_cast<size_t>(rllm::TokenID::MAX));
     append_enum_pair(pairs, "TokenID::UNKNOWN_TOKEN_ID", static_cast<size_t>(rllm::TokenID::UNKNOWN_TOKEN_ID));
 
@@ -108,6 +111,7 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     pairs.emplace_back("static_cast<EmbeddingDimension>", "(int)");
     pairs.emplace_back("static_cast<PositionIndex>", "(int)");
     pairs.emplace_back("static_cast<HeadsIndex>", "(int)");
+    pairs.emplace_back("static_cast<BatchIndex>", "(int)");
     pairs.emplace_back("static_cast<TokenID>", "(int)");
     pairs.emplace_back("static_cast<MultiTokenPredictionIndex>", "(int)");
     pairs.emplace_back("static_cast<HeadDimension>", "(int)");
@@ -117,6 +121,7 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     pairs.emplace_back("static_cast<rllm::EmbeddingDimension>", "(int)");
     pairs.emplace_back("static_cast<PositionIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::HeadsIndex>", "(int)");
+    pairs.emplace_back("static_cast<rllm::BatchIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::TokenID>", "(int)");
     pairs.emplace_back("static_cast<rllm::MultiTokenPredictionIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::HeadDimension>", "(int)");

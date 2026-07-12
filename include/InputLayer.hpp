@@ -51,6 +51,11 @@ namespace rllm
             GpuInputLine& gpu_input,
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
         ) const;
+        void propagate_forward(
+            const PackedBatchInput& input,
+            GpuPackedBatchInput& gpu_input,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
+        ) const;
 
         // Update token embeddings using dh[seq_len × D_MODEL] = ∂L/∂h.
         // Positional encodings are fixed (sinusoidal), so only embeddings change.
@@ -62,6 +67,11 @@ namespace rllm
 
         void accumulate_backward(
             const CpuInputLine& input,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
+            EmbeddingGradientAccumulator& accumulator
+        );
+        void accumulate_backward_packed(
+            const PackedBatchInput& input,
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
             EmbeddingGradientAccumulator& accumulator
         );
@@ -80,7 +90,7 @@ namespace rllm
                                          std::string* warn = nullptr,
                                          std::string* err = nullptr) const;
 
-    friend class NeuralNetwork;
+    friend class TextTrainer;
 
     private:
         // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.

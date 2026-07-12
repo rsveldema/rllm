@@ -4,7 +4,7 @@
 #include <TransformerBlock.hpp>
 #include <Corpus.hpp>
 #include <Statistics.hpp>
-#include <NeuralNetwork.hpp>
+#include <TextTrainer.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -155,50 +155,50 @@ TEST(SerializationTest, OutputLayerSafetensorsRoundTrip)
 // Safetensors model round-trip: checkpoint-style .st extension
 // ---------------------------------------------------------------------------
 
-TEST(SerializationTest, NeuralNetworkShortSafetensorsExtensionRoundTrip)
+TEST(SerializationTest, TextTrainerShortSafetensorsExtensionRoundTrip)
 {
     rllm::Corpus corpus({});
     rllm::Statistics stats;
-    rllm::NeuralNetwork network(0, corpus, stats);
+    rllm::TextTrainer network(0, corpus, stats);
 
     const std::string sf_file = (std::filesystem::temp_directory_path() / "checkpoint-short-extension.st").string();
     network.save(sf_file);
     ASSERT_TRUE(std::filesystem::exists(sf_file));
 
-    rllm::NeuralNetwork loaded(0, corpus, stats);
+    rllm::TextTrainer loaded(0, corpus, stats);
     EXPECT_TRUE(loaded.load(sf_file));
 
     std::filesystem::remove(sf_file);
 }
 
-TEST(SerializationTest, NeuralNetworkJsonLoadCanExtendTransformerBlocks)
+TEST(SerializationTest, TextTrainerJsonLoadCanExtendTransformerBlocks)
 {
     rllm::Corpus corpus({});
     rllm::Statistics stats;
-    rllm::NeuralNetwork source(0, corpus, stats);
+    rllm::TextTrainer source(0, corpus, stats);
 
     const std::string json_file = (std::filesystem::temp_directory_path() / "checkpoint-zero-blocks.json").string();
     source.save(json_file);
     ASSERT_TRUE(std::filesystem::exists(json_file));
 
-    rllm::NeuralNetwork loaded(1, corpus, stats);
+    rllm::TextTrainer loaded(1, corpus, stats);
     EXPECT_TRUE(loaded.load(json_file));
     EXPECT_EQ(loaded.get_transformer_block_count(), 1u);
 
     std::filesystem::remove(json_file);
 }
 
-TEST(SerializationTest, NeuralNetworkSafetensorsLoadCanExtendTransformerBlocks)
+TEST(SerializationTest, TextTrainerSafetensorsLoadCanExtendTransformerBlocks)
 {
     rllm::Corpus corpus({});
     rllm::Statistics stats;
-    rllm::NeuralNetwork source(2, corpus, stats);
+    rllm::TextTrainer source(2, corpus, stats);
 
     const std::string sf_file = (std::filesystem::temp_directory_path() / "checkpoint-two-blocks.st").string();
     source.save(sf_file);
     ASSERT_TRUE(std::filesystem::exists(sf_file));
 
-    rllm::NeuralNetwork loaded(3, corpus, stats);
+    rllm::TextTrainer loaded(3, corpus, stats);
     EXPECT_TRUE(loaded.load(sf_file));
     EXPECT_EQ(loaded.get_transformer_block_count(), 3u);
 

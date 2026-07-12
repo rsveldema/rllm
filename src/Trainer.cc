@@ -52,7 +52,7 @@ namespace rllm
         corpus.load_files_from_dir(train_corpus_dir);
         Statistics stats;
 
-        auto nn = std::make_unique<NeuralNetwork>(num_layers, corpus, stats);
+        auto nn = std::make_unique<TextTrainer>(num_layers, corpus, stats);
         nn->set_training_method(method);
         nn->set_window_size(window_size);
         nn->set_learn_depth(learn_depth);

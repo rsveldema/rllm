@@ -107,7 +107,7 @@ namespace rllm
     }
 
 
-    bool NeuralNetwork::load(const std::string& filename)
+    bool TextTrainer::load(const std::string& filename)
     {
         if (is_safetensors_model_filename(filename))
             return load_from_safetensors(filename);
@@ -194,7 +194,7 @@ namespace rllm
         return true;
     }
 
-    void NeuralNetwork::save(const std::string& filename) const
+    void TextTrainer::save(const std::string& filename) const
     {
         if (is_safetensors_model_filename(filename))
         {
@@ -233,7 +233,7 @@ namespace rllm
         std::println("Saved model '{}' in {:.3f} seconds", filename, elapsed);
     }
 
-    void NeuralNetwork::checkpoint() const
+    void TextTrainer::checkpoint() const
     {
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         save(std::format("models/checkpoint-{}.st", now_ms));
@@ -453,9 +453,9 @@ namespace rllm
     }
 
 
-    // ---- NeuralNetwork-level save/load for checkpointing ----------------------
+    // ---- TextTrainer-level save/load for checkpointing ----------------------
 
-    void NeuralNetwork::save_to_safetensors(const std::string& filename) const
+    void TextTrainer::save_to_safetensors(const std::string& filename) const
     {
         safetensors::safetensors_t st = make_safetensors_metadata();
         std::vector<uint8_t> storage;
@@ -513,7 +513,7 @@ namespace rllm
         }
     }
 
-    bool NeuralNetwork::load_from_safetensors(const std::string& filename)
+    bool TextTrainer::load_from_safetensors(const std::string& filename)
     {
         safetensors::safetensors_t st;
         std::string warn, ere;

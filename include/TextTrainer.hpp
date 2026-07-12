@@ -21,7 +21,7 @@
 
 namespace rllm
 {
-    struct NeuralNetworkForwardWorkspace;
+    struct TextTrainerForwardWorkspace;
     struct BackwardPropWorkspace;
     struct GradientAccumulationWorkspace;
     enum class TrainingStepOutcome
@@ -53,7 +53,7 @@ namespace rllm
 
     const char* training_method_to_string(TrainingMethod method);
 
-    class NeuralNetwork
+    class TextTrainer
     {
       public:
         // Denominator for convergence threshold: fires_nothing_ce_loss / k.
@@ -63,10 +63,10 @@ namespace rllm
         static constexpr size_t DEFAULT_LEARN_DEPTH = 16;
         static constexpr float DEFAULT_LEARNING_RATE = 0.003f;
 
-        NeuralNetwork(size_t num_layers, Corpus& corpus, Statistics& stats);
-        ~NeuralNetwork();
-        NeuralNetwork(const NeuralNetwork&) = delete;
-        NeuralNetwork& operator=(const NeuralNetwork&) = delete;
+        TextTrainer(size_t num_layers, Corpus& corpus, Statistics& stats);
+        ~TextTrainer();
+        TextTrainer(const TextTrainer&) = delete;
+        TextTrainer& operator=(const TextTrainer&) = delete;
 
         const Corpus& get_corpus() const { return m_corpus; }
         Statistics&   get_statistics() const { return m_stats; }
@@ -134,9 +134,11 @@ namespace rllm
         // Hidden state at the final position after the last transformer block.
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_last_hidden;
         PositionIndex m_seq_len{PositionIndex::START};
-        std::unique_ptr<NeuralNetworkForwardWorkspace> m_forward_workspace;
+        std::unique_ptr<TextTrainerForwardWorkspace> m_forward_workspace;
         std::unique_ptr<BackwardPropWorkspace> m_backward_workspace;
         std::unique_ptr<GradientAccumulationWorkspace> m_gradient_accumulation_workspace;
+        std::unique_ptr<GpuPackedBatchInput> m_gpu_packed_batch;
+        std::unique_ptr<BatchedOutputWorkspace> m_batched_output_workspace;
 
         // Computed from the actual corpus size.
         const float m_fires_nothing_ce_loss;
@@ -205,6 +207,52 @@ namespace rllm
             std::chrono::steady_clock::time_point& last_checkpoint_at,
             std::mt19937& rng,
             std::optional<size_t> epoch_size
+        );
+        struct BatchTrainingItem
+        {
+            CpuInputLine line;
+            bool finished = false;
+        };
+        struct BatchTrainingTiming
+        {
+            double forward_ms = 0.0;
+            double backward_ms = 0.0;
+            double apply_ms = 0.0;
+            double backward_output_ms = 0.0;
+            double backward_transformer_ms = 0.0;
+            double backward_input_ms = 0.0;
+            size_t rounds = 0;
+        };
+        std::vector<BatchTrainingItem> make_training_batch(
+            const std::vector<CpuInputLine>& training_lines,
+            const std::vector<size_t>& line_indices,
+            size_t batch_start,
+            size_t selected_count,
+            std::mt19937& rng
+        ) const;
+        size_t train_batch_items(std::vector<BatchTrainingItem>& batch, size_t steps, BatchTrainingTiming& timing);
+        size_t train_batch_step(std::vector<BatchTrainingItem>& batch, size_t step, BatchTrainingTiming& timing);
+        void collect_active_batch_inputs(
+            const std::vector<BatchTrainingItem>& batch,
+            std::vector<size_t>& active_indices,
+            std::vector<CpuInputLine>& contexts,
+            std::vector<MultiTokenPredictionIndex>& valid_heads
+        ) const;
+        void train_batch_output_heads(
+            const std::vector<BatchTrainingItem>& batch,
+            const std::vector<size_t>& active_indices,
+            const std::vector<MultiTokenPredictionIndex>& valid_heads,
+            BatchIndex packed_batch_size,
+            VulkanQueue& queue,
+            std::vector<float>& primary_losses,
+            BatchTrainingTiming& timing
+        );
+        void train_batch_transformer_backward(PositionIndex packed_rows, BatchTrainingTiming& timing);
+        size_t finish_converged_batch_items(
+            std::vector<BatchTrainingItem>& batch,
+            const std::vector<size_t>& active_indices,
+            const std::vector<float>& primary_losses,
+            size_t step
         );
 
         void do_whole_corpus_window_based_training(

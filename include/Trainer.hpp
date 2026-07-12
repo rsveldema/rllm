@@ -1,6 +1,6 @@
 #pragma once
 
-#include <NeuralNetwork.hpp>
+#include <TextTrainer.hpp>
 
 #include <chrono>
 #include <optional>

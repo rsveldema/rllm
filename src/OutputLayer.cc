@@ -268,6 +268,62 @@ namespace rllm
         ENDFOR
     }
 
+    static void output_layer_forward_batched_impl(VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(h_last, W, logits, batch_size)
+        const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
+        fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+        int batch_size
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, v, grid, (h_last, W, logits, batch_size))
+        float sum = 0.f;
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            sum += (h_last[batch, d] * static_cast<float>(W[v, d]));
+        logits[batch, v] = math::clamp(sum, -19200.0f, 19200.0f);
+        ENDFOR
+    }
+
+    static void accumulate_batched_output_layer_dh_last(
+        // OFFLOAD_PARAMETERS(delta, dh_last, W, batch_size)
+        const fixed_size_matrix<float, BatchIndex, TokenID>& delta,
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
+        int batch_size
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(static_cast<BatchIndex>(batch_size));
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (delta, dh_last, W, batch_size))
+        float sum = dh_last[batch, d];
+        for (const auto v : enum_iterator1D<TokenID>())
+            sum += (delta[batch, v] * W[v, d]);
+        dh_last[batch, d] = sum;
+        ENDFOR
+    }
+
+    static void accumulate_batched_output_layer_dW(
+        // OFFLOAD_PARAMETERS(delta, h_last, dW, batch_size)
+        const fixed_size_matrix<float, BatchIndex, TokenID>& delta,
+        const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+        fixed_size_matrix<float, TokenID, EmbeddingDimension>& dW,
+        int batch_size
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, dW, batch_size))
+        float grad = dW[v, d];
+        for (const auto batch : enum_iterator1D<BatchIndex>(static_cast<BatchIndex>(batch_size)))
+            grad += (delta[batch, v] * h_last[batch, d]);
+        dW[v, d] = grad;
+        ENDFOR
+    }
+
     static void accumulate_output_layer_dh_last(
         // OFFLOAD_PARAMETERS(delta, dh_last, W)
         const fixed_size_vector<float, TokenID>& delta,
@@ -459,6 +515,29 @@ namespace rllm
         accumulate_output_layer_dW(delta, h_last, accumulator.dW_lm_head);
         accumulator.touched = true;
         check_nan_finding_mode("backward_accumulate:end");
+    }
+
+    void OutputLayer::forward_batched(
+        const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+        BatchIndex batch_size,
+        fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+        VulkanQueue& queue
+    )
+    {
+        output_layer_forward_batched_impl(queue, h_last, W_lm_head, logits, static_cast<int>(batch_size));
+    }
+
+    void OutputLayer::backward_batched_accumulate(
+        const fixed_size_matrix<float, BatchIndex, TokenID>& delta,
+        const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+        BatchIndex batch_size,
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
+        OutputLayerGradientAccumulator& accumulator
+    )
+    {
+        accumulate_batched_output_layer_dh_last(delta, dh_last, W_lm_head, static_cast<int>(batch_size));
+        accumulate_batched_output_layer_dW(delta, h_last, accumulator.dW_lm_head, static_cast<int>(batch_size));
+        accumulator.touched = true;
     }
 
     void OutputLayer::apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate)

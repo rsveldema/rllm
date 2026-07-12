@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <Corpus.hpp>
-#include <NeuralNetwork.hpp>
+#include <TextTrainer.hpp>
 #include <Statistics.hpp>
 #include <TransformerBlock.hpp>
 #include <parallel.hpp>
@@ -63,11 +63,11 @@ namespace
     constexpr int BENCH_SEQ_LEN = 64; // speedup benchmark needs more work
     constexpr float TINY_CORPUS_TEST_LEARNING_RATE = 0.3f;
 
-    std::unique_ptr<NeuralNetwork> train_guaranteed_model(Corpus& corpus, Statistics& stats)
+    std::unique_ptr<TextTrainer> train_guaranteed_model(Corpus& corpus, Statistics& stats)
     {
         std::srand(0);
         corpus.load_files_from_dir("training_data0");
-        auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+        auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
         nn->set_training_method(TrainingMethod::RANDOM_LINE_RANDOM_LEN);
         nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
         nn->train(false, 3, std::nullopt, std::nullopt);
@@ -75,7 +75,7 @@ namespace
     }
 
     std::vector<OutputToken>
-    top5_for_prompt(NeuralNetwork& nn, Corpus& corpus, const std::string& prompt)
+    top5_for_prompt(TextTrainer& nn, Corpus& corpus, const std::string& prompt)
     {
         const auto token_ids = corpus.get_token_ids(prompt);
 
@@ -106,7 +106,7 @@ TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
     Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
-    auto nn = std::make_unique<NeuralNetwork>(2, corpus, stats);
+    auto nn = std::make_unique<TextTrainer>(2, corpus, stats);
     nn->set_training_method(TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
     nn->train(false, 3, std::nullopt, std::nullopt);
@@ -158,7 +158,7 @@ TEST(PredictorRegressionTest, MTP_HashPredictsInThenCluInParallel)
     Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
-    auto nn = std::make_unique<NeuralNetwork>(2, corpus, stats);
+    auto nn = std::make_unique<TextTrainer>(2, corpus, stats);
     nn->set_training_method(TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
     nn->train(false, 3, std::nullopt, std::nullopt);
@@ -218,7 +218,7 @@ TEST(PredictorRegressionTest, IncludeATrainingKeepsMTPHeadsQueryable)
     Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
-    auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+    auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
     nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
     nn->train(false, 3, std::nullopt, std::nullopt);
@@ -241,7 +241,7 @@ TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeTwoSmoke)
     Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
-    auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+    auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
     nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
     nn->set_micro_batch_size(2);
     nn->set_learn_depth(1);
@@ -266,7 +266,7 @@ TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeOneSmoke)
     Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
-    auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+    auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
     nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
     nn->set_micro_batch_size(1);
     nn->set_learn_depth(100);
@@ -294,7 +294,7 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
     Corpus corpus(filters);
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
-    auto nn = std::make_unique<NeuralNetwork>(1, corpus, stats);
+    auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
     nn->set_training_method(TrainingMethod::RANDOM_LINE_RANDOM_LEN);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
 

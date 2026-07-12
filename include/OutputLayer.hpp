@@ -17,6 +17,14 @@ namespace rllm
         void reset(VulkanQueue& queue);
     };
 
+    struct BatchedOutputWorkspace
+    {
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension> h_last;
+        fixed_size_matrix<float, BatchIndex, TokenID> logits;
+        fixed_size_matrix<float, BatchIndex, TokenID> delta;
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension> dh_last;
+    };
+
     void output_layer_forward_from_hidden_impl(
         VulkanQueue& queue,
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
@@ -65,6 +73,19 @@ namespace rllm
             fixed_size_vector<float, EmbeddingDimension>& dh_last,
             OutputLayerGradientAccumulator& accumulator
         );
+        void forward_batched(
+            const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+            BatchIndex batch_size,
+            fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+            VulkanQueue& queue
+        );
+        void backward_batched_accumulate(
+            const fixed_size_matrix<float, BatchIndex, TokenID>& delta,
+            const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+            BatchIndex batch_size,
+            fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
+            OutputLayerGradientAccumulator& accumulator
+        );
 
         void apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate);
 
@@ -88,7 +109,7 @@ namespace rllm
         // Returns the top-k tokens by raw logit value.
         std::vector<OutputToken> get_top_k_by_logit(size_t k) const;
 
-    friend class NeuralNetwork;
+    friend class TextTrainer;
       private:
         void check_nan_finding_mode(const char* phase);
 

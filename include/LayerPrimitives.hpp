@@ -326,6 +326,121 @@ namespace rllm
         }
     };
 
+    /** CPU description of a ragged micro-batch packed into one row axis.
+     *
+     * Rows belonging to an example are contiguous. `row_begin(b)` and
+     * `row_end(b)` define the block used by causal attention, while
+     * `local_position(row)` resets positional encoding at each example.
+     */
+    class PackedBatchInput
+    {
+      public:
+        PackedBatchInput() = default;
+
+        explicit PackedBatchInput(const std::vector<CpuInputLine>& examples)
+        {
+            assign(examples);
+        }
+
+        void assign(const std::vector<CpuInputLine>& examples)
+        {
+            assert(examples.size() <= static_cast<size_t>(BatchIndex::MAX));
+            m_tokens.clear();
+            m_row_begin.clear();
+            m_row_end.clear();
+            m_last_row.clear();
+            m_local_position.clear();
+            m_row_batch.clear();
+
+            for (size_t batch = 0; batch < examples.size(); ++batch)
+            {
+                const auto& example = examples[batch];
+                assert(!example.empty());
+                const auto begin = m_tokens.size();
+                m_row_begin.push_back(begin);
+                for (const auto pos : enum_iterator1D<PositionIndex>(example.size()))
+                {
+                    assert(static_cast<size_t>(m_tokens.size()) < static_cast<size_t>(PositionIndex::MAX));
+                    m_tokens.push_back(example[pos]);
+                    m_local_position.push_back(pos);
+                    m_row_batch.push_back(static_cast<BatchIndex>(batch));
+                }
+                m_row_end.push_back(m_tokens.size());
+                m_last_row.push_back(dec(m_tokens.size()));
+            }
+        }
+
+        BatchIndex batch_size() const { return m_row_begin.size(); }
+        PositionIndex packed_rows() const { return m_tokens.size(); }
+        const CpuInputLine& tokens() const { return m_tokens; }
+        PositionIndex row_begin(BatchIndex batch) const { return m_row_begin[batch]; }
+        PositionIndex row_end(BatchIndex batch) const { return m_row_end[batch]; }
+        PositionIndex last_row(BatchIndex batch) const { return m_last_row[batch]; }
+        PositionIndex local_position(PositionIndex row) const { return m_local_position[row]; }
+        BatchIndex row_batch(PositionIndex row) const { return m_row_batch[row]; }
+        const cpu_fixed_vector<PositionIndex, BatchIndex>& row_begins() const { return m_row_begin; }
+        const cpu_fixed_vector<PositionIndex, BatchIndex>& row_ends() const { return m_row_end; }
+        const cpu_fixed_vector<PositionIndex, BatchIndex>& last_rows() const { return m_last_row; }
+        const cpu_fixed_vector<PositionIndex, PositionIndex>& local_positions() const { return m_local_position; }
+        const cpu_fixed_vector<BatchIndex, PositionIndex>& row_batches() const { return m_row_batch; }
+        bool may_attend(PositionIndex query, PositionIndex key) const
+        {
+            return row_batch(query) == row_batch(key) && key <= query;
+        }
+
+      private:
+        CpuInputLine m_tokens;
+        cpu_fixed_vector<PositionIndex, BatchIndex> m_row_begin;
+        cpu_fixed_vector<PositionIndex, BatchIndex> m_row_end;
+        cpu_fixed_vector<PositionIndex, BatchIndex> m_last_row;
+        cpu_fixed_vector<PositionIndex, PositionIndex> m_local_position;
+        cpu_fixed_vector<BatchIndex, PositionIndex> m_row_batch;
+    };
+
+    class GpuPackedBatchInput
+    {
+      public:
+        void sync_to_device(VulkanQueue& queue, const PackedBatchInput& cpu)
+        {
+            tokens.sync_to_device(queue, cpu.tokens());
+            cpu_fixed_vector<int, BatchIndex> cpu_row_begin;
+            cpu_fixed_vector<int, BatchIndex> cpu_row_end;
+            cpu_fixed_vector<int, BatchIndex> cpu_last_row;
+            for (const auto batch : enum_iterator1D<BatchIndex>(cpu.batch_size()))
+            {
+                cpu_row_begin.push_back(static_cast<int>(cpu.row_begin(batch)));
+                cpu_row_end.push_back(static_cast<int>(cpu.row_end(batch)));
+                cpu_last_row.push_back(static_cast<int>(cpu.last_row(batch)));
+            }
+            cpu_fixed_vector<int, PositionIndex> cpu_local_position;
+            cpu_fixed_vector<int, PositionIndex> cpu_row_batch;
+            for (const auto row : enum_iterator1D<PositionIndex>(cpu.packed_rows()))
+            {
+                cpu_local_position.push_back(static_cast<int>(cpu.local_position(row)));
+                cpu_row_batch.push_back(static_cast<int>(cpu.row_batch(row)));
+            }
+            row_begin.copy_from_cpu(queue, cpu_row_begin);
+            row_end.copy_from_cpu(queue, cpu_row_end);
+            last_row.copy_from_cpu(queue, cpu_last_row);
+            local_position.copy_from_cpu(queue, cpu_local_position);
+            row_batch.copy_from_cpu(queue, cpu_row_batch);
+            // The converted CPU vectors are temporary staging buffers. Keep
+            // them alive until every H2D copy has completed.
+            queue.wait("GpuPackedBatchInput metadata upload");
+            batch_size = cpu.batch_size();
+            packed_rows = cpu.packed_rows();
+        }
+
+        GpuInputLine tokens;
+        fixed_size_vector<int, BatchIndex> row_begin;
+        fixed_size_vector<int, BatchIndex> row_end;
+        fixed_size_vector<int, BatchIndex> last_row;
+        fixed_size_vector<int, PositionIndex> local_position;
+        fixed_size_vector<int, PositionIndex> row_batch;
+        BatchIndex batch_size{BatchIndex::START};
+        PositionIndex packed_rows{PositionIndex::START};
+    };
+
     class InputLineView
     {
       public:
