@@ -305,13 +305,13 @@ MOCK_METHOD(std::chrono::nanoseconds, get_time, (), (const, override));
 // modification, are permitted provided that the following conditions are met:
 //
 // 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer.
+// list of conditions and the following disclaimer.
 // 2. Redistributions in binary form must reproduce the above copyright notice,
-//    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution.
+// this list of conditions and the following disclaimer in the documentation
+// and/or other materials provided with the distribution.
 // 3. Neither the name of the copyright holder nor the names of its contributors
-//    may be used to endorse or promote products derived from this software without
-//    specific prior written permission.
+// may be used to endorse or promote products derived from this software without
+// specific prior written permission.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 // ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -833,8 +833,8 @@ start_pos = modify(str, start_pos);
 }
 return str;
 }
-/// close a sequence of characters indicated by a closure character.  Brackets allows sub sequences
-/// recognized bracket sequences include "'`[(<{  other closure characters are assumed to be literal strings
+/// close a sequence of characters indicated by a closure character. Brackets allows sub sequences
+/// recognized bracket sequences include "'`[(<{ other closure characters are assumed to be literal strings
 CLI11_INLINE std::size_t close_sequence(const std::string &str, std::size_t start, char closure_char);
 /// Split a string '"one two" "three"' into 'one two', 'three'
 /// Quote characters can be ` ' or " or bracket characters [{(< with matching to the matching bracket
@@ -842,11 +842,11 @@ CLI11_INLINE std::vector<std::string> split_up(std::string str, char delimiter =
 /// get the value of an environmental variable or empty string if empty
 CLI11_INLINE std::string get_environment_value(const std::string &env_name);
 /// This function detects an equal or colon followed by an escaped quote after an argument
-/// then modifies the string to replace the equality with a space.  This is needed
+/// then modifies the string to replace the equality with a space. This is needed
 /// to allow the split up function to work properly and is intended to be used with the find_and_modify function
 /// the return value is the offset+1 which is required by the find_and_modify function.
 CLI11_INLINE std::size_t escape_detect(std::string &str, std::size_t offset);
-/// @brief  detect if a string has escapable characters
+/// @brief detect if a string has escapable characters
 /// @param str the string to do the detection on
 /// @return true if the string has escapable characters
 CLI11_INLINE bool has_escapable_character(const std::string &str);
@@ -933,7 +933,7 @@ return input;
 }
 CLI11_INLINE std::ostream &
 format_help(std::ostream &out, std::string name, const std::string &description, std::size_t wid) {
-name = "  " + name;
+name = " " + name;
 out << std::setw(static_cast<int>(wid)) << std::left << name;
 if (!description.empty()) {
 if (name.length() >= wid)
@@ -951,7 +951,7 @@ return out;
 }
 CLI11_INLINE std::ostream &format_aliases(std::ostream &out, const std::vector<std::string> &aliases, std::size_t wid) {
 if (!aliases.empty()) {
-out << std::setw(static_cast<int>(wid)) << "     aliases: ";
+out << std::setw(static_cast<int>(wid)) << " aliases: ";
 bool front = true;
 for (const auto &alias : aliases) {
 if (!front) {
@@ -959,7 +959,7 @@ out << ", ";
 } else {
 front = false;
 }
-out << detail::fix_newlines("              ", alias);
+out << detail::fix_newlines(" ", alias);
 }
 out << "\n";
 }
@@ -1377,14 +1377,14 @@ return ename_string;
 // namespace detail
 // Use one of these on all error classes.
 // These are temporary and are undef'd at the end of this file.
-#define CLI11_ERROR_DEF(parent, name)                                                                              \
-protected:                                                                                                         \
+#define CLI11_ERROR_DEF(parent, name) \
+protected: \
 name(std::string ename, std::string msg, int exit_code) : parent(std::move(ename), std::move(msg), exit_code) {} \
-name(std::string ename, std::string msg, ExitCodes exit_code)                                                    \
-: parent(std::move(ename), std::move(msg), exit_code) {}                                                     \
+name(std::string ename, std::string msg, ExitCodes exit_code) \
+: parent(std::move(ename), std::move(msg), exit_code) {} \
 \
-public:                                                                                                            \
-name(std::string msg, ExitCodes exit_code) : parent(#name, std::move(msg), exit_code) {}                         \
+public: \
+name(std::string msg, ExitCodes exit_code) : parent(#name, std::move(msg), exit_code) {} \
 name(std::string msg, int exit_code) : parent(#name, std::move(msg), exit_code) {}
 // This is added after the one above if a class is used directly and builds its own message
 #define CLI11_ERROR_SIMPLE(name) \
@@ -1803,8 +1803,8 @@ return std::get<1>(std::forward<Q>(pair_value));
 }
 };
 // Warning is suppressed due to "bug" in gcc<5.0 and gcc 7.0 with c++17 enabled that generates a Wnarrowing warning
-// in the unevaluated context even if the function that was using this wasn't used.  The standard says narrowing in
-// brace initialization shouldn't be allowed but for backwards compatibility gcc allows it in some contexts.  It is a
+// in the unevaluated context even if the function that was using this wasn't used. The standard says narrowing in
+// brace initialization shouldn't be allowed but for backwards compatibility gcc allows it in some contexts. It is a
 // little fuzzy what happens in template constructs and I think that was something GCC took a little while to work out.
 // But regardless some versions of gcc generate a warning when they shouldn't from the following code so that should be
 // suppressed
@@ -1893,7 +1893,7 @@ return false;
 template <typename T, typename _ = void>
 struct is_mutable_container : std::false_type {};
 /// type trait to test if a type is a mutable container meaning it has a value_type, it has an iterator, a clear, and
-/// end methods and an insert function.  And for our purposes we exclude std::string and types that can be constructed
+/// end methods and an insert function. And for our purposes we exclude std::string and types that can be constructed
 /// from a std::string
 template <typename T>
 struct is_mutable_container<
@@ -1912,7 +1912,7 @@ std::true_type> {};
 template <typename T, typename _ = void>
 struct is_readable_container : std::false_type {};
 /// type trait to test if a type is a container meaning it has a value_type, it has an iterator, a clear, and an end
-/// methods and an insert function.  And for our purposes we exclude std::string and types that can be constructed from
+/// methods and an insert function. And for our purposes we exclude std::string and types that can be constructed from
 /// a std::string
 template <typename T>
 struct is_readable_container<
@@ -1930,7 +1930,7 @@ template <typename S>
 class is_tuple_like {
 template <typename SS>
 // static auto test(int)
-//     -> decltype(std::conditional<(std::tuple_size<SS>::value > 0), std::true_type, std::false_type>::type());
+// -> decltype(std::conditional<(std::tuple_size<SS>::value > 0), std::true_type, std::false_type>::type());
 static auto test(int) -> decltype(std::tuple_size<typename std::decay<SS>::type>::value, std::true_type{});
 template <typename>
 static auto test(...) -> std::false_type;
@@ -2352,7 +2352,7 @@ static constexpr object_category value{object_category::container_value};
 };
 // Type name print
 /// Was going to be based on
-///  http://stackoverflow.com/questions/1055452/c-get-name-of-type-in-template
+/// http://stackoverflow.com/questions/1055452/c-get-name-of-type-in-template
 /// But this is cleaner and works better in this case
 template <typename T,
 enable_if_t<classify_object<T>::value == object_category::char_value, detail::enabler> = detail::dummy>
@@ -2558,7 +2558,7 @@ return (val == (input.c_str() + input.size()) && static_cast<std::int64_t>(outpu
 }
 return false;
 }
-/// Convert a flag into an integer value  typically binary flags sets errno to nonzero if conversion failed
+/// Convert a flag into an integer value typically binary flags sets errno to nonzero if conversion failed
 inline std::int64_t to_flag_value(std::string val) noexcept {
 static const std::string trueString("true");
 static const std::string falseString("false");
@@ -3794,7 +3794,7 @@ explicit Range(T max_val, const std::string &validator_name = std::string{})
 };
 /// Check for a non negative number
 const Range NonNegativeNumber((std::numeric_limits<double>::max)(), "NONNEGATIVE");
-/// Check for a positive valued number (val>0.0), <double>::min  here is the smallest positive number
+/// Check for a positive valued number (val>0.0), <double>::min here is the smallest positive number
 const Range PositiveNumber((std::numeric_limits<double>::min)(), (std::numeric_limits<double>::max)(), "POSITIVE");
 /// Produce a bounded range (factory). Min and max are inclusive.
 class Bound : public Validator {
@@ -4166,9 +4166,9 @@ return item;
 /// Can be used to write transforms for SIZE or DURATION inputs.
 ///
 /// Example:
-///   With mapping = `{"b"->1, "kb"->1024, "mb"->1024*1024}`
-///   one can recognize inputs like "100", "12kb", "100 MB",
-///   that will be automatically transformed to 100, 14448, 104857600.
+/// With mapping = `{"b"->1, "kb"->1024, "mb"->1024*1024}`
+/// one can recognize inputs like "100", "12kb", "100 MB",
+/// that will be automatically transformed to 100, 14448, 104857600.
 ///
 /// Output number type matches the type in the provided mapping.
 /// Therefore, if it is required to interpret real inputs like "0.42 s",
@@ -4178,7 +4178,7 @@ public:
 /// Adjust AsNumberWithUnit behavior.
 /// CASE_SENSITIVE/CASE_INSENSITIVE controls how units are matched.
 /// UNIT_OPTIONAL/UNIT_REQUIRED throws ValidationError
-///   if UNIT_REQUIRED is set and unit literal is not found.
+/// if UNIT_REQUIRED is set and unit literal is not found.
 enum Options {
 CASE_SENSITIVE = 0,
 CASE_INSENSITIVE = 1,
@@ -4295,15 +4295,15 @@ return static_cast<AsNumberWithUnit::Options>(static_cast<int>(a) | static_cast<
 }
 /// Converts a human-readable size string (with unit literal) to uin64_t size.
 /// Example:
-///   "100" => 100
-///   "1 b" => 100
-///   "10Kb" => 10240 // you can configure this to be interpreted as kilobyte (*1000) or kibibyte (*1024)
-///   "10 KB" => 10240
-///   "10 kb" => 10240
-///   "10 kib" => 10240 // *i, *ib are always interpreted as *bibyte (*1024)
-///   "10kb" => 10240
-///   "2 MB" => 2097152
-///   "2 EiB" => 2^61 // Units up to exibyte are supported
+/// "100" => 100
+/// "1 b" => 100
+/// "10Kb" => 10240 // you can configure this to be interpreted as kilobyte (*1000) or kibibyte (*1024)
+/// "10 KB" => 10240
+/// "10 kb" => 10240
+/// "10 kib" => 10240 // *i, *ib are always interpreted as *bibyte (*1024)
+/// "10kb" => 10240
+/// "2 MB" => 2097152
+/// "2 EiB" => 2^61 // Units up to exibyte are supported
 class AsSizeValue : public AsNumberWithUnit {
 public:
 using result_t = std::uint64_t;
@@ -5219,14 +5219,14 @@ CLI11_NODISCARD int get_expected() const { return expected_min_; }
 CLI11_NODISCARD int get_expected_min() const { return expected_min_; }
 /// The max number of times the option expects to be included
 CLI11_NODISCARD int get_expected_max() const { return expected_max_; }
-/// The total min number of expected  string values to be used
+/// The total min number of expected string values to be used
 CLI11_NODISCARD int get_items_expected_min() const { return type_size_min_ * expected_min_; }
 /// Get the maximum number of items expected to be returned and used for the callback
 CLI11_NODISCARD int get_items_expected_max() const {
 int t = type_size_max_;
 return detail::checked_multiply(t, expected_max_) ? t : detail::expected_max_vector_size;
 }
-/// The total min number of expected  string values to be used
+/// The total min number of expected string values to be used
 CLI11_NODISCARD int get_items_expected() const { return get_items_expected_min(); }
 /// True if the argument can be given directly
 CLI11_NODISCARD bool get_positional() const { return !pname_.empty(); }
@@ -6032,11 +6032,11 @@ res.push_back(std::move(result));
 return result_count;
 }
 #ifndef CLI11_PARSE
-#define CLI11_PARSE(app, ...)          \
-try {                                \
-(app).parse(__VA_ARGS__);          \
+#define CLI11_PARSE(app, ...) \
+try { \
+(app).parse(__VA_ARGS__); \
 } catch (const CLI::ParseError &e) { \
-return (app).exit(e);              \
+return (app).exit(e); \
 }
 #endif
 namespace detail {
@@ -6080,7 +6080,7 @@ return opt->multi_option_policy(MultiOptionPolicy::Sum)->default_str("0")->force
 class Option_group;
 /// Creates a command line program, with very few defaults.
 /** To use, create a new `Program()` instance with `argc`, `argv`, and a help description. The templated
-*  add_option methods make it easy to prepare options. Remember to call `.start` before starting your
+* add_option methods make it easy to prepare options. Remember to call `.start` before starting your
 * program, so that the options can be evaluated and the help option doesn't accidentally run your program. */
 class App {
 friend Option;
@@ -6098,7 +6098,7 @@ bool allow_extras_{false};
 /// If ignore, allow extra arguments in the ini file (ie, don't throw an error). INHERITABLE
 /// if error error on an extra argument, and if capture feed it to the app
 config_extras_mode allow_config_extras_{config_extras_mode::ignore};
-///  If true, return immediately on an unrecognized option (implies allow_extras) INHERITABLE
+/// If true, return immediately on an unrecognized option (implies allow_extras) INHERITABLE
 bool prefix_command_{false};
 /// If set to true the name was automatically generated from the command line vs a user set name
 bool has_automatic_name_{false};
@@ -6162,7 +6162,7 @@ std::set<App *> exclude_subcommands_{};
 /// This is a list of options which are exclusionary to this App, if the options were used this subcommand should
 /// not be
 std::set<Option *> exclude_options_{};
-/// this is a list of subcommands or option groups that are required by this one, the list is not mutual,  the
+/// this is a list of subcommands or option groups that are required by this one, the list is not mutual, the
 /// listed subcommands do not require this one
 std::set<App *> need_subcommands_{};
 /// This is a list of options which are required by this app, the list is not mutual, listed options do not need the
@@ -6177,7 +6177,7 @@ std::vector<App_p> subcommands_{};
 bool ignore_case_{false};
 /// If true, the program should ignore underscores INHERITABLE
 bool ignore_underscore_{false};
-/// Allow subcommand fallthrough, so that parent commands can collect commands after subcommand.  INHERITABLE
+/// Allow subcommand fallthrough, so that parent commands can collect commands after subcommand. INHERITABLE
 bool fallthrough_{false};
 /// Allow '/' for options for Windows like options. Defaults to true on Windows, false otherwise. INHERITABLE
 bool allow_windows_style_options_{
@@ -6411,8 +6411,8 @@ OptionDefaults *option_defaults() { return &option_defaults_; }
 ///
 /// For example,
 ///
-///     std::string filename;
-///     program.add_option("filename", filename, "description of filename");
+/// std::string filename;
+/// program.add_option("filename", filename, "description of filename");
 ///
 Option *add_option(std::string option_name,
 callback_t option_callback,
@@ -6511,7 +6511,7 @@ public:
 /// Add a flag with no description or variable assignment
 Option *add_flag(std::string flag_name) { return _add_flag_internal(flag_name, CLI::callback_t(), std::string{}); }
 /// Add flag with description but with no variable assignment or callback
-/// takes a constant string,  if a variable string is passed that variable will be assigned the results from the
+/// takes a constant string, if a variable string is passed that variable will be assigned the results from the
 /// flag
 template <typename T,
 enable_if_t<std::is_const<T>::value && std::is_constructible<std::string, T>::value, detail::enabler> =
@@ -9385,7 +9385,7 @@ output.emplace_back();
 output.back().parents = std::move(parents);
 output.back().name = "++";
 }
-/// @brief  checks if a string represents a multiline comment
+/// @brief checks if a string represents a multiline comment
 CLI11_INLINE bool hasMLString(std::string const &fullString, char check) {
 if (fullString.length() < 3) {
 return false;
@@ -9973,7 +9973,7 @@ std::string tmp = detail::find_and_replace(out.str(), "\n\n", "\n");
 tmp = tmp.substr(0, tmp.size() - 1);
 // Remove the final '\n'
 // Indent all but the first line (the name)
-return detail::find_and_replace(tmp, "\n", "\n  ") + "\n";
+return detail::find_and_replace(tmp, "\n", "\n ") + "\n";
 }
 CLI11_INLINE std::string Formatter::make_option_name(const Option *opt, bool is_positional) const {
 if (is_positional)
@@ -10217,7 +10217,7 @@ iuring::NetworkAdapter &m_adapter;
 std::shared_ptr<iuring::IOUringInterface> m_network;
 model::ChannelMapper &m_mapper;
 std::shared_ptr<model::Node> m_model;
-// Pre-allocated interleave buffer  avoids stack page-faults in the RT task
+// Pre-allocated interleave buffer avoids stack page-faults in the RT task
 InterleavedAudioFrame m_send_frame{AudioEncodingID::L24_2CH, "rtp-send"};
 // SRTP encryption contexts
 srtp_t m_srtp_send_ctx = nullptr;
@@ -10529,7 +10529,7 @@ void poll_playout_possible();
 void poll_recording_available();
 void playback(const AudioFrame &chunk);
 bool record(AudioFrame &chunk);
-// Pre-allocated interleave buffers  avoids 61 KB stack frames in the RT path.
+// Pre-allocated interleave buffers avoids 61 KB stack frames in the RT path.
 InterleavedAudioFrame m_playback_frame{AudioEncodingID::L24_2CH, "alsa-playback"};
 InterleavedAudioFrame m_record_frame{AudioEncodingID::L24_2CH, "alsa-recording"};
 };
@@ -10556,9 +10556,9 @@ using channel_index_t = uint16_t;
 enum class AudioEncodingID {
 UNKNOWN,
 #define CH_ENC_MACRO(C) \
-L8_##C##CH,           \
-L16_##C##CH,      \
-L24_##C##CH,      \
+L8_##C##CH, \
+L16_##C##CH, \
+L24_##C##CH, \
 L32_##C##CH,
 CH_ENC_MACRO(1)
 CH_ENC_MACRO(2)
@@ -10600,45 +10600,45 @@ switch (m_encoding) {
 case AudioEncodingID::UNKNOWN:
 fprintf(stderr, "called set_num_channels for unknown");
 abort();
-#define CHANGE_DISPATCH_CH(BITS, X)                                        \
-switch (num_channels) {                                                  \
-case 1:                                                                  \
-m_encoding = AudioEncodingID::BITS##_1CH;                              \
-break;                                                                 \
-case 2:                                                                  \
-m_encoding = AudioEncodingID::BITS##_2CH;                              \
-break;                                                                 \
-case 4:                                                                  \
-m_encoding = AudioEncodingID::BITS##_4CH;                              \
-break;                                                                 \
-case 8:                                                                  \
-m_encoding = AudioEncodingID::BITS##_8CH;                              \
-break;                                                                 \
-case 16:                                                                 \
-m_encoding = AudioEncodingID::BITS##_16CH;                             \
-break;                                                                 \
-case 32:                                                                 \
-m_encoding = AudioEncodingID::BITS##_32CH;                             \
-break;                                                                 \
-case 64:                                                                 \
-m_encoding = AudioEncodingID::BITS##_64CH;                             \
-break;                                                                 \
-case 128:                                                                \
-m_encoding = AudioEncodingID::BITS##_128CH;                            \
-break;                                                                 \
-default:                                                                 \
+#define CHANGE_DISPATCH_CH(BITS, X) \
+switch (num_channels) { \
+case 1: \
+m_encoding = AudioEncodingID::BITS##_1CH; \
+break; \
+case 2: \
+m_encoding = AudioEncodingID::BITS##_2CH; \
+break; \
+case 4: \
+m_encoding = AudioEncodingID::BITS##_4CH; \
+break; \
+case 8: \
+m_encoding = AudioEncodingID::BITS##_8CH; \
+break; \
+case 16: \
+m_encoding = AudioEncodingID::BITS##_16CH; \
+break; \
+case 32: \
+m_encoding = AudioEncodingID::BITS##_32CH; \
+break; \
+case 64: \
+m_encoding = AudioEncodingID::BITS##_64CH; \
+break; \
+case 128: \
+m_encoding = AudioEncodingID::BITS##_128CH; \
+break; \
+default: \
 fprintf(stderr, "unsupported number of channels: %d\n", num_channels); \
-abort();                                                               \
-break;                                                                 \
-}                                                                        \
+abort(); \
+break; \
+} \
 break;
-#define DISPATCH_CH(X)               \
-case AudioEncodingID::L8_##X##CH:  \
-CHANGE_DISPATCH_CH(L8, X)        \
+#define DISPATCH_CH(X) \
+case AudioEncodingID::L8_##X##CH: \
+CHANGE_DISPATCH_CH(L8, X) \
 case AudioEncodingID::L16_##X##CH: \
-CHANGE_DISPATCH_CH(L16, X)       \
+CHANGE_DISPATCH_CH(L16, X) \
 case AudioEncodingID::L24_##X##CH: \
-CHANGE_DISPATCH_CH(L24, X)       \
+CHANGE_DISPATCH_CH(L24, X) \
 case AudioEncodingID::L32_##X##CH: \
 CHANGE_DISPATCH_CH(L32, X)
 DISPATCH_CH(1);
@@ -10666,13 +10666,13 @@ switch (m_encoding) {
 case AudioEncodingID::UNKNOWN:
 fprintf(stderr, "called get_bytes_per_sample for unknown");
 abort();
-#define DISPATCH_CH(X)               \
-case AudioEncodingID::L8_##X##CH:  \
-return 1;                        \
+#define DISPATCH_CH(X) \
+case AudioEncodingID::L8_##X##CH: \
+return 1; \
 case AudioEncodingID::L16_##X##CH: \
-return 2;                        \
+return 2; \
 case AudioEncodingID::L24_##X##CH: \
-return 3;                        \
+return 3; \
 case AudioEncodingID::L32_##X##CH: \
 return 4;
 DISPATCH_CH(1);
@@ -10692,13 +10692,13 @@ switch (m_encoding) {
 case AudioEncodingID::UNKNOWN:
 fprintf(stderr, "called get_num_channels for unknown");
 abort();
-#define DISPATCH_CH(X)               \
-case AudioEncodingID::L8_##X##CH:  \
-return X;                        \
+#define DISPATCH_CH(X) \
+case AudioEncodingID::L8_##X##CH: \
+return X; \
 case AudioEncodingID::L16_##X##CH: \
-return X;                        \
+return X; \
 case AudioEncodingID::L24_##X##CH: \
-return X;                        \
+return X; \
 case AudioEncodingID::L32_##X##CH: \
 return X;
 DISPATCH_CH(1);
@@ -12461,7 +12461,7 @@ void do_register_receiver(const iuring::IPAddress &dest, int ix);
 namespace http {
 class EmptyObject {
 };
-#define EMPTY_DECL(CODE)     \
+#define EMPTY_DECL(CODE) \
 class EmptyObject_##CODE { \
 };
 EMPTY_DECL(200)
@@ -12750,7 +12750,7 @@ uint8_t messageType = 0;
 uint8_t sourceCommunicationTechnology = GRANDMASTER_ETHERNET_TECH;
 // 1 21
 uuid_type_t sourceUUID{};
-//   6 22
+// 6 22
 uint16_t sourcePortId = 1;
 // 2 28
 sequence_id_t sequenceId = 0;
@@ -12802,7 +12802,7 @@ reserved = 0;
 flags = 0;
 reserved2 = 0;
 }
-//  PtpHeaderV1(const PtpHeaderV1&&) = delete;
+// PtpHeaderV1(const PtpHeaderV1&&) = delete;
 uint16_t get_version_ptp() const {
 return ntohs(versionPTP);
 }
@@ -13844,8 +13844,8 @@ bool enable_srtp_encryption = false;
 * \brief Sample certificates and DHM parameters for testing
 */
 /*
-*  Copyright The Mbed TLS Contributors
-*  SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
+* Copyright The Mbed TLS Contributors
+* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
 */
 #ifndef MBEDTLS_CERTS_H
 #define MBEDTLS_CERTS_H
@@ -14097,7 +14097,7 @@ virtual void submit_connect(const std::shared_ptr<ISocket> &socket,
 const IPAddress &target, connect_callback_func_t handler) = 0;
 /** This accepts new connections from other machines.
 * Note that this requires that the socket is opened with
-*  SocketKind::SERVER_STREAM_SOCKET
+* SocketKind::SERVER_STREAM_SOCKET
 * As only server sockets can accept new connections.
 * We check this by asserting the correct behavior here to safeguard this.
 */
@@ -14106,11 +14106,11 @@ accept_callback_func_t handler) = 0;
 virtual void submit_recv(const std::shared_ptr<ISocket> &socket,
 recv_callback_func_t handler) = 0;
 /** The steps for sending a packet:
-*      - This returns a work-item where you can retrieve the SendPacket
+* - This returns a work-item where you can retrieve the SendPacket
 * object from
-*      - Then with that send packet you append your dara
-*      - Then you call submit on the work-item.
-*      - The WorkItem::submit() method then has the callback arg.
+* - Then with that send packet you append your dara
+* - Then you call submit on the work-item.
+* - The WorkItem::submit() method then has the callback arg.
 */
 virtual std::shared_ptr<IWorkItem> ackuire_send_workitem(
 const std::shared_ptr<ISocket> &socket) = 0;
@@ -14884,45 +14884,45 @@ bool m_debug = true;
 bool m_info = true;
 };
 const char *strip_prefix(const char *path);
-#define LOG_DEBUG(logger, ...)                                  \
-if (logger.enable_debug()) {                                  \
+#define LOG_DEBUG(logger, ...) \
+if (logger.enable_debug()) { \
 logger.debug_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
+std::format(__VA_ARGS__)); \
 }
-#define LOG_INFO(logger, ...)                                  \
-if (logger.enable_info()) {                                  \
+#define LOG_INFO(logger, ...) \
+if (logger.enable_info()) { \
 logger.info_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
+std::format(__VA_ARGS__)); \
 }
-#define LOG_INFO_ONCE(logger, ...)                               \
-do {                                                           \
-static bool init_once;                                       \
-if (logger.enable_info() && !init_once) {                    \
+#define LOG_INFO_ONCE(logger, ...) \
+do { \
+static bool init_once; \
+if (logger.enable_info() && !init_once) { \
 logger.info_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
-init_once = true;                                          \
-}                                                            \
+std::format(__VA_ARGS__)); \
+init_once = true; \
+} \
 } while (0)
 #define LOG_ERROR(logger, ...) \
-logger.error_msg(            \
+logger.error_msg( \
 __LINE__, logging::strip_prefix(__FILE__), std::format(__VA_ARGS__))
-#define LOG_ERROR_ONCE(logger, ...)                               \
-do {                                                            \
-static bool init_once;                                        \
-if (!init_once) {                                             \
+#define LOG_ERROR_ONCE(logger, ...) \
+do { \
+static bool init_once; \
+if (!init_once) { \
 logger.error_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
-init_once = true;                                           \
-}                                                             \
+std::format(__VA_ARGS__)); \
+init_once = true; \
+} \
 } while (0)
-#define LOG_ERROR_SLOW(logger, ...)                               \
-do {                                                            \
-static uint32_t counter;                                      \
-if (counter++ > 1000) {                                       \
+#define LOG_ERROR_SLOW(logger, ...) \
+do { \
+static uint32_t counter; \
+if (counter++ > 1000) { \
 logger.error_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
-counter = 0;                                                \
-}                                                             \
+std::format(__VA_ARGS__)); \
+counter = 0; \
+} \
 } while (0)
 }
 // namespace logging
@@ -15118,9 +15118,9 @@ uint64_t m_secs;
 };
 static inline nanoseconds get_current_time() {
 // epoch in chrono::tai is 1958-01-01 00:00:00.
-// for PTP/SMPTE we need an epoch of  1970-01-01
+// for PTP/SMPTE we need an epoch of 1970-01-01
 // THis means adding 12 years to the chono
-// For TAI a day is exactly  86,400 seconds.
+// For TAI a day is exactly 86,400 seconds.
 const auto tai_now = std::chrono::tai_clock::now().time_since_epoch();
 const auto secs_too_much = std::chrono::seconds(TAI_SECS_PER_DAY * DAYS_PER_YEAR * YEARS_DIFFERENCE_TO_PTP_EPOCH);
 const auto tai_adjusted = tai_now - secs_too_much;
@@ -16298,45 +16298,45 @@ bool m_debug = true;
 bool m_info = true;
 };
 const char *strip_prefix(const char *path);
-#define LOG_DEBUG(logger, ...)                                  \
-if (logger.enable_debug()) {                                  \
+#define LOG_DEBUG(logger, ...) \
+if (logger.enable_debug()) { \
 logger.debug_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
+std::format(__VA_ARGS__)); \
 }
-#define LOG_INFO(logger, ...)                                  \
-if (logger.enable_info()) {                                  \
+#define LOG_INFO(logger, ...) \
+if (logger.enable_info()) { \
 logger.info_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
+std::format(__VA_ARGS__)); \
 }
-#define LOG_INFO_ONCE(logger, ...)                               \
-do {                                                           \
-static bool init_once;                                       \
-if (logger.enable_info() && !init_once) {                    \
+#define LOG_INFO_ONCE(logger, ...) \
+do { \
+static bool init_once; \
+if (logger.enable_info() && !init_once) { \
 logger.info_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
-init_once = true;                                          \
-}                                                            \
+std::format(__VA_ARGS__)); \
+init_once = true; \
+} \
 } while (0)
 #define LOG_ERROR(logger, ...) \
-logger.error_msg(            \
+logger.error_msg( \
 __LINE__, logging::strip_prefix(__FILE__), std::format(__VA_ARGS__))
-#define LOG_ERROR_ONCE(logger, ...)                               \
-do {                                                            \
-static bool init_once;                                        \
-if (!init_once) {                                             \
+#define LOG_ERROR_ONCE(logger, ...) \
+do { \
+static bool init_once; \
+if (!init_once) { \
 logger.error_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
-init_once = true;                                           \
-}                                                             \
+std::format(__VA_ARGS__)); \
+init_once = true; \
+} \
 } while (0)
-#define LOG_ERROR_SLOW(logger, ...)                               \
-do {                                                            \
-static uint32_t counter;                                      \
-if (counter++ > 1000) {                                       \
+#define LOG_ERROR_SLOW(logger, ...) \
+do { \
+static uint32_t counter; \
+if (counter++ > 1000) { \
 logger.error_msg(__LINE__, logging::strip_prefix(__FILE__), \
-std::format(__VA_ARGS__));                 \
-counter = 0;                                                \
-}                                                             \
+std::format(__VA_ARGS__)); \
+counter = 0; \
+} \
 } while (0)
 }
 // namespace logging
@@ -16532,9 +16532,9 @@ uint64_t m_secs;
 };
 static inline nanoseconds get_current_time() {
 // epoch in chrono::tai is 1958-01-01 00:00:00.
-// for PTP/SMPTE we need an epoch of  1970-01-01
+// for PTP/SMPTE we need an epoch of 1970-01-01
 // THis means adding 12 years to the chono
-// For TAI a day is exactly  86,400 seconds.
+// For TAI a day is exactly 86,400 seconds.
 const auto tai_now = std::chrono::tai_clock::now().time_since_epoch();
 const auto secs_too_much = std::chrono::seconds(TAI_SECS_PER_DAY * DAYS_PER_YEAR * YEARS_DIFFERENCE_TO_PTP_EPOCH);
 const auto tai_adjusted = tai_now - secs_too_much;

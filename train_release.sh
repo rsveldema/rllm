@@ -140,11 +140,12 @@ echo "--- Starting training ---"
      --filter preprocessor \
      --filter effective \
      --filter modern \
+     --filter esched \
      --method random_line_random_len \
      --epochs 20 \
      --layers 3 \
      --checkpoint-interval 120 \
-     --learn-depth 100 \
+     --learn-depth 1 \
      --learning-rate 0.0003 \
      --micro-batch-size 16 \
      --vulkan-device R9700
