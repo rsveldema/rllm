@@ -183,12 +183,15 @@ namespace rllm
     //   FFDimension::MAX      = D_MODEL * 4              = 2048
     //
     // All weight matrices are stored [out × in] row-major on the heap.
-    // Optimizer: SGD + momentum (β=0.9), gradient clip ±1, vel clip ±0.1, weight clamp ±2.
+    // Optimizer: AdamW with clipped gradients and decoupled weight decay.
     class TransformerBlock
     {
       public:
         // Optimizer hyper-parameters
-        static constexpr float MOMENTUM_BETA = 0.9f;
+        static constexpr float ADAM_BETA1 = 0.9f;
+        static constexpr float ADAM_BETA2 = 0.999f;
+        static constexpr float ADAM_EPSILON = 1e-8f;
+        static constexpr float WEIGHT_DECAY = 0.01f;
         static constexpr float GRAD_CLIP = 1.0f;
         static constexpr float VEL_CLIP = 0.1f;
         static constexpr float WEIGHT_CLAMP = 2.0f;
@@ -222,7 +225,7 @@ namespace rllm
             backward(dout, din, workspace, fwd_workspace);
         }
         void accumulate_gradients(const BackwardWorkspace& workspace, TransformerGradientAccumulator& accumulator);
-        void apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate);
+        void apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
 
         void randomize();
 
@@ -281,14 +284,17 @@ namespace rllm
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
         fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> S_q, S_k, S_v, S_o;
 
         // SwiGLU FFN:
         //   gate, up:  [FFDimension::MAX    × D_MODEL]  (out × in)
         //   down:      [D_MODEL × FFDimension::MAX   ]  (out × in)
         fixed_size_matrix<float16, FFDimension, EmbeddingDimension> W_gate, W_up;
         fixed_size_matrix<float, FFDimension, EmbeddingDimension> V_gate, V_up;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> S_gate, S_up;
         fixed_size_matrix<float16, EmbeddingDimension, FFDimension> W_down;
         fixed_size_matrix<float, EmbeddingDimension, FFDimension> V_down;
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension> S_down;
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
         static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y);

@@ -61,7 +61,7 @@ namespace rllm
         // NOTE: if set too high, we drive a specific example to high confidence but fail to learn from other examples, harming generalization.
         static constexpr float k_convergence_divisor = 2.0f;
         static constexpr size_t DEFAULT_LEARN_DEPTH = 16;
-        static constexpr float DEFAULT_LEARNING_RATE = 0.003f;
+        static constexpr float DEFAULT_LEARNING_RATE = 0.0003f;
 
         TextTrainer(size_t num_layers, Corpus& corpus, Statistics& stats);
         ~TextTrainer();
@@ -164,13 +164,20 @@ namespace rllm
             MultiTokenPredictionIndex num_valid,
             TrainingStepTiming* timing = nullptr
         );
-        float evaluate_average_loss(const std::vector<CpuInputLine>& evaluation_lines);
+        struct EvaluationMetrics
+        {
+            float average_loss = 0.0f;
+            double perplexity = 0.0;
+            double average_correct_token_probability = 0.0;
+        };
+        EvaluationMetrics evaluate(const std::vector<CpuInputLine>& evaluation_lines);
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
         int m_window_size = 2;
         size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
         float m_learning_rate = DEFAULT_LEARNING_RATE;
         size_t m_micro_batch_size = 1;
+        size_t m_optimizer_step = 0;
 
         void train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations);

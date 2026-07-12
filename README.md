@@ -173,3 +173,13 @@ NAN_FINDING_MODE activation scans now use sane bounds:InputLayer hidden state: [
 input gradient: [-10000, 10000]
 TextTrainer hidden states / h_last: [-10000, 10000]
 OutputLayer logits: [-1000000, 1000000]
+
+--- Training
+During training, what matters is the trend:
+Validation loss continues falling: training is working.
+The validation loss is logged after each epoch.
+
+Training loss falls but validation stays near 5.1: overfitting or distribution mismatch.
+Validation rises for several epochs: the learning rate may be too high or training is overfitting.
+Validation settles substantially below 3: predictions are becoming useful.
+Below 2 would be strong for this corpus, though achievable loss depends heavily on ambiguous prefixes.

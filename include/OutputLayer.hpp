@@ -23,6 +23,17 @@ namespace rllm
         fixed_size_matrix<float, BatchIndex, TokenID> logits;
         fixed_size_matrix<float, BatchIndex, TokenID> delta;
         fixed_size_matrix<float, BatchIndex, EmbeddingDimension> dh_last;
+        fixed_size_matrix<float, BatchIndex, TempStorage> softmax_temp;
+        fixed_size_vector<int, BatchIndex> expected_tokens;
+        fixed_size_vector<int, BatchIndex> active_examples;
+        fixed_size_vector<float, BatchIndex> losses;
+
+        BatchedOutputWorkspace()
+        {
+            expected_tokens.set_size(BatchIndex::MAX);
+            active_examples.set_size(BatchIndex::MAX);
+            losses.set_size(BatchIndex::MAX);
+        }
     };
 
     void output_layer_forward_from_hidden_impl(
@@ -40,7 +51,10 @@ namespace rllm
     class OutputLayer
     {
       public:
-        static constexpr float MOMENTUM_BETA = 0.9f;
+        static constexpr float ADAM_BETA1 = 0.9f;
+        static constexpr float ADAM_BETA2 = 0.999f;
+        static constexpr float ADAM_EPSILON = 1e-8f;
+        static constexpr float WEIGHT_DECAY = 0.01f;
         static constexpr float GRAD_CLIP = 1.0f;
         static constexpr float VEL_CLIP = 0.1f;
         static constexpr float WEIGHT_CLAMP = 2.0f;
@@ -86,8 +100,14 @@ namespace rllm
             fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
             OutputLayerGradientAccumulator& accumulator
         );
+        void compute_batched_delta(
+            const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+            BatchIndex batch_size,
+            BatchedOutputWorkspace& workspace,
+            VulkanQueue& queue
+        );
 
-        void apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate);
+        void apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
 
         // Computes softmax deltas (with label smoothing) into score for backprop,
         // and returns the cross-entropy loss -log(softmax[target]).
@@ -120,7 +140,8 @@ namespace rllm
 
         // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> W_lm_head;
-        fixed_size_matrix<float, TokenID, EmbeddingDimension> V_lm_head; // SGD momentum velocities
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> V_lm_head; // Adam first moment
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> S_lm_head; // Adam second moment
     };
 
 } // namespace rllm

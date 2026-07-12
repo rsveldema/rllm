@@ -155,10 +155,11 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         auto flag = make_nan_scan_flag(queue);
         scan_output_layer_weight_matrix(W_lm_head, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
-        scan_output_layer_velocity_matrix(V_lm_head, flag, -VEL_CLIP, VEL_CLIP);
+        scan_output_layer_velocity_matrix(V_lm_head, flag, -GRAD_CLIP, GRAD_CLIP);
+        scan_output_layer_velocity_matrix(S_lm_head, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
         if (nan_scan_failed(queue, flag))
         {
-            std::fprintf(stderr, "NAN_FINDING_MODE: OutputLayer weights/velocities invalid during %s\n", phase);
+            std::fprintf(stderr, "NAN_FINDING_MODE: OutputLayer weights/Adam moments invalid during %s\n", phase);
             std::abort();
         }
     }
@@ -363,22 +364,26 @@ namespace rllm
     }
 
     static void update_output_layer_weights_from_gradient(
-        // OFFLOAD_PARAMETERS(dW, W, V, learning_rate)
+        // OFFLOAD_PARAMETERS(dW, W, V, S, learning_rate, bias_correction1, bias_correction2)
         const fixed_size_matrix<float, TokenID, EmbeddingDimension>& dW,
         fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
         fixed_size_matrix<float, TokenID, EmbeddingDimension>& V,
-        float learning_rate
+        fixed_size_matrix<float, TokenID, EmbeddingDimension>& S,
+        float learning_rate,
+        float bias_correction1,
+        float bias_correction2
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, W, V, learning_rate))
+        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, W, V, S, learning_rate, bias_correction1, bias_correction2))
         const float g = math::clamp(dW[v, d], -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
-        const float raw_v = ((OutputLayer::MOMENTUM_BETA * V[v, d]) + (learning_rate * g));
-        V[v, d] = math::clamp(raw_v, -OutputLayer::VEL_CLIP, OutputLayer::VEL_CLIP);
-        const float raw_w = (W[v, d] + V[v, d]);
-        W[v, d] = math::clamp(raw_w, -OutputLayer::WEIGHT_CLAMP, OutputLayer::WEIGHT_CLAMP);
+        V[v, d] = ((OutputLayer::ADAM_BETA1 * V[v, d]) + ((1.0f - OutputLayer::ADAM_BETA1) * g));
+        S[v, d] = ((OutputLayer::ADAM_BETA2 * S[v, d]) + ((1.0f - OutputLayer::ADAM_BETA2) * (g * g)));
+        const float update = ((V[v, d] / bias_correction1) / (sqrt((S[v, d] / bias_correction2)) + OutputLayer::ADAM_EPSILON));
+        const float decayed = (static_cast<float>(W[v, d]) * (1.0f - (learning_rate * OutputLayer::WEIGHT_DECAY)));
+        W[v, d] = math::clamp((decayed + (learning_rate * update)), -OutputLayer::WEIGHT_CLAMP, OutputLayer::WEIGHT_CLAMP);
         ENDFOR
     }
 
@@ -477,6 +482,7 @@ namespace rllm
             auto& queue = rllm::vulkan_runtime::get_queue(0);
             W_lm_head.copy_from_cpu(queue, cpu_tmp);
             V_lm_head.zero(queue);
+            S_lm_head.zero(queue);
         }
     }
 
@@ -527,6 +533,108 @@ namespace rllm
         output_layer_forward_batched_impl(queue, h_last, W_lm_head, logits, static_cast<int>(batch_size));
     }
 
+    static void initialize_batched_softmax(
+        // OFFLOAD_PARAMETERS(temp, losses, batch_size)
+        fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
+        fixed_size_vector<float, BatchIndex>& losses,
+        int batch_size
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<BatchIndex, TempStorage>(static_cast<BatchIndex>(batch_size));
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, slot, grid, (temp, losses, batch_size))
+        temp[batch, slot] = (slot == TempStorage::START) ? -3.402823e38f : 0.0f;
+        if (slot == TempStorage::START)
+            losses[batch] = 3.402823e38f;
+        ENDFOR
+    }
+
+    static void reduce_batched_logits_max(
+        // OFFLOAD_PARAMETERS(logits, temp, active_examples, batch_size)
+        const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+        fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
+        const fixed_size_vector<int, BatchIndex>& active_examples,
+        int batch_size
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, temp, active_examples, batch_size))
+        if (active_examples[batch] != 0)
+            atomicMax(temp[batch, TempStorage::START], logits[batch, token]);
+        ENDFOR
+    }
+
+    static void compute_batched_exp_sum(
+        // OFFLOAD_PARAMETERS(logits, delta, temp, active_examples, batch_size)
+        const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+        fixed_size_matrix<float, BatchIndex, TokenID>& delta,
+        fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
+        const fixed_size_vector<int, BatchIndex>& active_examples,
+        int batch_size
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, delta, temp, active_examples, batch_size))
+        if (active_examples[batch] != 0)
+        {
+            const float value = exp((logits[batch, token] - temp[batch, TempStorage::START]));
+            delta[batch, token] = value;
+            atomicAdd(temp[batch, static_cast<TempStorage>(1)], value);
+        }
+        else
+            delta[batch, token] = 0.0f;
+        ENDFOR
+    }
+
+    static void finalize_batched_softmax_delta(
+        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_tokens, active_examples, losses, batch_size)
+        const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+        fixed_size_matrix<float, BatchIndex, TokenID>& delta,
+        const fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
+        const fixed_size_vector<int, BatchIndex>& expected_tokens,
+        const fixed_size_vector<int, BatchIndex>& active_examples,
+        fixed_size_vector<float, BatchIndex>& losses,
+        int batch_size
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, delta, temp, expected_tokens, active_examples, losses, batch_size))
+        if (active_examples[batch] != 0)
+        {
+            const float sum_exp = temp[batch, static_cast<TempStorage>(1)];
+            float value = (OutputLayer::smooth - (delta[batch, token] / sum_exp));
+            if (static_cast<int>(token) == expected_tokens[batch])
+            {
+                value += (1.0f - OutputLayer::LABEL_SMOOTHING);
+                losses[batch] = -((logits[batch, token] - temp[batch, TempStorage::START]) - log(sum_exp));
+            }
+            delta[batch, token] = value;
+        }
+        ENDFOR
+    }
+
+    void OutputLayer::compute_batched_delta(
+        const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+        BatchIndex batch_size,
+        BatchedOutputWorkspace& workspace,
+        VulkanQueue& queue)
+    {
+        (void) queue;
+        const int count = static_cast<int>(batch_size);
+        initialize_batched_softmax(workspace.softmax_temp, workspace.losses, count);
+        reduce_batched_logits_max(logits, workspace.softmax_temp, workspace.active_examples, count);
+        compute_batched_exp_sum(logits, workspace.delta, workspace.softmax_temp, workspace.active_examples, count);
+        finalize_batched_softmax_delta(logits, workspace.delta, workspace.softmax_temp,
+            workspace.expected_tokens, workspace.active_examples, workspace.losses, count);
+    }
+
     void OutputLayer::backward_batched_accumulate(
         const fixed_size_matrix<float, BatchIndex, TokenID>& delta,
         const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
@@ -540,12 +648,12 @@ namespace rllm
         accumulator.touched = true;
     }
 
-    void OutputLayer::apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate)
+    void OutputLayer::apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2)
     {
         if (!accumulator.touched)
             return;
         check_nan_finding_mode("apply_accumulated_update:start");
-        update_output_layer_weights_from_gradient(accumulator.dW_lm_head, W_lm_head, V_lm_head, learning_rate * LM_HEAD_LEARNING_RATE_SCALE);
+        update_output_layer_weights_from_gradient(accumulator.dW_lm_head, W_lm_head, V_lm_head, S_lm_head, learning_rate, bias_correction1, bias_correction2);
         check_nan_finding_mode("apply_accumulated_update:end");
     }
 

@@ -461,14 +461,17 @@ namespace rllm
     void TextTrainer::apply_accumulated_gradients(float learning_rate_scale)
     {
         const float learning_rate = (m_learning_rate * learning_rate_scale) / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
+        ++m_optimizer_step;
+        const float bias_correction1 = 1.0f - std::pow(TransformerBlock::ADAM_BETA1, static_cast<float>(m_optimizer_step));
+        const float bias_correction2 = 1.0f - std::pow(TransformerBlock::ADAM_BETA2, static_cast<float>(m_optimizer_step));
 
         for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
-            m_output_layers[oi].apply_accumulated_update(m_gradient_accumulation_workspace->output_layers[oi], learning_rate);
+            m_output_layers[oi].apply_accumulated_update(m_gradient_accumulation_workspace->output_layers[oi], learning_rate, bias_correction1, bias_correction2);
 
         for (size_t i = 0; i < m_transformer_blocks.size(); ++i)
-            m_transformer_blocks[i].apply_accumulated_update(m_gradient_accumulation_workspace->transformer_blocks[i], learning_rate);
+            m_transformer_blocks[i].apply_accumulated_update(m_gradient_accumulation_workspace->transformer_blocks[i], learning_rate, bias_correction1, bias_correction2);
 
-        m_input_layer.apply_accumulated_update(m_gradient_accumulation_workspace->embeddings, learning_rate);
+        m_input_layer.apply_accumulated_update(m_gradient_accumulation_workspace->embeddings, learning_rate, bias_correction1, bias_correction2);
     }
 
     TextTrainer::TextTrainer(size_t num_layers, Corpus& corpus, Statistics& stats)
@@ -584,19 +587,24 @@ namespace rllm
     }
 
 
-    float TextTrainer::evaluate_average_loss(const std::vector<CpuInputLine>& evaluation_lines)
+    TextTrainer::EvaluationMetrics TextTrainer::evaluate(const std::vector<CpuInputLine>& evaluation_lines)
     {
         if (evaluation_lines.empty())
         {
             LOG_ERROR("evaluation lines are empty!!");
             std::abort();
-            return std::numeric_limits<float>::quiet_NaN();
+            return {
+                .average_loss = std::numeric_limits<float>::quiet_NaN(),
+                .perplexity = std::numeric_limits<double>::quiet_NaN(),
+                .average_correct_token_probability = std::numeric_limits<double>::quiet_NaN()
+            };
         }
 
         Score& score = m_evaluation_score;
         auto& queue = rllm::vulkan_runtime::get_queue(0);
 
         double total_loss = 0.0;
+        double total_correct_token_probability = 0.0;
         for (const auto& example : evaluation_lines)
         {
             const int seq_len = static_cast<int>(example.size());
@@ -609,6 +617,7 @@ namespace rllm
             propagate_forward();
 
             double example_loss = 0.0;
+            double example_correct_token_probability = 0.0;
             for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
             {
                 const auto target = mtp_target_for_head(example, input_len, head);
@@ -629,11 +638,20 @@ namespace rllm
                     std::abort();
                 }
                 example_loss += static_cast<double>(loss);
+                example_correct_token_probability += std::exp(-static_cast<double>(loss));
             }
-            total_loss += example_loss / static_cast<double>(static_cast<size_t>(num_valid_heads));
+            const double head_count = static_cast<double>(static_cast<size_t>(num_valid_heads));
+            total_loss += example_loss / head_count;
+            total_correct_token_probability += example_correct_token_probability / head_count;
         }
 
-        return static_cast<float>(total_loss / static_cast<double>(evaluation_lines.size()));
+        const double line_count = static_cast<double>(evaluation_lines.size());
+        const double average_loss = total_loss / line_count;
+        return {
+            .average_loss = static_cast<float>(average_loss),
+            .perplexity = std::exp(average_loss),
+            .average_correct_token_probability = total_correct_token_probability / line_count
+        };
     }
 
     void TextTrainer::train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations)
@@ -820,8 +838,16 @@ namespace rllm
 
             if (!validation_lines.empty())
             {
-                const float validation_loss = evaluate_average_loss(validation_lines);
-                LOG_INFO("epoch {} validation loss: {:.6f} across {} held-out lines", epoch, validation_loss, validation_lines.size());
+                const auto validation = evaluate(validation_lines);
+                const float validation_loss = validation.average_loss;
+                LOG_INFO(
+                    "epoch {} validation: loss {:.6f}, perplexity {:.2f} (effective number of equally likely next-token choices; lower is better), average correct-token probability {:.3f}% across {} held-out lines",
+                    epoch,
+                    validation_loss,
+                    validation.perplexity,
+                    validation.average_correct_token_probability * 100.0,
+                    validation_lines.size()
+                );
 
                 if ((validation_loss + VALIDATION_IMPROVEMENT_EPSILON) < best_validation_loss)
                 {

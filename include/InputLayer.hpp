@@ -76,7 +76,7 @@ namespace rllm
             EmbeddingGradientAccumulator& accumulator
         );
 
-        void apply_accumulated_update(EmbeddingGradientAccumulator& accumulator, float learning_rate);
+        void apply_accumulated_update(EmbeddingGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
 
         void set_random_embeddings();
 
@@ -97,6 +97,8 @@ namespace rllm
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> m_embeddings;
         // CPU-side copy used for gradient updates and serialization.
         cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> m_embeddings_cpu;
+        cpu_fixed_matrix<float, TokenID, EmbeddingDimension> m_adam_first;
+        cpu_fixed_matrix<float, TokenID, EmbeddingDimension> m_adam_second;
 
         void reset_embeddings();
 

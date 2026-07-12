@@ -62,6 +62,8 @@ namespace rllm
 
     void InputLayer::load(const nlohmann::json& j)
     {
+        m_adam_first.zero();
+        m_adam_second.zero();
         if (!j.contains("embeddings"))
             return;
 
@@ -90,6 +92,7 @@ namespace rllm
             W_lm_head.copy_from_cpu(queue, w_lm_head_cpu);
         }
         V_lm_head.zero(queue);
+        S_lm_head.zero(queue);
     }
 
     nlohmann::json OutputLayer::save() const
@@ -109,6 +112,7 @@ namespace rllm
 
     bool TextTrainer::load(const std::string& filename)
     {
+        m_optimizer_step = 0;
         if (is_safetensors_model_filename(filename))
             return load_from_safetensors(filename);
 
@@ -336,6 +340,8 @@ namespace rllm
 
     void InputLayer::load_from_safetensors(const std::string& filename, std::string* err)
     {
+        m_adam_first.zero();
+        m_adam_second.zero();
         safetensors::safetensors_t st;
         if (!safetensors::load_from_file(filename, &st, nullptr, err))
         {
@@ -394,6 +400,13 @@ namespace rllm
         V_gate.zero(queue);
         V_up.zero(queue);
         V_down.zero(queue);
+        S_q.zero(queue);
+        S_k.zero(queue);
+        S_v.zero(queue);
+        S_o.zero(queue);
+        S_gate.zero(queue);
+        S_up.zero(queue);
+        S_down.zero(queue);
     }
 
     void TransformerBlock::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
@@ -436,6 +449,7 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_inputs.zero(queue);
         V_lm_head.zero(queue);
+        S_lm_head.zero(queue);
     }
 
     void OutputLayer::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
@@ -515,6 +529,7 @@ namespace rllm
 
     bool TextTrainer::load_from_safetensors(const std::string& filename)
     {
+        m_optimizer_step = 0;
         safetensors::safetensors_t st;
         std::string warn, ere;
         if (!safetensors::load_from_file(filename, &st, &warn, &ere))

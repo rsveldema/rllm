@@ -263,22 +263,29 @@ namespace rllm
         scan_embedding_embedding_weight_matrix(W_k, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
         scan_embedding_embedding_weight_matrix(W_v, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
         scan_embedding_embedding_weight_matrix(W_o, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
-        scan_embedding_embedding_velocity_matrix(V_q, flag, -VEL_CLIP, VEL_CLIP);
-        scan_embedding_embedding_velocity_matrix(V_k, flag, -VEL_CLIP, VEL_CLIP);
-        scan_embedding_embedding_velocity_matrix(V_v, flag, -VEL_CLIP, VEL_CLIP);
-        scan_embedding_embedding_velocity_matrix(V_o, flag, -VEL_CLIP, VEL_CLIP);
+        scan_embedding_embedding_velocity_matrix(V_q, flag, -GRAD_CLIP, GRAD_CLIP);
+        scan_embedding_embedding_velocity_matrix(V_k, flag, -GRAD_CLIP, GRAD_CLIP);
+        scan_embedding_embedding_velocity_matrix(V_v, flag, -GRAD_CLIP, GRAD_CLIP);
+        scan_embedding_embedding_velocity_matrix(V_o, flag, -GRAD_CLIP, GRAD_CLIP);
+        scan_embedding_embedding_velocity_matrix(S_q, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        scan_embedding_embedding_velocity_matrix(S_k, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        scan_embedding_embedding_velocity_matrix(S_v, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        scan_embedding_embedding_velocity_matrix(S_o, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
 
         scan_ff_embedding_weight_matrix(W_gate, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
         scan_ff_embedding_weight_matrix(W_up, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
-        scan_ff_embedding_velocity_matrix(V_gate, flag, -VEL_CLIP, VEL_CLIP);
-        scan_ff_embedding_velocity_matrix(V_up, flag, -VEL_CLIP, VEL_CLIP);
+        scan_ff_embedding_velocity_matrix(V_gate, flag, -GRAD_CLIP, GRAD_CLIP);
+        scan_ff_embedding_velocity_matrix(V_up, flag, -GRAD_CLIP, GRAD_CLIP);
+        scan_ff_embedding_velocity_matrix(S_gate, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        scan_ff_embedding_velocity_matrix(S_up, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
 
         scan_embedding_ff_weight_matrix(W_down, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
-        scan_embedding_ff_velocity_matrix(V_down, flag, -VEL_CLIP, VEL_CLIP);
+        scan_embedding_ff_velocity_matrix(V_down, flag, -GRAD_CLIP, GRAD_CLIP);
+        scan_embedding_ff_velocity_matrix(S_down, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
 
         if (nan_scan_failed(queue, flag))
         {
-            std::fprintf(stderr, "NAN_FINDING_MODE: TransformerBlock weights/velocities invalid during %s\n", phase);
+            std::fprintf(stderr, "NAN_FINDING_MODE: TransformerBlock weights/Adam moments invalid during %s\n", phase);
             std::abort();
         }
     }
@@ -441,6 +448,13 @@ namespace rllm
         V_gate.zero(queue);
         V_up.zero(queue);
         V_down.zero(queue);
+        S_q.zero(queue);
+        S_k.zero(queue);
+        S_v.zero(queue);
+        S_o.zero(queue);
+        S_gate.zero(queue);
+        S_up.zero(queue);
+        S_down.zero(queue);
     }
 
     // ── normalisation ──────────────────────────────────────────────────────────
@@ -577,7 +591,7 @@ namespace rllm
         ENDFOR
     }
 
-    // ── SGD + momentum ─────────────────────────────────────────────────────────
+    // ── AdamW optimizer state ──────────────────────────────────────────────────
 
     // ── destructor ────────────────────────────────────────────────────────────
     // Defined here so ForwardWorkspace is complete when unique_ptr deleter fires.
@@ -1292,17 +1306,18 @@ namespace rllm
         accumulator.touched = true;
     }
 
-    void TransformerBlock::apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate)
+    void TransformerBlock::apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2)
     {
         if (!accumulator.touched)
             return;
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
-        sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(queue, W_q, V_q, accumulator.dW_q, W_k, V_k, accumulator.dW_k, W_v, V_v, accumulator.dW_v, W_o, V_o, accumulator.dW_o, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
-        queue.wait("TransformerBlock accumulated qkvo wait idle");
-        sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(queue, W_gate, V_gate, accumulator.dW_gate, W_up, V_up, accumulator.dW_up, learning_rate * EMBEDDING_LEARNING_RATE_SCALE);
-        queue.wait("TransformerBlock accumulated gateup wait idle");
-        sgd_update_Wdown_x_Vdown_dWdown(queue, W_down, V_down, accumulator.dW_down, learning_rate * FF_LEARNING_RATE_SCALE);
-        queue.wait("TransformerBlock accumulated down wait idle");
+        const float embedding_lr = learning_rate;
+        adamw_update(W_q, V_q, S_q, accumulator.dW_q, embedding_lr, bias_correction1, bias_correction2);
+        adamw_update(W_k, V_k, S_k, accumulator.dW_k, embedding_lr, bias_correction1, bias_correction2);
+        adamw_update(W_v, V_v, S_v, accumulator.dW_v, embedding_lr, bias_correction1, bias_correction2);
+        adamw_update(W_o, V_o, S_o, accumulator.dW_o, embedding_lr, bias_correction1, bias_correction2);
+        adamw_update(W_gate, V_gate, S_gate, accumulator.dW_gate, embedding_lr, bias_correction1, bias_correction2);
+        adamw_update(W_up, V_up, S_up, accumulator.dW_up, embedding_lr, bias_correction1, bias_correction2);
+        adamw_update(W_down, V_down, S_down, accumulator.dW_down, learning_rate, bias_correction1, bias_correction2);
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────
@@ -1364,6 +1379,13 @@ namespace rllm
         V_gate.zero(queue);
         V_up.zero(queue);
         V_down.zero(queue);
+        S_q.zero(queue);
+        S_k.zero(queue);
+        S_v.zero(queue);
+        S_o.zero(queue);
+        S_gate.zero(queue);
+        S_up.zero(queue);
+        S_down.zero(queue);
     }
 
 } // namespace rllm

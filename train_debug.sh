@@ -137,7 +137,7 @@ echo "--- Starting training ---"
      --layers 4 \
      --checkpoint-interval 30 \
      --learn-depth 20 \
-     --learning-rate 0.03
+     --learning-rate 0.0003
 
 # ./build/rllm --train -i models/start.json \
 #     -o models/after_training.json \

@@ -99,109 +99,72 @@ namespace rllm
         ENDFOR
     }
 
-    void sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr)
-        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W1,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel1,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& grad1,
-        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W2,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel2,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& grad2,
-        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W3,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel3,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& grad3,
-        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W4,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel4,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& grad4,
-        float lr
+    void adamw_update(
+        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2)
+        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& weight,
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& first,
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& second,
+        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient,
+        float learning_rate, float bias_correction1, float bias_correction2
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr))
-        const float raw_g1 = grad1[r, c];
-        const float g1 = math::clamp(raw_g1, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        const float raw_v1 = ((TransformerBlock::MOMENTUM_BETA * vel1[r, c]) + (lr * g1));
-        vel1[r, c] = math::clamp(raw_v1, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
-        const float raw_w1 = (W1[r, c] + vel1[r, c]);
-        W1[r, c] = math::clamp(raw_w1, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
-
-        const float raw_g2 = grad2[r, c];
-        const float g2 = math::clamp(raw_g2, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        const float raw_v2 = ((TransformerBlock::MOMENTUM_BETA * vel2[r, c]) + (lr * g2));
-        vel2[r, c] = math::clamp(raw_v2, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
-        const float raw_w2 = (W2[r, c] + vel2[r, c]);
-        W2[r, c] = math::clamp(raw_w2, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
-
-        const float raw_g3 = grad3[r, c];
-        const float g3 = math::clamp(raw_g3, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        const float raw_v3 = ((TransformerBlock::MOMENTUM_BETA * vel3[r, c]) + (lr * g3));
-        vel3[r, c] = math::clamp(raw_v3, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
-        const float raw_w3 = (W3[r, c] + vel3[r, c]);
-        W3[r, c] = math::clamp(raw_w3, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
-
-        const float raw_g4 = grad4[r, c];
-        const float g4 = math::clamp(raw_g4, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        const float raw_v4 = ((TransformerBlock::MOMENTUM_BETA * vel4[r, c]) + (lr * g4));
-        vel4[r, c] = math::clamp(raw_v4, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
-        const float raw_w4 = (W4[r, c] + vel4[r, c]);
-        W4[r, c] = math::clamp(raw_w4, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2))
+        const float g = math::clamp(gradient[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        first[r, c] = ((TransformerBlock::ADAM_BETA1 * first[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA1) * g));
+        second[r, c] = ((TransformerBlock::ADAM_BETA2 * second[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA2) * (g * g)));
+        const float update = ((first[r, c] / bias_correction1) / (sqrt((second[r, c] / bias_correction2)) + TransformerBlock::ADAM_EPSILON));
+        const float decayed = (static_cast<float>(weight[r, c]) * (1.0f - (learning_rate * TransformerBlock::WEIGHT_DECAY)));
+        weight[r, c] = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
         ENDFOR
     }
 
-    void sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, lr)
-        fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& W1,
-        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& vel1,
-        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& grad1,
-        fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& W2,
-        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& vel2,
-        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& grad2,
-        float lr
+    void adamw_update(
+        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2)
+        fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& weight,
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& first,
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& second,
+        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& gradient,
+        float learning_rate, float bias_correction1, float bias_correction2
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W1, vel1, grad1, W2, vel2, grad2, lr))
-        const float raw_g1 = grad1[r, c];
-        const float g1 = math::clamp(raw_g1, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        const float raw_v1 = ((TransformerBlock::MOMENTUM_BETA * vel1[r, c]) + (lr * g1));
-        vel1[r, c] = math::clamp(raw_v1, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
-        const float raw_w1 = (W1[r, c] + vel1[r, c]);
-        W1[r, c] = math::clamp(raw_w1, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
-
-        const float raw_g2 = grad2[r, c];
-        const float g2 = math::clamp(raw_g2, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        const float raw_v2 = ((TransformerBlock::MOMENTUM_BETA * vel2[r, c]) + (lr * g2));
-        vel2[r, c] = math::clamp(raw_v2, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
-        const float raw_w2 = (W2[r, c] + vel2[r, c]);
-        W2[r, c] = math::clamp(raw_w2, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2))
+        const float g = math::clamp(gradient[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        first[r, c] = ((TransformerBlock::ADAM_BETA1 * first[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA1) * g));
+        second[r, c] = ((TransformerBlock::ADAM_BETA2 * second[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA2) * (g * g)));
+        const float update = ((first[r, c] / bias_correction1) / (sqrt((second[r, c] / bias_correction2)) + TransformerBlock::ADAM_EPSILON));
+        const float decayed = (static_cast<float>(weight[r, c]) * (1.0f - (learning_rate * TransformerBlock::WEIGHT_DECAY)));
+        weight[r, c] = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
         ENDFOR
     }
 
-    void sgd_update_Wdown_x_Vdown_dWdown(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(W, vel, grad, lr)
-        fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& W,
-        fixed_size_matrix<float, EmbeddingDimension, FFDimension>& vel,
-        const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& grad,
-        float lr
+    void adamw_update(
+        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2)
+        fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& weight,
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension>& first,
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension>& second,
+        const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient,
+        float learning_rate, float bias_correction1, float bias_correction2
         // END_OFFLOAD_PARAMETERS
     )
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W, vel, grad, lr))
-        const float raw_g = grad[r, c];
-        const float g = math::clamp(raw_g, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-        const float raw_v = ((TransformerBlock::MOMENTUM_BETA * vel[r, c]) + (lr * g));
-        vel[r, c] = math::clamp(raw_v, -TransformerBlock::VEL_CLIP, TransformerBlock::VEL_CLIP);
-        const float raw_w = (W[r, c] + vel[r, c]);
-        W[r, c] = math::clamp(raw_w, -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2))
+        const float g = math::clamp(gradient[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        first[r, c] = ((TransformerBlock::ADAM_BETA1 * first[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA1) * g));
+        second[r, c] = ((TransformerBlock::ADAM_BETA2 * second[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA2) * (g * g)));
+        const float update = ((first[r, c] / bias_correction1) / (sqrt((second[r, c] / bias_correction2)) + TransformerBlock::ADAM_EPSILON));
+        const float decayed = (static_cast<float>(weight[r, c]) * (1.0f - (learning_rate * TransformerBlock::WEIGHT_DECAY)));
+        weight[r, c] = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
         ENDFOR
     }
 
-    /**
-     * @brief C1 = A × B1^T, C2 = A × B2^T, and C3 = A × B3^T for Q/K/V-style projections.
-     */
     void matmul_ABt_3_matrix_muls(
         // OFFLOAD_PARAMETERS(A,B1,C1,B2,C2,B3,C3)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,

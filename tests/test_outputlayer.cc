@@ -48,6 +48,46 @@ TEST(OutputLayerBatchTest, BatchedForwardMatchesIndependentForwards)
     }
 }
 
+TEST(OutputLayerBatchTest, BatchedDeltaAndLossStayOnDevice)
+{
+    using namespace rllm;
+    auto& queue = vulkan_runtime::get_queue(0);
+    OutputLayer layer;
+    BatchedOutputWorkspace workspace;
+
+    cpu_fixed_matrix<float, BatchIndex, TokenID> logits_cpu;
+    logits_cpu.zero();
+    workspace.logits.copy_from_cpu(queue, logits_cpu);
+
+    cpu_fixed_vector<int, BatchIndex> expected;
+    expected.push_back(1);
+    expected.push_back(0);
+    workspace.expected_tokens.copy_from_cpu(queue, expected);
+    cpu_fixed_vector<int, BatchIndex> active;
+    active.push_back(1);
+    active.push_back(0);
+    workspace.active_examples.copy_from_cpu(queue, active);
+
+    layer.compute_batched_delta(workspace.logits, static_cast<BatchIndex>(2), workspace, queue);
+
+    cpu_fixed_matrix<float, BatchIndex, TokenID> delta_cpu;
+    workspace.delta.copy_to_cpu(queue, delta_cpu);
+    cpu_fixed_vector<float, BatchIndex> losses_cpu;
+    losses_cpu.set_size(static_cast<BatchIndex>(2));
+    workspace.losses.copy_to_cpu(queue, losses_cpu);
+
+    const float uniform_probability = 1.0f / static_cast<float>(TokenID::MAX);
+    EXPECT_NEAR(losses_cpu[BatchIndex::START], std::log(static_cast<float>(TokenID::MAX)), 1e-4f);
+    for (const auto token : enum_iterator1D<TokenID>())
+    {
+        float expected_delta = OutputLayer::smooth - uniform_probability;
+        if (static_cast<int>(token) == 1)
+            expected_delta += 1.0f - OutputLayer::LABEL_SMOOTHING;
+        EXPECT_NEAR((delta_cpu[BatchIndex::START, token]), expected_delta, 1e-5f);
+        EXPECT_FLOAT_EQ((delta_cpu[static_cast<BatchIndex>(1), token]), 0.0f);
+    }
+}
+
 
 namespace
 {
@@ -415,7 +455,7 @@ TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
         dh_last.zero(test_queue());
         accumulator.reset(test_queue());
         layer.backward_accumulate(score.values, h_last, dh_last, accumulator);
-        layer.apply_accumulated_update(accumulator, 0.003f);
+        layer.apply_accumulated_update(accumulator, 0.0003f, 0.1f, 0.001f);
     }
 
     layer.forward_from_hidden(h_last, test_queue());

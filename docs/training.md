@@ -14,6 +14,13 @@ The release training script includes `training_data1/preprocessor.cpp` via the `
 
 Increasing the value makes each example train longer before the next example is visited. Lower values move through the corpus more quickly.
 
+After each epoch with validation enabled, training reports validation loss,
+perplexity, and the average probability assigned to the correct token.
+Perplexity is `exp(average loss)` and can be read as the effective number of
+equally likely next-token choices, so lower is better. Correct-token probability
+is the arithmetic mean of each evaluated target's softmax probability, so
+higher is better.
+
 For multi-token prediction, each example trains only the heads that have real future tokens. Short prefixes no longer train missing future heads toward `INVALID`.
 
 Training diagnostics render unknown, missing, or out-of-range token IDs as `<UNK>` instead of aborting while formatting a log line. `Corpus::get_line` returns `std::nullopt` for those sequences.
@@ -26,13 +33,22 @@ This is useful for faster validation/checkpoint feedback on large corpora. Windo
 
 ## Learning Rate
 
-`--learning-rate <R>` sets the base learning rate used during training. The binary default is `0.003`; the training scripts pass `0.03`.
+`--learning-rate <R>` sets the base learning rate used during training. The binary and training-script default for AdamW is `0.0003`.
 
 The effective per-update rate is divided by the number of transformer blocks, matching the previous hardcoded behavior.
 
-Dense projection updates additionally scale their weight updates by fan-in: the output LM head and transformer embedding projections scale by the embedding dimension, and the feed-forward down projection scales by the feed-forward dimension. Without that normalization, one example can shift downstream activations or logits by hundreds or thousands of times the base learning rate because every input dimension contributes to the same output value.
+All learned parameters use AdamW with `beta1=0.9`, `beta2=0.999`,
+`epsilon=1e-8`, and decoupled weight decay `0.01`. Gradients retain the existing
+clipping. The old SGD-specific fan-in learning-rate scaling is not applied,
+because AdamW normalizes updates by their second moment. Loading a checkpoint
+restores its weights and starts fresh Adam moment buffers and optimizer step;
+optimizer state is not serialized.
 
-Large values can still saturate the clipped output weights and produce losses around `38400`, which means the target logit is clamped far below another token. After fan-in scaling, `0.03` is a practical scripted default; use lower values such as `0.003` when debugging instability, and use higher values only with validation enabled.
+Large learning rates can still saturate the clipped weights and produce losses
+around `38400`, which means the target logit is clamped far below another
+token. Values inherited from the previous SGD configuration, such as `0.03`,
+are too large for AdamW; start with `0.0003` and use validation trends when
+tuning it.
 
 If a previous run saturated or learned bad prompt completions, start a new release run with `FRESH_START=1 ./train_release.sh` so the script does not resume from the bad `models/after_training.st`.
 

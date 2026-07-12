@@ -2,6 +2,7 @@
 #include "TextTrainerInternal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -124,44 +125,53 @@ namespace rllm
         VulkanQueue& queue, std::vector<float>& primary_losses, BatchTrainingTiming& timing)
     {
         const auto started = std::chrono::steady_clock::now();
+        std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> expected_by_head;
+        std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> active_by_head;
+        std::vector<MultiTokenPredictionIndex> head_order;
         for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>())
+            if (head != MultiTokenPredictionIndex::START)
+                head_order.push_back(head);
+        head_order.push_back(MultiTokenPredictionIndex::START);
+
+        for (const auto head : head_order)
+        {
+            auto& expected = expected_by_head[static_cast<size_t>(head)];
+            auto& active_flags = active_by_head[static_cast<size_t>(head)];
+            for (size_t active = 0; active < active_indices.size(); ++active)
+            {
+                const bool used = head < valid_heads[active];
+                active_flags.push_back(used ? 1 : 0);
+                if (!used)
+                {
+                    expected.push_back(0);
+                    continue;
+                }
+                const auto& line = batch[active_indices[active]].line;
+                expected.push_back(static_cast<int>(target_for_head(
+                    line, batch_input_len(static_cast<int>(line.size())), head)));
+            }
+        }
+
+        for (const auto head : head_order)
         {
             if (std::none_of(valid_heads.begin(), valid_heads.end(), [head](auto count) { return head < count; }))
                 continue;
             m_output_layers[head].forward_batched(m_batched_output_workspace->h_last, batch_size, m_batched_output_workspace->logits, queue);
-            cpu_fixed_matrix<float, BatchIndex, TokenID> logits;
-            m_batched_output_workspace->logits.copy_to_cpu(queue, logits);
-            cpu_fixed_matrix<float, BatchIndex, TokenID> delta;
-            delta.zero();
-            for (size_t active = 0; active < active_indices.size(); ++active)
-            {
-                if (head >= valid_heads[active])
-                    continue;
-                const auto& line = batch[active_indices[active]].line;
-                const int input_length = batch_input_len(static_cast<int>(line.size()));
-                const auto target = target_for_head(line, input_length, head);
-                const auto batch_index = static_cast<BatchIndex>(active);
-                float max_logit = -std::numeric_limits<float>::infinity();
-                for (const auto token : enum_iterator1D<TokenID>())
-                    max_logit = std::max(max_logit, logits[batch_index, token]);
-                double sum_exp = 0.0;
-                for (const auto token : enum_iterator1D<TokenID>())
-                    sum_exp += std::exp(static_cast<double>(logits[batch_index, token] - max_logit));
-                for (const auto token : enum_iterator1D<TokenID>())
-                {
-                    const float probability = static_cast<float>(std::exp(static_cast<double>(logits[batch_index, token] - max_logit)) / sum_exp);
-                    float value = OutputLayer::smooth - probability;
-                    if (token == target)
-                        value += 1.0f - OutputLayer::LABEL_SMOOTHING;
-                    delta.set(batch_index, token, value);
-                }
-                if (head == MultiTokenPredictionIndex::START)
-                    primary_losses[active] = -(logits[batch_index, target] - max_logit - static_cast<float>(std::log(sum_exp)));
-            }
-            m_batched_output_workspace->delta.copy_from_cpu(queue, delta);
+            m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected_by_head[static_cast<size_t>(head)]);
+            m_batched_output_workspace->active_examples.copy_from_cpu(queue, active_by_head[static_cast<size_t>(head)]);
+            m_output_layers[head].compute_batched_delta(
+                m_batched_output_workspace->logits, batch_size, *m_batched_output_workspace, queue);
             m_output_layers[head].backward_batched_accumulate(
                 m_batched_output_workspace->delta, m_batched_output_workspace->h_last, batch_size,
                 m_batched_output_workspace->dh_last, m_gradient_accumulation_workspace->output_layers[head]);
+            if (head == MultiTokenPredictionIndex::START)
+            {
+                cpu_fixed_vector<float, BatchIndex> losses;
+                losses.set_size(batch_size);
+                m_batched_output_workspace->losses.copy_to_cpu(queue, losses);
+                for (size_t active = 0; active < active_indices.size(); ++active)
+                    primary_losses[active] = losses[static_cast<BatchIndex>(active)];
+            }
         }
         timing.backward_output_ms += elapsed_ms(started);
     }
@@ -273,27 +283,29 @@ namespace rllm
         const size_t epoch_lines = std::min(epoch_size.value_or(lines.size()), lines.size());
         std::vector<size_t> indices(lines.size());
         std::iota(indices.begin(), indices.end(), 0);
-        std::stable_sort(indices.begin(), indices.end(), [&lines](size_t a, size_t b) {
-            return lines[a].size() == lines[b].size() ? a < b : lines[a].size() < lines[b].size();
+        auto selected_inputs = make_training_batch(lines, indices, 0, epoch_lines, rng);
+        std::stable_sort(selected_inputs.begin(), selected_inputs.end(), [](const auto& a, const auto& b) {
+            return a.line.size() < b.line.size();
         });
-        for (size_t start = 0; start < epoch_lines; start += m_micro_batch_size)
+        const size_t selected_lines = selected_inputs.size();
+        for (size_t start = 0; start < selected_lines; start += m_micro_batch_size)
         {
-            const size_t count = std::min(m_micro_batch_size, epoch_lines - start);
+            const size_t count = std::min(m_micro_batch_size, selected_lines - start);
             if (checkpoint_due(checkpointing_interval, last_checkpoint_at))
             {
-                LOG_INFO("Creating timed checkpoint at epoch: {}, line: {}, epoch lines todo: {}", epoch, start + 1, epoch_lines);
+                LOG_INFO("Creating timed checkpoint at epoch: {}, line: {}, epoch lines todo: {}", epoch, start + 1, selected_lines);
                 checkpoint();
             }
-            auto batch = make_training_batch(lines, indices, start, count, rng);
-            if (batch.empty())
-                continue;
+            std::vector<BatchTrainingItem> batch(
+                selected_inputs.begin() + static_cast<std::ptrdiff_t>(start),
+                selected_inputs.begin() + static_cast<std::ptrdiff_t>(start + count));
             const auto started = std::chrono::steady_clock::now();
             BatchTrainingTiming timing;
             const size_t iterations = train_batch_items(batch, m_learn_depth, timing);
             const double total_ms = elapsed_ms(started);
             LOG_INFO("Epoch[{}%] random-line[{}..{}]: {:0.2f}% done (micro-batch {}, avg {:.2f} ms/line, iterations total {}, avg {:.2f}/line, rounds {}, batch {:.2f} ms, forward {:.2f} ms, backward {:.2f} ms, apply {:.2f} ms, out {:.2f} ms, transformer {:.2f} ms, input {:.2f} ms)",
                 epoch / static_cast<float>(num_epochs) * 100.0f, start + 1, start + count,
-                static_cast<float>(start + count) / static_cast<float>(epoch_lines) * 100.0f,
+                static_cast<float>(start + count) / static_cast<float>(selected_lines) * 100.0f,
                 batch.size(), total_ms / batch.size(), iterations, static_cast<double>(iterations) / batch.size(),
                 timing.rounds, total_ms, timing.forward_ms, timing.backward_ms,
                 timing.apply_ms, timing.backward_output_ms, timing.backward_transformer_ms, timing.backward_input_ms);

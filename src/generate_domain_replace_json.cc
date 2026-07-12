@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
+#include <format>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -24,7 +25,7 @@ void append_enum_pair(std::vector<SearchReplace>& pairs, const std::string& key,
 
 void append_float_pair(std::vector<SearchReplace>& pairs, const std::string& key, float value)
 {
-    pairs.emplace_back(key, std::to_string(value));
+    pairs.emplace_back(key, std::format("{:.9g}", value));
 }
 
 void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
@@ -131,11 +132,17 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
 
 void append_transformer_block_constant_pairs(std::vector<SearchReplace>& pairs)
 {
-    append_float_pair(pairs, "TransformerBlock::MOMENTUM_BETA", rllm::TransformerBlock::MOMENTUM_BETA);
+    append_float_pair(pairs, "TransformerBlock::ADAM_BETA1", rllm::TransformerBlock::ADAM_BETA1);
+    append_float_pair(pairs, "TransformerBlock::ADAM_BETA2", rllm::TransformerBlock::ADAM_BETA2);
+    append_float_pair(pairs, "TransformerBlock::ADAM_EPSILON", rllm::TransformerBlock::ADAM_EPSILON);
+    append_float_pair(pairs, "TransformerBlock::WEIGHT_DECAY", rllm::TransformerBlock::WEIGHT_DECAY);
     append_float_pair(pairs, "TransformerBlock::GRAD_CLIP", rllm::TransformerBlock::GRAD_CLIP);
     append_float_pair(pairs, "TransformerBlock::VEL_CLIP", rllm::TransformerBlock::VEL_CLIP);
     append_float_pair(pairs, "TransformerBlock::WEIGHT_CLAMP", rllm::TransformerBlock::WEIGHT_CLAMP);
-    append_float_pair(pairs, "rllm::TransformerBlock::MOMENTUM_BETA", rllm::TransformerBlock::MOMENTUM_BETA);
+    append_float_pair(pairs, "rllm::TransformerBlock::ADAM_BETA1", rllm::TransformerBlock::ADAM_BETA1);
+    append_float_pair(pairs, "rllm::TransformerBlock::ADAM_BETA2", rllm::TransformerBlock::ADAM_BETA2);
+    append_float_pair(pairs, "rllm::TransformerBlock::ADAM_EPSILON", rllm::TransformerBlock::ADAM_EPSILON);
+    append_float_pair(pairs, "rllm::TransformerBlock::WEIGHT_DECAY", rllm::TransformerBlock::WEIGHT_DECAY);
     append_float_pair(pairs, "rllm::TransformerBlock::GRAD_CLIP", rllm::TransformerBlock::GRAD_CLIP);
     append_float_pair(pairs, "rllm::TransformerBlock::VEL_CLIP", rllm::TransformerBlock::VEL_CLIP);
     append_float_pair(pairs, "rllm::TransformerBlock::WEIGHT_CLAMP", rllm::TransformerBlock::WEIGHT_CLAMP);
@@ -143,7 +150,10 @@ void append_transformer_block_constant_pairs(std::vector<SearchReplace>& pairs)
 
 void append_output_layer_constant_pairs(std::vector<SearchReplace>& pairs)
 {
-    append_float_pair(pairs, "OutputLayer::MOMENTUM_BETA", rllm::OutputLayer::MOMENTUM_BETA);
+    append_float_pair(pairs, "OutputLayer::ADAM_BETA1", rllm::OutputLayer::ADAM_BETA1);
+    append_float_pair(pairs, "OutputLayer::ADAM_BETA2", rllm::OutputLayer::ADAM_BETA2);
+    append_float_pair(pairs, "OutputLayer::ADAM_EPSILON", rllm::OutputLayer::ADAM_EPSILON);
+    append_float_pair(pairs, "OutputLayer::WEIGHT_DECAY", rllm::OutputLayer::WEIGHT_DECAY);
     append_float_pair(pairs, "OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
     append_float_pair(pairs, "OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
     append_float_pair(pairs, "OutputLayer::WEIGHT_CLAMP", rllm::OutputLayer::WEIGHT_CLAMP);
@@ -152,7 +162,10 @@ void append_output_layer_constant_pairs(std::vector<SearchReplace>& pairs)
     append_float_pair(pairs, "OutputLayer::smooth", rllm::OutputLayer::smooth);
     append_float_pair(pairs, "OutputLayer::LABEL_SMOOTHING", rllm::OutputLayer::LABEL_SMOOTHING);
 
-    append_float_pair(pairs, "rllm::OutputLayer::MOMENTUM_BETA", rllm::OutputLayer::MOMENTUM_BETA);
+    append_float_pair(pairs, "rllm::OutputLayer::ADAM_BETA1", rllm::OutputLayer::ADAM_BETA1);
+    append_float_pair(pairs, "rllm::OutputLayer::ADAM_BETA2", rllm::OutputLayer::ADAM_BETA2);
+    append_float_pair(pairs, "rllm::OutputLayer::ADAM_EPSILON", rllm::OutputLayer::ADAM_EPSILON);
+    append_float_pair(pairs, "rllm::OutputLayer::WEIGHT_DECAY", rllm::OutputLayer::WEIGHT_DECAY);
     append_float_pair(pairs, "rllm::OutputLayer::GRAD_CLIP", rllm::OutputLayer::GRAD_CLIP);
     append_float_pair(pairs, "rllm::OutputLayer::VEL_CLIP", rllm::OutputLayer::VEL_CLIP);
     append_float_pair(pairs, "rllm::OutputLayer::WEIGHT_CLAMP", rllm::OutputLayer::WEIGHT_CLAMP);

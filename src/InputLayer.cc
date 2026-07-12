@@ -1,6 +1,7 @@
 #include <InputLayer.hpp>
 #include <RandomHelpers.hpp>
 #include <RuntimeConfig.hpp>
+#include <TransformerBlock.hpp>
 #include <cpu/cpu_flex_rows_matrix.hpp>
 #include <enum_iterator2D.hpp>
 #include <parallel.hpp>
@@ -214,6 +215,8 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_embeddings.zero(queue);
         m_embeddings_cpu.zero();
+        m_adam_first.zero();
+        m_adam_second.zero();
     }
 
     void InputLayer::set_random_embeddings()
@@ -402,7 +405,7 @@ namespace rllm
             m_updated_tokens[input.get(pos)] = 0;
     }
 
-    void InputLayer::apply_accumulated_update(EmbeddingGradientAccumulator& accumulator, float learning_rate)
+    void InputLayer::apply_accumulated_update(EmbeddingGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2)
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         check_nan_finding_mode_embeddings("apply_accumulated_update:start");
@@ -412,9 +415,16 @@ namespace rllm
                 continue;
             for (const auto di : enum_iterator1D<EmbeddingDimension>())
             {
+                const float gradient = accumulator.get(tok, di);
+                const float first = (TransformerBlock::ADAM_BETA1 * m_adam_first.get(tok, di)) + ((1.0f - TransformerBlock::ADAM_BETA1) * gradient);
+                const float second = (TransformerBlock::ADAM_BETA2 * m_adam_second.get(tok, di)) + ((1.0f - TransformerBlock::ADAM_BETA2) * gradient * gradient);
+                m_adam_first.set(tok, di, first);
+                m_adam_second.set(tok, di, second);
+                const float update = (first / bias_correction1) / (std::sqrt(second / bias_correction2) + TransformerBlock::ADAM_EPSILON);
+                const float decayed = static_cast<float>(m_embeddings_cpu.get(tok, di)) * (1.0f - learning_rate * TransformerBlock::WEIGHT_DECAY);
                 m_embeddings_cpu.set(tok, di,
                     math::clamp(
-                        static_cast<float>(m_embeddings_cpu.get(tok, di)) + learning_rate * accumulator.get(tok, di),
+                        decayed + learning_rate * update,
                         RLMM_NEG_ONE,
                         RLMM_ONE));
             }

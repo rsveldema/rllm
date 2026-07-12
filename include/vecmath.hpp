@@ -16,42 +16,9 @@ namespace rllm
         fixed_size_vector<float, EmbeddingDimension>& dst
     );
 
-    void sgd_update_Wqkvo_x_Vqkvo_dWqkvo__4_matrix(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, W3, vel3, grad3, W4, vel4, grad4, lr)
-        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W1,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel1,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& grad1,
-        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W2,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel2,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& grad2,
-        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W3,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel3,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& grad3,
-        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& W4,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& vel4,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& grad4,
-        float lr
-        // END_OFFLOAD_PARAMETERS
-    );
-
-    void sgd_update_Wgateup_x_Vgateup_dWgateup__2_matrix(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(W1, vel1, grad1, W2, vel2, grad2, lr)
-        fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& W1,
-        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& vel1,
-        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& grad1,
-        fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& W2,
-        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& vel2,
-        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& grad2,
-        float lr
-        // END_OFFLOAD_PARAMETERS
-    );
-
-    void sgd_update_Wdown_x_Vdown_dWdown(VulkanQueue& queue,
-        fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& W,
-        fixed_size_matrix<float, EmbeddingDimension, FFDimension>& vel,
-        const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& grad,
-        float lr
-    );
+    void adamw_update(fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& weight, fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& first, fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& second, const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient, float learning_rate, float bias_correction1, float bias_correction2);
+    void adamw_update(fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& weight, fixed_size_matrix<float, FFDimension, EmbeddingDimension>& first, fixed_size_matrix<float, FFDimension, EmbeddingDimension>& second, const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& gradient, float learning_rate, float bias_correction1, float bias_correction2);
+    void adamw_update(fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& weight, fixed_size_matrix<float, EmbeddingDimension, FFDimension>& first, fixed_size_matrix<float, EmbeddingDimension, FFDimension>& second, const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient, float learning_rate, float bias_correction1, float bias_correction2);
     void matmul_ABt_3_matrix_muls(
         // OFFLOAD_PARAMETERS(A,B1,C1,B2,C2,B3,C3)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,

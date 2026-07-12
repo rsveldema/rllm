@@ -165,6 +165,9 @@ namespace rllm
         }
         else
         {
+            // Isocline history has zero capacity until explicitly enabled.
+            // A null filename keeps prompt history in memory for this session.
+            ic_set_history(nullptr, -1);
             while (true)
             {
                 std::println("Enter input (or '/exit' to quit): ");
