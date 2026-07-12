@@ -46,6 +46,10 @@ def move_inline_comments_to_next_line(line: str) -> list[str]:
 		return [comment]
 	return [code, comment]
 
+def multi_replace(text: str, old: str, new: str) -> str:
+	while old in text:
+		text = text.replace(old, new)
+	return text
 
 def normalize_c_cpp(text: str) -> str:
 	text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -53,8 +57,28 @@ def normalize_c_cpp(text: str) -> str:
 
 	for raw_line in text.split("\n"):
 		line = raw_line.lstrip()
-		if not line:
+		if not line or len(line) == 0:
 			continue
+
+		line = multi_replace(line, "---", "-")
+		line = multi_replace(line, "\t", " ")
+		line = multi_replace(line, "  ", " ")
+		line = multi_replace(line, "====", "-")
+		line = multi_replace(line, "+++", "+")
+		line = multi_replace(line, "~~~", "~")
+		line = multi_replace(line, "###", "#")
+
+		if line == "{" and len(normalized_lines) > 0:
+			# when seeing:
+			#    for ()
+			#      {
+			# change to:
+			#   for () {
+			
+			normalized_lines[-1] += "" + line
+			continue
+
+
 		split_lines = move_inline_comments_to_next_line(line)
 		for split_line in split_lines:
 			if split_line:

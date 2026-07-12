@@ -2,11 +2,15 @@
 #include <string>
 
 #include <Prompter.hpp>
+#include <RuntimeConfig.hpp>
 #include <Trainer.hpp>
 #include <parallel.hpp>
+#include <rllm_vulkan_runtime.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -31,7 +35,7 @@ struct CommandLineOption
 struct CommandLineParser
 {
 
-    std::string train_corpus_dir = "training_data";
+    std::optional<std::string> train_corpus_dir;
     std::vector<std::string> filters;
     bool train_mode = false;
     std::string output_filename = "model.json";
@@ -45,6 +49,12 @@ struct CommandLineParser
     std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
     std::string executable_name = "./rllm";
     size_t mtp_heads = 1;
+    size_t learn_depth = rllm::TextTrainer::DEFAULT_LEARN_DEPTH;
+    float learning_rate = rllm::TextTrainer::DEFAULT_LEARNING_RATE;
+    size_t micro_batch_size = 1;
+    std::optional<size_t> epoch_size;
+    bool nan_finding_mode = false;
+    std::optional<std::string> vulkan_device;
 
     static bool option_matches(const std::string& arg, const CommandLineOption& option)
     {
@@ -99,6 +109,65 @@ struct CommandLineParser
                  else
                      checkpointing_interval = std::chrono::seconds{seconds};
              }},
+        {.options = {"--learn-depth"},
+         .description = std::format("Gradient-update passes per training example (default: {})", learn_depth),
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int n = std::atoi(args[0].c_str());
+                 if (n <= 0)
+                 {
+                     std::println("--learn-depth requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 learn_depth = static_cast<size_t>(n);
+             }},
+        {.options = {"--learning-rate"},
+         .description = std::format("Base learning rate before layer-count scaling (default: {})", learning_rate),
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const float rate = std::strtof(args[0].c_str(), &end);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE || !std::isfinite(rate) || rate <= 0.0f)
+                 {
+                     std::println("--learning-rate requires a positive number, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 learning_rate = rate;
+             }},
+        {.options = {"--micro-batch-size"},
+         .description = "Number of examples to group into one averaged gradient update (default: 1)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int n = std::atoi(args[0].c_str());
+                 if (n <= 0)
+                 {
+                     std::println("--micro-batch-size requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 micro_batch_size = static_cast<size_t>(n);
+             }},
+        {.options = {"--nan-finding"},
+         .description = "Enable expensive NaN/range validation checks (default: disabled)",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 nan_finding_mode = true;
+             }},
+        {.options = {"--vulkan-device"},
+         .description = "Select a Vulkan device by a case-insensitive name substring",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 if (args[0].empty())
+                 {
+                     std::println("--vulkan-device requires a non-empty device name substring");
+                     std::exit(1);
+                 }
+                 vulkan_device = args[0];
+             }},
         {.options = {"--train-dir"},
          .description = "Directory containing training text files",
          .required_args = 1,
@@ -112,6 +181,19 @@ struct CommandLineParser
          .action =
              [&](const std::vector<std::string>& args) {
                  num_epochs = static_cast<size_t>(std::atoi(args[0].c_str()));
+             }},
+        {.options = {"--epoch-size"},
+         .description = "Number of training lines to visit per line-based epoch (default: all)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int n = std::atoi(args[0].c_str());
+                 if (n <= 0)
+                 {
+                     std::println("--epoch-size requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 epoch_size = static_cast<size_t>(n);
              }},
         {.options = {"-o"},
          .description = "Specify the model file to save",
@@ -236,21 +318,45 @@ struct CommandLineParser
             option_it->action(args);
             i += static_cast<int>(option_it->required_args);
         }
+
+        if (train_mode && !train_corpus_dir.has_value())
+        {
+            std::println("Error: --train requires --train-dir <path>");
+            print_usage_and_exit(argv[0], 1);
+        }
     }
 };
 
 int main(int argc, char* argv[])
 {
     std::srand(0);
+
+    CommandLineParser parser;
+    parser.parse(argc, argv);
+    if (parser.vulkan_device)
+        setenv("RLLM_VULKAN_DEVICE_SUBSTRING", parser.vulkan_device->c_str(), 1);
+
     parallel::init_parallel();
+
+    // Generated Vulkan kernels are function-local statics and may destruct
+    // during process teardown. Keep the session alive for the full process so
+    // those destructors never see a dead VkDevice.
+    auto* vulkan_session = new VulkanSession(
+        false,
+        parser.vulkan_device ? parser.vulkan_device->c_str() : nullptr
+    );
+    if (!vulkan_session->has_device())
+        return 1;
+    rllm::vulkan_runtime::set_session(*vulkan_session);
 #ifdef NDEBUG
     std::println("Build type: Release (NDEBUG defined)");
 #else
     std::println("Build type: Debug (NDEBUG not defined)");
 #endif
 
-    CommandLineParser parser;
-    parser.parse(argc, argv);
+    std::println("Offload type: Vulkan");
+    parallel::print_vulkan_provider();
+    rllm::set_nan_finding_mode_enabled(parser.nan_finding_mode);
 
     if (parser.train_mode)
     {
@@ -263,8 +369,12 @@ int main(int argc, char* argv[])
             parser.method,
             parser.checkpointing_interval,
             parser.window_size,
+            parser.learn_depth,
+            parser.learning_rate,
+            parser.micro_batch_size,
             parser.num_epochs,
-            parser.train_corpus_dir
+            parser.epoch_size,
+            parser.train_corpus_dir.value()
         );
     }
     else

@@ -1,8 +1,9 @@
 #pragma once
 
-#include <NeuralNetwork.hpp>
+#include <TextTrainer.hpp>
 
 #include <chrono>
+#include <optional>
 #include <string>
 
 namespace rllm
@@ -23,7 +24,11 @@ namespace rllm
             TrainingMethod method,
             std::optional<std::chrono::seconds> checkpointing_interval,
             int window_size,
+            size_t learn_depth,
+            float learning_rate,
+            size_t micro_batch_size,
             size_t num_epochs,
+            std::optional<size_t> epoch_size,
             const std::string& train_corpus_dir
         );
       private:

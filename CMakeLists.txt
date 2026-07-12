@@ -5,7 +5,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(PREFER_SPEED_OVER_MEMORY 0 CACHE BOOL "Use faster full attention matrices instead of compact triangular storage")
+
 include(CheckIPOSupported)
+include(CTest)
 
 # Build type default
 if(NOT CMAKE_BUILD_TYPE)
@@ -23,6 +26,12 @@ endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+set(
+    RLLM_ENUM_VALUE_TOOL ""
+    CACHE FILEPATH
+    "Optional path to a prebuilt enum-value tool used by vulkanize"
+)
+
 # --- tokenizer_map codegen ---------------------------------------------------
 # Glob the input files so CMake re-runs if any of them change.
 file(GLOB TOKENIZER_TRAINING_FILES "${CMAKE_SOURCE_DIR}/tokenizer_training_data/*")
@@ -30,22 +39,24 @@ file(GLOB TOKENIZER_TRAINING_FILES "${CMAKE_SOURCE_DIR}/tokenizer_training_data/
 set(TOKENIZER_GEN_DIR "${CMAKE_BINARY_DIR}/generated")
 set(TOKENIZER_CC  "${TOKENIZER_GEN_DIR}/tokenizer_map.cc")
 set(TOKENIZER_HPP "${TOKENIZER_GEN_DIR}/tokenizer_map.hpp")
+set(TOKENIZER_JSON "${TOKENIZER_GEN_DIR}/token_map.json")
 
 file(MAKE_DIRECTORY "${TOKENIZER_GEN_DIR}")
 
 add_custom_command(
-    OUTPUT  "${TOKENIZER_CC}" "${TOKENIZER_HPP}"
+    OUTPUT  "${TOKENIZER_CC}" "${TOKENIZER_HPP}" "${TOKENIZER_JSON}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
             "--cc-out"  "${TOKENIZER_CC}"
             "--hpp-out" "${TOKENIZER_HPP}"
+            "--json-out" "${TOKENIZER_JSON}"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     DEPENDS
         "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
         ${TOKENIZER_TRAINING_FILES}
-    COMMENT "Generating tokenizer_map.cc and tokenizer_map.hpp in build/generated"
+    COMMENT "Generating tokenizer_map.cc, tokenizer_map.hpp, and token_map.json in build/generated"
     VERBATIM
 )
-add_custom_target(generate_tokenizer_map DEPENDS "${TOKENIZER_CC}" "${TOKENIZER_HPP}")
+add_custom_target(generate_tokenizer_map DEPENDS "${TOKENIZER_CC}" "${TOKENIZER_HPP}" "${TOKENIZER_JSON}")
 # -----------------------------------------------------------------------------
 
 include(FetchContent)
@@ -57,22 +68,51 @@ FetchContent_Declare(
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
 
+# --- Safetensors C++ library (in-tree dependency) ----------------------------
+add_subdirectory(safetensors-cpp)
+
+# --- Isocline readline library (in-tree dependency) ---------------------------------
+set(IC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(isocline)
+
+add_executable(generate_domain_replace_json src/generate_domain_replace_json.cc)
+target_include_directories(generate_domain_replace_json PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/generated
+        "${CMAKE_SOURCE_DIR}/kernel_compiler/runtime/include"
+)
+target_compile_definitions(generate_domain_replace_json PRIVATE USE_VULKAN_OFFLOAD)
+target_link_libraries(generate_domain_replace_json PUBLIC safetensors-cpp::safetensors_cpp)
+target_link_libraries(generate_domain_replace_json PRIVATE nlohmann_json::nlohmann_json)
+add_dependencies(generate_domain_replace_json generate_tokenizer_map)
+set_target_properties(generate_domain_replace_json PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
 add_subdirectory(src)
-add_subdirectory(tests)
+
+option(RLLM_BUILD_KERNEL_COMPILER "Build kernel_compiler subproject (runtime + tests)" ON)
+if(RLLM_BUILD_KERNEL_COMPILER AND EXISTS "${CMAKE_SOURCE_DIR}/kernel_compiler/CMakeLists.txt")
+    add_subdirectory(kernel_compiler)
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 add_executable(rllm src/main.cc
   include/LayerPrimitives.hpp
   include/Range.hpp
-  include/enum_iterator.hpp
+  include/enum_iterator1D.hpp
   include/fixed_size_vector.hpp
   include/fixed_size_matrix.hpp
-  include/matmul.hpp
+  include/flexible_size_matrix.hpp
+  include/Statistics.hpp
   include/fastfork/circular_queue.hpp
   include/Prompter.hpp)
 
 if(PARALLEL_BACKEND STREQUAL "fastfork")
     target_sources(rllm PRIVATE src/fastfork/fastfork.cc)
 endif()
+
 target_link_libraries(rllm PRIVATE rllm_lib)
 target_include_directories(rllm PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(rllm PRIVATE -O3 -march=native)

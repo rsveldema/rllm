@@ -1,18 +1,178 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
-#include <matmul.hpp>
+#include <safetensors.hh>
+#include <fixed_size_levels_rows_cols_matrix.hpp>
+#include <fixed_size_obj_vector.hpp>
+#include <fixed_size_triangular_matrix.hpp>
+#include <flexible_size_matrix.hpp>
+#include <flexible_rows_matrix.hpp>
+#include <flexible_rows_cols_levels_matrix.hpp>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <parallel.hpp>
+#include <string>
 #include <vector>
 
 namespace rllm
 {
-    // Forward declaration for heap-allocated forward-pass activation workspace.
-    struct ForwardWorkspace;
-    // Forward declaration for heap-allocated backward-pass scratch workspace.
-    struct BackwardWorkspace;
+    struct TransformerGradientAccumulator
+    {
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension> dW_down;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> dW_gate;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> dW_up;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_o;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_q;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_k;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
+        bool touched = false;
+
+        void reset(VulkanQueue& queue);
+    };
+
+    // ── forward workspace ─────────────────────────────────────────────────────
+    // All large fixed-size matrices live here so they are heap-allocated via
+    // unique_ptr and do not blow the stack (~21 MB of combined fixed-size arrays).
+    struct ForwardWorkspace
+    {
+        PositionIndex seq_len;
+        const GpuPackedBatchInput* packed_batch = nullptr;
+        // Activations cached for the backward pass
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_in;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_attn;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> Q, K, V;
+        // Per-head softmax weight matrices; only the [H x T x T] block is live.
+        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> attn_w;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_mid;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_ff;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> gate_pre;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> up_pre;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> ffn_act;
+        // Temporaries used only within forward() itself
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
+        fixed_size_vector<float, RmsNormPartialSumIndex> rms_norm_row_sums;
+        fixed_size_vector<float, PositionIndex> rms_norm_inv_rms;
+
+        explicit ForwardWorkspace(PositionIndex seq)
+            : seq_len(seq)
+            , h_in(seq)
+            , h_norm_attn(seq)
+            , Q(seq)
+            , K(seq)
+            , V(seq)
+            , attn_concat(seq)
+            , h_mid(seq)
+            , h_norm_ff(seq)
+            , gate_pre(seq)
+            , up_pre(seq)
+            , ffn_act(seq)
+            , attn_proj(seq)
+            , ffn_out(seq)
+        {
+            attn_w.set_size(HeadsIndex::MAX);
+        }
+
+        void reset(VulkanQueue& queue, PositionIndex seq)
+        {
+            packed_batch = nullptr;
+            h_in.set_rows(seq);
+            seq_len = seq;
+            h_norm_attn.set_rows(seq);
+            Q.set_rows(seq);
+            K.set_rows(seq);
+            V.set_rows(seq);
+            attn_concat.set_rows(seq);
+            h_mid.set_rows(seq);
+            h_norm_ff.set_rows(seq);
+            gate_pre.set_rows(seq);
+            up_pre.set_rows(seq);
+            ffn_act.set_rows(seq);
+            attn_proj.set_rows(seq);
+            ffn_out.set_rows(seq);
+            attn_w.set_size(HeadsIndex::MAX);
+            rms_norm_row_sums.zero(queue);
+            rms_norm_inv_rms.zero(queue);
+        }
+    };
+
+
+    // Shared scratch workspace for one TransformerBlock backward pass. Owned by
+    // the training backward workspace and reused for each block in reverse order.
+    struct BackwardWorkspace
+    {
+        // FFN backward
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_mid;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> d_ffn_act;
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension> dW_down;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> d_gate_pre;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> d_up_pre;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_ff;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> dW_gate;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> dW_up;
+
+        // Attention backward
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_attn_concat;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_o;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_Q;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_K;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_V;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_q;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_k;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
+
+        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
+        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
+
+        explicit BackwardWorkspace(PositionIndex seq)
+            : d_h_mid(seq)
+            , d_ffn_act(seq)
+            , d_gate_pre(seq)
+            , d_up_pre(seq)
+            , d_h_norm_ff(seq)
+            , d_attn_concat(seq)
+            , d_Q(seq)
+            , d_K(seq)
+            , d_V(seq)
+            , d_h_norm_attn(seq)
+        {
+            d_scores.set_size(HeadsIndex::MAX);
+            d_raw.set_size(HeadsIndex::MAX);
+        }
+
+        void reset(VulkanQueue& queue, PositionIndex seq)
+        {
+            d_h_mid.set_rows(seq);
+            d_ffn_act.set_rows(seq);
+            d_gate_pre.set_rows(seq);
+            d_up_pre.set_rows(seq);
+            d_h_norm_ff.set_rows(seq);
+            d_attn_concat.set_rows(seq);
+            d_Q.set_rows(seq);
+            d_K.set_rows(seq);
+            d_V.set_rows(seq);
+            d_h_norm_attn.set_rows(seq);
+            d_scores.set_size(HeadsIndex::MAX);
+            d_raw.set_size(HeadsIndex::MAX);
+            dW_down.zero(queue);
+            d_h_norm_ff.zero(queue);
+            dW_gate.zero(queue);
+            dW_up.zero(queue);
+            dW_o.zero(queue);
+            d_Q.zero(queue);
+            d_K.zero(queue);
+            d_V.zero(queue);
+            dW_q.zero(queue);
+            dW_k.zero(queue);
+            dW_v.zero(queue);
+            d_h_norm_attn.zero(queue);
+            for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
+                d_raw[hi].zero(queue);
+        }
+    };
+
     // A single transformer decoder block:
     //   Pre-RMSNorm → causal multi-head self-attention → residual
     //   Pre-RMSNorm → SwiGLU feed-forward network       → residual
@@ -23,9 +183,21 @@ namespace rllm
     //   FFDimension::MAX      = D_MODEL * 4              = 2048
     //
     // All weight matrices are stored [out × in] row-major on the heap.
-    // Optimizer: SGD + momentum (β=0.9), gradient clip ±1, vel clip ±0.1, weight clamp ±2.
+    // Optimizer: AdamW with clipped gradients and decoupled weight decay.
     class TransformerBlock
     {
+      public:
+        // Optimizer hyper-parameters
+        static constexpr float ADAM_BETA1 = 0.9f;
+        static constexpr float ADAM_BETA2 = 0.999f;
+        static constexpr float ADAM_EPSILON = 1e-8f;
+        static constexpr float WEIGHT_DECAY = 0.01f;
+        static constexpr float GRAD_CLIP = 1.0f;
+        static constexpr float VEL_CLIP = 0.1f;
+        static constexpr float WEIGHT_CLAMP = 2.0f;
+        static constexpr float EMBEDDING_LEARNING_RATE_SCALE = 1.0f / static_cast<float>(EmbeddingDimension::MAX);
+        static constexpr float FF_LEARNING_RATE_SCALE = 1.0f / static_cast<float>(FFDimension::MAX);
+
       public:
         TransformerBlock(); // defined in .cc after ForwardWorkspace is complete
         ~TransformerBlock(); // defined in .cc after ForwardWorkspace is complete
@@ -36,124 +208,131 @@ namespace rllm
 
         // Forward pass.  h[seq_len × D_MODEL] is modified in-place.
         // Caches intermediate activations for the backward pass.
-        void forward(flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len);
-
-        // Backward pass.  dout[seq_len × D_MODEL] = dL/dh_out.
-        // Writes dL/dh_in into din (same shape) and updates all weights.
-        void backward(
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dout,
-            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& din,
-            float learning_rate
+        void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, ForwardWorkspace& workspace);
+        void forward_batched(
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+            PositionIndex packed_rows,
+            const GpuPackedBatchInput& batch,
+            ForwardWorkspace& workspace
         );
+
+        // Backward pass. dout[seq_len x D_MODEL] = dL/dh_out.
+        // Writes dL/dh_in into din and leaves weight gradients in workspace.
+        void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, ForwardWorkspace& fwd_workspace, bool wait_for_completion = true);
+        void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate, ForwardWorkspace& fwd_workspace)
+        {
+            (void) learning_rate;
+            backward(dout, din, workspace, fwd_workspace);
+        }
+        void accumulate_gradients(const BackwardWorkspace& workspace, TransformerGradientAccumulator& accumulator);
+        void apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
 
         void randomize();
 
         void load(const nlohmann::json& j);
-        nlohmann::json save() const;
+        std::unique_ptr<nlohmann::json> save() const;
+        void load_from_safetensors(const std::string& filename, std::string* err = nullptr);
+        void save_to_safetensors(const std::string& filename,
+                                         std::string* warn = nullptr,
+                                         std::string* err = nullptr) const;
 
-        // Public RMS norm: used by NeuralNetwork to apply the final pre-LM-head norm.
-        static void apply_rms_norm(
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
-            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y
-        )
+        // Public RMS norm: used by TextTrainer to apply the final pre-LM-head norm.
+        static void apply_rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y)
         {
             rms_norm(x, y);
         }
 
         // Test helper: expose causal softmax without exposing internals broadly.
-        static void
-        causal_softmax_for_test(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T)
+        static void causal_softmax_for_test(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, PositionIndex T)
         {
             causal_softmax(x, T);
         }
 
-        // Test helper: expose softmax backward Jacobian application.
-        static void softmax_backward_for_test(
-            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dp,
-            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& p,
-            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dscores,
-            PositionIndex T
-        )
+        // Test helper: expose per-head softmax backward Jacobian application.
+        static void softmax_attention_for_head_for_test(
+            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores,
+            fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw,
+            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w,
+            PositionIndex T)
         {
-            softmax_backward(dp, p, dscores, T);
+            softmax_attention_for_head(d_scores, d_raw, attn_w, T);
         }
 
+
+        // Test helper: expose RMSNorm backward for correctness tests.
+        static void rms_norm_backward_for_test(VulkanQueue& queue,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx)
+        {
+            rms_norm_backward(queue, dy, x, dx);
+        }
+
+        static void rms_norm_backward_for_test(
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx)
+        {
+            rms_norm_backward_for_test(rllm::vulkan_runtime::get_queue(0), dy, x, dx);
+        }
+
+    // Serialization helpers need access to private weight matrices.
+    friend class TextTrainer;
       private:
-        // Optimizer hyper-parameters
-        static constexpr float MOMENTUM_BETA = 0.9f;
-        static constexpr float GRAD_CLIP = 1.0f;
-        static constexpr float VEL_CLIP = 0.1f;
-        static constexpr float WEIGHT_CLAMP = 2.0f;
+        void check_nan_finding_mode(const char* phase);
 
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
+        fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> S_q, S_k, S_v, S_o;
 
         // SwiGLU FFN:
         //   gate, up:  [FFDimension::MAX    × D_MODEL]  (out × in)
         //   down:      [D_MODEL × FFDimension::MAX   ]  (out × in)
-        fixed_size_matrix<rlmm_float_small, FFDimension, EmbeddingDimension> W_gate, W_up;
-        fixed_size_matrix<rlmm_float_small, EmbeddingDimension, FFDimension> W_down;
-        fixed_size_matrix<rlmm_float, FFDimension, EmbeddingDimension> V_gate, V_up;
-        fixed_size_matrix<rlmm_float, EmbeddingDimension, FFDimension> V_down;
-
-        // Activations cached during forward() for use in backward().
-        // Heap-allocated to avoid blowing the stack (~21 MB of fixed-size arrays).
-        std::unique_ptr<ForwardWorkspace> m_fwd_ws;
-        // Scratch workspace for backward(); cached to avoid per-call heap allocation.
-        std::unique_ptr<BackwardWorkspace> m_bwd_ws;
+        fixed_size_matrix<float16, FFDimension, EmbeddingDimension> W_gate, W_up;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> V_gate, V_up;
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension> S_gate, S_up;
+        fixed_size_matrix<float16, EmbeddingDimension, FFDimension> W_down;
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension> V_down;
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension> S_down;
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
-        static void rms_norm(
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
-            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& y
-        );
+        static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y);
 
         // RMSNorm backward: dx += ∂L/∂x  given dy = ∂L/∂y and the original x
-        static void rms_norm_backward(
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dy,
-            const flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& x,
-            flexible_rows_matrix<rlmm_float, PositionIndex, EmbeddingDimension>& dx
-        );
+        static void rms_norm_backward(VulkanQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx);
 
         // In-place causal softmax over the active [T × T] block of x.
-        static void
-        causal_softmax(flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& x, PositionIndex T);
+        static void causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, PositionIndex T);
 
-        // Accumulates softmax backward into dscores (stride T).
-        // dp is the per-head d_scores matrix; p is the cached per-head softmax matrix.
-        static void softmax_backward(
-            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dp,
-            const flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& p,
-            flexible_rows_cols_matrix<rlmm_float, PositionIndex, PositionIndex>& dscores,
-            PositionIndex T
-        );
+        // Per-head softmax backward into d_raw.
+        static void softmax_attention_for_head(
+            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores_h,
+            fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h,
+            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
+            PositionIndex seq_len);
 
         // SwiGLU backward: computes d_gate_pre and d_up_pre from d_ffn_act.
-        static void swiglu_backward(
-            PositionIndex seq,
-            const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& gate_pre,
-            const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& up_pre,
-            const flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_ffn_act,
-            flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_gate_pre,
-            flexible_rows_matrix<rlmm_float, PositionIndex, FFDimension>& d_up_pre
-        );
+        static void swiglu_backward(PositionIndex seq, const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre);
 
-        // SGD + momentum update: clips gradients, clips velocity, clamps weights.
-        template <typename R_enum, typename C_enum, typename WType, typename VType, typename GType>
-        static void sgd_update(
-            fixed_size_matrix<WType, R_enum, C_enum>& W,
-            fixed_size_matrix<VType, R_enum, C_enum>& vel,
-            const fixed_size_matrix<GType, R_enum, C_enum>& grad,
-            float lr
-        )
-        {
-            OFFLOADABLE_PARFOR_2D(r, c, enum_iterator2D<R_enum, C_enum>())
-            const float g = math::clamp(grad[r, c], -GRAD_CLIP, GRAD_CLIP);
-            vel[r, c] = math::clamp(MOMENTUM_BETA * vel[r, c] + lr * g, -VEL_CLIP, VEL_CLIP);
-            W[r, c] = math::clamp(W[r, c] + vel[r, c], -WEIGHT_CLAMP, WEIGHT_CLAMP);
-            ENDFOR
-        }
+        void forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len);
+        void forward_batched_attention_heads(ForwardWorkspace& ws, PositionIndex packed_rows, const GpuPackedBatchInput& batch);
+        void compute_attention_scores_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
+        void backward_accumulate_attention_dq_for_head_hi(BackwardWorkspace& ws,
+                const ForwardWorkspace& fwd,
+                HeadsIndex hi);
+        void apply_causal_softmax_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
+        void compute_attention_scores_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi);
+        void compute_attention_values_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
+        void backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_compute_attention_dscores_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+
+        void apply_causal_softmax_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi);
+        void backward_accumulate_attention_dk_for_heads_hi(BackwardWorkspace& ws, const ForwardWorkspace& fwd, HeadsIndex hi);
+        void backward_softmax_attention_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_accumulate_attention_dq_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_accumulate_attention_dk_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
     };
 
 } // namespace rllm

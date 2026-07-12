@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <LayerPrimitives.hpp>
-#include <enum_iterator.hpp>
+#include <enum_iterator1D.hpp>
 
 #include <vector>
 
@@ -9,7 +9,7 @@ TEST(EnumIteratorTest, TotalCount)
 {
     using namespace rllm;
     int count = 0;
-    for (const auto h : enum_iterator<HeadsIndex>())
+    for (const auto h : enum_iterator1D<HeadsIndex>())
         ++count;
     EXPECT_EQ(count, static_cast<int>(HeadsIndex::MAX));
 }
@@ -20,7 +20,7 @@ TEST(EnumIteratorTest, DefaultStartsAtStartAndIsIncreasing)
     std::vector<int> values;
     values.reserve(static_cast<int>(HeadsIndex::MAX));
 
-    for (const auto h : enum_iterator<HeadsIndex>())
+    for (const auto h : enum_iterator1D<HeadsIndex>())
         values.push_back(static_cast<int>(h));
 
     ASSERT_EQ(values.size(), static_cast<size_t>(static_cast<int>(HeadsIndex::MAX)));
@@ -33,7 +33,7 @@ TEST(EnumIteratorTest, RuntimeUpperBound)
     using namespace rllm;
     constexpr int bound = 3;
     int count = 0;
-    for (const auto h : enum_iterator<HeadsIndex>(static_cast<HeadsIndex>(bound)))
+    for (const auto h : enum_iterator1D<HeadsIndex>(static_cast<HeadsIndex>(bound)))
         ++count;
     EXPECT_EQ(count, bound);
 }
@@ -45,7 +45,7 @@ TEST(EnumIteratorTest, StartEndRangeHonorsStart)
 
     const auto start = static_cast<HeadsIndex>(2);
     const auto end = static_cast<HeadsIndex>(5);
-    for (const auto h : enum_iterator<HeadsIndex>(start, end))
+    for (const auto h : enum_iterator1D<HeadsIndex>(start, end))
         values.push_back(static_cast<int>(h));
 
     const std::vector<int> expected = {2, 3, 4};
@@ -57,7 +57,7 @@ TEST(EnumIteratorTest, ZeroLengthRangeProducesNoIterations)
     using namespace rllm;
     int count = 0;
     const auto x = static_cast<HeadsIndex>(3);
-    for (const auto h : enum_iterator<HeadsIndex>(x, x))
+    for (const auto h : enum_iterator1D<HeadsIndex>(x, x))
         ++count;
     EXPECT_EQ(count, 0);
 }

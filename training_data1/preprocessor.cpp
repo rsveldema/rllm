@@ -147,24 +147,24 @@
 #define FALLTHROUGH
 #endif
 // Integer type aliases via macros
-#define DEFINE_INT_TYPES     \
-using i8 = std::int8_t;    \
-using i16 = std::int16_t;  \
-using i32 = std::int32_t;  \
-using i64 = std::int64_t;  \
-using u8 = std::uint8_t;   \
+#define DEFINE_INT_TYPES \
+using i8 = std::int8_t; \
+using i16 = std::int16_t; \
+using i32 = std::int32_t; \
+using i64 = std::int64_t; \
+using u8 = std::uint8_t; \
 using u16 = std::uint16_t; \
 using u32 = std::uint32_t; \
 using u64 = std::uint64_t; \
-using f32 = float;         \
+using f32 = float; \
 using f64 = double;
 DEFINE_INT_TYPES
 // Safe cast macro
-#define SAFE_CAST(T, val)                                \
-([&]() -> T {                                          \
-auto result = static_cast<T>(val);                   \
+#define SAFE_CAST(T, val) \
+([&]() -> T { \
+auto result = static_cast<T>(val); \
 ASSERT(static_cast<decltype(val)>(result) == (val)); \
-return result;                                       \
+return result; \
 }())
 // Array size helper
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -230,22 +230,22 @@ STATIC_ASSERT(sizeof(f64) == 8, "f64 must be 8 bytes");
 #define I32_MAX (2147483647)
 #define U32_MAX (4294967295u)
 // Enum helper macros
-#define ENUM_CLASS_OPERATORS(E)                                                                                                                  \
+#define ENUM_CLASS_OPERATORS(E) \
 inline E operator|(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) | static_cast<std::underlying_type_t<E>>(b)); } \
 inline E operator&(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) & static_cast<std::underlying_type_t<E>>(b)); } \
 inline E operator^(E a, E b) { return static_cast<E>(static_cast<std::underlying_type_t<E>>(a) ^ static_cast<std::underlying_type_t<E>>(b)); } \
-inline E operator~(E a) { return static_cast<E>(~static_cast<std::underlying_type_t<E>>(a)); }                                                 \
-inline E &operator|=(E &a, E b) {                                                                                                              \
-a = a | b;                                                                                                                                   \
-return a;                                                                                                                                    \
-}                                                                                                                                              \
-inline E &operator&=(E &a, E b) {                                                                                                              \
-a = a & b;                                                                                                                                   \
-return a;                                                                                                                                    \
-}                                                                                                                                              \
-inline E &operator^=(E &a, E b) {                                                                                                              \
-a = a ^ b;                                                                                                                                   \
-return a;                                                                                                                                    \
+inline E operator~(E a) { return static_cast<E>(~static_cast<std::underlying_type_t<E>>(a)); } \
+inline E &operator|=(E &a, E b) { \
+a = a | b; \
+return a; \
+} \
+inline E &operator&=(E &a, E b) { \
+a = a & b; \
+return a; \
+} \
+inline E &operator^=(E &a, E b) { \
+a = a ^ b; \
+return a; \
 }
 enum class Flags : u32 {
 None = 0,
@@ -266,14 +266,14 @@ return (*s == '\0') ? h : fnv1a(s + 1, (h ^ static_cast<u32>(*s)) * FNV1A_PRIME)
 }
 #define HASH(str) fnv1a(str)
 // Macro-based switch dispatch
-#define DISPATCH_ON_TYPE(T, ...)                       \
-if constexpr (std::is_same_v<T, float>) {            \
-__VA_ARGS__                                        \
-} else if constexpr (std::is_same_v<T, double>) {    \
-__VA_ARGS__                                        \
-} else if constexpr (std::is_same_v<T, int>) {       \
-__VA_ARGS__                                        \
-} else {                                             \
+#define DISPATCH_ON_TYPE(T, ...) \
+if constexpr (std::is_same_v<T, float>) { \
+__VA_ARGS__ \
+} else if constexpr (std::is_same_v<T, double>) { \
+__VA_ARGS__ \
+} else if constexpr (std::is_same_v<T, int>) { \
+__VA_ARGS__ \
+} else { \
 static_assert(sizeof(T) == 0, "unsupported type"); \
 }
 // Include guard end

@@ -1,0 +1,6 @@
+model = "gemma4:26b"
+model_provider = "ollama"
+model_reasoning_effort = "medium"
+personality = "pragmatic"
+base_url = "http://localhost:11434/v1"
+

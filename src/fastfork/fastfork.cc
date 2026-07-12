@@ -36,6 +36,10 @@ namespace fastfork
 
         static constexpr int QUEUE_CAPACITY = 4096 * 128;
 
+#if defined(USE_VULKAN_OFFLOAD)
+        static constexpr int DEFAULT_MAX_THREADS = 8;
+#endif
+
         // ── TaskQueue tree ─────────────────────────────────────────────────
         // One node per hwloc object.  Only leaf nodes (thread_id ≥ 0) carry
         // a queue.  steal_order is pre-computed at init time: own queue first,
@@ -266,6 +270,9 @@ namespace fastfork
             s_num_threads = hwloc_get_nbobjs_by_type(s_topology, HWLOC_OBJ_PU);
             if (s_num_threads <= 0)
                 s_num_threads = static_cast<int>(std::thread::hardware_concurrency());
+#if defined(USE_VULKAN_OFFLOAD)
+            s_num_threads = std::min(s_num_threads, DEFAULT_MAX_THREADS);
+#endif
         }
 
         spawn_workers();

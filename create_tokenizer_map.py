@@ -1,5 +1,6 @@
 from collections import defaultdict
 import argparse
+import json
 import re
 import os
 
@@ -150,11 +151,27 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
     # and count the frequency of each sequence. We will use this to create a tokenizer map that maps each sequence to a unique ID, sorted by length and frequency.
     seperators = ' \n\t(){}[]<>.,;:"\'`~?!@#$%^&*-_=+|\\/0123456789'
 
+    # Reserved model-control tokens. INVALID is used as the supervised target
+    # for MTP heads whose prediction horizon extends past the available input.
+    tokens = ["INVALID"]
+
     # all seperators are tokens:
-    tokens = []
     for ch in seperators:
         tokens.append(ch)
     tokens.append(EOW_MARKER)  # end-of-word marker used by BPE
+
+    # Multi-character operators — added explicitly so longest-match-first
+    # tokenization prefers them over their single-character constituents.
+    # Without these, "==" would match only the first "=" and the second "="
+    # would be skipped as unmatched, shortening the sequence and causing NaN loss.
+    MULTI_CHAR_OPS = [
+        '==', '!=', '<=', '>=',
+        '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=',
+        '<<', '>>', '<<=', '>>=',
+        '->', '::', '...',
+        '&&', '||', '!!',
+    ]
+    tokens.extend(MULTI_CHAR_OPS)
 
     # a-z, A-Z and accented latin characters (U+00C0–U+024F) as single-char tokens
     # so that every letter can always be tokenized without skipping.
@@ -263,6 +280,8 @@ def generate_cpp_table_header(tokenizer_map) -> str:
             cpp_table += f'    TOK_COMMA = TOK_{idx},\n'
         if _token == EOW_MARKER:
             cpp_table += f'    TOK_EOW = TOK_{idx},\n'
+        if _token == "INVALID":
+            cpp_table += f'    INVALID = TOK_{idx},\n'
     cpp_table += "    START = TOK_0,\n"
     cpp_table += f"    MAX = {len(tokenizer_map)},\n"
     cpp_table += "    UNKNOWN_TOKEN_ID = -1\n"
@@ -285,10 +304,27 @@ def generate_cpp_table(tokenizer_map, cc_out: str, hpp_out: str):
         cpp_table = generate_cpp_table_header(tokenizer_map)
         f.write(cpp_table)
 
+def generate_json_map(tokenizer_map, json_out: str):
+    runtime_tokenizer_map = {}
+    for token, idx in tokenizer_map.items():
+        if token == " ":
+            continue
+        is_eow = token.endswith(EOW_MARKER)
+        stripped = token[:-len(EOW_MARKER)] if is_eow else token
+        if not stripped:
+            continue
+        runtime_tokenizer_map[stripped] = idx
+
+    os.makedirs(os.path.dirname(json_out), exist_ok=True)
+    with open(json_out, "w", encoding="utf-8") as f:
+        json.dump(runtime_tokenizer_map, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--cc-out",  default="src/tokenizer_map.cc")
     parser.add_argument("--hpp-out", default="include/tokenizer_map.hpp")
+    parser.add_argument("--json-out", help="Optional path for the generated token_map.json")
     parser.add_argument("--support-extra-latin-characters", action="store_true", help="Include additional Latin characters (beyond basic ASCII) as single-character tokens")
     args = parser.parse_args()
 
@@ -299,3 +335,5 @@ if __name__ == "__main__":
     print(f"Total unique tokens: {len(tokenizer_map)}")
 
     generate_cpp_table(tokenizer_map, args.cc_out, args.hpp_out)
+    if args.json_out:
+        generate_json_map(tokenizer_map, args.json_out)

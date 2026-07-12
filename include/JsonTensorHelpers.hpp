@@ -1,9 +1,13 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <cpu/cpu_fixed_matrix.hpp>
 
 #include <nlohmann/json.hpp>
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
+#include <memory>
 
 namespace rllm::json_helpers
 {
@@ -14,12 +18,12 @@ namespace rllm::json_helpers
     }
 
     template <typename Enum, typename T>
-    nlohmann::json serialize_vector(const fixed_size_vector<T, Enum>& v)
+    std::unique_ptr<nlohmann::json> serialize_vector(const fixed_size_vector<T, Enum>& v)
     {
-        auto out = nlohmann::json::array();
+        auto out = std::make_unique<nlohmann::json>(nlohmann::json::array());
         for (size_t i = 0; i < enum_max<Enum>(); ++i)
         {
-            out.push_back(v[static_cast<Enum>(i)]);
+            out->push_back(v[static_cast<Enum>(i)]);
         }
         return out;
     }
@@ -29,7 +33,8 @@ namespace rllm::json_helpers
     {
         if (!j.is_array() || j.size() != enum_max<Enum>())
         {
-            throw std::runtime_error("Invalid vector shape in model JSON");
+            std::fprintf(stderr, "Invalid vector shape in model JSON\n");
+            std::abort();
         }
 
         for (size_t i = 0; i < enum_max<Enum>(); ++i)
@@ -39,29 +44,30 @@ namespace rllm::json_helpers
     }
 
     template <typename T, typename X, typename Y>
-    nlohmann::json serialize_matrix(const fixed_size_matrix<T, X, Y>& m)
+    std::unique_ptr<nlohmann::json> serialize_matrix(const cpu_fixed_matrix<T, X, Y>& m)
     {
-        auto rows = nlohmann::json::array();
+        auto rows = std::make_unique<nlohmann::json>(nlohmann::json::array());
 
         for (size_t x = 0; x < enum_max<X>(); ++x)
         {
-            auto cols = nlohmann::json::array();
+            auto cols = std::make_unique<nlohmann::json>(nlohmann::json::array());
             for (size_t y = 0; y < enum_max<Y>(); ++y)
             {
-                cols.push_back(m.get(static_cast<X>(x), static_cast<Y>(y)));
+                cols->push_back(m.get(static_cast<X>(x), static_cast<Y>(y)));
             }
-            rows.push_back(std::move(cols));
+            rows->push_back(std::move(*cols));
         }
 
         return rows;
     }
 
     template <typename T, typename X, typename Y>
-    void deserialize_matrix(const nlohmann::json& j, fixed_size_matrix<T, X, Y>& m)
+    void deserialize_matrix(const nlohmann::json& j, cpu_fixed_matrix<T, X, Y>& m)
     {
         if (!j.is_array() || j.size() != enum_max<X>())
         {
-            throw std::runtime_error("Invalid matrix row count in model JSON");
+            std::fprintf(stderr, "Invalid matrix row count in model JSON\n");
+            std::abort();
         }
 
         for (size_t x = 0; x < enum_max<X>(); ++x)
@@ -69,7 +75,8 @@ namespace rllm::json_helpers
             const auto& row = j.at(x);
             if (!row.is_array() || row.size() != enum_max<Y>())
             {
-                throw std::runtime_error("Invalid matrix column count in model JSON");
+                std::fprintf(stderr, "Invalid matrix column count in model JSON\n");
+                std::abort();
             }
 
             for (size_t y = 0; y < enum_max<Y>(); ++y)

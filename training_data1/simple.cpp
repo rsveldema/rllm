@@ -3,8 +3,8 @@
 #include "NeuralNetwork.hpp"
 #include <algorithm>
 #define LOG_TRAINING_PROGRESS(...) \
-if (verbose) {                   \
-std::println(__VA_ARGS__);     \
+if (verbose) { \
+std::println(__VA_ARGS__); \
 }
 enum class A {
 };

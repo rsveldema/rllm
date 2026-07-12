@@ -1,6 +1,6 @@
 #pragma once
 
-#include <NeuralNetwork.hpp>
+#include <TextTrainer.hpp>
 
 #include <optional>
 #include <string>
@@ -24,7 +24,7 @@ namespace rllm
                          size_t mtp_heads = 1);
 
       private:
-        void process_line(const std::string& line, Corpus& corpus, NeuralNetwork& nn, PromptOptions& options);
+        void process_line(const std::string& line, Corpus& corpus, TextTrainer& nn, PromptOptions& options);
 
         const std::vector<std::string> m_filters;
     };

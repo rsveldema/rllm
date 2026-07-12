@@ -34,17 +34,6 @@
         "PARALLEL_BACKEND": "fastfork",
         "OFFLOAD_BACKEND": "vulkan"
       }
-    },
-    {
-      "name": "openmp-rocm",
-      "displayName": "OpenMP + ROCm Offload",
-      "description": "OpenMP backend with ROCm offload mode and explicit ROCm root",
-      "inherits": "base",
-      "cacheVariables": {
-        "PARALLEL_BACKEND": "openmp",
-        "OFFLOAD_BACKEND": "rocm",
-        "ROCM_ROOT": "/opt/rocm"
-      }
     }
   ],
   "buildPresets": [
@@ -57,11 +46,6 @@
       "name": "build-fastfork-vulkan",
       "displayName": "Build FastFork + Vulkan",
       "configurePreset": "fastfork-vulkan"
-    },
-    {
-      "name": "build-openmp-rocm",
-      "displayName": "Build OpenMP + ROCm",
-      "configurePreset": "openmp-rocm"
     }
   ]
 }

@@ -1,12 +1,48 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <safetensors.hh>
 
 #include <nlohmann/json_fwd.hpp>
 #include <Corpus.hpp>
+#include <string>
 
 namespace rllm
 {
+    struct OutputLayerGradientAccumulator
+    {
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> dW_lm_head;
+        bool touched = false;
+
+        void reset(VulkanQueue& queue);
+    };
+
+    struct BatchedOutputWorkspace
+    {
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension> h_last;
+        fixed_size_matrix<float, BatchIndex, TokenID> logits;
+        fixed_size_matrix<float, BatchIndex, TokenID> delta;
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension> dh_last;
+        fixed_size_matrix<float, BatchIndex, TempStorage> softmax_temp;
+        fixed_size_vector<int, BatchIndex> expected_tokens;
+        fixed_size_vector<int, BatchIndex> active_examples;
+        fixed_size_vector<float, BatchIndex> losses;
+
+        BatchedOutputWorkspace()
+        {
+            expected_tokens.set_size(BatchIndex::MAX);
+            active_examples.set_size(BatchIndex::MAX);
+            losses.set_size(BatchIndex::MAX);
+        }
+    };
+
+    void output_layer_forward_from_hidden_impl(
+        VulkanQueue& queue,
+        const fixed_size_vector<float, EmbeddingDimension>& h_last,
+        const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
+        fixed_size_vector<float, TokenID>& inputs
+    );
+
     // OutputLayer holds the learned linear projection ("LM head") from the last
     // transformer block's hidden state at the final sequence position to
     // vocabulary logits, plus the scoring and serialisation logic.
@@ -15,7 +51,18 @@ namespace rllm
     class OutputLayer
     {
       public:
-        OutputLayer() = default;
+        static constexpr float ADAM_BETA1 = 0.9f;
+        static constexpr float ADAM_BETA2 = 0.999f;
+        static constexpr float ADAM_EPSILON = 1e-8f;
+        static constexpr float WEIGHT_DECAY = 0.01f;
+        static constexpr float GRAD_CLIP = 1.0f;
+        static constexpr float VEL_CLIP = 0.1f;
+        static constexpr float WEIGHT_CLAMP = 2.0f;
+        static constexpr float LM_HEAD_LEARNING_RATE_SCALE = 1.0f / static_cast<float>(EmbeddingDimension::MAX);
+        static constexpr float LABEL_SMOOTHING = 0.1f;
+        static constexpr float smooth = LABEL_SMOOTHING / static_cast<float>(static_cast<int>(TokenID::MAX));
+
+        OutputLayer();
         OutputLayer(const Corpus& corpus);
         ~OutputLayer() = default;
         OutputLayer(const OutputLayer&) = delete;
@@ -25,35 +72,76 @@ namespace rllm
         void set_random_weights();
 
         // Project h_last[D_MODEL] to vocabulary logits, storing them in m_inputs.
-        void forward_from_hidden(const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last);
-
-        // Backpropagate the output delta through W_lm_head.
-        // Returns d_h_last[D_MODEL] = ∂L/∂h_last and updates W_lm_head via SGD+momentum.
-        fixed_size_vector<rlmm_float, EmbeddingDimension> backward_and_update(
-            const fixed_size_vector<rlmm_float, TokenID>& delta,
-            const fixed_size_vector<rlmm_float, EmbeddingDimension>& h_last,
-            float learning_rate
+        void forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last,
+              VulkanQueue& queue);
+        void forward_from_hidden(
+            const fixed_size_vector<float, EmbeddingDimension>& h_last,
+            fixed_size_vector<float, TokenID>& inputs,
+            cpu_fixed_vector<float, TokenID>& inputs_cpu,
+            VulkanQueue& queue
         );
+
+        void backward_accumulate(
+            const fixed_size_vector<float, TokenID>& delta,
+            const fixed_size_vector<float, EmbeddingDimension>& h_last,
+            fixed_size_vector<float, EmbeddingDimension>& dh_last,
+            OutputLayerGradientAccumulator& accumulator
+        );
+        void forward_batched(
+            const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+            BatchIndex batch_size,
+            fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+            VulkanQueue& queue
+        );
+        void backward_batched_accumulate(
+            const fixed_size_matrix<float, BatchIndex, TokenID>& delta,
+            const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+            BatchIndex batch_size,
+            fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
+            OutputLayerGradientAccumulator& accumulator
+        );
+        void compute_batched_delta(
+            const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+            BatchIndex batch_size,
+            BatchedOutputWorkspace& workspace,
+            VulkanQueue& queue
+        );
+
+        void apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
 
         // Computes softmax deltas (with label smoothing) into score for backprop,
         // and returns the cross-entropy loss -log(softmax[target]).
         float compute_score(Score& score, const TokenID expected_output_token);
-        void compute_deltas(const Score& score, fixed_size_vector<rlmm_float, TokenID>& deltas) const;
-        void rms_normalize_inputs();
+        float compute_score(
+            const fixed_size_vector<float, TokenID>& inputs,
+            const cpu_fixed_vector<float, TokenID>& inputs_cpu,
+            Score& score,
+            const TokenID expected_output_token
+        );
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;
+        void load_from_safetensors(const std::string& filename, std::string* err = nullptr);
+        void save_to_safetensors(const std::string& filename,
+                                         std::string* warn = nullptr,
+                                         std::string* err = nullptr) const;
 
         // Returns the top-k tokens by raw logit value.
         std::vector<OutputToken> get_top_k_by_logit(size_t k) const;
 
+    friend class TextTrainer;
       private:
+        void check_nan_finding_mode(const char* phase);
+
         // Vocabulary logits computed by forward_from_hidden().
-        fixed_size_vector<rlmm_float, TokenID> m_inputs;
+        fixed_size_vector<float, TokenID> m_inputs;
+        // CPU-side copy of m_inputs, updated after each forward pass.
+        cpu_fixed_vector<float, TokenID> m_inputs_cpu;
 
         // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
-        fixed_size_matrix<rlmm_float_small, TokenID, EmbeddingDimension> W_lm_head;
-        fixed_size_matrix<rlmm_float, TokenID, EmbeddingDimension> V_lm_head; // SGD momentum velocities
+        fixed_size_matrix<float16, TokenID, EmbeddingDimension> W_lm_head;
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> V_lm_head; // Adam first moment
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> S_lm_head; // Adam second moment
     };
 
 } // namespace rllm

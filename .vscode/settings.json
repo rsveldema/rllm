@@ -1,0 +1,21 @@
+{
+    "python.autoComplete.extraPaths": [
+        "${workspaceFolder}/sources/poky/bitbake/lib",
+        "${workspaceFolder}/sources/poky/meta/lib"
+    ],
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/sources/poky/bitbake/lib",
+        "${workspaceFolder}/sources/poky/meta/lib"
+    ],
+    "files.associations": {
+        "*.conf": "bitbake",
+        "*.inc": "bitbake"
+    },
+    "terminal.integrated.gpuAcceleration": "off",
+    "chat.tools.terminal.autoApprove": {
+        ".": true,
+        "./build_release.sh": true,
+        "build_release/kernel_compiler/tests/test_vulkan_stubs": true
+    }
+    
+}

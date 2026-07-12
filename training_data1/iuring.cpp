@@ -221,14 +221,14 @@ nullptr,
 // buffer selected automatically from buffer queue
 buffer_size(), flags);
 } else {
-// fprintf(stderr, "RECV ---- submit: {}\n", idx);
+// fprintf(stderr, "RECV -- submit: {}\n", idx);
 memset(&item.m_msg, 0, sizeof(item.m_msg));
 item.m_msg.msg_name = &item.m_buffer_for_uring;
 item.m_msg.msg_namelen = sizeof(item.m_buffer_for_uring);
 item.m_msg.msg_iov = item.m_msg_iov->data();
 item.m_msg.msg_iovlen = item.m_msg_iov->size();
 assert(item.m_msg.msg_iovlen == 1);
-// fprintf(stderr, "msg_name = %p, p = %p\n",  item.m_msg.msg_name,
+// fprintf(stderr, "msg_name = %p, p = %p\n", item.m_msg.msg_name,
 // item.m_msg.msg_iov);
 item.m_msg.msg_iov->iov_base =
 nullptr;
@@ -257,7 +257,7 @@ case WorkItem::Type::SEND_WORKPACKET: {
 const auto fd = item.get_socket()->get_fd();
 assert(!item.is_stream());
 int flags = 0;
-LOG_DEBUG(get_logger(), "SEND ---- submit: {}", fd);
+LOG_DEBUG(get_logger(), "SEND -- submit: {}", fd);
 item.init_send_msg();
 io_uring_prep_sendmsg(sqe, fd, &item.m_msg, flags);
 // sqe->flags |= IOSQE_FIXED_FILE;
@@ -276,8 +276,7 @@ m_msg.msg_iov = m_msg_iov->data();
 m_msg.msg_iovlen = m_msg_iov->size();
 assert(m_msg.msg_iovlen == 1);
 m_msg.msg_iov[0].iov_base = (void *)m_send_packet.data();
-m_msg.msg_iov[0].iov_len = m_send_packet.size();
-{
+m_msg.msg_iov[0].iov_len = m_send_packet.size();{
 const uint8_t congestion_notification = 0;
 const uint8_t tos =
 static_cast<std::underlying_type_t<dscp_t>>(m_params.dscp) << 2 |
@@ -319,12 +318,12 @@ abort();
 void IOUring::call_close_callback(
 std::shared_ptr<WorkItem> work_item, io_uring_cqe *cqe) {
 const int status = cqe->res;
-LOG_DEBUG(get_logger(), "=======> CLOSE CALLBACK: {}", cqe->res);
+LOG_DEBUG(get_logger(), "-===> CLOSE CALLBACK: {}", cqe->res);
 work_item->call_close_callback(status);
 }
 void IOUring::call_send_callback(
 std::shared_ptr<WorkItem> work_item, io_uring_cqe *cqe) {
-LOG_DEBUG(get_logger(), "=======> SEND CALLBACK: {}", cqe->res);
+LOG_DEBUG(get_logger(), "-===> SEND CALLBACK: {}", cqe->res);
 if (cqe->res < 0) {
 LOG_ERROR(get_logger(), "recv cqe bad res {}", cqe->res);
 if (cqe->res == -EFAULT || cqe->res == -EINVAL) {
@@ -337,7 +336,7 @@ work_item->call_send_callback(cqe->res);
 }
 void IOUring::call_connect_callback(
 std::shared_ptr<WorkItem> work_item, io_uring_cqe *cqe) {
-LOG_DEBUG(get_logger(), "=======> CONNECT CALLBACK: {}", cqe->res);
+LOG_DEBUG(get_logger(), "-===> CONNECT CALLBACK: {}", cqe->res);
 if (cqe->res < 0) {
 LOG_ERROR(get_logger(), "recv cqe bad res {} ({})", cqe->res,
 strerror(-cqe->res));
@@ -486,7 +485,7 @@ return;
 assert(work_item);
 if (cqe->res == -ENOBUFS) {
 LOG_ERROR(get_logger(),
-"uring ---> ENOBUFS buffer??? -- status: {} ({})", recv_status,
+"uring -> ENOBUFS buffer??? -- status: {} ({})", recv_status,
 work_item->get_descr().c_str());
 return;
 }
@@ -746,7 +745,7 @@ break;
 default:
 LOG_INFO(get_logger(), "FOUND INTERFACE: {} {} ({})", ifa->ifa_name,
 (family == AF_PACKET) ? "AF_PACKET" : (family == AF_INET) ? "AF_INET"
-: (family == AF_INET6)  ? "AF_INET6"
+: (family == AF_INET6) ? "AF_INET6"
 : "???",
 family);
 break;
@@ -1051,7 +1050,7 @@ return;
 const auto *sa = (struct sockaddr_in *)&s;
 const auto port = ntohs(sa->sin_port);
 const auto addr = sa->sin_addr;
-LOG_DEBUG(get_logger(), "DOUBLE CHECK -----> port bound to {}: {}", port,
+LOG_DEBUG(get_logger(), "DOUBLE CHECK -> port bound to {}: {}", port,
 inet_ntoa(addr));
 }
 void SocketImpl::send(const std::shared_ptr<iuring::IOUringInterface> &io,
@@ -1241,7 +1240,7 @@ const auto id = m_work_items.size();
 if (id > 64) {
 LOG_ERROR_ONCE(get_logger(), "potential FD leak!!!");
 }
-LOG_DEBUG(get_logger(), "  NEW: id = {} ({})", id, descr);
+LOG_DEBUG(get_logger(), " NEW: id = {} ({})", id, descr);
 auto ret = std::make_shared<WorkItem>(get_logger(), network, id, descr, socket);
 assert(!ret->is_free());
 m_work_items.push_back(ret);
@@ -1411,7 +1410,7 @@ virtual void submit_connect(const std::shared_ptr<ISocket> &socket,
 const IPAddress &target, connect_callback_func_t handler) = 0;
 /** This accepts new connections from other machines.
 * Note that this requires that the socket is opened with
-*  SocketKind::SERVER_STREAM_SOCKET
+* SocketKind::SERVER_STREAM_SOCKET
 * As only server sockets can accept new connections.
 * We check this by asserting the correct behavior here to safeguard this.
 */
@@ -1420,11 +1419,11 @@ accept_callback_func_t handler) = 0;
 virtual void submit_recv(const std::shared_ptr<ISocket> &socket,
 recv_callback_func_t handler) = 0;
 /** The steps for sending a packet:
-*      - This returns a work-item where you can retrieve the SendPacket
+* - This returns a work-item where you can retrieve the SendPacket
 * object from
-*      - Then with that send packet you append your dara
-*      - Then you call submit on the work-item.
-*      - The WorkItem::submit() method then has the callback arg.
+* - Then with that send packet you append your dara
+* - Then you call submit on the work-item.
+* - The WorkItem::submit() method then has the callback arg.
 */
 virtual std::shared_ptr<IWorkItem> ackuire_send_workitem(
 const std::shared_ptr<ISocket> &socket) = 0;

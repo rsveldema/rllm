@@ -43,6 +43,14 @@ namespace rllm
 
     static std::ofstream s_log_file{"tokenization.log"};
 
+#ifdef LOG_INFO
+#undef LOG_INFO
+#endif
+
+#ifdef LOG_ERROR
+#undef LOG_ERROR
+#endif
+
 #define LOG_INFO(...) \
     if (log_info_enabled) \
     { \
@@ -121,7 +129,7 @@ namespace rllm
             while (std::getline(file, line))
             {
                 const auto input_line = get_token_ids(line);
-                for (const auto i : enum_iterator<PositionIndex>(input_line.size()))
+                for (const auto i : enum_iterator1D<PositionIndex>(input_line.size()))
                 {
                     assert(input_line[i] >= TokenID::START);
                     assert(input_line[i] < TokenID::MAX);
@@ -143,9 +151,9 @@ namespace rllm
         }
     }
 
-    InputLine Corpus::get_token_ids(const std::string& text) const
+CpuInputLine Corpus::get_token_ids(const std::string& text) const
     {
-        InputLine result;
+        CpuInputLine result;
 
         size_t ix = 0;
 
@@ -216,21 +224,38 @@ namespace rllm
         {
             return "<UNK>";
         }
-        assert(id < TokenID::MAX);
-        return tokenizer_map[id].str;
+        if (id < TokenID::START || id >= TokenID::MAX)
+        {
+            return "<UNK>";
+        }
+
+        const auto it = tokenizer_map.find(id);
+        if (it == tokenizer_map.end() || it->second.str == nullptr)
+        {
+            return "<UNK>";
+        }
+
+        return it->second.str;
     }
 
-    std::optional<std::string> Corpus::get_line(const InputLine& line) const
+    std::optional<std::string> Corpus::get_line(const CpuInputLine& line) const
     {
         std::string result;
-        for (const auto i : enum_iterator<PositionIndex>(line.size()))
+        for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
         {
             auto& token_id = line[i];
-            auto& token_info = tokenizer_map[token_id];
             if (token_id == TokenID::UNKNOWN_TOKEN_ID)
             {
                 return std::nullopt; // line contains unknown token ID, cannot convert to string
             }
+
+            const auto it = tokenizer_map.find(token_id);
+            if (it == tokenizer_map.end() || it->second.str == nullptr)
+            {
+                return std::nullopt;
+            }
+
+            const auto& token_info = it->second;
             result += get_token_from_id(token_id);
             if (token_info.end_of_word)
             {
@@ -244,15 +269,15 @@ namespace rllm
         return result;
     }
 
-    std::vector<InputLine> Corpus::get_suitable_training_lines() const
+    std::vector<CpuInputLine> Corpus::get_suitable_training_lines() const
     {
-        std::vector<InputLine> training_lines;
+        std::vector<CpuInputLine> training_lines;
         std::unordered_set<std::string> seen_training_line_keys;
 
-        auto make_line_key = [](const InputLine& line) {
+        auto make_line_key = [](const CpuInputLine& line) {
             std::string key;
             key.reserve(static_cast<size_t>(line.size()) * 6);
-            for (const auto i : enum_iterator<PositionIndex>(line.size()))
+            for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
             {
                 key += std::to_string(static_cast<int>(line[i]));
                 key.push_back(',');
@@ -261,11 +286,11 @@ namespace rllm
         };
 
         assert(!m_token_list.empty());
-        this->visit_lines([&](const InputLine& line) {
+        this->visit_lines([&](const CpuInputLine& line) {
             // Strip the trailing TOK_NEWLINE that the corpus appends to every line.
             // Keeping it would make \n the dominant training target (it ends every line),
             // causing the model to collapse to always predicting \n.
-            InputLine stripped = line;
+            CpuInputLine stripped = line;
             if (!stripped.empty() && stripped.back() == TokenID::TOK_NEWLINE)
                 stripped.pop_back();
 

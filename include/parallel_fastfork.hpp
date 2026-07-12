@@ -4,7 +4,12 @@
 #include <bit>
 #include <cstddef>
 #include <cstdio>
+#include <type_traits>
 #include <fastfork/fastfork.hpp>
+
+#if defined(USE_VULKAN_OFFLOAD)
+#error "PARFOR* with the FastFork backend is not supported in Vulkan builds; use PARALLEL_BACKEND=sequential or openmp"
+#endif
 
 namespace parallel {
     void init_parallel();
@@ -16,11 +21,16 @@ namespace parallel {
 // Each loop iteration is forked as an independent task.
 // The extra inner scope `{ {` lets ENDFOR use `}}` to close both PARFOR
 // and PARFOR_2D uniformly while still yielding one task per outer row for 2D.
-#define PARFOR(v, ...) \
+#define PARFOR_1D(v, ...) \
     { auto _ff_rng_ = (__VA_ARGS__); \
       fastfork::Context _ff_ctx_; \
       for (auto v : _ff_rng_) \
           fastfork::fork_task(_ff_ctx_, [&, v]() { {
+#define PARFOR_3D(v1, v2, v3, ...) \
+    { auto _ff_rng_ = (__VA_ARGS__); \
+      fastfork::Context _ff_ctx_; \
+      for (auto [v1, v2, v3] : _ff_rng_) \
+          fastfork::fork_task(_ff_ctx_, [&, v1, v2, v3]() { {
 // PARFOR_2D partitions the 2D space into dynamically-sized blocks so that
 // the total task count ~= FF_PARFOR_2D_TASKS_PER_THREAD x n_threads for large
 // iteration spaces, or ~= n_threads for small ones (< FF_PARFOR_2D_SMALL_THRESH
@@ -90,8 +100,20 @@ namespace parallel {
           fastfork::fork_task(_tri_ctx_, [&, _tri_t_, _tri_nt_]() { \
               for (size_t _tri_i_ = _tri_t_; _tri_i_ < _tri_n_; _tri_i_ += _tri_nt_) \
               for (size_t _tri_j_ = 0; _tri_j_ <= _tri_i_; ++_tri_j_) { \
-                  const auto v1 = static_cast<decltype(N)>(_tri_i_); \
-                  const auto v2 = static_cast<decltype(N)>(_tri_j_);
+                    const auto v1 = static_cast<std::remove_cvref_t<decltype(N)>>(_tri_i_); \
+                    const auto v2 = static_cast<std::remove_cvref_t<decltype(N)>>(_tri_j_);
+#define PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2) \
+    { const size_t _tri3_hn_ = static_cast<size_t>(N1); \
+      const size_t _tri3_n_ = static_cast<size_t>(N2); \
+      fastfork::Context _tri3_ctx_; \
+      for (size_t _tri3_flat_ = 0; _tri3_flat_ < _tri3_hn_ * _tri3_n_; ++_tri3_flat_) \
+          fastfork::fork_task(_tri3_ctx_, [&, _tri3_flat_]() { \
+              const size_t _tri3_h_ = _tri3_flat_ / _tri3_n_; \
+              const size_t _tri3_i_ = _tri3_flat_ % _tri3_n_; \
+              for (size_t _tri3_j_ = 0; _tri3_j_ <= _tri3_i_; ++_tri3_j_) { \
+                    const auto v1 = static_cast<std::remove_cvref_t<decltype(N1)>>(_tri3_h_); \
+                    const auto v2 = static_cast<std::remove_cvref_t<decltype(N2)>>(_tri3_i_); \
+                    const auto v3 = static_cast<std::remove_cvref_t<decltype(N2)>>(_tri3_j_);
 // Parallelises the upper-triangular iteration space { (v1,v2) | 0 <= v1 <= v2 < N }.
 // Same interleaved-striping strategy and cell-count-based task cap as the lower
 // triangular variant above.
@@ -106,12 +128,8 @@ namespace parallel {
           fastfork::fork_task(_utri_ctx_, [&, _utri_t_, _utri_nt_]() { \
               for (size_t _utri_i_ = _utri_t_; _utri_i_ < _utri_n_; _utri_i_ += _utri_nt_) \
               for (size_t _utri_j_ = _utri_i_; _utri_j_ < _utri_n_; ++_utri_j_) { \
-                  const auto v1 = static_cast<decltype(N)>(_utri_i_); \
-                  const auto v2 = static_cast<decltype(N)>(_utri_j_);
-
-#define PARSECTIONS_BEGIN  { fastfork::Context _ff_ctx_; fastfork::fork_task(_ff_ctx_, [&]() {
-#define PARSECTION         }); fastfork::fork_task(_ff_ctx_, [&]() {
-#define PARSECTIONS_END    }); }
+                    const auto v1 = static_cast<std::remove_cvref_t<decltype(N)>>(_utri_i_); \
+                    const auto v2 = static_cast<std::remove_cvref_t<decltype(N)>>(_utri_j_);
 
 // Dump per-worker fastfork statistics to stderr then reset the counters.
 #define PARALLEL_DUMP_STATS() \
@@ -130,17 +148,12 @@ namespace parallel {
         fastfork::reset_worker_stats(); \
     } while (false)
 
-// Top-level (non-nested) parallel loops that are candidates for future GPU /
-// accelerator offload. Currently they expand identically to the CPU PARFOR*
-// macros; the distinct name marks the intent without changing behaviour.
-#define OFFLOADABLE_PARFOR(v, ...)              PARFOR(v, __VA_ARGS__)
-#define OFFLOADABLE_PARFOR_2D(v1, v2, ...)      PARFOR_2D(v1, v2, __VA_ARGS__)
-
-// Index-space OFFLOAD_PARFOR* fallback for fastfork builds.
-// In USE_VULKAN_OFFLOAD mode these remain CPU loops until Vulkan kernels land.
-#define OFFLOAD_PARFOR(v, N) \
-    for (std::size_t v = 0, _off_n_ = static_cast<std::size_t>(N); v < _off_n_; ++v) {
-
-#define OFFLOAD_PARFOR_2D(v1, v2, N1, N2) \
-    for (std::size_t v1 = 0, _off_n1_ = static_cast<std::size_t>(N1); v1 < _off_n1_; ++v1) \
-        for (std::size_t v2 = 0, _off_n2_ = static_cast<std::size_t>(N2); v2 < _off_n2_; ++v2) {
+// Source offload macros are rewritten by vulkanize, but headers are not rewritten.
+// Keep header-time uses valid by falling back to the CPU PARFOR forms.
+// The first argument is a VulkanQueue reference (ignored by CPU backends).
+#define OFFLOAD_PARFOR_1D_PARAM(queue, v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
+#define OFFLOAD_PARFOR_2D_PARAM(queue, v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
+#define OFFLOAD_PARFOR_3D_PARAM(queue, v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
+#define OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(queue, v1, v2, v3, N1, N2, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D_TRIANGULAR(v1, v2, v3, N1, N2)
+#define OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_TRIANGULAR(v1, v2, N)
+#define OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(queue, v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D_UPPER_TRIANGULAR(v1, v2, N)

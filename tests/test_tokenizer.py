@@ -63,3 +63,8 @@ def test_hash_prefixed_word_is_learned_as_single_token():
     matched, skipped = _greedy_tokenize("#xxxx", token_vocab)
     assert skipped == []
     assert matched == ["#xxxx"]
+
+
+def test_invalid_token_is_reserved_even_when_absent_from_training_text():
+    tokenizer_map = ctm.create_tokenizer_map("abc abc")
+    assert "INVALID" in tokenizer_map

@@ -1,9 +1,11 @@
 #include <Prompter.hpp>
+#include <rllm_vulkan_runtime.hpp>
 
 #include <algorithm>
 #include <iostream>
 #include <print>
 #include <string>
+#include <isocline.h>
 
 namespace rllm
 {
@@ -14,7 +16,7 @@ namespace rllm
     // This is a tunable hyperparameter.
     static constexpr float VALID_PREDICTION_THRESHOLD = 0.5f / 100.0f;
 
-    static void process_command(const std::string& _command, Prompter::PromptOptions& options, NeuralNetwork& nn)
+    static void process_command(const std::string& _command, Prompter::PromptOptions& options, TextTrainer& nn)
     {
         const auto command = _command.empty() ? "/help" : _command;
 
@@ -67,8 +69,12 @@ namespace rllm
                  const std::string arg = command.substr(space + 1);
                  const auto& corpus = nn.get_corpus();
                  const auto token_ids = corpus.get_token_ids(arg);
-                 nn.propagate_forward(token_ids);
-                 const auto mean_vec = nn.get_last_hidden_mean();
+
+                 nn.get_last_input() = token_ids; // set the input to the probe token(s) for tracing
+
+                 nn.propagate_forward();
+                 auto& queue = rllm::vulkan_runtime::get_queue(0);
+                 const auto mean_vec = nn.get_last_hidden_mean(queue);
                  constexpr size_t D = static_cast<size_t>(EmbeddingDimension::MAX);
                  constexpr size_t COLS = 8;
                  std::println("Hidden state embedding for '{}' ({} tokens, mean-pooled):", arg, static_cast<size_t>(token_ids.size()));
@@ -93,17 +99,18 @@ namespace rllm
                  const auto token_ids = corpus.get_token_ids(arg);
                  constexpr size_t D = static_cast<size_t>(EmbeddingDimension::MAX);
                  constexpr size_t COLS = 8;
-                 for (const auto pos : enum_iterator<PositionIndex>(token_ids.size()))
+                 for (const auto pos : enum_iterator1D<PositionIndex>(token_ids.size()))
                  {
                      const TokenID tok = token_ids[pos];
                      const auto token_str = corpus.get_token_from_id(tok);
                      std::println("Embedding for token '{}' (id {}):", token_str, static_cast<size_t>(tok));
-                     const auto& emb = input_layer.get_embedding(tok);
+                     embedding_row_t emb;
+                     input_layer.get_embedding(tok, emb);
                      for (size_t i = 0; i < D; i += COLS)
                      {
                          std::print("  [{:3d}]", i);
                          for (size_t j = i; j < std::min(i + COLS, D); ++j)
-                             std::print("  {:+.4f}", static_cast<float>(emb[static_cast<EmbeddingDimension>(j)]));
+                             std::print("  {:+.4f}", static_cast<float>(emb[static_cast<size_t>(j)]));
                          std::println("");
                      }
                  }
@@ -139,7 +146,7 @@ namespace rllm
         size_t _num_layers = 2; // overridden when loaded from file
         Statistics stats;
 
-        auto nn = std::make_unique<NeuralNetwork>(_num_layers, corpus, stats);
+        auto nn = std::make_unique<TextTrainer>(_num_layers, corpus, stats);
 
         std::println("Loading '{}'...", filename);
         if (!nn->load(filename))
@@ -158,22 +165,26 @@ namespace rllm
         }
         else
         {
-            std::string line;
+            // Isocline history has zero capacity until explicitly enabled.
+            // A null filename keeps prompt history in memory for this session.
+            ic_set_history(nullptr, -1);
             while (true)
             {
                 std::println("Enter input (or '/exit' to quit): ");
-                std::print("> ");
-                if (!std::getline(std::cin, line))
+                char* raw = ic_readline("> ");
+                if (raw == nullptr)
                 {
                     std::println("Exiting prompt mode.");
                     break;
                 }
+                std::string line(raw);
+                ic_free(raw);
                 process_line(line, corpus, *nn, options);
             }
         }
     }
 
-    void Prompter::process_line(const std::string& line, Corpus& corpus, NeuralNetwork& nn, PromptOptions& options)
+    void Prompter::process_line(const std::string& line, Corpus& corpus, TextTrainer& nn, PromptOptions& options)
     {
         if (line.starts_with("/") || line.empty())
         {
@@ -198,10 +209,11 @@ namespace rllm
         bool stop = false;
         while (!stop && total_tokens_generated < MAX_NUM_ANSWER_TOKENS)
         {
-            nn.propagate_forward(token_id_list);
+            nn.get_last_input() = token_id_list; // set the input for tracing
+            nn.propagate_forward();
 
             bool appended_token = false;
-            for (const auto head : enum_iterator<MultiTokenPredictionIndex>())
+            for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>())
             {
                 if (stop)
                     break;
