@@ -57,6 +57,7 @@ file(
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
 )
 
+
 if(OFFLOAD_BACKEND STREQUAL "vulkan")
     set(RLLM_VULKANIZED_SRC_DIR "${CMAKE_BINARY_DIR}/generated/vulkanized/src")
     set(RLLM_VULKAN_KERNEL_DIR "${CMAKE_BINARY_DIR}/generated/vulkanized/kernels")

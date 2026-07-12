@@ -706,8 +706,9 @@ namespace rllm
     void TextTrainer::train_with_random_len_from_start(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, std::mt19937& rng, float learning_rate_scale, bool manage_accumulator)
     {
         const int line_len = static_cast<int>(line_of_file.size());
-        if (line_len < 2)
+        if (line_len < 2) {
             return;
+        }
 
         // Include short prefixes (len=2) so one-token contexts can learn their next token
         // (e.g. "# -> define/include").

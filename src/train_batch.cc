@@ -93,6 +93,7 @@ namespace rllm
                 batch.push_back({line});
                 continue;
             }
+            // random length prefixes of the line, but at least 2 tokens (1 input + 1 target).
             std::uniform_int_distribution<int> length(2, static_cast<int>(line.size()));
             CpuInputLine input;
             line.sub_array(input, static_cast<PositionIndex>(length(rng)));
@@ -284,9 +285,17 @@ namespace rllm
         std::vector<size_t> indices(lines.size());
         std::iota(indices.begin(), indices.end(), 0);
         auto selected_inputs = make_training_batch(lines, indices, 0, epoch_lines, rng);
-        std::stable_sort(selected_inputs.begin(), selected_inputs.end(), [](const auto& a, const auto& b) {
-            return a.line.size() < b.line.size();
-        });
+
+        if (false)
+        {
+            std::stable_sort(selected_inputs.begin(), selected_inputs.end(), [](const auto& a, const auto& b) {
+                return a.line.size() < b.line.size();
+            });
+        } else {
+            std::shuffle(selected_inputs.begin(), selected_inputs.end(), rng);
+        }
+
+
         const size_t selected_lines = selected_inputs.size();
         for (size_t start = 0; start < selected_lines; start += m_micro_batch_size)
         {

@@ -146,7 +146,7 @@ echo "--- Starting training ---"
      --layers 3 \
      --checkpoint-interval 120 \
      --learn-depth 1 \
-     --learning-rate 0.0003 \
+     --learning-rate 0.00001 \
      --micro-batch-size 16 \
      --vulkan-device R9700
 
