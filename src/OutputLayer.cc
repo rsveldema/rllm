@@ -1,4 +1,5 @@
 #include <OutputLayer.hpp>
+#include <WeightInitialization.hpp>
 #include <RandomHelpers.hpp>
 #include <RuntimeConfig.hpp>
 #include <cpu/cpu_fixed_matrix.hpp>
@@ -470,14 +471,19 @@ namespace rllm
         touched = false;
     }
 
-    void OutputLayer::set_random_weights()
+    void OutputLayer::set_random_weights(WeightInitializerType type)
     {
-        const int D = static_cast<int>(EmbeddingDimension::MAX);
-        const float scale = 1.0f / std::sqrt(static_cast<float>(D));
+        const size_t d_model = static_cast<size_t>(EmbeddingDimension::MAX);
+        const size_t vocab_size = static_cast<size_t>(TokenID::MAX);
+        // The mixed profile reserves Xavier for transformer input projections;
+        // the LM head remains on the legacy scale.
+        if (type == WeightInitializerType::XavierInputProjections)
+            type = WeightInitializerType::LegacyUniform;
+        auto initializer = make_weight_initializer(type, d_model, vocab_size);
         cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> cpu_tmp;
         for (const auto v : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                cpu_tmp.set(v, d, static_cast<float16>(get_random_value(-scale, scale)));
+                cpu_tmp.set(v, d, static_cast<float16>(initializer->getNextValue()));
         {
             auto& queue = rllm::vulkan_runtime::get_queue(0);
             W_lm_head.copy_from_cpu(queue, cpu_tmp);

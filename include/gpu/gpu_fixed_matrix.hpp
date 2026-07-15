@@ -59,6 +59,16 @@ namespace rllm
             copy_from_cpu(queue, tmp);
         }
 
+        template<typename Initializer>
+        void fill_rand(VulkanQueue& queue, Initializer& initializer)
+        {
+            cpu_fixed_matrix<ElementType, X, Y> tmp;
+            auto* ptr = tmp.data();
+            for (size_t i = 0; i < ROWS * COLS; ++i)
+                ptr[i] = static_cast<ElementType>(initializer.getNextValue());
+            copy_from_cpu(queue, tmp);
+        }
+
         /** H2D partial: upload one row from the given cpu source. */
         void copy_row_to_offload_buffer(VulkanQueue& queue, X x, const cpu_fixed_matrix<ElementType, X, Y>& src)
         {

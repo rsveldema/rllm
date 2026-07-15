@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <Corpus.hpp>
+#include <LogFormatting.hpp>
+#include <WeightInitialization.hpp>
 #include <TextTrainer.hpp>
 #include <Statistics.hpp>
 #include <TransformerBlock.hpp>
@@ -18,6 +20,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <print>
 #include <vector>
@@ -39,6 +42,56 @@ namespace
     };
 } // namespace
 
+TEST(LearningRateScheduleTest, WarmsUpThenCosineDecays)
+{
+    constexpr size_t total_steps = 100;
+    EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(1, total_steps), 0.2f);
+    EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(5, total_steps), 1.0f);
+    EXPECT_LT(LoweringLearningRate::scale_for_step(50, total_steps), 1.0f);
+    EXPECT_GT(LoweringLearningRate::scale_for_step(50, total_steps), LoweringLearningRate::MIN_SCALE);
+    EXPECT_NEAR(
+        LoweringLearningRate::scale_for_step(total_steps, total_steps),
+        LoweringLearningRate::MIN_SCALE,
+        1e-6f);
+    EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(1, 0), 1.0f);
+}
+
+TEST(LearningRateScheduleTest, ConstantRateDoesNotChange)
+{
+    ConstantLearningRate rate{0.25f};
+    EXPECT_FLOAT_EQ(rate.get_rate(), 0.25f);
+    EXPECT_FLOAT_EQ(rate.get_rate(), 0.25f);
+}
+
+TEST(LearningRateScheduleTest, SimulatedAnnealingRateDecaysByConfiguredFactorUntilFloor)
+{
+    SimulatedAnnealingLearningRate rate{1.0f, 0.8f, 40.0f, 2};
+    EXPECT_FLOAT_EQ(rate.get_rate(), 40.0f);
+    EXPECT_FLOAT_EQ(rate.get_rate(), 40.0f);
+    rate.advance_epoch();
+    EXPECT_FLOAT_EQ(rate.get_rate(), 40.0f);
+    rate.advance_epoch();
+    EXPECT_FLOAT_EQ(rate.get_rate(), 32.0f);
+
+    float current = 0.0f;
+    for (size_t epoch = 0; epoch < 80; ++epoch)
+    {
+        rate.advance_epoch();
+        current = rate.get_rate();
+    }
+    EXPECT_FLOAT_EQ(current, 1.0f / 50.0f);
+    rate.advance_epoch();
+    EXPECT_FLOAT_EQ(rate.get_rate(), 1.0f / 50.0f);
+}
+
+TEST(LearningRateScheduleTest, SimulatedAnnealingUsesConfiguredMinimumMultiplier)
+{
+    SimulatedAnnealingLearningRate rate{1.0f, 0.5f, 1.0f, 1, 0.25f};
+    for (int epoch = 0; epoch < 10; ++epoch)
+        rate.advance_epoch();
+    EXPECT_FLOAT_EQ(rate.get_rate(), 0.25f);
+}
+
 int main(int argc, char** argv)
 {
     parallel::init_parallel();
@@ -52,6 +105,66 @@ int main(int argc, char** argv)
 TEST(PredictorTest, Placeholder)
 {
     SUCCEED();
+}
+
+TEST(LogFormattingTest, EscapesNewlinesAndTabs)
+{
+    EXPECT_EQ(escape_whitespace_for_log("first\n\tsecond"), "first\\n\\tsecond");
+}
+
+TEST(LogFormattingTest, FormatsEpochEta)
+{
+    EXPECT_EQ(format_eta_for_log(0.0), "00:00:00");
+    EXPECT_EQ(format_eta_for_log(3661.0), "01:01:01");
+    EXPECT_EQ(format_eta_for_log(61.1), "00:01:02");
+}
+
+TEST(WeightInitializationTest, UsesVarianceScaledUniformBounds)
+{
+    EXPECT_FLOAT_EQ(xavier_uniform_bound(512, 512), std::sqrt(6.0f / 1024.0f));
+    EXPECT_FLOAT_EQ(xavier_uniform_bound(512, 2048), std::sqrt(6.0f / 2560.0f));
+    EXPECT_FLOAT_EQ(xavier_uniform_bound(2048, 512), xavier_uniform_bound(512, 2048));
+    EXPECT_FLOAT_EQ(embedding_uniform_bound(512), std::sqrt(3.0f / 512.0f));
+}
+
+TEST(WeightInitializationTest, InterfacesGenerateValuesWithinTheirBounds)
+{
+    XavierUniformWeightInitializer weights(512, 512);
+    XavierUniformFFNInitializer ffn(512, 2048);
+    VarianceScaledEmbeddingInitializer embeddings(512);
+
+    EXPECT_LE(std::abs(weights.getNextValue()), xavier_uniform_bound(512, 512));
+    EXPECT_LE(std::abs(ffn.getNextValue()), xavier_uniform_bound(512, 2048));
+    EXPECT_LE(std::abs(embeddings.getNextValue()), embedding_uniform_bound(512));
+}
+
+TEST(WeightInitializationTest, NamesMixedInputProjectionProfile)
+{
+    EXPECT_EQ(initializer_name(WeightInitializerType::XavierInputProjections), "xavier-input-projections");
+    EXPECT_EQ(initializer_name(FFNInitializerType::XavierInputProjections), "xavier-input-projections");
+}
+
+TEST(CorpusTest, TrainingLinesRetainPythonTabsAndTrailingNewline)
+{
+    const auto corpus_dir = std::filesystem::temp_directory_path() / "rllm_python_token_test";
+    std::filesystem::create_directories(corpus_dir);
+    const auto source_path = corpus_dir / "sample.py";
+    {
+        std::ofstream source(source_path);
+        source << "if ready:\n\tpass\n";
+    }
+
+    std::vector<std::string> filters = {".py"};
+    Corpus corpus(filters);
+    corpus.load_files_from_dir(corpus_dir.string());
+    const auto lines = corpus.get_suitable_training_lines();
+
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[0].get(static_cast<size_t>(lines[0].size()) - 1), TokenID::TOK_NEWLINE);
+    EXPECT_EQ(lines[1].get(0u), TokenID::TOK_TAB);
+    EXPECT_EQ(lines[1].get(static_cast<size_t>(lines[1].size()) - 1), TokenID::TOK_NEWLINE);
+
+    std::filesystem::remove_all(corpus_dir);
 }
 
 namespace

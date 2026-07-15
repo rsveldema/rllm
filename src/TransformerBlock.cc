@@ -2,6 +2,7 @@
 #include <RandomHelpers.hpp>
 #include <RuntimeConfig.hpp>
 #include <TransformerBlock.hpp>
+#include <WeightInitialization.hpp>
 #include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
 #include <enum_iterator3D.hpp>
@@ -427,19 +428,31 @@ namespace rllm
 
     // ── randomize ─────────────────────────────────────────────────────────────
 
-    void TransformerBlock::randomize()
+    void TransformerBlock::randomize(WeightInitializerType weight_type, FFNInitializerType ffn_type)
     {
-        const float sd = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(EmbeddingDimension::MAX)));
-        const float sf = 1.0f / std::sqrt(static_cast<float>(static_cast<int>(FFDimension::MAX)));
+        const size_t d_model = static_cast<size_t>(EmbeddingDimension::MAX);
+        const size_t d_ff = static_cast<size_t>(FFDimension::MAX);
+        const auto attention_input_type = weight_type == WeightInitializerType::XavierInputProjections
+            ? WeightInitializerType::XavierUniform : weight_type;
+        const auto attention_output_type = weight_type == WeightInitializerType::XavierInputProjections
+            ? WeightInitializerType::LegacyUniform : weight_type;
+        const auto ffn_input_type = ffn_type == FFNInitializerType::XavierInputProjections
+            ? FFNInitializerType::XavierUniform : ffn_type;
+        const auto ffn_output_type = ffn_type == FFNInitializerType::XavierInputProjections
+            ? FFNInitializerType::LegacyUniform : ffn_type;
+        auto attention_input_initializer = make_weight_initializer(attention_input_type, d_model, d_model);
+        auto attention_output_initializer = make_weight_initializer(attention_output_type, d_model, d_model);
+        auto ffn_up_initializer = make_ffn_initializer(ffn_input_type, d_model, d_ff);
+        auto ffn_down_initializer = make_ffn_initializer(ffn_output_type, d_ff, d_model);
 
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        W_q.fill_rand(queue, -sd, sd);
-        W_k.fill_rand(queue, -sd, sd);
-        W_v.fill_rand(queue, -sd, sd);
-        W_o.fill_rand(queue, -sd, sd);
-        W_gate.fill_rand(queue, -sd, sd);
-        W_up.fill_rand(queue, -sd, sd);
-        W_down.fill_rand(queue, -sf, sf);
+        W_q.fill_rand(queue, *attention_input_initializer);
+        W_k.fill_rand(queue, *attention_input_initializer);
+        W_v.fill_rand(queue, *attention_input_initializer);
+        W_o.fill_rand(queue, *attention_output_initializer);
+        W_gate.fill_rand(queue, *ffn_up_initializer);
+        W_up.fill_rand(queue, *ffn_up_initializer);
+        W_down.fill_rand(queue, *ffn_down_initializer);
 
         V_q.zero(queue);
         V_k.zero(queue);
@@ -482,6 +495,55 @@ namespace rllm
         for (const auto i : enum_iterator1D<EmbeddingDimension>())
             y[t, i] = (x[t, i] * inv);
         ENDFOR
+    }
+
+    size_t TransformerBlock::memory_usage_bytes(
+        const ForwardWorkspace& fwd,
+        const BackwardWorkspace& bwd,
+        const TransformerGradientAccumulator& grad,
+        size_t backward_workspace_share_count) const
+    {
+        assert(backward_workspace_share_count > 0);
+
+        const size_t persistent =
+            W_q.storage_size_bytes() + W_k.storage_size_bytes() + W_v.storage_size_bytes() + W_o.storage_size_bytes() +
+            V_q.storage_size_bytes() + V_k.storage_size_bytes() + V_v.storage_size_bytes() + V_o.storage_size_bytes() +
+            S_q.storage_size_bytes() + S_k.storage_size_bytes() + S_v.storage_size_bytes() + S_o.storage_size_bytes() +
+            W_gate.storage_size_bytes() + W_up.storage_size_bytes() + W_down.storage_size_bytes() +
+            V_gate.storage_size_bytes() + V_up.storage_size_bytes() + V_down.storage_size_bytes() +
+            S_gate.storage_size_bytes() + S_up.storage_size_bytes() + S_down.storage_size_bytes();
+
+        size_t forward =
+            fwd.h_in.storage_size_bytes() + fwd.h_norm_attn.storage_size_bytes() +
+            fwd.Q.storage_size_bytes() + fwd.K.storage_size_bytes() + fwd.V.storage_size_bytes() +
+            fwd.attn_concat.storage_size_bytes() + fwd.h_mid.storage_size_bytes() +
+            fwd.h_norm_ff.storage_size_bytes() + fwd.gate_pre.storage_size_bytes() +
+            fwd.up_pre.storage_size_bytes() + fwd.ffn_act.storage_size_bytes() +
+            fwd.attn_proj.storage_size_bytes() + fwd.ffn_out.storage_size_bytes() +
+            decltype(fwd.rms_norm_row_sums)::CAPACITY * sizeof(float) +
+            decltype(fwd.rms_norm_inv_rms)::CAPACITY * sizeof(float);
+        for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
+            forward += fwd.attn_w[hi].storage_size_bytes();
+
+        size_t backward =
+            bwd.d_h_mid.storage_size_bytes() + bwd.d_ffn_act.storage_size_bytes() +
+            bwd.dW_down.storage_size_bytes() + bwd.d_gate_pre.storage_size_bytes() +
+            bwd.d_up_pre.storage_size_bytes() + bwd.d_h_norm_ff.storage_size_bytes() +
+            bwd.dW_gate.storage_size_bytes() + bwd.dW_up.storage_size_bytes() +
+            bwd.d_attn_concat.storage_size_bytes() + bwd.dW_o.storage_size_bytes() +
+            bwd.d_Q.storage_size_bytes() + bwd.d_K.storage_size_bytes() + bwd.d_V.storage_size_bytes() +
+            bwd.dW_q.storage_size_bytes() + bwd.dW_k.storage_size_bytes() + bwd.dW_v.storage_size_bytes() +
+            bwd.d_h_norm_attn.storage_size_bytes();
+        for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
+            backward += bwd.d_scores[hi].storage_size_bytes() + bwd.d_raw[hi].storage_size_bytes();
+
+        const size_t gradient_accumulator =
+            grad.dW_down.storage_size_bytes() + grad.dW_gate.storage_size_bytes() +
+            grad.dW_up.storage_size_bytes() + grad.dW_o.storage_size_bytes() +
+            grad.dW_q.storage_size_bytes() + grad.dW_k.storage_size_bytes() +
+            grad.dW_v.storage_size_bytes();
+
+        return persistent + forward + gradient_accumulator + backward / backward_workspace_share_count;
     }
 
 

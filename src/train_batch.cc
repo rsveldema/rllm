@@ -1,5 +1,6 @@
 #include <TextTrainer.hpp>
 #include "TextTrainerInternal.hpp"
+#include <LogFormatting.hpp>
 
 #include <algorithm>
 #include <array>
@@ -88,16 +89,41 @@ namespace rllm
             const auto& line = lines[indices[start + offset]];
             if (static_cast<int>(line.size()) < 2)
                 continue;
-            if (m_training_method == TrainingMethod::RANDOM_LINE_FULL)
+            switch (m_training_method)
             {
+            case TrainingMethod::RANDOM_LINE_FULL:
                 batch.push_back({line});
-                continue;
+                break;
+            case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
+            {
+                std::uniform_int_distribution<int> length(2, static_cast<int>(line.size()));
+                CpuInputLine input;
+                line.sub_array(input, static_cast<PositionIndex>(length(rng)));
+                batch.push_back({input});
+                break;
             }
-            // random length prefixes of the line, but at least 2 tokens (1 input + 1 target).
-            std::uniform_int_distribution<int> length(2, static_cast<int>(line.size()));
-            CpuInputLine input;
-            line.sub_array(input, static_cast<PositionIndex>(length(rng)));
-            batch.push_back({input});
+            case TrainingMethod::TWO_TOK:
+            case TrainingMethod::THREE_TOK:
+            {
+                const int requested = m_training_method == TrainingMethod::TWO_TOK ? 2 : 3;
+                CpuInputLine input;
+                line.sub_array(input, static_cast<PositionIndex>(std::min(requested, static_cast<int>(line.size()))));
+                batch.push_back({input});
+                break;
+            }
+            case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
+                // Preserve the existing exclusive upper bound: prefixes [2, line.size()).
+                for (size_t length = 2; length < static_cast<size_t>(line.size()); ++length)
+                {
+                    CpuInputLine input;
+                    line.sub_array(input, static_cast<PositionIndex>(length));
+                    batch.push_back({input});
+                }
+                break;
+            case TrainingMethod::WINDOW:
+                assert(false);
+                break;
+            }
         }
         return batch;
     }
@@ -201,13 +227,14 @@ namespace rllm
         size_t finished = 0;
         for (size_t active = 0; active < indices.size(); ++active)
         {
-            if (losses[active] >= m_convergence_threshold)
+            if (losses[active] >= CONVERGENCE_THRESHOLD)
                 continue;
             auto& item = batch[indices[active]];
             const int input_length = batch_input_len(static_cast<int>(item.line.size()));
             const auto target = target_for_head(item.line, input_length, MultiTokenPredictionIndex::START);
             LOG_INFO("Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}",
-                step + 1, m_corpus.get_token_from_id(target), m_corpus.get_line(item.line).value_or(""), input_length);
+                step + 1, escape_whitespace_for_log(m_corpus.get_token_from_id(target)),
+                escape_whitespace_for_log(m_corpus.get_line(item.line).value_or("")), input_length);
             item.finished = true;
             ++finished;
             m_stats.record_learning_success();
@@ -244,6 +271,14 @@ namespace rllm
         std::vector<float> losses(active_indices.size(), std::numeric_limits<float>::infinity());
         const auto backward_started = std::chrono::steady_clock::now();
         train_batch_output_heads(batch, active_indices, valid_heads, batch_size, queue, losses, timing);
+        for (const float loss : losses)
+        {
+            if (std::isfinite(loss))
+            {
+                timing.primary_loss_sum += loss;
+                ++timing.primary_loss_count;
+            }
+        }
         back.dh.zero(queue);
         back.din.zero(queue);
         scatter_last_hidden_gradient(m_batched_output_workspace->dh_last, m_gpu_packed_batch->last_row, back.dh, static_cast<int>(batch_size));
@@ -297,6 +332,7 @@ namespace rllm
 
 
         const size_t selected_lines = selected_inputs.size();
+        const auto epoch_started_at = std::chrono::steady_clock::now();
         for (size_t start = 0; start < selected_lines; start += m_micro_batch_size)
         {
             const size_t count = std::min(m_micro_batch_size, selected_lines - start);
@@ -312,12 +348,30 @@ namespace rllm
             BatchTrainingTiming timing;
             const size_t iterations = train_batch_items(batch, m_learn_depth, timing);
             const double total_ms = elapsed_ms(started);
-            LOG_INFO("Epoch[{}%] random-line[{}..{}]: {:0.2f}% done (micro-batch {}, avg {:.2f} ms/line, iterations total {}, avg {:.2f}/line, rounds {}, batch {:.2f} ms, forward {:.2f} ms, backward {:.2f} ms, apply {:.2f} ms, out {:.2f} ms, transformer {:.2f} ms, input {:.2f} ms)",
-                epoch / static_cast<float>(num_epochs) * 100.0f, start + 1, start + count,
+            LOG_INFO("Epoch[{}%] {}[{}..{}]: {:0.2f}% done (micro-batch {}, training loss {:.6f}, avg {:.2f} ms/example, iterations total {}, avg {:.2f}/example, rounds {}, batch {:.2f} ms, forward {:.2f} ms, backward {:.2f} ms, apply {:.2f} ms, out {:.2f} ms, transformer {:.2f} ms, input {:.2f} ms)",
+                epoch / static_cast<float>(num_epochs) * 100.0f, training_method_to_string(m_training_method), start + 1, start + count,
                 static_cast<float>(start + count) / static_cast<float>(selected_lines) * 100.0f,
-                batch.size(), total_ms / batch.size(), iterations, static_cast<double>(iterations) / batch.size(),
+                batch.size(), timing.average_primary_loss(), total_ms / batch.size(), iterations, static_cast<double>(iterations) / batch.size(),
                 timing.rounds, total_ms, timing.forward_ms, timing.backward_ms,
                 timing.apply_ms, timing.backward_output_ms, timing.backward_transformer_ms, timing.backward_input_ms);
+
+            const size_t batch_number = start / m_micro_batch_size + 1;
+            if (batch_number % 10 == 0)
+            {
+                const double elapsed_seconds = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - epoch_started_at).count();
+                const size_t completed = start + count;
+                const double remaining_seconds = elapsed_seconds *
+                    static_cast<double>(selected_lines - completed) / static_cast<double>(completed);
+                const double epoch_fraction = static_cast<double>(completed) / static_cast<double>(selected_lines);
+                const double estimated_epoch_seconds = elapsed_seconds / epoch_fraction;
+                const double all_epochs_remaining_seconds = estimated_epoch_seconds *
+                    (static_cast<double>(num_epochs - epoch) - epoch_fraction);
+                LOG_INFO(
+                    "Epoch {} batch {} ETA until epoch finishes: {}; ETA until all planned epochs finish: {}",
+                    epoch, batch_number, format_eta_for_log(remaining_seconds),
+                    format_eta_for_log(all_epochs_remaining_seconds));
+            }
         }
     }
 }

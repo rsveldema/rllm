@@ -4,45 +4,16 @@ set -euo pipefail
 echo "Configuring and building release before training..."
 sh ./build_release.sh
 
+#TRAIN_DIR="${TRAIN_DIR:-training_data0}"
 TRAIN_DIR="${TRAIN_DIR:-training_data1}"
 RUNTIME_TOKENIZER_HEADER="build_release/generated/tokenizer_map.hpp"
 
 runtime_vocab_size() {
-    python3 - "$RUNTIME_TOKENIZER_HEADER" <<'PY'
-import re
-import sys
-
-text = open(sys.argv[1], encoding="utf-8").read()
-match = re.search(r"\bMAX\s*=\s*(\d+)", text)
-if not match:
-    raise SystemExit(f"Could not find TokenID::MAX in {sys.argv[1]}")
-print(match.group(1))
-PY
+    python3 ./runtime_vocab_size.py "$RUNTIME_TOKENIZER_HEADER"
 }
 
 model_vocab_size() {
-    python3 - "$1" <<'PY'
-import json
-import pathlib
-import struct
-import sys
-
-path = pathlib.Path(sys.argv[1])
-try:
-    if path.suffix in {".st", ".safetensors"}:
-        with path.open("rb") as f:
-            header_len = struct.unpack("<Q", f.read(8))[0]
-            header = json.loads(f.read(header_len))
-        print(header.get("__metadata__", {}).get("tokenizer_vocab_size", ""))
-    elif path.suffix == ".json":
-        with path.open(encoding="utf-8") as f:
-            header = json.load(f)
-        print(header.get("tokenizer_vocab_size", ""))
-    else:
-        print("")
-except Exception as exc:
-    print(f"ERROR:{exc}")
-PY
+    python3 ./model_vocab_size.py "$1"
 }
 
 resume_arg_for_model() {
@@ -73,6 +44,17 @@ resume_arg_for_model() {
     echo "-i $candidate"
 }
 
+delete_superseded_checkpoints() {
+    local checkpoint
+
+    shopt -s nullglob
+    for checkpoint in models/checkpoint-[0-9]*.st; do
+        echo "Deleting superseded checkpoint $checkpoint"
+        rm -f -- "$checkpoint"
+    done
+    shopt -u nullglob
+}
+
 echo "Locating checkpoint to resume from..."
 
 echo "Normalizing training_data1 with training_postprocessor.py..."
@@ -90,7 +72,8 @@ if [ ! -d "$TRAIN_DIR" ]; then
     exit 1
 fi
 
-# Resume from an explicit model path, then after_training.st, then latest checkpoint.
+# Resume from an explicit model path, then the best window checkpoint, then the
+# completed-training model, and finally the latest timed checkpoint.
 # Use RESUME_MODEL=/path/to/model.st to override.
 if [ "${FRESH_START:-0}" != "0" ]; then
     echo "FRESH_START=${FRESH_START}: ignoring existing checkpoints and starting from random weights."
@@ -98,6 +81,13 @@ if [ "${FRESH_START:-0}" != "0" ]; then
 elif [ -n "${RESUME_MODEL:-}" ] && [ -f "${RESUME_MODEL}" ]; then
     echo "Resuming from ${RESUME_MODEL}"
     input_arg="$(resume_arg_for_model "${RESUME_MODEL}" 1)"
+elif [ -f "models/checkpoint-best-window.st" ]; then
+    if input_arg="$(resume_arg_for_model "models/checkpoint-best-window.st")"; then
+        echo "Resuming from models/checkpoint-best-window.st"
+        delete_superseded_checkpoints
+    else
+        input_arg=""
+    fi
 elif [ -f "models/after_training.st" ]; then
     if input_arg="$(resume_arg_for_model "models/after_training.st")"; then
         echo "Resuming from models/after_training.st"
@@ -141,13 +131,22 @@ echo "--- Starting training ---"
      --filter effective \
      --filter modern \
      --filter esched \
-     --method random_line_random_len \
+     --method window:32 \
+     --window-stride 4 \
      --epochs 20 \
      --layers 3 \
      --checkpoint-interval 120 \
      --learn-depth 1 \
-     --learning-rate 0.00001 \
-     --micro-batch-size 16 \
+     --learning-rate 0.00003 \
+     --weight-initializer xavier-input-projections \
+     --ffn-initializer xavier-input-projections \
+     --embedding-initializer legacy-uniform \
+     --learning-rate-schedule simulated_annealing \
+     --simulated-annealing-initial-multiplier 8 \
+     --simulated-annealing-decay-factor 0.7 \
+     --simulated-annealing-decay-epochs 1 \
+     --simulated-annealing-min-multiplier 0.02 \
+     --micro-batch-size 128 \
      --vulkan-device R9700
 
 

@@ -1,4 +1,5 @@
 #include <InputLayer.hpp>
+#include <WeightInitialization.hpp>
 #include <RandomHelpers.hpp>
 #include <RuntimeConfig.hpp>
 #include <TransformerBlock.hpp>
@@ -219,11 +220,12 @@ namespace rllm
         m_adam_second.zero();
     }
 
-    void InputLayer::set_random_embeddings()
+    void InputLayer::set_random_embeddings(EmbeddingInitializerType type)
     {
+        auto initializer = make_embedding_initializer(type, static_cast<size_t>(EmbeddingDimension::MAX));
         for (const auto tok : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                m_embeddings_cpu.set(tok, d, static_cast<float16>(get_random_value(-0.1f, 0.1f)));
+                m_embeddings_cpu.set(tok, d, static_cast<float16>(initializer->getNextValue()));
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
     }

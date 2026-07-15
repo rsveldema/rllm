@@ -287,21 +287,14 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
 
         assert(!m_token_list.empty());
         this->visit_lines([&](const CpuInputLine& line) {
-            // Strip the trailing TOK_NEWLINE that the corpus appends to every line.
-            // Keeping it would make \n the dominant training target (it ends every line),
-            // causing the model to collapse to always predicting \n.
-            CpuInputLine stripped = line;
-            if (!stripped.empty() && stripped.back() == TokenID::TOK_NEWLINE)
-                stripped.pop_back();
-
-            if (static_cast<int>(stripped.size()) < 2)
+            if (static_cast<int>(line.size()) < 2)
                 return; // too short to produce a valid (input, target) pair
 
-            const auto dedupe_key = make_line_key(stripped);
+            const auto dedupe_key = make_line_key(line);
             if (!seen_training_line_keys.insert(dedupe_key).second)
                 return; // duplicate line in corpus; already included once
 
-            training_lines.push_back(stripped);
+            training_lines.push_back(line);
         });
         return training_lines;
     }

@@ -1,6 +1,7 @@
 #include <TextTrainer.hpp>
 #include "TextTrainerInternal.hpp"
 #include <RuntimeConfig.hpp>
+#include <LogFormatting.hpp>
 #include <TokenIDFormatter.hpp>
 #include <algorithm>
 #include <cassert>
@@ -14,6 +15,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <numbers>
 #include <parallel.hpp>
 #include <random>
 #include <rllm_vulkan_runtime.hpp>
@@ -460,8 +462,40 @@ namespace rllm
 
     void TextTrainer::apply_accumulated_gradients(float learning_rate_scale)
     {
-        const float learning_rate = (m_learning_rate * learning_rate_scale) / static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
         ++m_optimizer_step;
+        if (!m_learning_rate_provider)
+            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
+        const float scheduled_rate = m_learning_rate_provider->get_rate();
+        const float schedule_scale = scheduled_rate / m_learning_rate;
+        const float learning_rate = (scheduled_rate * learning_rate_scale) /
+            static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
+        const float peak_effective_rate = (m_learning_rate * learning_rate_scale) /
+            static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
+        const float log_delta = peak_effective_rate * 0.01f;
+        const size_t warmup_steps = m_learning_rate_schedule_steps == 0
+            ? 0
+            : std::max<size_t>(1, m_learning_rate_schedule_steps / 20 +
+                (m_learning_rate_schedule_steps % 20 != 0 ? 1 : 0));
+        const bool phase_boundary = m_optimizer_step == warmup_steps ||
+            m_optimizer_step == m_learning_rate_schedule_steps;
+        if (!std::isfinite(m_last_logged_learning_rate) ||
+            std::abs(learning_rate - m_last_logged_learning_rate) >= log_delta || phase_boundary)
+        {
+            const char* phase = "constant";
+            if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
+                phase = m_optimizer_step <= warmup_steps ? "warmup" : "cosine-decay";
+            else if (m_learning_rate_schedule == LearningRateSchedule::SimulatedAnnealing)
+                phase = "simulated_annealing";
+            LOG_INFO(
+                "Learning rate changed: effective {:.10f}, base {:.10f}, schedule scale {:.6f}, phase {}, optimizer step {}/{}",
+                learning_rate,
+                m_learning_rate,
+                schedule_scale,
+                phase,
+                m_optimizer_step,
+                m_learning_rate_schedule_steps);
+            m_last_logged_learning_rate = learning_rate;
+        }
         const float bias_correction1 = 1.0f - std::pow(TransformerBlock::ADAM_BETA1, static_cast<float>(m_optimizer_step));
         const float bias_correction2 = 1.0f - std::pow(TransformerBlock::ADAM_BETA2, static_cast<float>(m_optimizer_step));
 
@@ -478,8 +512,6 @@ namespace rllm
         : m_corpus(corpus)
         , m_stats(stats)
         , m_input_layer()
-        , m_fires_nothing_ce_loss(std::log(static_cast<float>(TokenID::MAX)))
-        , m_convergence_threshold(m_fires_nothing_ce_loss / k_convergence_divisor)
     {
         assert(static_cast<size_t>(TokenID::MAX) > 1);
         for (size_t i = 0; i < num_layers; ++i)
@@ -564,13 +596,18 @@ namespace rllm
 
     void TextTrainer::set_random_weights_and_connections()
     {
-        m_input_layer.set_random_embeddings();
+        LOG_INFO(
+            "Initializers: weights={}, FFN={}, embeddings={}",
+            initializer_name(m_weight_initializer),
+            initializer_name(m_ffn_initializer),
+            initializer_name(m_embedding_initializer));
+        m_input_layer.set_random_embeddings(m_embedding_initializer);
 
         for (auto& block : m_transformer_blocks)
-            block.randomize();
+            block.randomize(m_weight_initializer, m_ffn_initializer);
 
         for (const auto output_index : enum_iterator1D<MultiTokenPredictionIndex>())
-            m_output_layers[output_index].set_random_weights();
+            m_output_layers[output_index].set_random_weights(m_weight_initializer);
     }
 
 
@@ -665,7 +702,7 @@ namespace rllm
 
             const auto full_string_opt = m_corpus.get_line(line);
             assert(full_string_opt.has_value());
-            const auto& full_string = *full_string_opt;
+            const auto full_string = escape_whitespace_for_log(*full_string_opt);
 
             if (static_cast<int>(line.size()) < 2)
             {
@@ -696,7 +733,7 @@ namespace rllm
 
         const auto full_string_opt = m_corpus.get_line(train_input);
         assert(full_string_opt.has_value());
-        const auto& full_string = *full_string_opt;
+        const auto full_string = escape_whitespace_for_log(*full_string_opt);
 
         LOG_INFO("Training on line[{}]: '{}'", num_tokens, full_string);
 
@@ -721,7 +758,7 @@ namespace rllm
         const auto full_string_opt = m_corpus.get_line(train_input);
         assert(full_string_opt.has_value());
 
-        LOG_INFO("Training on random line prefix ({} toks): '{}'", random_len, *full_string_opt);
+        LOG_INFO("Training on random line prefix ({} toks): '{}'", random_len, escape_whitespace_for_log(*full_string_opt));
 
         do_training(train_input, verbose, max_iterations, learning_rate_scale, manage_accumulator);
     }
@@ -771,71 +808,12 @@ namespace rllm
         {
             bool should_stop = false;
 
-            if (m_training_method == TrainingMethod::RANDOM_LINE_RANDOM_LEN || m_training_method == TrainingMethod::RANDOM_LINE_FULL)
-            {
-                train_random_line_random_len_epoch(epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng, epoch_size);
+            batch_train(epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng, epoch_size);
 
-                epoch_checkpoint(last_checkpoint_at, epoch, [&] {
-                    std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
-                    checkpoint();
-                });
-            }
-            else
-            {
-                std::shuffle(training_lines.begin(), training_lines.end(), rng);
-
-                size_t lines_visited = 0;
-                for (const auto& line_of_file : training_lines)
-                {
-                    if (lines_visited >= epoch_lines)
-                        break;
-                    lines_visited++;
-                    const float progress = static_cast<float>(lines_visited) / static_cast<float>(epoch_lines);
-
-                    if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
-                    {
-                        std::println("creating timed checkpoint at epoch {}, line {}, epoch lines visited {}", epoch, lines_visited, epoch_lines);
-                        checkpoint();
-                    }
-
-                    LOG_INFO("Epoch[{}%] line[{}]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, lines_visited, progress * 100.0f);
-
-                    switch (m_training_method)
-                    {
-                    case TrainingMethod::TWO_TOK:
-                        train_with_up_to_N(line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth), 2);
-                        break;
-
-                    case TrainingMethod::THREE_TOK:
-                        train_with_up_to_N(line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth), 3);
-                        break;
-
-                    case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
-                        train_with_increasingly_longer_sequences(line_of_file, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth));
-                        break;
-
-                    case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
-                        // Handled in the random-line loop above.
-                        assert(false);
-                        break;
-
-                    case TrainingMethod::RANDOM_LINE_FULL:
-                        // Handled in the random-line loop above.
-                        assert(false);
-                        break;
-
-                    case TrainingMethod::WINDOW:
-                        // window methods don't use the line-based loop; handled separately below
-                        assert(false);
-                        break;
-                    }
-                }
-
-                epoch_checkpoint(last_checkpoint_at, epoch, [&] {
-                    std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
-                    checkpoint();
-                });
-            }
+            epoch_checkpoint(last_checkpoint_at, epoch, [&] {
+                std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+                checkpoint();
+            });
 
             if (!validation_lines.empty())
             {
@@ -871,6 +849,8 @@ namespace rllm
             }
 
             print_parallel_statistics_for_epoch(epoch);
+            if (m_learning_rate_provider)
+                m_learning_rate_provider->advance_epoch();
 
             if (should_stop)
                 break;
@@ -894,63 +874,238 @@ namespace rllm
     {
         assert(window_size >= 2);
 
-        // Collect the full flat token sequence from every corpus file.
+        auto split = m_corpus.get_deterministic_training_split(VALIDATION_PERCENT);
+        if (split.validation_lines.size() < 2)
+        {
+            split.training_lines.insert(
+                split.training_lines.end(),
+                std::make_move_iterator(split.validation_lines.begin()),
+                std::make_move_iterator(split.validation_lines.end()));
+            split.validation_lines.clear();
+            LOG_INFO("Window validation disabled for tiny corpus (fewer than 2 held-out lines)");
+        }
+
+        // Flatten only the training side of the deterministic line split. This
+        // prevents the periodic validation examples from leaking into windows.
         std::vector<TokenID> tokens;
-        m_corpus.visit_flat_tokens([&](TokenID tok) {
-            tokens.push_back(tok);
-        });
+        for (const auto& line : split.training_lines)
+            for (const auto position : enum_iterator1D<PositionIndex>(line.size()))
+                tokens.push_back(line[position]);
 
         if (tokens.size() < static_cast<size_t>(window_size))
             return;
 
-        // Each valid start index yields one training example.
-        const size_t num_windows = tokens.size() - static_cast<size_t>(window_size) + 1;
-        std::vector<size_t> indices(num_windows);
-        std::iota(indices.begin(), indices.end(), 0);
+        LOG_INFO(
+            "Window split: {} training lines ({} flattened tokens), {} validation lines; validation interval 5 minutes",
+            split.training_lines.size(),
+            tokens.size(),
+            split.validation_lines.size());
 
+        const size_t max_window_start = tokens.size() - static_cast<size_t>(window_size);
+        const size_t steps_per_window = training_steps_per_example(m_transformer_blocks.size(), m_learn_depth);
+        const size_t offset_period = std::min(m_window_stride, max_window_start + 1);
+        auto windows_for_epoch = [&](size_t epoch) {
+            const size_t offset = epoch % offset_period;
+            return (max_window_start - offset) / m_window_stride + 1;
+        };
+        m_learning_rate_schedule_steps = 0;
+        for (size_t epoch = 0; epoch < num_epochs; ++epoch)
+        {
+            const size_t count = windows_for_epoch(epoch);
+            const size_t batches = count / m_micro_batch_size + (count % m_micro_batch_size != 0 ? 1 : 0);
+            m_learning_rate_schedule_steps += batches * steps_per_window;
+        }
+        if (m_learning_rate_schedule == LearningRateSchedule::Constant)
+        {
+            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
+            LOG_INFO("Window training: size {}, stride {}, epoch-varying offset; constant learning rate {:.8f}",
+                window_size, m_window_stride, m_learning_rate);
+        }
+        else if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
+        {
+            m_learning_rate_provider = std::make_unique<LoweringLearningRate>(m_learning_rate, m_learning_rate_schedule_steps);
+            LOG_INFO(
+                "Window training: size {}, stride {}, epoch-varying offset; learning-rate schedule: {} planned optimizer steps, {:.1f}% warmup, cosine decay from {:.8f} to {:.8f}",
+                window_size, m_window_stride, m_learning_rate_schedule_steps,
+                LoweringLearningRate::WARMUP_FRACTION * 100.0f, m_learning_rate,
+                m_learning_rate * LoweringLearningRate::MIN_SCALE);
+        }
+        else
+        {
+            m_learning_rate_provider = std::make_unique<SimulatedAnnealingLearningRate>(
+                m_learning_rate, m_simulated_annealing_decay_factor,
+                m_simulated_annealing_initial_multiplier, m_simulated_annealing_decay_epochs,
+                m_simulated_annealing_min_multiplier);
+            LOG_INFO(
+                "Window training: size {}, stride {}, epoch-varying offset; simulated_annealing learning rate multiplies by {:.4f} every {} epochs from {:.8f} to a floor of {:.8f}",
+                window_size, m_window_stride,
+                m_simulated_annealing_decay_factor,
+                m_simulated_annealing_decay_epochs,
+                std::max(
+                    m_learning_rate * m_simulated_annealing_initial_multiplier,
+                    m_learning_rate * m_simulated_annealing_min_multiplier),
+                m_learning_rate * m_simulated_annealing_min_multiplier);
+        }
+        m_last_logged_learning_rate = std::numeric_limits<float>::quiet_NaN();
         std::mt19937 rng{42};
         size_t total_windows_trained = 0;
         auto last_checkpoint_at = std::chrono::steady_clock::now();
-        ScopedDeviceBufferAllocationFreeze device_buffer_allocation_freeze;
+        auto next_validation_at = std::chrono::steady_clock::now() + std::chrono::minutes{5};
+        float best_validation_loss = std::numeric_limits<float>::infinity();
+        size_t epochs_without_improvement = 0;
+        bool has_best_checkpoint = false;
+        static constexpr const char* BEST_CHECKPOINT_FILENAME = "models/checkpoint-best-window.st";
+        auto device_buffer_allocation_freeze = std::make_unique<ScopedDeviceBufferAllocationFreeze>();
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
+            bool should_stop = false;
+            const auto epoch_started_at = std::chrono::steady_clock::now();
             LOG_INFO("Epoch[{}%]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, 0.0f);
 
+            const size_t offset = epoch % offset_period;
+            const size_t num_windows = windows_for_epoch(epoch);
+            std::vector<size_t> indices(num_windows);
+            for (size_t i = 0; i < num_windows; ++i)
+                indices[i] = offset + i * m_window_stride;
             std::shuffle(indices.begin(), indices.end(), rng);
 
-            for (size_t j = 0; j < num_windows; ++j)
+            for (size_t start = 0; start < num_windows; start += m_micro_batch_size)
             {
-                const float progress = static_cast<float>(j) / static_cast<float>(num_windows);
-
-                CpuInputLine window;
-                int current_try_len = 2 + random_int(0, window_size - 2); // random length between 2 and window_size
-                for (int k = 0; k < current_try_len; ++k)
+                const size_t count = std::min(m_micro_batch_size, num_windows - start);
+                std::vector<BatchTrainingItem> batch;
+                batch.reserve(count);
+                for (size_t offset = 0; offset < count; ++offset)
                 {
-                    window.push_back(tokens[indices[j] + static_cast<size_t>(k)]);
+                    CpuInputLine window;
+                    for (int k = 0; k < window_size; ++k)
+                        window.push_back(tokens[indices[start + offset] + static_cast<size_t>(k)]);
+                    batch.push_back({window});
                 }
-                assert(window.size() == static_cast<PositionIndex>(current_try_len));
-
-                total_windows_trained++;
+                total_windows_trained += batch.size();
 
                 if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
                 {
-                    LOG_INFO("creating timed checkpoint at epoch {}, window {}, total windows trained {}", epoch, j, total_windows_trained);
+                    LOG_INFO("creating timed checkpoint at epoch {}, window {}, total windows trained {}", epoch, start, total_windows_trained);
                     checkpoint();
                 }
 
+                const auto started = std::chrono::steady_clock::now();
+                BatchTrainingTiming timing;
+                const size_t iterations = train_batch_items(batch, steps_per_window, timing);
+                const double total_ms = elapsed_ms(started);
+                LOG_INFO(
+                    "Epoch[{}%] window[{}..{}]: {:0.2f}% done (micro-batch {}, training loss {:.6f}, avg {:.2f} ms/window, iterations total {}, avg {:.2f}/window, rounds {}, batch {:.2f} ms)",
+                    epoch / static_cast<float>(num_epochs) * 100.0f,
+                    start + 1,
+                    start + count,
+                    static_cast<float>(start + count) / static_cast<float>(num_windows) * 100.0f,
+                    batch.size(),
+                    timing.average_primary_loss(),
+                    total_ms / batch.size(),
+                    iterations,
+                    static_cast<double>(iterations) / batch.size(),
+                    timing.rounds,
+                    total_ms);
 
-                if (total_windows_trained % 100 == 0)
+                const size_t batch_number = start / m_micro_batch_size + 1;
+                if (batch_number % 10 == 0)
                 {
-                    const auto line_opt = m_corpus.get_line(window);
-                    LOG_INFO("Epoch[{}%] window[{}]: {:0.2f}% done for '{}', successes: {}, failures: {}", epoch / static_cast<float>(num_epochs) * 100.0f, j, progress * 100.0f, line_opt.has_value() ? line_opt->c_str() : "unknown", m_stats.num_learning_successes(), m_stats.num_learning_failures());
+                    const double elapsed_seconds = std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - epoch_started_at).count();
+                    const size_t completed = start + count;
+                    const double remaining_seconds = elapsed_seconds *
+                        static_cast<double>(num_windows - completed) / static_cast<double>(completed);
+                    const double epoch_fraction = static_cast<double>(completed) / static_cast<double>(num_windows);
+                    const double estimated_epoch_seconds = elapsed_seconds / epoch_fraction;
+                    const double all_epochs_remaining_seconds = estimated_epoch_seconds *
+                        (static_cast<double>(num_epochs - epoch) - epoch_fraction);
+                    LOG_INFO(
+                        "Epoch {} batch {} ETA until epoch finishes: {}; ETA until all planned epochs finish: {}",
+                        epoch, batch_number, format_eta_for_log(remaining_seconds),
+                        format_eta_for_log(all_epochs_remaining_seconds));
                 }
 
-                do_training(window, verbose, training_steps_per_example(m_transformer_blocks.size(), m_learn_depth));
+                if (!split.validation_lines.empty() && std::chrono::steady_clock::now() >= next_validation_at)
+                {
+                    const auto validation_started = std::chrono::steady_clock::now();
+                    const auto validation = evaluate(split.validation_lines);
+                    LOG_INFO(
+                        "window validation at epoch {}, {:.2f}%: loss {:.6f}, perplexity {:.2f}, average correct-token probability {:.3f}% across {} held-out lines (evaluation {:.2f} s)",
+                        epoch,
+                        static_cast<float>(start + count) / static_cast<float>(num_windows) * 100.0f,
+                        validation.average_loss,
+                        validation.perplexity,
+                        validation.average_correct_token_probability * 100.0,
+                        split.validation_lines.size(),
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
+                    next_validation_at = std::chrono::steady_clock::now() + std::chrono::minutes{5};
+                }
+            }
+
+            if (!split.validation_lines.empty())
+            {
+                const auto validation_started = std::chrono::steady_clock::now();
+                const auto validation = evaluate(split.validation_lines);
+                LOG_INFO(
+                    "window validation at epoch {} end: loss {:.6f}, perplexity {:.2f}, average correct-token probability {:.3f}% across {} held-out lines (evaluation {:.2f} s)",
+                    epoch,
+                    validation.average_loss,
+                    validation.perplexity,
+                    validation.average_correct_token_probability * 100.0,
+                    split.validation_lines.size(),
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
+                next_validation_at = std::chrono::steady_clock::now() + std::chrono::minutes{5};
+
+                if ((validation.average_loss + VALIDATION_IMPROVEMENT_EPSILON) < best_validation_loss)
+                {
+                    best_validation_loss = validation.average_loss;
+                    epochs_without_improvement = 0;
+                    save(BEST_CHECKPOINT_FILENAME);
+                    has_best_checkpoint = true;
+                    LOG_INFO(
+                        "Saved new best window checkpoint '{}' with validation loss {:.6f}",
+                        BEST_CHECKPOINT_FILENAME, best_validation_loss);
+                }
+                else
+                {
+                    ++epochs_without_improvement;
+                    LOG_INFO(
+                        "Window validation loss did not improve for {} epoch(s); best remains {:.6f}",
+                        epochs_without_improvement, best_validation_loss);
+                    if (epochs_without_improvement >= EARLY_STOPPING_PATIENCE)
+                    {
+                        LOG_INFO(
+                            "early stopping window training at epoch {} after {} epoch(s) without validation improvement",
+                            epoch, epochs_without_improvement);
+                        should_stop = true;
+                    }
+                }
             }
 
             std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
             checkpoint();
             print_parallel_statistics_for_epoch(epoch);
+            if (m_learning_rate_provider)
+                m_learning_rate_provider->advance_epoch();
+            if (should_stop)
+                break;
+        }
+
+        // Loading recreates transformer blocks and their workspaces, so GPU buffer
+        // allocation must be enabled again before restoring the best checkpoint.
+        device_buffer_allocation_freeze.reset();
+        if (has_best_checkpoint)
+        {
+            if (load(BEST_CHECKPOINT_FILENAME))
+            {
+                LOG_INFO(
+                    "restored best window checkpoint '{}' with validation loss {:.6f}",
+                    BEST_CHECKPOINT_FILENAME, best_validation_loss);
+            }
+            else
+            {
+                LOG_INFO("failed to restore best window checkpoint '{}'", BEST_CHECKPOINT_FILENAME);
+            }
         }
     }
 
@@ -993,6 +1148,22 @@ namespace rllm
         const size_t params_per_block = params_attn + params_ffn;
         const size_t total_params = params_embed + params_lm_head + n_layers * params_per_block;
         const float total_params_mib = static_cast<float>(total_params * sizeof(float)) / (1024.0f * 1024.0f);
+        size_t transformer_gpu_bytes = 0;
+        if (n_layers > 0)
+        {
+            const size_t per_layer_gpu_bytes = m_transformer_blocks.front().memory_usage_bytes(
+                m_forward_workspace->transformer_workspaces.front(),
+                m_backward_workspace->transformer_block,
+                m_gradient_accumulation_workspace->transformer_blocks.front(),
+                n_layers);
+            transformer_gpu_bytes = per_layer_gpu_bytes * n_layers;
+            LOG_INFO(
+                "Estimated transformer GPU memory: {:.2f} MB per-layer share x {} layers = {:.2f} MB "
+                "(weights, optimizer state, forward/backward workspaces, and gradient accumulators)",
+                static_cast<double>(per_layer_gpu_bytes) / 1'000'000.0,
+                n_layers,
+                static_cast<double>(transformer_gpu_bytes) / 1'000'000.0);
+        }
 
         static constexpr size_t CORPUS_SIZE_WARNING_THRESHOLD = 100000;
         if (corpus_size > CORPUS_SIZE_WARNING_THRESHOLD)
@@ -1011,7 +1182,7 @@ namespace rllm
             "\t $corpus_size: {}\n"
             "\t $total_params: {} ({:.2f}M, {:.2f} MiB)  [embed:{} lm_head:{} blocks:{}x{}]\n"
             "\t convergence threshold: {:.6f}\n"
-            "\t fires nothing CE loss:  {:.6f}\n"
+            "\t probability of correct token:  {:.6f}\n"
             "\t steps per example per epoch: {}\n"
             "\t micro-batch size: {}\n"
             "\t num epochs: {}\n"
@@ -1026,14 +1197,22 @@ namespace rllm
             params_lm_head,
             n_layers,
             params_per_block,
-            m_convergence_threshold,
-            m_fires_nothing_ce_loss,
+            CONVERGENCE_THRESHOLD,
+            PROBABILITY_OF_CORRECT_TOKEN,
             training_steps_per_example(n_layers, m_learn_depth),
             m_micro_batch_size,
             num_epochs,
             epoch_size.has_value() ? std::format("{} line(s)", epoch_size.value()) : std::string{"all training lines"},
             training_method_to_string(m_training_method)
         );
+
+        if (m_learning_rate_schedule == LearningRateSchedule::Constant)
+            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
+        else if (m_learning_rate_schedule == LearningRateSchedule::SimulatedAnnealing)
+            m_learning_rate_provider = std::make_unique<SimulatedAnnealingLearningRate>(
+                m_learning_rate, m_simulated_annealing_decay_factor,
+                m_simulated_annealing_initial_multiplier, m_simulated_annealing_decay_epochs,
+                m_simulated_annealing_min_multiplier);
 
         if (training_method_is_line_based())
         {
@@ -1061,7 +1240,7 @@ namespace rllm
 
         const auto full_string_opt = m_corpus.get_line(train_output);
         assert(full_string_opt.has_value());
-        const auto& full_string = *full_string_opt;
+        const auto full_string = escape_whitespace_for_log(*full_string_opt);
 
         get_last_input() = train_input;
 
@@ -1106,9 +1285,9 @@ namespace rllm
                 timing->apply_ms += elapsed_ms(apply_started_at);
         }
 
-        if (loss < m_convergence_threshold)
+        if (loss < CONVERGENCE_THRESHOLD)
         {
-            LOG_INFO("Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}", iteration_index + 1, m_corpus.get_token_from_id(expected_output_token), full_string, static_cast<size_t>(train_input.size()));
+            LOG_INFO("Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}", iteration_index + 1, escape_whitespace_for_log(m_corpus.get_token_from_id(expected_output_token)), full_string, static_cast<size_t>(train_input.size()));
             m_stats.record_learning_success();
             return TrainingStepOutcome::Converged;
         }
@@ -1123,7 +1302,7 @@ namespace rllm
         const auto expected_output_token = mtp_target_for_head(train_output, _input_len, MultiTokenPredictionIndex::START);
         const auto full_string_opt = m_corpus.get_line(train_output);
         assert(full_string_opt.has_value());
-        const auto& full_string = *full_string_opt;
+        const auto full_string = escape_whitespace_for_log(*full_string_opt);
 
         bool print_loss_verbose = false;
         static int count = 0;
@@ -1142,7 +1321,7 @@ namespace rllm
 
             if (print_loss_verbose)
             {
-                LOG_INFO("Training iteration[{}], wanted: '{}' ({}), full string: '{}'", i, m_corpus.get_token_from_id(expected_output_token), expected_output_token, full_string);
+                LOG_INFO("Training iteration[{}], wanted: '{}' ({}), full string: '{}'", i, escape_whitespace_for_log(m_corpus.get_token_from_id(expected_output_token)), expected_output_token, full_string);
                 LOG_INFO("  Loss: {:.6f}", 0.0f);
                 dump_top_predictions();
             }
@@ -1150,7 +1329,7 @@ namespace rllm
 
         if (manage_accumulator || max_iterations != 1)
         {
-            LOG_INFO("Steps exhausted ({}) for this line. threshold = {:.6f}, expected token: '{}' ({}), full string: '{}', input size: {}.", max_iterations, m_convergence_threshold, m_corpus.get_token_from_id(expected_output_token), expected_output_token, full_string, static_cast<size_t>(_input_len));
+            LOG_INFO("Steps exhausted ({}) for this line. threshold = {:.6f}, expected token: '{}' ({}), full string: '{}', input size: {}.", max_iterations, CONVERGENCE_THRESHOLD, escape_whitespace_for_log(m_corpus.get_token_from_id(expected_output_token)), expected_output_token, full_string, static_cast<size_t>(_input_len));
             m_stats.record_learning_failure();
         }
 

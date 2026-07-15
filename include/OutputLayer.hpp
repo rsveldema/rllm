@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <WeightInitialization.hpp>
 #include <safetensors.hh>
 
 #include <nlohmann/json_fwd.hpp>
@@ -69,7 +70,7 @@ namespace rllm
         OutputLayer& operator=(const OutputLayer&) = delete;
 
         // Initialise W_lm_head with small random values.
-        void set_random_weights();
+        void set_random_weights(WeightInitializerType type = WeightInitializerType::XavierInputProjections);
 
         // Project h_last[D_MODEL] to vocabulary logits, storing them in m_inputs.
         void forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last,

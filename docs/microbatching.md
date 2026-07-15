@@ -1,17 +1,18 @@
 # Microbatching
 
-`--micro-batch-size 1` uses the existing single-example random-line training
-path.
+`--micro-batch-size 1` trains one example per packed batch.
 
-Values greater than one group random-line examples into batches. Each training
+Values greater than one group examples into batches for every training method,
+including sliding windows, fixed-length prefixes, increasingly longer
+prefixes, random prefixes, and full lines. Each training
 step accumulates gradients for every valid example in the batch, then applies
 one summed update. This intentionally increases the effective update magnitude
 with the number of active examples, which preserves the faster convergence seen
-with micro-batching. Random prefixes are selected once and reused for all
-training steps in that batch. For random-prefix training, the prefixes for the
-whole epoch are selected first and sorted by their actual token count before
-consecutive micro-batches are formed. Sorting the original full lines before
-prefix selection does not provide the same length locality.
+with micro-batching. For random-prefix training, each prefix is selected once
+and reused for all training steps in that batch. Window training
+uses the configured fixed window length at every sliding start position before
+the packed batch is built. Start positions honor `--window-stride`, are shuffled
+each epoch, and use an epoch-varying initial offset.
 
 True tensor batching uses a packed ragged row axis. Each example owns a
 contiguous row interval, positional indices restart at zero for every example,

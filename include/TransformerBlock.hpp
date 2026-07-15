@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <WeightInitialization.hpp>
 #include <safetensors.hh>
 #include <fixed_size_levels_rows_cols_matrix.hpp>
 #include <fixed_size_obj_vector.hpp>
@@ -227,7 +228,17 @@ namespace rllm
         void accumulate_gradients(const BackwardWorkspace& workspace, TransformerGradientAccumulator& accumulator);
         void apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
 
-        void randomize();
+        // GPU storage owned by this block plus its per-layer forward workspace,
+        // gradient accumulator, and its share of the shared backward workspace.
+        size_t memory_usage_bytes(
+            const ForwardWorkspace& forward_workspace,
+            const BackwardWorkspace& backward_workspace,
+            const TransformerGradientAccumulator& gradient_accumulator,
+            size_t backward_workspace_share_count = 1) const;
+
+        void randomize(
+            WeightInitializerType weight_type = WeightInitializerType::XavierInputProjections,
+            FFNInitializerType ffn_type = FFNInitializerType::XavierInputProjections);
 
         void load(const nlohmann::json& j);
         std::unique_ptr<nlohmann::json> save() const;

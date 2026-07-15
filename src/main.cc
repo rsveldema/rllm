@@ -46,11 +46,20 @@ struct CommandLineParser
     size_t num_epochs = 1000;
     rllm::TrainingMethod method = rllm::TrainingMethod::TWO_TOK;
     int window_size = 2;
+    size_t window_stride = 1;
     std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
     std::string executable_name = "./rllm";
     size_t mtp_heads = 1;
     size_t learn_depth = rllm::TextTrainer::DEFAULT_LEARN_DEPTH;
     float learning_rate = rllm::TextTrainer::DEFAULT_LEARNING_RATE;
+    rllm::LearningRateSchedule learning_rate_schedule = rllm::LearningRateSchedule::Lowering;
+    float simulated_annealing_decay_factor = 0.8f;
+    float simulated_annealing_initial_multiplier = 50.0f;
+    size_t simulated_annealing_decay_epochs = 2;
+    float simulated_annealing_min_multiplier = rllm::SimulatedAnnealingLearningRate::DEFAULT_MIN_MULTIPLIER;
+    rllm::WeightInitializerType weight_initializer = rllm::WeightInitializerType::XavierInputProjections;
+    rllm::FFNInitializerType ffn_initializer = rllm::FFNInitializerType::XavierInputProjections;
+    rllm::EmbeddingInitializerType embedding_initializer = rllm::EmbeddingInitializerType::LegacyUniform;
     size_t micro_batch_size = 1;
     std::optional<size_t> epoch_size;
     bool nan_finding_mode = false;
@@ -122,6 +131,19 @@ struct CommandLineParser
                  }
                  learn_depth = static_cast<size_t>(n);
              }},
+        {.options = {"--window-stride"},
+         .description = "Token positions between consecutive window starts (default: 1)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 const int n = std::atoi(args[0].c_str());
+                 if (n <= 0)
+                 {
+                     std::println("--window-stride requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 window_stride = static_cast<size_t>(n);
+             }},
         {.options = {"--learning-rate"},
          .description = std::format("Base learning rate before layer-count scaling (default: {})", learning_rate),
          .required_args = 1,
@@ -136,6 +158,135 @@ struct CommandLineParser
                      std::exit(1);
                  }
                  learning_rate = rate;
+             }},
+        {.options = {"--weight-initializer"},
+         .description = "Weight initializer: xavier-uniform, xavier-input-projections, or legacy-uniform (default: xavier-input-projections)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 if (args[0] == "xavier-uniform")
+                     weight_initializer = rllm::WeightInitializerType::XavierUniform;
+                 else if (args[0] == "xavier-input-projections")
+                     weight_initializer = rllm::WeightInitializerType::XavierInputProjections;
+                 else if (args[0] == "legacy-uniform")
+                     weight_initializer = rllm::WeightInitializerType::LegacyUniform;
+                 else
+                 {
+                     std::println("--weight-initializer must be 'xavier-uniform', 'xavier-input-projections', or 'legacy-uniform', got '{}'", args[0]);
+                     std::exit(1);
+                 }
+             }},
+        {.options = {"--ffn-initializer"},
+         .description = "FFN initializer: xavier-uniform, xavier-input-projections, or legacy-uniform (default: xavier-input-projections)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 if (args[0] == "xavier-uniform")
+                     ffn_initializer = rllm::FFNInitializerType::XavierUniform;
+                 else if (args[0] == "xavier-input-projections")
+                     ffn_initializer = rllm::FFNInitializerType::XavierInputProjections;
+                 else if (args[0] == "legacy-uniform")
+                     ffn_initializer = rllm::FFNInitializerType::LegacyUniform;
+                 else
+                 {
+                     std::println("--ffn-initializer must be 'xavier-uniform', 'xavier-input-projections', or 'legacy-uniform', got '{}'", args[0]);
+                     std::exit(1);
+                 }
+             }},
+        {.options = {"--embedding-initializer"},
+         .description = "Token embedding initializer: variance-scaled-uniform or legacy-uniform (default: legacy-uniform)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 if (args[0] == "variance-scaled-uniform")
+                     embedding_initializer = rllm::EmbeddingInitializerType::VarianceScaledUniform;
+                 else if (args[0] == "legacy-uniform")
+                     embedding_initializer = rllm::EmbeddingInitializerType::LegacyUniform;
+                 else
+                 {
+                     std::println("--embedding-initializer must be 'variance-scaled-uniform' or 'legacy-uniform', got '{}'", args[0]);
+                     std::exit(1);
+                 }
+             }},
+        {.options = {"--learning-rate-schedule"},
+         .description = "Learning-rate schedule: constant, lowering, or simulated_annealing (default: lowering)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 if (args[0] == "constant")
+                     learning_rate_schedule = rllm::LearningRateSchedule::Constant;
+                 else if (args[0] == "lowering")
+                     learning_rate_schedule = rllm::LearningRateSchedule::Lowering;
+                 else if (args[0] == "simulated_annealing")
+                     learning_rate_schedule = rllm::LearningRateSchedule::SimulatedAnnealing;
+                 else
+                 {
+                     std::println("--learning-rate-schedule must be 'constant', 'lowering', or 'simulated_annealing', got '{}'", args[0]);
+                     std::exit(1);
+                 }
+             }},
+        {.options = {"--simulated-annealing-decay-factor"},
+         .description = "Simulated-annealing learning-rate multiplier applied every two epochs (default: 0.8)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const float factor = std::strtof(args[0].c_str(), &end);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE ||
+                     !std::isfinite(factor) || factor <= 0.0f || factor >= 1.0f)
+                 {
+                     std::println("--simulated-annealing-decay-factor requires a number between 0 and 1, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 simulated_annealing_decay_factor = factor;
+             }},
+        {.options = {"--simulated-annealing-initial-multiplier"},
+         .description = "Initial simulated-annealing learning-rate multiplier (default: 50)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const float multiplier = std::strtof(args[0].c_str(), &end);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE ||
+                     !std::isfinite(multiplier) || multiplier <= 0.0f)
+                 {
+                     std::println("--simulated-annealing-initial-multiplier requires a positive number, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 simulated_annealing_initial_multiplier = multiplier;
+             }},
+        {.options = {"--simulated-annealing-decay-epochs"},
+         .description = "Epochs between simulated-annealing rate reductions (default: 2)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const unsigned long epochs = std::strtoul(args[0].c_str(), &end, 10);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE || epochs == 0)
+                 {
+                     std::println("--simulated-annealing-decay-epochs requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 simulated_annealing_decay_epochs = static_cast<size_t>(epochs);
+             }},
+        {.options = {"--simulated-annealing-min-multiplier"},
+         .description = "Minimum simulated-annealing rate as a base-rate multiplier (default: 0.02)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const float multiplier = std::strtof(args[0].c_str(), &end);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE ||
+                     !std::isfinite(multiplier) || multiplier <= 0.0f)
+                 {
+                     std::println("--simulated-annealing-min-multiplier requires a positive number, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 simulated_annealing_min_multiplier = multiplier;
              }},
         {.options = {"--micro-batch-size"},
          .description = "Number of examples to group into one averaged gradient update (default: 1)",
@@ -369,8 +520,17 @@ int main(int argc, char* argv[])
             parser.method,
             parser.checkpointing_interval,
             parser.window_size,
+            parser.window_stride,
             parser.learn_depth,
             parser.learning_rate,
+            parser.learning_rate_schedule,
+            parser.simulated_annealing_decay_factor,
+            parser.simulated_annealing_initial_multiplier,
+            parser.simulated_annealing_decay_epochs,
+            parser.simulated_annealing_min_multiplier,
+            parser.weight_initializer,
+            parser.ffn_initializer,
+            parser.embedding_initializer,
             parser.micro_batch_size,
             parser.num_epochs,
             parser.epoch_size,

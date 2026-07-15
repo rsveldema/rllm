@@ -2,6 +2,7 @@
 
 #include <Corpus.hpp>
 #include <InputLayer.hpp>
+#include <LearningRate.hpp>
 #include <TransformerBlock.hpp>
 #include <LayerPrimitives.hpp>
 #include <OutputLayer.hpp>
@@ -13,6 +14,7 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <chrono>
+#include <limits>
 #include <memory>
 #include <random>
 #include <string>
@@ -48,7 +50,7 @@ namespace rllm
         INCREASINGLY_LONGER_SEQUENCES,
         RANDOM_LINE_RANDOM_LEN,
         RANDOM_LINE_FULL, // pick a random line, train on the full line (last token is target)
-        WINDOW, // sliding window of N tokens over flat corpus ((N-1) inputs → predict next)
+        WINDOW, // fixed sliding window of N tokens over the flat corpus
     };
 
     const char* training_method_to_string(TrainingMethod method);
@@ -56,12 +58,31 @@ namespace rllm
     class TextTrainer
     {
       public:
-        // Denominator for convergence threshold: fires_nothing_ce_loss / k.
-        // Higher k = tighter threshold = more gradient steps per example.
-        // NOTE: if set too high, we drive a specific example to high confidence but fail to learn from other examples, harming generalization.
-        static constexpr float k_convergence_divisor = 2.0f;
+        /** Denominator for convergence threshold: fires_nothing_ce_loss / k.
+         * Higher k = tighter threshold = more gradient steps per example.
+         * NOTE: if set too high, we drive a specific example to high confidence but fail to learn from other examples, harming generalization.
+         *
+         * - FIRES_NOTHONG_CE_LOSS(std::log(static_cast<float>(TokenID::MAX)))
+         * - With TokenID::MAX = 621:
+         * - Baseline uniform CE loss: ln(621) ≈ 6.431
+         * - CONVERGENCE_THRESHOLD(FIRES_NOTHONG_CE_LOSS / K_CONVERGENCE_DIVISOR)
+         * - K_CONVERGENCE_DIVISOR = 2.0 → convergence threshold ≈ 3.215   = exp(-3.215) ≈ 0.040 = 4% chance of predicting the correct token
+         * - K_CONVERGENCE_DIVISOR = 4.0 → convergence threshold ≈ 1.608 = exp(-1.608) ≈ 0.200 = 20% chance of predicting the correct token
+         * - K_CONVERGENCE_DIVISOR = 6.0 → convergence threshold ≈ 1.072 = exp(-1.072) ≈ 0.342 = 34% chance of predicting the correct token
+         * - K_CONVERGENCE_DIVISOR = 10.0 → convergence threshold ≈
+         * - K_CONVERGENCE_DIVISOR = 50.0 → convergence threshold ≈ 0.129 = exp(-0.129) ≈ 0.879 = 88% chance of predicting the correct token
+         * - K_CONVERGENCE_DIVISOR = 100.0 → convergence threshold ≈ 0.0643 = exp(-0.0643) ≈ 0.938 = 94% chance of predicting the correct token
+         * - K_CONVERGENCE_DIVISOR = 200.0 → convergence threshold ≈ 0.0321 = exp(-0.0321) ≈ 0.969 = 97% chance of predicting the correct token
+         * - K_CONVERGENCE_DIVISOR = 500.0 → convergence threshold ≈ 0.0129 = exp(-0.0129) ≈ 0.987 = 98% chance of predicting the correct token
+         * - K_CONVERGENCE_DIVISOR = 1000.0 → convergence threshold ≈ 0.00643 = exp(-0.00643) ≈ 0.9936 = 99% chance of predicting the correct token
+         * - K_CONVERGENCE_DIVISOR = 2000.0 → convergence threshold ≈ 0.003215 = exp(-0.003215) ≈ 0.9968 = 99.7% chance of predicting the
+         */
+        static constexpr float K_CONVERGENCE_DIVISOR = 50.0f;
         static constexpr size_t DEFAULT_LEARN_DEPTH = 16;
         static constexpr float DEFAULT_LEARNING_RATE = 0.0003f;
+        static constexpr float FIRES_NOTHONG_CE_LOSS = std::log(static_cast<float>(TokenID::MAX));
+        static constexpr float CONVERGENCE_THRESHOLD = FIRES_NOTHONG_CE_LOSS / K_CONVERGENCE_DIVISOR;
+        static constexpr float PROBABILITY_OF_CORRECT_TOKEN = std::exp(-CONVERGENCE_THRESHOLD) * 100.0f;
 
         TextTrainer(size_t num_layers, Corpus& corpus, Statistics& stats);
         ~TextTrainer();
@@ -77,9 +98,18 @@ namespace rllm
 
         void set_training_method(TrainingMethod m) { m_training_method = m; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
+        void set_window_stride(size_t n) { assert(n > 0); m_window_stride = n; }
         void set_learn_depth(size_t n) { assert(n > 0); m_learn_depth = n; }
         void set_learning_rate(float rate) { assert(rate > 0.0f); m_learning_rate = rate; }
+        void set_learning_rate_schedule(LearningRateSchedule schedule) { m_learning_rate_schedule = schedule; }
+        void set_simulated_annealing_decay_factor(float factor) { assert(factor > 0.0f && factor < 1.0f); m_simulated_annealing_decay_factor = factor; }
+        void set_simulated_annealing_initial_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_initial_multiplier = multiplier; }
+        void set_simulated_annealing_decay_epochs(size_t epochs) { assert(epochs > 0); m_simulated_annealing_decay_epochs = epochs; }
+        void set_simulated_annealing_min_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_min_multiplier = multiplier; }
         void set_micro_batch_size(size_t n);
+        void set_weight_initializer(WeightInitializerType type) { m_weight_initializer = type; }
+        void set_ffn_initializer(FFNInitializerType type) { m_ffn_initializer = type; }
+        void set_embedding_initializer(EmbeddingInitializerType type) { m_embedding_initializer = type; }
 
         void propagate_forward();
 
@@ -140,10 +170,6 @@ namespace rllm
         std::unique_ptr<GpuPackedBatchInput> m_gpu_packed_batch;
         std::unique_ptr<BatchedOutputWorkspace> m_batched_output_workspace;
 
-        // Computed from the actual corpus size.
-        const float m_fires_nothing_ce_loss;
-        const float m_convergence_threshold;
-
         void reset_workspaces();
         void reset_gradient_accumulators();
         void apply_accumulated_gradients(float learning_rate_scale);
@@ -174,10 +200,22 @@ namespace rllm
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
         int m_window_size = 2;
+        size_t m_window_stride = 1;
         size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
         float m_learning_rate = DEFAULT_LEARNING_RATE;
+        LearningRateSchedule m_learning_rate_schedule = LearningRateSchedule::Lowering;
+        float m_simulated_annealing_decay_factor = 0.8f;
+        float m_simulated_annealing_initial_multiplier = 50.0f;
+        size_t m_simulated_annealing_decay_epochs = 2;
+        float m_simulated_annealing_min_multiplier = SimulatedAnnealingLearningRate::DEFAULT_MIN_MULTIPLIER;
+        std::unique_ptr<ILearningRate> m_learning_rate_provider;
         size_t m_micro_batch_size = 1;
         size_t m_optimizer_step = 0;
+        size_t m_learning_rate_schedule_steps = 0;
+        float m_last_logged_learning_rate = std::numeric_limits<float>::quiet_NaN();
+        WeightInitializerType m_weight_initializer = WeightInitializerType::XavierInputProjections;
+        FFNInitializerType m_ffn_initializer = FFNInitializerType::XavierInputProjections;
+        EmbeddingInitializerType m_embedding_initializer = EmbeddingInitializerType::LegacyUniform;
 
         void train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations);
@@ -228,7 +266,16 @@ namespace rllm
             double backward_output_ms = 0.0;
             double backward_transformer_ms = 0.0;
             double backward_input_ms = 0.0;
+            double primary_loss_sum = 0.0;
+            size_t primary_loss_count = 0;
             size_t rounds = 0;
+
+            double average_primary_loss() const
+            {
+                return primary_loss_count == 0
+                    ? std::numeric_limits<double>::quiet_NaN()
+                    : primary_loss_sum / static_cast<double>(primary_loss_count);
+            }
         };
         std::vector<BatchTrainingItem> make_training_batch(
             const std::vector<CpuInputLine>& training_lines,

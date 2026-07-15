@@ -79,7 +79,7 @@ namespace rllm
     enum class BatchIndex : size_t
     {
         START = 0,
-        MAX = 64
+        MAX = 128
     };
 
     // we are predicting N next tokens in parallel,

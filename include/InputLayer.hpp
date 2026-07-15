@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LayerPrimitives.hpp>
+#include <WeightInitialization.hpp>
 #include <cpu/cpu_fixed_vector.hpp>
 #include <cpu/cpu_fixed_matrix.hpp>
 #include <safetensors.hh>
@@ -78,7 +79,7 @@ namespace rllm
 
         void apply_accumulated_update(EmbeddingGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
 
-        void set_random_embeddings();
+        void set_random_embeddings(EmbeddingInitializerType type = EmbeddingInitializerType::LegacyUniform);
 
         // Returns the raw learned embedding for a single token (without positional encoding).
         void get_embedding(TokenID tok, embedding_row_t& out) const;

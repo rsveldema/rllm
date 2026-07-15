@@ -24,6 +24,26 @@ higher is better.
 For multi-token prediction, each example trains only the heads that have real future tokens. Short prefixes no longer train missing future heads toward `INVALID`.
 
 Training diagnostics render unknown, missing, or out-of-range token IDs as `<UNK>` instead of aborting while formatting a log line. `Corpus::get_line` returns `std::nullopt` for those sequences.
+Full training strings in `train.log` render newline and tab characters as `\\n`
+and `\\t`, keeping each diagnostic on one physical log line.
+
+Line-based training retains the newline token appended to every corpus line, so
+line endings are learned as prediction targets. Whitespace within a line is also
+preserved; for example, leading tab tokens in Python source remain part of the
+training sequence.
+
+Fresh models initialize attention, FFN, and LM-head matrices with Xavier-uniform
+bounds derived from each matrix's fan-in and fan-out. Token embeddings use a
+dimension-scaled uniform distribution with variance `1 / embedding_dimension`.
+The defaults are `--weight-initializer xavier-input-projections`,
+`--ffn-initializer xavier-input-projections`, and `--embedding-initializer
+legacy-uniform`. Fresh-model runs log all three selected initializers in
+`train.log`; loading a model does not reinitialize its parameters.
+
+The `xavier-input-projections` weight/FFN profile applies Xavier initialization
+only to Q/K/V and FFN gate/up matrices. Attention output, FFN down, and the LM
+head use legacy scaling. `train_release.sh` selects this mixed profile and uses
+legacy token embeddings.
 
 ## Epoch Size
 
@@ -33,9 +53,68 @@ This is useful for faster validation/checkpoint feedback on large corpora. Windo
 
 ## Learning Rate
 
-`--learning-rate <R>` sets the base learning rate used during training. The binary and training-script default for AdamW is `0.0003`.
+`--learning-rate <R>` sets the base learning rate used during training. The
+binary default for AdamW is `0.0003`; `train_release.sh` currently selects
+`0.00003` explicitly.
+
+`--learning-rate-schedule constant|lowering|simulated_annealing` selects the learning-rate
+implementation. `constant` keeps the configured rate unchanged for every
+optimizer update. `lowering` (the binary default) applies the existing 5%
+linear warmup and cosine decay.
+`simulated_annealing` starts at
+`--simulated-annealing-initial-multiplier <M>` times the configured rate
+(default `50`) and remains constant within each epoch. Every
+`--simulated-annealing-decay-epochs <N>` epochs (default `2`), it multiplies the
+rate by `--simulated-annealing-decay-factor <F>` (default `0.8`) until
+reaching `--simulated-annealing-min-multiplier <M>` times the configured base
+rate (default `0.02`, or one fiftieth). The factor must be
+greater than zero and less than one. `train_release.sh` currently selects
+`simulated_annealing`.
 
 The effective per-update rate is divided by the number of transformer blocks, matching the previous hardcoded behavior.
+
+Window training applies a 5% linear learning-rate warmup followed by cosine
+decay to 10% of the configured base rate. The schedule is calculated from the
+number of windows, epochs, and allowed updates per window. For example, a base
+rate of `0.00003` decays to `0.000003`. Loading a checkpoint starts a new
+schedule because optimizer state and optimizer progress are not serialized.
+The log reports the base and effective scheduled rate at startup, at warmup and
+decay boundaries, and whenever the effective rate moves by at least 1% of its
+peak value. This exposes schedule progress without logging every optimizer step.
+
+`--window-stride <N>` controls the distance in tokens between fixed-size
+sliding-window starts and defaults to `1`. Window start positions are shuffled,
+and the initial offset advances each epoch so strides greater than one do not
+remain permanently aligned to one subset of token positions. A stride of `4`
+matches the four MTP target heads and substantially reduces overlapping work.
+
+Window training uses the same deterministic 80/20 line split as line-based
+training. Only training-split tokens are flattened into windows. Every five
+minutes it reports held-out loss, perplexity, average correct-token probability,
+and validation duration together with the current epoch and window progress.
+It also performs and reports a held-out validation at the end of every epoch,
+including epochs that finish before the five-minute interval.
+Each batch progress line also reports `training loss`, the mean primary
+next-token cross-entropy for the examples and optimizer rounds in that batch.
+This per-batch value is expected to be noisier than loss over the full held-out
+validation split.
+
+Window training saves `models/checkpoint-best-window.st` whenever end-of-epoch
+validation loss improves by at least `1e-4`. It stops after three consecutive
+epochs without improvement and restores that best checkpoint before the final
+model is saved. Timed intra-epoch validation remains diagnostic and does not
+advance early-stopping patience.
+Every tenth completed batch logs `HH:MM:SS` estimates of the wall-clock time
+remaining in the current epoch and until all planned epochs finish. The
+estimates use elapsed epoch time and the completed example/window fraction, so
+checkpointing and validation time already spent in that epoch are reflected in
+later estimates. Early stopping may finish before the all-epochs estimate.
+
+At startup, `train.log` reports estimated transformer GPU memory in MB per layer and
+multiplied by the configured layer count. The estimate includes block weights,
+Adam optimizer state, per-layer forward workspaces and gradient accumulators,
+and the correctly apportioned shared backward workspace. It excludes non-block
+buffers and Vulkan allocator overhead.
 
 All learned parameters use AdamW with `beta1=0.9`, `beta2=0.999`,
 `epsilon=1e-8`, and decoupled weight decay `0.01`. Gradients retain the existing
