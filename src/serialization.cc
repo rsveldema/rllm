@@ -203,6 +203,14 @@ namespace rllm
         if (is_safetensors_model_filename(filename))
         {
             save_to_safetensors(filename);
+            if (!m_training_parameters_json.empty())
+            {
+                const auto parameters_filename = filename + ".training.json";
+                std::ofstream parameters_file{parameters_filename};
+                parameters_file << m_training_parameters_json << '\n';
+                std::println("Saved training parameters '{}'", parameters_filename);
+            }
+            flush_training_progress_log();
             return;
         }
 
@@ -235,6 +243,14 @@ namespace rllm
 
         const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - save_start).count();
         std::println("Saved model '{}' in {:.3f} seconds", filename, elapsed);
+        if (!m_training_parameters_json.empty())
+        {
+            const auto parameters_filename = filename + ".training.json";
+            std::ofstream parameters_file{parameters_filename};
+            parameters_file << m_training_parameters_json << '\n';
+            std::println("Saved training parameters '{}'", parameters_filename);
+        }
+        flush_training_progress_log();
     }
 
     void TextTrainer::checkpoint() const
@@ -640,6 +656,7 @@ namespace rllm
                 auto& queue = rllm::vulkan_runtime::get_queue(0);
                 m_output_layers[oi].m_inputs.zero(queue);
                 m_output_layers[oi].V_lm_head.zero(queue);
+                m_output_layers[oi].S_lm_head.zero(queue);
             }
         }
         else if (st.tensors.count("output_layers.W_lm_head"))

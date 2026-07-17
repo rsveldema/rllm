@@ -2,6 +2,13 @@
 
 `train_release.sh` and `train_debug.sh` try to resume from `RESUME_MODEL`, `models/after_training.st`, or the newest `models/checkpoint-*.st`.
 
+Every saved model has a sibling `<model filename>.training.json` containing the
+training configuration. Resume both weights and settings with, for example,
+`rllm --train --training-parameters models/checkpoint-123.st.training.json -i
+models/checkpoint-123.st`. Options appearing after `--training-parameters`
+override the archived value, which makes deliberate changes such as extending
+the epoch count explicit while retaining all other settings.
+
 Before auto-resuming, the scripts compare the checkpoint tokenizer vocabulary size with the generated runtime tokenizer. Incompatible automatic checkpoints are skipped and training starts from random weights. An explicitly supplied `RESUME_MODEL` must be compatible; if it is not, the script exits instead of silently ignoring the requested model.
 
 This matters after tokenizer changes, such as adding the `INVALID` token, because old checkpoints have weight matrices with the previous vocabulary size.
@@ -27,6 +34,13 @@ Training diagnostics render unknown, missing, or out-of-range token IDs as `<UNK
 Full training strings in `train.log` render newline and tab characters as `\\n`
 and `\\t`, keeping each diagnostic on one physical log line.
 
+Each batch progress message is also recorded as an object in an in-memory JSON
+array. Entries include the method, epoch and item range, completion percentage,
+loss, optimizer rounds, iteration counts, and forward/backward/apply timings.
+After each model or checkpoint save, the complete array is written to
+`train.json`, providing a valid snapshot for later visualization without doing
+file I/O for every training batch.
+
 Line-based training retains the newline token appended to every corpus line, so
 line endings are learned as prediction targets. Whitespace within a line is also
 preserved; for example, leading tab tokens in Python source remain part of the
@@ -48,6 +62,11 @@ legacy token embeddings.
 ## Epoch Size
 
 `--epoch-size <N>` limits line-based training methods to `N` shuffled training lines per epoch. The default is all training lines. Values larger than the training split are clamped to the full split.
+
+`--micro-batch-size <N>` must be between `1` and the compiled
+`BatchIndex::MAX`. Larger values are rejected during argument parsing because
+the packed batch metadata and output workspaces are statically bounded by that
+index. The error message reports the active build's limit.
 
 This is useful for faster validation/checkpoint feedback on large corpora. Window training keeps its existing window-based epoch behavior.
 
@@ -72,6 +91,13 @@ greater than zero and less than one. `train_release.sh` currently selects
 `simulated_annealing`.
 
 The effective per-update rate is divided by the number of transformer blocks, matching the previous hardcoded behavior.
+
+The resulting effective rate is adjusted by model depth using a linear profile.
+`--layer-learning-rate-multiplier <M>` controls the output-head multiplier and
+defaults to `1.05`. Token embeddings use `2-M`, and transformer blocks increase
+gradually between those endpoints. Accepted values are `[1, 2)`. The profile is
+symmetric with a mean multiplier of `1.0x`, so it changes the distribution of
+learning across depth without increasing the model's average configured rate.
 
 Window training applies a 5% linear learning-rate warmup followed by cosine
 decay to 10% of the configured base rate. The schedule is calculated from the
@@ -99,6 +125,12 @@ next-token cross-entropy for the examples and optimizer rounds in that batch.
 This per-batch value is expected to be noisier than loss over the full held-out
 validation split.
 
+`--method reverse_window` visits fixed-size windows from the end of the
+flattened training text toward the start. It uses the current window size
+(default `2`); `--method reverse_window:<N>` selects the size inline. Unlike
+regular window training, reverse-window traversal is not shuffled. Window
+stride and the epoch-varying offset continue to apply.
+
 Window training saves `models/checkpoint-best-window.st` whenever end-of-epoch
 validation loss improves by at least `1e-4`. It stops after three consecutive
 epochs without improvement and restores that best checkpoint before the final
@@ -115,6 +147,12 @@ multiplied by the configured layer count. The estimate includes block weights,
 Adam optimizer state, per-layer forward workspaces and gradient accumulators,
 and the correctly apportioned shared backward workspace. It excludes non-block
 buffers and Vulkan allocator overhead.
+
+The startup log also reports GPU memory required per compiled batch slot and in
+total across `BatchIndex::MAX`. This batch-slot estimate covers the batched
+output workspace and per-example packed-row boundaries. Token-level packed
+metadata and transformer activations are instead bounded by `PositionIndex::MAX`
+and are not multiplied by the number of batch slots.
 
 All learned parameters use AdamW with `beta1=0.9`, `beta2=0.999`,
 `epsilon=1e-8`, and decoupled weight decay `0.01`. Gradients retain the existing

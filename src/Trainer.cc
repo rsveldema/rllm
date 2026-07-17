@@ -4,6 +4,9 @@
 #include <fstream>
 #include <print>
 #include <string>
+#include <type_traits>
+
+#include <nlohmann/json.hpp>
 
 #include <vulkan_session.hpp>
 
@@ -24,6 +27,7 @@ namespace rllm
         size_t window_stride,
         size_t learn_depth,
         float learning_rate,
+        float layer_learning_rate_multiplier,
         LearningRateSchedule learning_rate_schedule,
         float simulated_annealing_decay_factor,
         float simulated_annealing_initial_multiplier,
@@ -62,11 +66,47 @@ namespace rllm
         Statistics stats;
 
         auto nn = std::make_unique<TextTrainer>(num_layers, corpus, stats);
+        const auto initializer_name = [](auto type) {
+            using T = decltype(type);
+            if constexpr (std::is_same_v<T, EmbeddingInitializerType>)
+                return type == EmbeddingInitializerType::VarianceScaledUniform ? "variance-scaled-uniform" : "legacy-uniform";
+            else
+                return type == T::XavierUniform ? "xavier-uniform" :
+                    type == T::XavierInputProjections ? "xavier-input-projections" : "legacy-uniform";
+        };
+        const char* schedule_name = learning_rate_schedule == LearningRateSchedule::Constant ? "constant" :
+            learning_rate_schedule == LearningRateSchedule::Lowering ? "lowering" : "simulated_annealing";
+        nlohmann::json training_parameters{
+            {"version", 1},
+            {"layers", num_layers},
+            {"method", training_method_to_string(method)},
+            {"window_size", window_size},
+            {"window_stride", window_stride},
+            {"learn_depth", learn_depth},
+            {"learning_rate", learning_rate},
+            {"learning_rate_schedule", schedule_name},
+            {"layer_learning_rate_multiplier", layer_learning_rate_multiplier},
+            {"simulated_annealing_decay_factor", simulated_annealing_decay_factor},
+            {"simulated_annealing_initial_multiplier", simulated_annealing_initial_multiplier},
+            {"simulated_annealing_decay_epochs", simulated_annealing_decay_epochs},
+            {"simulated_annealing_min_multiplier", simulated_annealing_min_multiplier},
+            {"weight_initializer", initializer_name(weight_initializer)},
+            {"ffn_initializer", initializer_name(ffn_initializer)},
+            {"embedding_initializer", initializer_name(embedding_initializer)},
+            {"micro_batch_size", micro_batch_size},
+            {"epochs", num_epochs},
+            {"checkpoint_interval_seconds", checkpointing_interval ? nlohmann::json(checkpointing_interval->count()) : nlohmann::json(nullptr)},
+            {"epoch_size", epoch_size ? nlohmann::json(*epoch_size) : nlohmann::json(nullptr)},
+            {"train_corpus_dir", train_corpus_dir},
+            {"filters", m_filters}
+        };
+        nn->set_training_parameters_json(training_parameters.dump(2));
         nn->set_training_method(method);
         nn->set_window_size(window_size);
         nn->set_window_stride(window_stride);
         nn->set_learn_depth(learn_depth);
         nn->set_learning_rate(learning_rate);
+        nn->set_layer_learning_rate_multiplier(layer_learning_rate_multiplier);
         nn->set_learning_rate_schedule(learning_rate_schedule);
         nn->set_simulated_annealing_decay_factor(simulated_annealing_decay_factor);
         nn->set_simulated_annealing_initial_multiplier(simulated_annealing_initial_multiplier);

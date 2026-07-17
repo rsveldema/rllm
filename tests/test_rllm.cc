@@ -63,6 +63,28 @@ TEST(LearningRateScheduleTest, ConstantRateDoesNotChange)
     EXPECT_FLOAT_EQ(rate.get_rate(), 0.25f);
 }
 
+TEST(LearningRateScheduleTest, DepthAdaptiveProfileIncreasesTowardOutputAndPreservesMean)
+{
+    constexpr size_t stage_count = 5;
+    float sum = 0.0f;
+    float previous = 0.0f;
+    for (size_t stage = 0; stage < stage_count; ++stage)
+    {
+        const float multiplier = depth_learning_rate_multiplier(stage, stage_count);
+        EXPECT_GT(multiplier, previous);
+        previous = multiplier;
+        sum += multiplier;
+    }
+    EXPECT_FLOAT_EQ(depth_learning_rate_multiplier(0, stage_count), 0.95f);
+    EXPECT_FLOAT_EQ(depth_learning_rate_multiplier(stage_count - 1, stage_count), 1.05f);
+    EXPECT_FLOAT_EQ(sum / static_cast<float>(stage_count), 1.0f);
+    EXPECT_FLOAT_EQ(depth_learning_rate_multiplier(0, 1), 1.0f);
+
+    EXPECT_FLOAT_EQ(depth_learning_rate_multiplier(0, stage_count, 1.2f), 0.8f);
+    EXPECT_FLOAT_EQ(depth_learning_rate_multiplier(stage_count - 1, stage_count, 1.2f), 1.2f);
+    EXPECT_FLOAT_EQ(depth_learning_rate_multiplier(2, stage_count, 1.2f), 1.0f);
+}
+
 TEST(LearningRateScheduleTest, SimulatedAnnealingRateDecaysByConfiguredFactorUntilFloor)
 {
     SimulatedAnnealingLearningRate rate{1.0f, 0.8f, 40.0f, 2};

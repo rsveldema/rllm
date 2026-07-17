@@ -3,10 +3,27 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cassert>
 #include <numbers>
 
 namespace rllm
 {
+    inline constexpr float DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER = 1.05f;
+
+    inline float depth_learning_rate_multiplier(
+        size_t stage_index,
+        size_t stage_count,
+        float output_multiplier = DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER)
+    {
+        if (stage_count <= 1)
+            return 1.0f;
+        assert(stage_index < stage_count);
+        assert(output_multiplier >= 1.0f && output_multiplier < 2.0f);
+        const float input_multiplier = 2.0f - output_multiplier;
+        const float depth = static_cast<float>(stage_index) / static_cast<float>(stage_count - 1);
+        return input_multiplier + depth * (output_multiplier - input_multiplier);
+    }
+
     class ILearningRate
     {
       public:

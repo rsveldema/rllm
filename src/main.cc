@@ -15,9 +15,12 @@
 #include <cstring>
 #include <ctime>
 #include <functional>
+#include <fstream>
 #include <optional>
 #include <ranges>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 
 struct CommandLineOption
@@ -52,6 +55,7 @@ struct CommandLineParser
     size_t mtp_heads = 1;
     size_t learn_depth = rllm::TextTrainer::DEFAULT_LEARN_DEPTH;
     float learning_rate = rllm::TextTrainer::DEFAULT_LEARNING_RATE;
+    float layer_learning_rate_multiplier = rllm::DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER;
     rllm::LearningRateSchedule learning_rate_schedule = rllm::LearningRateSchedule::Lowering;
     float simulated_annealing_decay_factor = 0.8f;
     float simulated_annealing_initial_multiplier = 50.0f;
@@ -64,6 +68,73 @@ struct CommandLineParser
     std::optional<size_t> epoch_size;
     bool nan_finding_mode = false;
     std::optional<std::string> vulkan_device;
+
+    void load_training_parameters(const std::string& filename)
+    {
+        const auto fail = [&](const std::string& message) {
+            std::println("Error loading training parameters '{}': {}", filename, message);
+            std::exit(1);
+        };
+        std::ifstream file{filename};
+        if (!file)
+            fail("cannot open file");
+        const auto j = nlohmann::json::parse(file);
+        if (j.value("version", 0) != 1)
+            fail("unsupported version");
+
+        num_layers = j.value("layers", num_layers);
+        window_size = j.value("window_size", window_size);
+        window_stride = j.value("window_stride", window_stride);
+        learn_depth = j.value("learn_depth", learn_depth);
+        learning_rate = j.value("learning_rate", learning_rate);
+        layer_learning_rate_multiplier = j.value("layer_learning_rate_multiplier", layer_learning_rate_multiplier);
+        if (!std::isfinite(layer_learning_rate_multiplier) ||
+            layer_learning_rate_multiplier < 1.0f || layer_learning_rate_multiplier >= 2.0f)
+            fail("layer_learning_rate_multiplier must be in [1, 2)");
+        simulated_annealing_decay_factor = j.value("simulated_annealing_decay_factor", simulated_annealing_decay_factor);
+        simulated_annealing_initial_multiplier = j.value("simulated_annealing_initial_multiplier", simulated_annealing_initial_multiplier);
+        simulated_annealing_decay_epochs = j.value("simulated_annealing_decay_epochs", simulated_annealing_decay_epochs);
+        simulated_annealing_min_multiplier = j.value("simulated_annealing_min_multiplier", simulated_annealing_min_multiplier);
+        micro_batch_size = j.value("micro_batch_size", micro_batch_size);
+        if (micro_batch_size == 0 || micro_batch_size > static_cast<size_t>(rllm::BatchIndex::MAX))
+            fail(std::format(
+                "micro_batch_size must be between 1 and {}",
+                static_cast<size_t>(rllm::BatchIndex::MAX)));
+        num_epochs = j.value("epochs", num_epochs);
+        train_corpus_dir = j.value("train_corpus_dir", train_corpus_dir.value_or(""));
+        filters = j.value("filters", filters);
+        if (j.contains("epoch_size"))
+            epoch_size = j["epoch_size"].is_null() ? std::nullopt : std::optional<size_t>{j["epoch_size"].get<size_t>()};
+        if (j.contains("checkpoint_interval_seconds"))
+            checkpointing_interval = j["checkpoint_interval_seconds"].is_null() ? std::nullopt :
+                std::optional<std::chrono::seconds>{std::chrono::seconds{j["checkpoint_interval_seconds"].get<long long>()}};
+
+        const auto method_name = j.value("method", "two_tok");
+        if (method_name == "two_tok") method = rllm::TrainingMethod::TWO_TOK;
+        else if (method_name == "three_tok") method = rllm::TrainingMethod::THREE_TOK;
+        else if (method_name == "increasingly_longer") method = rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
+        else if (method_name == "random_line_random_len") method = rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN;
+        else if (method_name == "random_line_full") method = rllm::TrainingMethod::RANDOM_LINE_FULL;
+        else if (method_name == "window") method = rllm::TrainingMethod::WINDOW;
+        else if (method_name == "reverse_window") method = rllm::TrainingMethod::REVERSE_WINDOW;
+        else fail(std::format("unknown training method '{}'", method_name));
+
+        const auto schedule = j.value("learning_rate_schedule", "lowering");
+        if (schedule == "constant") learning_rate_schedule = rllm::LearningRateSchedule::Constant;
+        else if (schedule == "lowering") learning_rate_schedule = rllm::LearningRateSchedule::Lowering;
+        else if (schedule == "simulated_annealing") learning_rate_schedule = rllm::LearningRateSchedule::SimulatedAnnealing;
+        else fail(std::format("unknown learning-rate schedule '{}'", schedule));
+
+        const auto weight = j.value("weight_initializer", "xavier-input-projections");
+        weight_initializer = weight == "xavier-uniform" ? rllm::WeightInitializerType::XavierUniform :
+            weight == "legacy-uniform" ? rllm::WeightInitializerType::LegacyUniform : rllm::WeightInitializerType::XavierInputProjections;
+        const auto ffn = j.value("ffn_initializer", "xavier-input-projections");
+        ffn_initializer = ffn == "xavier-uniform" ? rllm::FFNInitializerType::XavierUniform :
+            ffn == "legacy-uniform" ? rllm::FFNInitializerType::LegacyUniform : rllm::FFNInitializerType::XavierInputProjections;
+        embedding_initializer = j.value("embedding_initializer", "legacy-uniform") == "variance-scaled-uniform" ?
+            rllm::EmbeddingInitializerType::VarianceScaledUniform : rllm::EmbeddingInitializerType::LegacyUniform;
+        std::println("Loaded training parameters '{}'", filename);
+    }
 
     static bool option_matches(const std::string& arg, const CommandLineOption& option)
     {
@@ -93,6 +164,10 @@ struct CommandLineParser
     }
 
     std::vector<CommandLineOption> command_line_options = {
+        {.options = {"--training-parameters"},
+         .description = "Load archived training settings from a checkpoint JSON; later options override them",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) { load_training_parameters(args[0]); }},
         {.options = {"--filter"},
          .description = "Specify a filter to apply (can be used multiple times for multiple filters)",
          .required_args = 1,
@@ -158,6 +233,22 @@ struct CommandLineParser
                      std::exit(1);
                  }
                  learning_rate = rate;
+             }},
+        {.options = {"--layer-learning-rate-multiplier"},
+         .description = "Output-side depth learning-rate multiplier in [1, 2); input side uses 2-M (default: 1.05)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const float multiplier = std::strtof(args[0].c_str(), &end);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE ||
+                     !std::isfinite(multiplier) || multiplier < 1.0f || multiplier >= 2.0f)
+                 {
+                     std::println("--layer-learning-rate-multiplier requires a number in [1, 2), got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 layer_learning_rate_multiplier = multiplier;
              }},
         {.options = {"--weight-initializer"},
          .description = "Weight initializer: xavier-uniform, xavier-input-projections, or legacy-uniform (default: xavier-input-projections)",
@@ -293,10 +384,15 @@ struct CommandLineParser
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
-                 const int n = std::atoi(args[0].c_str());
-                 if (n <= 0)
+                 char* end = nullptr;
+                 errno = 0;
+                 const unsigned long n = std::strtoul(args[0].c_str(), &end, 10);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE || n == 0 ||
+                     n > static_cast<unsigned long>(rllm::BatchIndex::MAX))
                  {
-                     std::println("--micro-batch-size requires a positive integer, got '{}'", args[0]);
+                     std::println(
+                         "--micro-batch-size requires an integer between 1 and {}, got '{}'",
+                         static_cast<size_t>(rllm::BatchIndex::MAX), args[0]);
                      std::exit(1);
                  }
                  micro_batch_size = static_cast<size_t>(n);
@@ -370,7 +466,7 @@ struct CommandLineParser
         {.options = {"--method"},
          .description = std::format(
              "Training method. Valid values: two_tok, three_tok, increasingly_longer, random_line_random_len, "
-             "window:<N> Sliding window of N tokens (N >= 2)"
+             "window:<N>, reverse_window[:N] Sliding window of N tokens (N >= 2)"
          ),
          .required_args = 1,
          .action =
@@ -395,11 +491,22 @@ struct CommandLineParser
                      method = rllm::TrainingMethod::WINDOW;
                      window_size = n;
                  }
+                 else if (m == "reverse_window" || m.starts_with("reverse_window:"))
+                 {
+                     const int n = m == "reverse_window" ? window_size : std::atoi(m.c_str() + 15);
+                     if (n < 2)
+                     {
+                         std::println("reverse_window:<N> requires N >= 2, got '{}'", m);
+                         std::exit(1);
+                     }
+                     method = rllm::TrainingMethod::REVERSE_WINDOW;
+                     window_size = n;
+                 }
                  else
                  {
                      std::println(
                          "Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, "
-                         "random_line_random_len, window:<N>",
+                         "random_line_random_len, window:<N>, reverse_window[:N]",
                          m
                      );
                      std::exit(1);
@@ -523,6 +630,7 @@ int main(int argc, char* argv[])
             parser.window_stride,
             parser.learn_depth,
             parser.learning_rate,
+            parser.layer_learning_rate_multiplier,
             parser.learning_rate_schedule,
             parser.simulated_annealing_decay_factor,
             parser.simulated_annealing_initial_multiplier,

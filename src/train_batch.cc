@@ -121,6 +121,7 @@ namespace rllm
                 }
                 break;
             case TrainingMethod::WINDOW:
+            case TrainingMethod::REVERSE_WINDOW:
                 assert(false);
                 break;
             }
@@ -354,6 +355,9 @@ namespace rllm
                 batch.size(), timing.average_primary_loss(), total_ms / batch.size(), iterations, static_cast<double>(iterations) / batch.size(),
                 timing.rounds, total_ms, timing.forward_ms, timing.backward_ms,
                 timing.apply_ms, timing.backward_output_ms, timing.backward_transformer_ms, timing.backward_input_ms);
+            log_training_progress(
+                training_method_to_string(m_training_method), epoch, num_epochs,
+                start + 1, start + count, selected_lines, batch.size(), iterations, total_ms, timing);
 
             const size_t batch_number = start / m_micro_batch_size + 1;
             if (batch_number % 10 == 0)

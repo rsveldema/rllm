@@ -27,6 +27,7 @@ namespace rllm
             size_t window_stride,
             size_t learn_depth,
             float learning_rate,
+            float layer_learning_rate_multiplier,
             LearningRateSchedule learning_rate_schedule,
             float simulated_annealing_decay_factor,
             float simulated_annealing_initial_multiplier,

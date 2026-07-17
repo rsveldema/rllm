@@ -51,6 +51,7 @@ namespace rllm
         RANDOM_LINE_RANDOM_LEN,
         RANDOM_LINE_FULL, // pick a random line, train on the full line (last token is target)
         WINDOW, // fixed sliding window of N tokens over the flat corpus
+        REVERSE_WINDOW, // fixed windows visited from the end of the flat corpus
     };
 
     const char* training_method_to_string(TrainingMethod method);
@@ -101,6 +102,7 @@ namespace rllm
         void set_window_stride(size_t n) { assert(n > 0); m_window_stride = n; }
         void set_learn_depth(size_t n) { assert(n > 0); m_learn_depth = n; }
         void set_learning_rate(float rate) { assert(rate > 0.0f); m_learning_rate = rate; }
+        void set_layer_learning_rate_multiplier(float multiplier) { assert(multiplier >= 1.0f && multiplier < 2.0f); m_layer_learning_rate_multiplier = multiplier; }
         void set_learning_rate_schedule(LearningRateSchedule schedule) { m_learning_rate_schedule = schedule; }
         void set_simulated_annealing_decay_factor(float factor) { assert(factor > 0.0f && factor < 1.0f); m_simulated_annealing_decay_factor = factor; }
         void set_simulated_annealing_initial_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_initial_multiplier = multiplier; }
@@ -110,6 +112,7 @@ namespace rllm
         void set_weight_initializer(WeightInitializerType type) { m_weight_initializer = type; }
         void set_ffn_initializer(FFNInitializerType type) { m_ffn_initializer = type; }
         void set_embedding_initializer(EmbeddingInitializerType type) { m_embedding_initializer = type; }
+        void set_training_parameters_json(std::string json) { m_training_parameters_json = std::move(json); }
 
         void propagate_forward();
 
@@ -203,6 +206,7 @@ namespace rllm
         size_t m_window_stride = 1;
         size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
         float m_learning_rate = DEFAULT_LEARNING_RATE;
+        float m_layer_learning_rate_multiplier = DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER;
         LearningRateSchedule m_learning_rate_schedule = LearningRateSchedule::Lowering;
         float m_simulated_annealing_decay_factor = 0.8f;
         float m_simulated_annealing_initial_multiplier = 50.0f;
@@ -216,6 +220,7 @@ namespace rllm
         WeightInitializerType m_weight_initializer = WeightInitializerType::XavierInputProjections;
         FFNInitializerType m_ffn_initializer = FFNInitializerType::XavierInputProjections;
         EmbeddingInitializerType m_embedding_initializer = EmbeddingInitializerType::LegacyUniform;
+        std::string m_training_parameters_json;
 
         void train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations);
@@ -277,6 +282,21 @@ namespace rllm
                     : primary_loss_sum / static_cast<double>(primary_loss_count);
             }
         };
+        void initialize_training_progress_log();
+        void log_training_progress(
+            const char* item_type,
+            size_t epoch,
+            size_t num_epochs,
+            size_t range_start,
+            size_t range_end,
+            size_t total_items,
+            size_t batch_size,
+            size_t iterations,
+            double batch_ms,
+            const BatchTrainingTiming& timing
+        );
+        std::unique_ptr<nlohmann::json> m_training_progress_entries;
+        void flush_training_progress_log() const;
         std::vector<BatchTrainingItem> make_training_batch(
             const std::vector<CpuInputLine>& training_lines,
             const std::vector<size_t>& line_indices,
@@ -332,6 +352,7 @@ namespace rllm
             case TrainingMethod::RANDOM_LINE_FULL:
                 return true;
             case TrainingMethod::WINDOW:
+            case TrainingMethod::REVERSE_WINDOW:
                 return false;
             }
             return false;

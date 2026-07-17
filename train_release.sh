@@ -134,19 +134,20 @@ echo "--- Starting training ---"
      --method window:32 \
      --window-stride 4 \
      --epochs 20 \
-     --layers 3 \
-     --checkpoint-interval 120 \
+     --layers 6 \
+     --checkpoint-interval 300 \
      --learn-depth 1 \
      --learning-rate 0.00003 \
+     --layer-learning-rate-multiplier 1.05 \
      --weight-initializer xavier-input-projections \
      --ffn-initializer xavier-input-projections \
      --embedding-initializer legacy-uniform \
      --learning-rate-schedule simulated_annealing \
-     --simulated-annealing-initial-multiplier 8 \
+     --simulated-annealing-initial-multiplier 9 \
      --simulated-annealing-decay-factor 0.7 \
      --simulated-annealing-decay-epochs 1 \
      --simulated-annealing-min-multiplier 0.02 \
-     --micro-batch-size 128 \
+     --micro-batch-size 256 \
      --vulkan-device R9700
 
 

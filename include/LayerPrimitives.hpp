@@ -64,7 +64,7 @@ namespace rllm
     enum class PositionIndex : size_t
     {
         START = 0,
-        MAX = 1024 * 16,
+        MAX = 1024 * 8,
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
@@ -79,7 +79,7 @@ namespace rllm
     enum class BatchIndex : size_t
     {
         START = 0,
-        MAX = 128
+        MAX = 1024
     };
 
     // we are predicting N next tokens in parallel,

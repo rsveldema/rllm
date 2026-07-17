@@ -22,6 +22,8 @@
 #include <set>
 #include <vecmath.hpp>
 
+#include <nlohmann/json.hpp>
+
 namespace rllm
 {
     const char* training_method_to_string(TrainingMethod method)
@@ -40,6 +42,8 @@ namespace rllm
             return "random_line_full";
         case TrainingMethod::WINDOW:
             return "window";
+        case TrainingMethod::REVERSE_WINDOW:
+            return "reverse_window";
         }
         return "UNKNOWN";
     }
@@ -438,6 +442,57 @@ namespace rllm
         return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started_at).count();
     }
 
+    void TextTrainer::initialize_training_progress_log()
+    {
+        m_training_progress_entries = std::make_unique<nlohmann::json>(nlohmann::json::array());
+    }
+
+    void TextTrainer::log_training_progress(
+        const char* item_type, size_t epoch, size_t num_epochs,
+        size_t range_start, size_t range_end, size_t total_items,
+        size_t batch_size, size_t iterations, double batch_ms,
+        const BatchTrainingTiming& timing)
+    {
+        const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        nlohmann::json entry{
+            {"timestamp_ms", timestamp_ms},
+            {"method", training_method_to_string(m_training_method)},
+            {"item_type", item_type},
+            {"epoch", epoch},
+            {"epoch_percent", static_cast<double>(epoch) / static_cast<double>(num_epochs) * 100.0},
+            {"range_start", range_start},
+            {"range_end", range_end},
+            {"total_items", total_items},
+            {"progress_percent", static_cast<double>(range_end) / static_cast<double>(total_items) * 100.0},
+            {"micro_batch_size", batch_size},
+            {"training_loss", timing.average_primary_loss()},
+            {"average_ms_per_item", batch_ms / static_cast<double>(batch_size)},
+            {"iterations_total", iterations},
+            {"average_iterations_per_item", static_cast<double>(iterations) / static_cast<double>(batch_size)},
+            {"rounds", timing.rounds},
+            {"batch_ms", batch_ms},
+            {"forward_ms", timing.forward_ms},
+            {"backward_ms", timing.backward_ms},
+            {"apply_ms", timing.apply_ms},
+            {"backward_output_ms", timing.backward_output_ms},
+            {"backward_transformer_ms", timing.backward_transformer_ms},
+            {"backward_input_ms", timing.backward_input_ms}
+        };
+
+        if (!m_training_progress_entries)
+            initialize_training_progress_log();
+        m_training_progress_entries->push_back(std::move(entry));
+    }
+
+    void TextTrainer::flush_training_progress_log() const
+    {
+        if (!m_training_progress_entries)
+            return;
+        std::ofstream file{"train.json", std::ios::trunc};
+        file << m_training_progress_entries->dump(2) << '\n';
+    }
+
     void TextTrainer::reset_workspaces()
     {
         m_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(PositionIndex::START, m_transformer_blocks.size());
@@ -449,7 +504,7 @@ namespace rllm
 
     void TextTrainer::set_micro_batch_size(size_t n)
     {
-        assert(n > 0);
+        assert(n > 0 && n <= static_cast<size_t>(BatchIndex::MAX));
         m_micro_batch_size = n;
     }
 
@@ -499,13 +554,32 @@ namespace rllm
         const float bias_correction1 = 1.0f - std::pow(TransformerBlock::ADAM_BETA1, static_cast<float>(m_optimizer_step));
         const float bias_correction2 = 1.0f - std::pow(TransformerBlock::ADAM_BETA2, static_cast<float>(m_optimizer_step));
 
+        // Treat embeddings, transformer blocks, and the LM heads as a sequence
+        // of learned stages. A symmetric depth profile keeps the mean multiplier
+        // at 1.0 while giving stages nearer the output a modestly higher rate.
+        const size_t learned_stage_count = m_transformer_blocks.size() + 2;
+        const float input_learning_rate = learning_rate *
+            depth_learning_rate_multiplier(0, learned_stage_count, m_layer_learning_rate_multiplier);
+        const float output_learning_rate = learning_rate *
+            depth_learning_rate_multiplier(learned_stage_count - 1, learned_stage_count, m_layer_learning_rate_multiplier);
+
         for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
-            m_output_layers[oi].apply_accumulated_update(m_gradient_accumulation_workspace->output_layers[oi], learning_rate, bias_correction1, bias_correction2);
+            m_output_layers[oi].apply_accumulated_update(
+                m_gradient_accumulation_workspace->output_layers[oi], output_learning_rate,
+                bias_correction1, bias_correction2);
 
         for (size_t i = 0; i < m_transformer_blocks.size(); ++i)
-            m_transformer_blocks[i].apply_accumulated_update(m_gradient_accumulation_workspace->transformer_blocks[i], learning_rate, bias_correction1, bias_correction2);
+        {
+            const float layer_learning_rate = learning_rate *
+                depth_learning_rate_multiplier(i + 1, learned_stage_count, m_layer_learning_rate_multiplier);
+            m_transformer_blocks[i].apply_accumulated_update(
+                m_gradient_accumulation_workspace->transformer_blocks[i], layer_learning_rate,
+                bias_correction1, bias_correction2);
+        }
 
-        m_input_layer.apply_accumulated_update(m_gradient_accumulation_workspace->embeddings, learning_rate, bias_correction1, bias_correction2);
+        m_input_layer.apply_accumulated_update(
+            m_gradient_accumulation_workspace->embeddings, input_learning_rate,
+            bias_correction1, bias_correction2);
     }
 
     TextTrainer::TextTrainer(size_t num_layers, Corpus& corpus, Statistics& stats)
@@ -954,7 +1028,8 @@ namespace rllm
         float best_validation_loss = std::numeric_limits<float>::infinity();
         size_t epochs_without_improvement = 0;
         bool has_best_checkpoint = false;
-        static constexpr const char* BEST_CHECKPOINT_FILENAME = "models/checkpoint-best-window.st";
+        const char* best_checkpoint_filename = m_training_method == TrainingMethod::REVERSE_WINDOW ?
+            "models/checkpoint-best-reverse-window.st" : "models/checkpoint-best-window.st";
         auto device_buffer_allocation_freeze = std::make_unique<ScopedDeviceBufferAllocationFreeze>();
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
@@ -966,8 +1041,14 @@ namespace rllm
             const size_t num_windows = windows_for_epoch(epoch);
             std::vector<size_t> indices(num_windows);
             for (size_t i = 0; i < num_windows; ++i)
-                indices[i] = offset + i * m_window_stride;
-            std::shuffle(indices.begin(), indices.end(), rng);
+            {
+                if (m_training_method == TrainingMethod::REVERSE_WINDOW)
+                    indices[i] = max_window_start - offset - i * m_window_stride;
+                else
+                    indices[i] = offset + i * m_window_stride;
+            }
+            if (m_training_method == TrainingMethod::WINDOW)
+                std::shuffle(indices.begin(), indices.end(), rng);
 
             for (size_t start = 0; start < num_windows; start += m_micro_batch_size)
             {
@@ -993,12 +1074,13 @@ namespace rllm
                 BatchTrainingTiming timing;
                 const size_t iterations = train_batch_items(batch, steps_per_window, timing);
                 const double total_ms = elapsed_ms(started);
+                const size_t completed_windows = start + count;
                 LOG_INFO(
                     "Epoch[{}%] window[{}..{}]: {:0.2f}% done (micro-batch {}, training loss {:.6f}, avg {:.2f} ms/window, iterations total {}, avg {:.2f}/window, rounds {}, batch {:.2f} ms)",
                     epoch / static_cast<float>(num_epochs) * 100.0f,
                     start + 1,
-                    start + count,
-                    static_cast<float>(start + count) / static_cast<float>(num_windows) * 100.0f,
+                    completed_windows,
+                    static_cast<float>(completed_windows) / static_cast<float>(num_windows) * 100.0f,
                     batch.size(),
                     timing.average_primary_loss(),
                     total_ms / batch.size(),
@@ -1006,6 +1088,9 @@ namespace rllm
                     static_cast<double>(iterations) / batch.size(),
                     timing.rounds,
                     total_ms);
+                log_training_progress(
+                    "window", epoch, num_epochs, start + 1, completed_windows,
+                    num_windows, batch.size(), iterations, total_ms, timing);
 
                 const size_t batch_number = start / m_micro_batch_size + 1;
                 if (batch_number % 10 == 0)
@@ -1060,11 +1145,11 @@ namespace rllm
                 {
                     best_validation_loss = validation.average_loss;
                     epochs_without_improvement = 0;
-                    save(BEST_CHECKPOINT_FILENAME);
+                    save(best_checkpoint_filename);
                     has_best_checkpoint = true;
                     LOG_INFO(
                         "Saved new best window checkpoint '{}' with validation loss {:.6f}",
-                        BEST_CHECKPOINT_FILENAME, best_validation_loss);
+                        best_checkpoint_filename, best_validation_loss);
                 }
                 else
                 {
@@ -1096,15 +1181,15 @@ namespace rllm
         device_buffer_allocation_freeze.reset();
         if (has_best_checkpoint)
         {
-            if (load(BEST_CHECKPOINT_FILENAME))
+            if (load(best_checkpoint_filename))
             {
                 LOG_INFO(
                     "restored best window checkpoint '{}' with validation loss {:.6f}",
-                    BEST_CHECKPOINT_FILENAME, best_validation_loss);
+                    best_checkpoint_filename, best_validation_loss);
             }
             else
             {
-                LOG_INFO("failed to restore best window checkpoint '{}'", BEST_CHECKPOINT_FILENAME);
+                LOG_INFO("failed to restore best window checkpoint '{}'", best_checkpoint_filename);
             }
         }
     }
@@ -1112,13 +1197,14 @@ namespace rllm
     void TextTrainer::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
         // Window methods operate on the flat token stream rather than per-line.
-        assert(m_training_method == TrainingMethod::WINDOW);
+        assert(m_training_method == TrainingMethod::WINDOW || m_training_method == TrainingMethod::REVERSE_WINDOW);
         train_with_window(m_window_size, verbose, num_epochs, checkpointing_interval);
     }
 
 
     void TextTrainer::train(bool verbose, size_t num_epochs, const std::optional<std::string>& input_filename, const std::optional<std::chrono::seconds>& checkpointing_interval, std::optional<size_t> epoch_size)
     {
+        initialize_training_progress_log();
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
         if (input_filename)
@@ -1165,6 +1251,20 @@ namespace rllm
                 static_cast<double>(transformer_gpu_bytes) / 1'000'000.0);
         }
 
+        const size_t batch_slot_gpu_bytes =
+            2 * static_cast<size_t>(EmbeddingDimension::MAX) * sizeof(float) + // h_last, dh_last
+            2 * vocab * sizeof(float) +                                       // logits, delta
+            static_cast<size_t>(TempStorage::MAX) * sizeof(float) +           // softmax_temp
+            2 * sizeof(int) + sizeof(float) +                                 // expected token, active flag, loss
+            3 * sizeof(int);                                                   // packed row begin, end, last
+        const size_t batch_gpu_bytes = batch_slot_gpu_bytes * static_cast<size_t>(BatchIndex::MAX);
+        LOG_INFO(
+            "Estimated batch-slot GPU memory: {:.2f} KB per slot x {} slots = {:.2f} MB "
+            "(batched output workspace and per-example packed-row metadata)",
+            static_cast<double>(batch_slot_gpu_bytes) / 1'000.0,
+            static_cast<size_t>(BatchIndex::MAX),
+            static_cast<double>(batch_gpu_bytes) / 1'000'000.0);
+
         static constexpr size_t CORPUS_SIZE_WARNING_THRESHOLD = 100000;
         if (corpus_size > CORPUS_SIZE_WARNING_THRESHOLD)
         {
@@ -1205,6 +1305,10 @@ namespace rllm
             epoch_size.has_value() ? std::format("{} line(s)", epoch_size.value()) : std::string{"all training lines"},
             training_method_to_string(m_training_method)
         );
+        LOG_INFO(
+            "Depth-adaptive learning rates: embeddings {:.3f}x, transformer layers linearly increasing by depth, output heads {:.3f}x (mean 1.000x)",
+            2.0f - m_layer_learning_rate_multiplier,
+            m_layer_learning_rate_multiplier);
 
         if (m_learning_rate_schedule == LearningRateSchedule::Constant)
             m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
