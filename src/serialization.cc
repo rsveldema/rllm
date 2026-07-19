@@ -57,6 +57,15 @@ namespace rllm
             const auto result = std::from_chars(begin, end, value);
             return result.ec == std::errc{} && result.ptr == end;
         }
+
+        template <typename T>
+        bool parse_metadata_number(const std::string& text, T& value)
+        {
+            const auto* begin = text.data();
+            const auto* end = begin + text.size();
+            const auto result = std::from_chars(begin, end, value);
+            return result.ec == std::errc{} && result.ptr == end;
+        }
     } // namespace
 
 
@@ -113,6 +122,7 @@ namespace rllm
     bool TextTrainer::load(const std::string& filename)
     {
         m_optimizer_step = 0;
+        m_has_loaded_training_state = false;
         if (is_safetensors_model_filename(filename))
             return load_from_safetensors(filename);
 
@@ -349,6 +359,29 @@ namespace rllm
             m.copy_from_cpu(queue, cpu_tmp);
         }
 
+        template <typename T, typename X, typename Y>
+        void pull_cpu_matrix(const std::string& key, const safetensors::safetensors_t& st, cpu_fixed_matrix<T, X, Y>& m)
+        {
+            safetensors::tensor_t tensor;
+            if (!st.tensors.at(key, &tensor) || tensor.dtype != safetensors::dtype::kFLOAT32)
+            {
+                std::println("Invalid or missing training tensor {}", key);
+                std::abort();
+            }
+            const size_t rows = static_cast<size_t>(X::MAX);
+            const size_t cols = static_cast<size_t>(Y::MAX);
+            if (tensor.shape.size() != 2 || tensor.shape[0] != rows || tensor.shape[1] != cols)
+            {
+                std::println("Shape mismatch for training tensor {}", key);
+                std::abort();
+            }
+            const uint8_t* base = st.storage.empty() ? st.databuffer_addr : reinterpret_cast<const uint8_t*>(st.storage.data());
+            const auto* data = reinterpret_cast<float const*>(base + tensor.data_offsets[0]);
+            for (size_t x = 0; x < rows; ++x)
+                for (size_t y = 0; y < cols; ++y)
+                    m.set(static_cast<X>(x), static_cast<Y>(y), static_cast<T>(data[x * cols + y]));
+        }
+
     } // anonymous namespace
 
 
@@ -492,6 +525,8 @@ namespace rllm
 
         // Input layer (friend grants access to m_embeddings)
         push_matrix(st, "input_layer.embeddings", m_input_layer.m_embeddings, storage);
+        push_cpu_matrix(st, "training.input_layer.adam_first", m_input_layer.m_adam_first, storage);
+        push_cpu_matrix(st, "training.input_layer.adam_second", m_input_layer.m_adam_second, storage);
 
         // Transformer blocks (friend grants access to W_q etc.)
         for (size_t bi = 0; bi < m_transformer_blocks.size(); ++bi)
@@ -505,6 +540,20 @@ namespace rllm
             push_matrix(st, pfx + "W_gate", block.W_gate, storage);
             push_matrix(st, pfx + "W_up", block.W_up, storage);
             push_matrix(st, pfx + "W_down", block.W_down, storage);
+            push_matrix(st, "training." + pfx + "V_q", block.V_q, storage);
+            push_matrix(st, "training." + pfx + "V_k", block.V_k, storage);
+            push_matrix(st, "training." + pfx + "V_v", block.V_v, storage);
+            push_matrix(st, "training." + pfx + "V_o", block.V_o, storage);
+            push_matrix(st, "training." + pfx + "V_gate", block.V_gate, storage);
+            push_matrix(st, "training." + pfx + "V_up", block.V_up, storage);
+            push_matrix(st, "training." + pfx + "V_down", block.V_down, storage);
+            push_matrix(st, "training." + pfx + "S_q", block.S_q, storage);
+            push_matrix(st, "training." + pfx + "S_k", block.S_k, storage);
+            push_matrix(st, "training." + pfx + "S_v", block.S_v, storage);
+            push_matrix(st, "training." + pfx + "S_o", block.S_o, storage);
+            push_matrix(st, "training." + pfx + "S_gate", block.S_gate, storage);
+            push_matrix(st, "training." + pfx + "S_up", block.S_up, storage);
+            push_matrix(st, "training." + pfx + "S_down", block.S_down, storage);
         }
 
         // Output layers (friend grants access to m_output_layers internals)
@@ -512,11 +561,34 @@ namespace rllm
         {
             const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
             push_matrix(st, out_key, m_output_layers[oi].W_lm_head, storage);
+            const auto training_prefix = "training.output_layers." + std::to_string(static_cast<size_t>(oi)) + ".";
+            push_matrix(st, training_prefix + "V_lm_head", m_output_layers[oi].V_lm_head, storage);
+            push_matrix(st, training_prefix + "S_lm_head", m_output_layers[oi].S_lm_head, storage);
         }
 
         // Tokenizer metadata for validation on load.
         st.metadata.insert("tokenizer_vocab_size", std::to_string(static_cast<size_t>(TokenID::MAX)));
         st.metadata.insert("tokenizer_signature", std::to_string(tokenizer_signature()));
+        if (m_learning_rate_provider)
+        {
+            st.metadata.insert("training_state_version", "1");
+            st.metadata.insert("training.optimizer_step", std::to_string(m_optimizer_step));
+            st.metadata.insert("training.learning_rate", std::to_string(m_learning_rate));
+            st.metadata.insert("training.layer_learning_rate_multiplier", std::to_string(m_layer_learning_rate_multiplier));
+            st.metadata.insert("training.learning_rate_schedule", std::to_string(static_cast<int>(m_learning_rate_schedule)));
+            st.metadata.insert("training.learning_rate_schedule_steps", std::to_string(m_learning_rate_schedule_steps));
+            st.metadata.insert("training.simulated_annealing_decay_factor", std::to_string(m_simulated_annealing_decay_factor));
+            st.metadata.insert("training.simulated_annealing_initial_multiplier", std::to_string(m_simulated_annealing_initial_multiplier));
+            st.metadata.insert("training.simulated_annealing_decay_epochs", std::to_string(m_simulated_annealing_decay_epochs));
+            st.metadata.insert("training.simulated_annealing_min_multiplier", std::to_string(m_simulated_annealing_min_multiplier));
+            st.metadata.insert("training.learning_rate_step", std::to_string(m_learning_rate_provider->step()));
+            st.metadata.insert("training.current_learning_rate", std::to_string(m_learning_rate_provider->current_rate()));
+            st.metadata.insert("training.epochs_at_current_rate", std::to_string(m_learning_rate_provider->epochs_at_current_rate()));
+            st.metadata.insert("training.epoch", std::to_string(m_checkpoint_epoch));
+            st.metadata.insert("training.window", std::to_string(m_checkpoint_window));
+            st.metadata.insert("training.window_count", std::to_string(m_checkpoint_window_count));
+            st.metadata.insert("training.rng_state", m_checkpoint_rng_state);
+        }
 
         st.storage = std::move(storage);
         std::string warn;
@@ -561,6 +633,52 @@ namespace rllm
         {
             std::println("Missing version in safetensors metadata for: {}", filename);
             return false;
+        }
+
+        std::string training_state_version;
+        if (header.count("training_state_version") &&
+            header.at("training_state_version", &training_state_version) &&
+            training_state_version == "1")
+        {
+            const auto parse_value = [&](const char* key, auto& value) {
+                std::string text;
+                return header.count(key) && header.at(key, &text) &&
+                    parse_metadata_number(text, value);
+            };
+            const auto read_string = [&](const char* key, std::string& value) {
+                return header.count(key) && header.at(key, &value);
+            };
+            int schedule = 0;
+            if (!parse_value("training.optimizer_step", m_optimizer_step) ||
+                !parse_value("training.learning_rate", m_learning_rate) ||
+                !parse_value("training.layer_learning_rate_multiplier", m_layer_learning_rate_multiplier) ||
+                !parse_value("training.learning_rate_schedule", schedule) ||
+                !parse_value("training.learning_rate_schedule_steps", m_learning_rate_schedule_steps) ||
+                !parse_value("training.simulated_annealing_decay_factor", m_simulated_annealing_decay_factor) ||
+                !parse_value("training.simulated_annealing_initial_multiplier", m_simulated_annealing_initial_multiplier) ||
+                !parse_value("training.simulated_annealing_decay_epochs", m_simulated_annealing_decay_epochs) ||
+                !parse_value("training.simulated_annealing_min_multiplier", m_simulated_annealing_min_multiplier) ||
+                !parse_value("training.learning_rate_step", m_loaded_learning_rate_step) ||
+                !parse_value("training.current_learning_rate", m_loaded_current_learning_rate) ||
+                !parse_value("training.epochs_at_current_rate", m_loaded_epochs_at_current_rate) ||
+                !parse_value("training.epoch", m_checkpoint_epoch) ||
+                !parse_value("training.window", m_checkpoint_window) ||
+                !read_string("training.rng_state", m_checkpoint_rng_state) ||
+                schedule < static_cast<int>(LearningRateSchedule::Constant) ||
+                schedule > static_cast<int>(LearningRateSchedule::SimulatedAnnealing))
+            {
+                std::println("Invalid or incomplete training state in {}", filename);
+                return false;
+            }
+            m_learning_rate_schedule = static_cast<LearningRateSchedule>(schedule);
+            std::string window_count_text;
+            if (header.count("training.window_count") && header.at("training.window_count", &window_count_text) &&
+                !parse_metadata_number(window_count_text, m_checkpoint_window_count))
+            {
+                std::println("Invalid training window count in {}", filename);
+                return false;
+            }
+            m_has_loaded_training_state = true;
         }
 
         const auto expected_vocab_size = static_cast<size_t>(TokenID::MAX);
@@ -611,6 +729,11 @@ namespace rllm
         const size_t target_blocks = std::max(requested_blocks, num_blocks);
 
         m_input_layer.load_from_safetensors(filename);
+        if (m_has_loaded_training_state)
+        {
+            pull_cpu_matrix("training.input_layer.adam_first", st, m_input_layer.m_adam_first);
+            pull_cpu_matrix("training.input_layer.adam_second", st, m_input_layer.m_adam_second);
+        }
 
         // Clear existing blocks and create new ones.
         m_transformer_blocks.clear();
@@ -630,6 +753,24 @@ namespace rllm
             pull_matrix(pfx + "W_gate", st, block.W_gate);
             pull_matrix(pfx + "W_up", st, block.W_up);
             pull_matrix(pfx + "W_down", st, block.W_down);
+            if (m_has_loaded_training_state)
+            {
+                const std::string tpfx = "training." + pfx;
+                pull_matrix(tpfx + "V_q", st, block.V_q);
+                pull_matrix(tpfx + "V_k", st, block.V_k);
+                pull_matrix(tpfx + "V_v", st, block.V_v);
+                pull_matrix(tpfx + "V_o", st, block.V_o);
+                pull_matrix(tpfx + "V_gate", st, block.V_gate);
+                pull_matrix(tpfx + "V_up", st, block.V_up);
+                pull_matrix(tpfx + "V_down", st, block.V_down);
+                pull_matrix(tpfx + "S_q", st, block.S_q);
+                pull_matrix(tpfx + "S_k", st, block.S_k);
+                pull_matrix(tpfx + "S_v", st, block.S_v);
+                pull_matrix(tpfx + "S_o", st, block.S_o);
+                pull_matrix(tpfx + "S_gate", st, block.S_gate);
+                pull_matrix(tpfx + "S_up", st, block.S_up);
+                pull_matrix(tpfx + "S_down", st, block.S_down);
+            }
         }
         for (size_t bi = num_blocks; bi < target_blocks; ++bi)
         {
@@ -655,8 +796,17 @@ namespace rllm
                 pull_matrix(out_key, st, m_output_layers[oi].W_lm_head);
                 auto& queue = rllm::vulkan_runtime::get_queue(0);
                 m_output_layers[oi].m_inputs.zero(queue);
-                m_output_layers[oi].V_lm_head.zero(queue);
-                m_output_layers[oi].S_lm_head.zero(queue);
+                if (m_has_loaded_training_state)
+                {
+                    const auto tpfx = "training.output_layers." + std::to_string(static_cast<size_t>(oi)) + ".";
+                    pull_matrix(tpfx + "V_lm_head", st, m_output_layers[oi].V_lm_head);
+                    pull_matrix(tpfx + "S_lm_head", st, m_output_layers[oi].S_lm_head);
+                }
+                else
+                {
+                    m_output_layers[oi].V_lm_head.zero(queue);
+                    m_output_layers[oi].S_lm_head.zero(queue);
+                }
             }
         }
         else if (st.tensors.count("output_layers.W_lm_head"))

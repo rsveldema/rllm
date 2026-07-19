@@ -29,7 +29,11 @@ namespace rllm
       public:
         virtual ~ILearningRate() = default;
         virtual float get_rate() = 0;
+        virtual float current_rate() const = 0;
         virtual void advance_epoch() {}
+        virtual size_t step() const { return 0; }
+        virtual size_t epochs_at_current_rate() const { return 0; }
+        virtual void restore(size_t, float, size_t) {}
     };
 
     class ConstantLearningRate final : public ILearningRate
@@ -40,6 +44,7 @@ namespace rllm
         {}
 
         float get_rate() override { return m_rate; }
+        float current_rate() const override { return m_rate; }
 
       private:
         float m_rate;
@@ -61,6 +66,10 @@ namespace rllm
             ++m_step;
             return m_rate * scale_for_step(m_step, m_total_steps);
         }
+
+        size_t step() const override { return m_step; }
+        float current_rate() const override { return m_rate * scale_for_step(std::max<size_t>(m_step, 1), m_total_steps); }
+        void restore(size_t step, float, size_t) override { m_step = step; }
 
         static float scale_for_step(size_t step, size_t total_steps)
         {
@@ -104,6 +113,7 @@ namespace rllm
         {
             return m_current_rate;
         }
+        float current_rate() const override { return m_current_rate; }
 
         void advance_epoch() override
         {
@@ -113,6 +123,13 @@ namespace rllm
                 m_current_rate = std::max(m_current_rate * m_decay_factor, m_min_rate);
                 m_epochs_at_current_rate = 0;
             }
+        }
+
+        size_t epochs_at_current_rate() const override { return m_epochs_at_current_rate; }
+        void restore(size_t, float current_rate, size_t epochs) override
+        {
+            m_current_rate = std::max(current_rate, m_min_rate);
+            m_epochs_at_current_rate = epochs % m_epochs_per_decay;
         }
 
       private:

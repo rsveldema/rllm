@@ -2,6 +2,7 @@
 #include <RandomHelpers.hpp>
 #include <RuntimeConfig.hpp>
 #include <TransformerBlock.hpp>
+#include <OptimizerDiagnostics.hpp>
 #include <WeightInitialization.hpp>
 #include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
@@ -1273,23 +1274,54 @@ namespace rllm
         ENDFOR
     }
 
-    void TransformerBlock::backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
+    void TransformerBlock::backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd,
+        bool log_gradient_diagnostics, int diagnostic_layer)
     {
+        const auto diagnostic_label = [diagnostic_layer](std::string_view stage) {
+            return std::format("transformer layer {} {}", diagnostic_layer, stage);
+        };
+#if DEBUG_ATTENTION_DIAGNOSTICS
+        if (log_gradient_diagnostics)
+        {
+            log_hidden_activation_diagnostics(fwd.Q, fwd.seq_len, diagnostic_label("attention Q"));
+            log_hidden_activation_diagnostics(fwd.K, fwd.seq_len, diagnostic_label("attention K"));
+            log_hidden_activation_diagnostics(fwd.V, fwd.seq_len, diagnostic_label("attention V"));
+        }
+#endif
         backward_accumulate_attention_dv_for_heads(ws, fwd);
+        if (log_gradient_diagnostics)
+            log_hidden_gradient_diagnostics(ws.d_V, fwd.seq_len, diagnostic_label("attention d_V"));
         backward_compute_attention_dscores_for_heads(ws, fwd);
+        if (log_gradient_diagnostics)
+            log_attention_matrix_gradient_diagnostics(ws.d_scores, fwd.seq_len,
+                diagnostic_label("attention d_scores")
+#if DEBUG_ATTENTION_DIAGNOSTICS
+                , true
+#endif
+            );
         backward_softmax_attention_for_heads(ws, fwd);
+        if (log_gradient_diagnostics)
+            log_attention_matrix_gradient_diagnostics(ws.d_raw, fwd.seq_len, diagnostic_label("attention d_raw"));
         backward_accumulate_attention_dq_for_heads(ws, fwd);
         backward_accumulate_attention_dk_for_heads(ws, fwd);
+        if (log_gradient_diagnostics)
+        {
+            log_hidden_gradient_diagnostics(ws.d_Q, fwd.seq_len, diagnostic_label("attention d_Q"));
+            log_hidden_gradient_diagnostics(ws.d_K, fwd.seq_len, diagnostic_label("attention d_K"));
+        }
     }
 
     void TransformerBlock::backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace,
-        ForwardWorkspace& fwd_workspace, bool wait_for_completion)
+        ForwardWorkspace& fwd_workspace, bool wait_for_completion, bool log_gradient_diagnostics, int diagnostic_layer)
     {
         const PositionIndex seq = fwd_workspace.seq_len;
         VulkanQueue& queue = vulkan_runtime::get_queue(0);
         workspace.reset(queue, seq);
         auto* ws = &workspace;
         auto& fwd = fwd_workspace;
+        const auto diagnostic_label = [diagnostic_layer](std::string_view stage) {
+            return std::format("transformer layer {} {}", diagnostic_layer, stage);
+        };
 
         check_nan_finding_mode("backward:start");
         check_transformer_hidden_nan_finding_mode(queue, dout, seq, "dout", "backward:start");
@@ -1301,6 +1333,8 @@ namespace rllm
 
         // d_ffn_act = d_ffn_out @ W_down   (W_down[D × Dff])
         matmul_AB(dout, W_down, ws->d_ffn_act);
+        if (log_gradient_diagnostics)
+            log_ffn_gradient_diagnostics(ws->d_ffn_act, seq, diagnostic_label("after FFN down projection"));
         check_transformer_ff_nan_finding_mode(queue, ws->d_ffn_act, seq, "d_ffn_act", "after FFN down projection backward");
 
         // dW_down[D, Dff] += dout^T @ ffn_act
@@ -1308,12 +1342,19 @@ namespace rllm
 
         // SwiGLU backward: d(silu(g)*u) / dg, du
         swiglu_backward(fwd.seq_len, fwd.gate_pre, fwd.up_pre, ws->d_ffn_act, ws->d_gate_pre, ws->d_up_pre);
+        if (log_gradient_diagnostics)
+        {
+            log_ffn_gradient_diagnostics(ws->d_gate_pre, seq, diagnostic_label("after SwiGLU gate backward"));
+            log_ffn_gradient_diagnostics(ws->d_up_pre, seq, diagnostic_label("after SwiGLU up backward"));
+        }
         check_transformer_ff_nan_finding_mode(queue, ws->d_gate_pre, seq, "d_gate_pre", "after SwiGLU backward");
         check_transformer_ff_nan_finding_mode(queue, ws->d_up_pre, seq, "d_up_pre", "after SwiGLU backward");
 
         // d_h_norm_ff = d_gate_pre @ W_gate  +  d_up_pre @ W_up
         matmul_AB_add(ws->d_gate_pre, W_gate, ws->d_h_norm_ff);
         matmul_AB_add(ws->d_up_pre, W_up, ws->d_h_norm_ff);
+        if (log_gradient_diagnostics)
+            log_hidden_gradient_diagnostics(ws->d_h_norm_ff, seq, diagnostic_label("before FFN RMSNorm backward"));
         check_transformer_hidden_nan_finding_mode(queue, ws->d_h_norm_ff, seq, "d_h_norm_ff", "after FFN gate/up projection backward");
 
         // weight gradients for gate, up
@@ -1321,6 +1362,8 @@ namespace rllm
 
         // RMSNorm backward for FFN: d_h_mid += rms_bwd(d_h_norm_ff, h_mid)
         rms_norm_backward(queue, ws->d_h_norm_ff, fwd.h_mid, ws->d_h_mid);
+        if (log_gradient_diagnostics)
+            log_hidden_gradient_diagnostics(ws->d_h_mid, seq, diagnostic_label("after FFN RMSNorm backward"));
         check_transformer_hidden_nan_finding_mode(queue, ws->d_h_mid, seq, "d_h_mid", "after FFN RMSNorm backward");
 
         // ── Attention backward ─────────────────────────────────────────────────
@@ -1329,11 +1372,13 @@ namespace rllm
 
         // d_attn_concat = d_attn_proj @ W_o
         matmul_AB(ws->d_h_mid, W_o, ws->d_attn_concat);
+        if (log_gradient_diagnostics)
+            log_hidden_gradient_diagnostics(ws->d_attn_concat, seq, diagnostic_label("after attention output projection"));
         check_transformer_hidden_nan_finding_mode(queue, ws->d_attn_concat, seq, "d_attn_concat", "after output projection backward");
         matmul_AtB_acc(ws->d_h_mid, fwd.attn_concat, ws->dW_o, fwd.seq_len);
 
         // Per-head backward
-        backward_attention_heads(*ws, fwd);
+        backward_attention_heads(*ws, fwd, log_gradient_diagnostics, diagnostic_layer);
         check_transformer_hidden_nan_finding_mode(queue, ws->d_Q, seq, "d_Q", "after attention heads backward");
         check_transformer_hidden_nan_finding_mode(queue, ws->d_K, seq, "d_K", "after attention heads backward");
         check_transformer_hidden_nan_finding_mode(queue, ws->d_V, seq, "d_V", "after attention heads backward");
@@ -1343,12 +1388,16 @@ namespace rllm
 
         // d_h_norm_attn = d_Q @ W_q  +  d_K @ W_k  +  d_V @ W_v
         matmul_AB_add_3_matrix_muls(ws->d_Q, W_q, ws->d_K, W_k, ws->d_V, W_v, ws->d_h_norm_attn);
+        if (log_gradient_diagnostics)
+            log_hidden_gradient_diagnostics(ws->d_h_norm_attn, seq, diagnostic_label("before attention RMSNorm backward"));
         check_transformer_hidden_nan_finding_mode(queue, ws->d_h_norm_attn, seq, "d_h_norm_attn", "after QKV projection backward");
 
         // d_h_in = residual gradient + RMSNorm backward. Weight updates are applied later
         // from the accumulated gradient buffers.
         din.copy_from(queue, ws->d_h_mid);
         rms_norm_backward(queue, ws->d_h_norm_attn, fwd.h_in, din);
+        if (log_gradient_diagnostics)
+            log_hidden_gradient_diagnostics(din, seq, diagnostic_label("after attention RMSNorm backward"));
         if (wait_for_completion)
             queue.wait("TransformerBlock backward din wait idle");
         check_transformer_hidden_nan_finding_mode(queue, din, seq, "din", "after final RMSNorm backward");
@@ -1370,16 +1419,27 @@ namespace rllm
 
     void TransformerBlock::apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2)
     {
+        auto& diagnostics = optimizer_diagnostics_buffer();
+        const int collect = optimizer_diagnostics_enabled() ? 1 : 0;
         if (!accumulator.touched)
             return;
+        prepare_optimizer_gradient_clip(diagnostics);
+        accumulate_optimizer_gradient_norm(accumulator.dW_q, diagnostics);
+        accumulate_optimizer_gradient_norm(accumulator.dW_k, diagnostics);
+        accumulate_optimizer_gradient_norm(accumulator.dW_v, diagnostics);
+        accumulate_optimizer_gradient_norm(accumulator.dW_o, diagnostics);
+        accumulate_optimizer_gradient_norm(accumulator.dW_gate, diagnostics);
+        accumulate_optimizer_gradient_norm(accumulator.dW_up, diagnostics);
+        accumulate_optimizer_gradient_norm(accumulator.dW_down, diagnostics);
+        finalize_optimizer_gradient_clip(diagnostics);
         const float embedding_lr = learning_rate;
-        adamw_update(W_q, V_q, S_q, accumulator.dW_q, embedding_lr, bias_correction1, bias_correction2);
-        adamw_update(W_k, V_k, S_k, accumulator.dW_k, embedding_lr, bias_correction1, bias_correction2);
-        adamw_update(W_v, V_v, S_v, accumulator.dW_v, embedding_lr, bias_correction1, bias_correction2);
-        adamw_update(W_o, V_o, S_o, accumulator.dW_o, embedding_lr, bias_correction1, bias_correction2);
-        adamw_update(W_gate, V_gate, S_gate, accumulator.dW_gate, embedding_lr, bias_correction1, bias_correction2);
-        adamw_update(W_up, V_up, S_up, accumulator.dW_up, embedding_lr, bias_correction1, bias_correction2);
-        adamw_update(W_down, V_down, S_down, accumulator.dW_down, learning_rate, bias_correction1, bias_correction2);
+        adamw_update(W_q, V_q, S_q, accumulator.dW_q, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
+        adamw_update(W_k, V_k, S_k, accumulator.dW_k, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
+        adamw_update(W_v, V_v, S_v, accumulator.dW_v, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
+        adamw_update(W_o, V_o, S_o, accumulator.dW_o, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
+        adamw_update(W_gate, V_gate, S_gate, accumulator.dW_gate, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
+        adamw_update(W_up, V_up, S_up, accumulator.dW_up, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
+        adamw_update(W_down, V_down, S_down, accumulator.dW_down, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────

@@ -66,6 +66,11 @@ struct CommandLineParser
     rllm::EmbeddingInitializerType embedding_initializer = rllm::EmbeddingInitializerType::LegacyUniform;
     size_t micro_batch_size = 1;
     std::optional<size_t> epoch_size;
+    bool disable_early_stopping = false;
+    bool disable_example_convergence = false;
+    bool disable_training_diagnostics = false;
+    bool reset_optimizer_state = false;
+    bool restart_learning_rate_schedule = false;
     bool nan_finding_mode = false;
     std::optional<std::string> vulkan_device;
 
@@ -105,6 +110,11 @@ struct CommandLineParser
         filters = j.value("filters", filters);
         if (j.contains("epoch_size"))
             epoch_size = j["epoch_size"].is_null() ? std::nullopt : std::optional<size_t>{j["epoch_size"].get<size_t>()};
+        disable_early_stopping = j.value("disable_early_stopping", disable_early_stopping);
+        disable_example_convergence = j.value("disable_example_convergence", disable_example_convergence);
+        disable_training_diagnostics = j.value("disable_training_diagnostics", disable_training_diagnostics);
+        reset_optimizer_state = j.value("reset_optimizer_state", reset_optimizer_state);
+        restart_learning_rate_schedule = j.value("restart_learning_rate_schedule", restart_learning_rate_schedule);
         if (j.contains("checkpoint_interval_seconds"))
             checkpointing_interval = j["checkpoint_interval_seconds"].is_null() ? std::nullopt :
                 std::optional<std::chrono::seconds>{std::chrono::seconds{j["checkpoint_interval_seconds"].get<long long>()}};
@@ -220,7 +230,7 @@ struct CommandLineParser
                  window_stride = static_cast<size_t>(n);
              }},
         {.options = {"--learning-rate"},
-         .description = std::format("Base learning rate before layer-count scaling (default: {})", learning_rate),
+         .description = std::format("Base AdamW learning rate (default: {})", learning_rate),
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
@@ -402,6 +412,36 @@ struct CommandLineParser
          .action =
              [&](const std::vector<std::string>&) {
                  nan_finding_mode = true;
+             }},
+        {.options = {"--disable-early-stopping"},
+         .description = "Continue through all requested epochs even when validation loss stops improving",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 disable_early_stopping = true;
+             }},
+        {.options = {"--disable-example-convergence"},
+         .description = "Keep examples active after reaching the convergence threshold",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 disable_example_convergence = true;
+             }},
+        {.options = {"--disable-training-diagnostics"},
+         .description = "Disable per-epoch optimizer and backward-pass diagnostics",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 disable_training_diagnostics = true;
+             }},
+        {.options = {"--reset-optimizer-state"},
+         .description = "Resume model weights and training cursor but reset Adam moments and bias-correction step",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 reset_optimizer_state = true;
+             }},
+        {.options = {"--restart-learning-rate-schedule"},
+         .description = "Resume model weights, optimizer state, and training cursor but restart the learning-rate schedule",
+         .action =
+             [&](const std::vector<std::string>&) {
+                 restart_learning_rate_schedule = true;
              }},
         {.options = {"--vulkan-device"},
          .description = "Select a Vulkan device by a case-insensitive name substring",
@@ -642,6 +682,11 @@ int main(int argc, char* argv[])
             parser.micro_batch_size,
             parser.num_epochs,
             parser.epoch_size,
+            parser.disable_early_stopping,
+            parser.disable_example_convergence,
+            parser.disable_training_diagnostics,
+            parser.reset_optimizer_state,
+            parser.restart_learning_rate_schedule,
             parser.train_corpus_dir.value()
         );
     }

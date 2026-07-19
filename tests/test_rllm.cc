@@ -189,6 +189,44 @@ TEST(CorpusTest, TrainingLinesRetainPythonTabsAndTrailingNewline)
     std::filesystem::remove_all(corpus_dir);
 }
 
+TEST(CorpusTest, LineWindowsNeverCrossBoundaries)
+{
+    CpuInputLine first;
+    for (const auto token : {TokenID::TOK_0, TokenID::TOK_1, TokenID::TOK_2,
+             TokenID::TOK_3, TokenID::TOK_4, TokenID::TOK_5, TokenID::TOK_6})
+        first.push_back(token);
+    CpuInputLine second;
+    for (const auto token : {TokenID::TOK_20, TokenID::TOK_21, TokenID::TOK_22})
+        second.push_back(token);
+
+    const auto windows = make_line_windows({first, second}, 6, 2);
+
+    ASSERT_EQ(windows.size(), 4u);
+    EXPECT_EQ(windows[0].line.get(windows[0].context_length), TokenID::TOK_1);
+    EXPECT_EQ(windows[1].line.get(windows[1].context_length), TokenID::TOK_3);
+    EXPECT_EQ(windows[2].line.get(windows[2].context_length), TokenID::TOK_5);
+    EXPECT_EQ(windows[3].line.get(windows[3].context_length), TokenID::TOK_21);
+    EXPECT_EQ(windows[2].line.get(0u), TokenID::TOK_0);
+    EXPECT_EQ(windows[3].line.get(0u), TokenID::TOK_20);
+}
+
+TEST(CorpusTest, LineWindowsTrainHashInToCluAsPrimaryTarget)
+{
+    CpuInputLine include_line;
+    for (const auto token : {TokenID::TOK_545, TokenID::TOK_417, TokenID::TOK_344,
+             TokenID::TOK_433, TokenID::TOK_532, TokenID::TOK_83})
+        include_line.push_back(token);
+
+    const auto windows = make_line_windows({include_line}, 32, 1);
+
+    ASSERT_GE(windows.size(), 2u);
+    const auto& hash_in = windows[1];
+    ASSERT_EQ(hash_in.context_length, static_cast<PositionIndex>(2));
+    EXPECT_EQ(hash_in.line.get(0u), TokenID::TOK_545); // '#'
+    EXPECT_EQ(hash_in.line.get(1u), TokenID::TOK_417); // 'in'
+    EXPECT_EQ(hash_in.line.get(hash_in.context_length), TokenID::TOK_344); // 'clu'
+}
+
 namespace
 {
     constexpr int BENCH_ITERS = 20;

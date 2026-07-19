@@ -219,7 +219,7 @@ namespace rllm
 
         // Backward pass. dout[seq_len x D_MODEL] = dL/dh_out.
         // Writes dL/dh_in into din and leaves weight gradients in workspace.
-        void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, ForwardWorkspace& fwd_workspace, bool wait_for_completion = true);
+        void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, ForwardWorkspace& fwd_workspace, bool wait_for_completion = true, bool log_gradient_diagnostics = false, int diagnostic_layer = -1);
         void backward(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dout, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& din, BackwardWorkspace& workspace, float learning_rate, ForwardWorkspace& fwd_workspace)
         {
             (void) learning_rate;
@@ -335,7 +335,8 @@ namespace rllm
         void apply_causal_softmax_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void compute_attention_scores_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi);
         void compute_attention_values_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
-        void backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
+        void backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd,
+            bool log_gradient_diagnostics, int diagnostic_layer);
         void backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
         void backward_compute_attention_dscores_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
 

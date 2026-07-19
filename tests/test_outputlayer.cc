@@ -68,7 +68,9 @@ TEST(OutputLayerBatchTest, BatchedDeltaAndLossStayOnDevice)
     active.push_back(0);
     workspace.active_examples.copy_from_cpu(queue, active);
 
-    layer.compute_batched_delta(workspace.logits, static_cast<BatchIndex>(2), workspace, queue);
+    constexpr float loss_gradient_scale = 0.25f;
+    layer.compute_batched_delta(
+        workspace.logits, static_cast<BatchIndex>(2), workspace, queue, loss_gradient_scale);
 
     cpu_fixed_matrix<float, BatchIndex, TokenID> delta_cpu;
     workspace.delta.copy_to_cpu(queue, delta_cpu);
@@ -83,7 +85,7 @@ TEST(OutputLayerBatchTest, BatchedDeltaAndLossStayOnDevice)
         float expected_delta = OutputLayer::smooth - uniform_probability;
         if (static_cast<int>(token) == 1)
             expected_delta += 1.0f - OutputLayer::LABEL_SMOOTHING;
-        EXPECT_NEAR((delta_cpu[BatchIndex::START, token]), expected_delta, 1e-5f);
+        EXPECT_NEAR((delta_cpu[BatchIndex::START, token]), expected_delta * loss_gradient_scale, 1e-5f);
         EXPECT_FLOAT_EQ((delta_cpu[static_cast<BatchIndex>(1), token]), 0.0f);
     }
 }

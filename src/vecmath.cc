@@ -3,6 +3,7 @@
 #include <enum_iterator2D.hpp>
 #include <parallel.hpp>
 #include <vecmath.hpp>
+#include <OptimizerDiagnostics.hpp>
 
 
 namespace parallel
@@ -100,68 +101,117 @@ namespace rllm
     }
 
     void adamw_update(
-        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2)
+        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics)
         fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& weight,
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& first,
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& second,
         const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient,
-        float learning_rate, float bias_correction1, float bias_correction2
+        float learning_rate, float bias_correction1, float bias_correction2,
+        fixed_size_vector<float, TempStorage>& diagnostics, int collect_diagnostics
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2))
-        const float g = math::clamp(gradient[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics))
+        const float raw_gradient = gradient[r, c];
+        const float scaled_gradient = (raw_gradient * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
+        const float g = math::clamp(scaled_gradient, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
         first[r, c] = ((TransformerBlock::ADAM_BETA1 * first[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA1) * g));
         second[r, c] = ((TransformerBlock::ADAM_BETA2 * second[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA2) * (g * g)));
         const float update = ((first[r, c] / bias_correction1) / (sqrt((second[r, c] / bias_correction2)) + TransformerBlock::ADAM_EPSILON));
         const float decayed = (static_cast<float>(weight[r, c]) * (1.0f - (learning_rate * TransformerBlock::WEIGHT_DECAY)));
-        weight[r, c] = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float old_weight = static_cast<float>(weight[r, c]);
+        const float new_weight = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        weight[r, c] = new_weight;
+        if (collect_diagnostics != 0) {
+            const float adam_abs = abs(update);
+            const float signed_weight_delta = (new_weight - old_weight);
+            const float weight_delta = abs(signed_weight_delta);
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_GRADIENT_MAX], abs(raw_gradient));
+            if (abs(scaled_gradient) > TransformerBlock::GRAD_CLIP) atomicAdd(diagnostics[TempStorage::OPTIMIZER_CLIPPED_COUNT], 1.0f);
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_ADAM_UPDATE_SQUARE_SUM], (update * update));
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_ADAM_UPDATE_MAX], adam_abs);
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_WEIGHT_UPDATE_SQUARE_SUM], (weight_delta * weight_delta));
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_WEIGHT_UPDATE_MAX], weight_delta);
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_PARAMETER_COUNT], 1.0f);
+        }
         ENDFOR
     }
 
     void adamw_update(
-        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2)
+        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics)
         fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& weight,
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>& first,
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>& second,
         const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& gradient,
-        float learning_rate, float bias_correction1, float bias_correction2
+        float learning_rate, float bias_correction1, float bias_correction2,
+        fixed_size_vector<float, TempStorage>& diagnostics, int collect_diagnostics
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2))
-        const float g = math::clamp(gradient[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics))
+        const float raw_gradient = gradient[r, c];
+        const float scaled_gradient = (raw_gradient * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
+        const float g = math::clamp(scaled_gradient, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
         first[r, c] = ((TransformerBlock::ADAM_BETA1 * first[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA1) * g));
         second[r, c] = ((TransformerBlock::ADAM_BETA2 * second[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA2) * (g * g)));
         const float update = ((first[r, c] / bias_correction1) / (sqrt((second[r, c] / bias_correction2)) + TransformerBlock::ADAM_EPSILON));
         const float decayed = (static_cast<float>(weight[r, c]) * (1.0f - (learning_rate * TransformerBlock::WEIGHT_DECAY)));
-        weight[r, c] = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float old_weight = static_cast<float>(weight[r, c]);
+        const float new_weight = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        weight[r, c] = new_weight;
+        if (collect_diagnostics != 0) {
+            const float signed_weight_delta = (new_weight - old_weight);
+            const float weight_delta = abs(signed_weight_delta);
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_GRADIENT_MAX], abs(raw_gradient));
+            if (abs(scaled_gradient) > TransformerBlock::GRAD_CLIP) atomicAdd(diagnostics[TempStorage::OPTIMIZER_CLIPPED_COUNT], 1.0f);
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_ADAM_UPDATE_SQUARE_SUM], (update * update));
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_ADAM_UPDATE_MAX], abs(update));
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_WEIGHT_UPDATE_SQUARE_SUM], (weight_delta * weight_delta));
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_WEIGHT_UPDATE_MAX], weight_delta);
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_PARAMETER_COUNT], 1.0f);
+        }
         ENDFOR
     }
 
     void adamw_update(
-        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2)
+        // OFFLOAD_PARAMETERS(weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics)
         fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& weight,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& first,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& second,
         const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient,
-        float learning_rate, float bias_correction1, float bias_correction2
+        float learning_rate, float bias_correction1, float bias_correction2,
+        fixed_size_vector<float, TempStorage>& diagnostics, int collect_diagnostics
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2))
-        const float g = math::clamp(gradient[r, c], -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (weight, first, second, gradient, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics))
+        const float raw_gradient = gradient[r, c];
+        const float scaled_gradient = (raw_gradient * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
+        const float g = math::clamp(scaled_gradient, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
         first[r, c] = ((TransformerBlock::ADAM_BETA1 * first[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA1) * g));
         second[r, c] = ((TransformerBlock::ADAM_BETA2 * second[r, c]) + ((1.0f - TransformerBlock::ADAM_BETA2) * (g * g)));
         const float update = ((first[r, c] / bias_correction1) / (sqrt((second[r, c] / bias_correction2)) + TransformerBlock::ADAM_EPSILON));
         const float decayed = (static_cast<float>(weight[r, c]) * (1.0f - (learning_rate * TransformerBlock::WEIGHT_DECAY)));
-        weight[r, c] = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        const float old_weight = static_cast<float>(weight[r, c]);
+        const float new_weight = math::clamp((decayed + (learning_rate * update)), -TransformerBlock::WEIGHT_CLAMP, TransformerBlock::WEIGHT_CLAMP);
+        weight[r, c] = new_weight;
+        if (collect_diagnostics != 0) {
+            const float signed_weight_delta = (new_weight - old_weight);
+            const float weight_delta = abs(signed_weight_delta);
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_GRADIENT_MAX], abs(raw_gradient));
+            if (abs(scaled_gradient) > TransformerBlock::GRAD_CLIP) atomicAdd(diagnostics[TempStorage::OPTIMIZER_CLIPPED_COUNT], 1.0f);
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_ADAM_UPDATE_SQUARE_SUM], (update * update));
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_ADAM_UPDATE_MAX], abs(update));
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_WEIGHT_UPDATE_SQUARE_SUM], (weight_delta * weight_delta));
+            atomicMax(diagnostics[TempStorage::OPTIMIZER_WEIGHT_UPDATE_MAX], weight_delta);
+            atomicAdd(diagnostics[TempStorage::OPTIMIZER_PARAMETER_COUNT], 1.0f);
+        }
         ENDFOR
     }
 

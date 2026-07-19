@@ -1,6 +1,7 @@
 #include <Trainer.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <print>
 #include <string>
@@ -39,17 +40,26 @@ namespace rllm
         size_t micro_batch_size,
         size_t num_epochs,
         std::optional<size_t> epoch_size,
+        bool disable_early_stopping,
+        bool disable_example_convergence,
+        bool disable_training_diagnostics,
+        bool reset_optimizer_state,
+        bool restart_learning_rate_schedule,
         const std::string& train_corpus_dir
     )
     {
-        const float effective_learning_rate = learning_rate / static_cast<float>(std::max<size_t>(1, num_layers));
         std::println(
-            "Training mode: depth {}, learning rate {} (effective per-layer {}), micro-batch size {}",
+            "Training mode: depth {}, learning rate {}, micro-batch size {}",
             learn_depth,
             learning_rate,
-            effective_learning_rate,
             micro_batch_size
         );
+        if (disable_early_stopping)
+            std::println("Early stopping disabled; all {} requested epochs will run", num_epochs);
+        if (disable_example_convergence)
+            std::println("Per-example convergence removal disabled");
+        if (disable_training_diagnostics)
+            std::println("Optimizer and backward training diagnostics disabled");
         if (learning_rate > 0.25f)
         {
             std::println(
@@ -58,7 +68,11 @@ namespace rllm
                 learning_rate
             );
         }
-        set_nn_log_file("train.log");
+        const auto output_directory = std::filesystem::path(output_filename).parent_path();
+        const auto artifact_directory = output_directory.empty()
+            ? std::filesystem::path{"."}
+            : output_directory;
+        set_nn_log_file((artifact_directory / "train.log").string());
         ComputeKernelRegistry::instance().enableRegistrationLog("training-log.txt");
 
         Corpus corpus{m_filters};
@@ -97,10 +111,16 @@ namespace rllm
             {"epochs", num_epochs},
             {"checkpoint_interval_seconds", checkpointing_interval ? nlohmann::json(checkpointing_interval->count()) : nlohmann::json(nullptr)},
             {"epoch_size", epoch_size ? nlohmann::json(*epoch_size) : nlohmann::json(nullptr)},
+            {"disable_early_stopping", disable_early_stopping},
+            {"disable_example_convergence", disable_example_convergence},
+            {"disable_training_diagnostics", disable_training_diagnostics},
+            {"reset_optimizer_state", reset_optimizer_state},
+            {"restart_learning_rate_schedule", restart_learning_rate_schedule},
             {"train_corpus_dir", train_corpus_dir},
             {"filters", m_filters}
         };
         nn->set_training_parameters_json(training_parameters.dump(2));
+        nn->set_training_progress_filename((artifact_directory / "train.json").string());
         nn->set_training_method(method);
         nn->set_window_size(window_size);
         nn->set_window_stride(window_stride);
@@ -116,6 +136,11 @@ namespace rllm
         nn->set_ffn_initializer(ffn_initializer);
         nn->set_embedding_initializer(embedding_initializer);
         nn->set_micro_batch_size(micro_batch_size);
+        nn->set_early_stopping_enabled(!disable_early_stopping);
+        nn->set_example_convergence_enabled(!disable_example_convergence);
+        nn->set_training_diagnostics_enabled(!disable_training_diagnostics);
+        nn->set_reset_optimizer_state_on_load(reset_optimizer_state);
+        nn->set_restart_learning_rate_schedule_on_load(restart_learning_rate_schedule);
 
         nn->train(verbose, num_epochs, input_filename, checkpointing_interval, epoch_size);
 

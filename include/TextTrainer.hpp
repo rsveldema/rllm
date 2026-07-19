@@ -1,8 +1,10 @@
 #pragma once
 
 #include <Corpus.hpp>
+#include <array>
 #include <InputLayer.hpp>
 #include <LearningRate.hpp>
+#include <OptimizerDiagnostics.hpp>
 #include <TransformerBlock.hpp>
 #include <LayerPrimitives.hpp>
 #include <OutputLayer.hpp>
@@ -109,10 +111,16 @@ namespace rllm
         void set_simulated_annealing_decay_epochs(size_t epochs) { assert(epochs > 0); m_simulated_annealing_decay_epochs = epochs; }
         void set_simulated_annealing_min_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_min_multiplier = multiplier; }
         void set_micro_batch_size(size_t n);
+        void set_early_stopping_enabled(bool enabled) { m_early_stopping_enabled = enabled; }
+        void set_example_convergence_enabled(bool enabled) { m_example_convergence_enabled = enabled; }
+        void set_training_diagnostics_enabled(bool enabled) { m_training_diagnostics_enabled = enabled; }
+        void set_reset_optimizer_state_on_load(bool enabled) { m_reset_optimizer_state_on_load = enabled; }
+        void set_restart_learning_rate_schedule_on_load(bool enabled) { m_restart_learning_rate_schedule_on_load = enabled; }
         void set_weight_initializer(WeightInitializerType type) { m_weight_initializer = type; }
         void set_ffn_initializer(FFNInitializerType type) { m_ffn_initializer = type; }
         void set_embedding_initializer(EmbeddingInitializerType type) { m_embedding_initializer = type; }
         void set_training_parameters_json(std::string json) { m_training_parameters_json = std::move(json); }
+        void set_training_progress_filename(std::string filename) { m_training_progress_filename = std::move(filename); }
 
         void propagate_forward();
 
@@ -163,6 +171,13 @@ namespace rllm
         fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
         fixed_size_obj_vector<Score, MultiTokenPredictionIndex> m_training_scores;
         Score m_evaluation_score;
+        bool m_early_stopping_enabled = true;
+        bool m_example_convergence_enabled = true;
+        bool m_training_diagnostics_enabled = true;
+        bool m_reset_optimizer_state_on_load = false;
+        bool m_restart_learning_rate_schedule_on_load = false;
+        bool m_optimizer_diagnostics_pending = false;
+        bool m_backward_diagnostics_pending = false;
 
         // Hidden state at the final position after the last transformer block.
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_last_hidden;
@@ -195,11 +210,21 @@ namespace rllm
         );
         struct EvaluationMetrics
         {
+            // Head zero is the next-token completion objective and the metric
+            // used for checkpointing and early stopping.
             float average_loss = 0.0f;
             double perplexity = 0.0;
             double average_correct_token_probability = 0.0;
+            double mtp_average_loss = 0.0;
+            double mtp_average_correct_token_probability = 0.0;
+            std::array<double, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> per_head_loss{};
+            std::array<size_t, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> per_head_count{};
         };
         EvaluationMetrics evaluate(const std::vector<CpuInputLine>& evaluation_lines);
+        EvaluationMetrics evaluate(
+            const std::vector<WindowExample>& evaluation_windows,
+            bool report_worst_predictions = false
+        );
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
         int m_window_size = 2;
@@ -217,10 +242,19 @@ namespace rllm
         size_t m_optimizer_step = 0;
         size_t m_learning_rate_schedule_steps = 0;
         float m_last_logged_learning_rate = std::numeric_limits<float>::quiet_NaN();
+        bool m_has_loaded_training_state = false;
+        size_t m_loaded_learning_rate_step = 0;
+        float m_loaded_current_learning_rate = 0.0f;
+        size_t m_loaded_epochs_at_current_rate = 0;
+        size_t m_checkpoint_epoch = 0;
+        size_t m_checkpoint_window = 0;
+        size_t m_checkpoint_window_count = 0;
+        std::string m_checkpoint_rng_state;
         WeightInitializerType m_weight_initializer = WeightInitializerType::XavierInputProjections;
         FFNInitializerType m_ffn_initializer = FFNInitializerType::XavierInputProjections;
         EmbeddingInitializerType m_embedding_initializer = EmbeddingInitializerType::LegacyUniform;
         std::string m_training_parameters_json;
+        std::string m_training_progress_filename = "train.json";
 
         void train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
         void train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations);
@@ -262,6 +296,7 @@ namespace rllm
         {
             CpuInputLine line;
             bool finished = false;
+            std::optional<PositionIndex> context_length;
         };
         struct BatchTrainingTiming
         {
@@ -295,8 +330,18 @@ namespace rllm
             double batch_ms,
             const BatchTrainingTiming& timing
         );
+        void log_validation_progress(
+            const char* phase,
+            size_t epoch,
+            size_t num_epochs,
+            double epoch_progress,
+            size_t sample_count,
+            const EvaluationMetrics& metrics
+        );
         std::unique_ptr<nlohmann::json> m_training_progress_entries;
+        std::vector<OptimizerDiagnosticMetrics> m_pending_optimizer_diagnostics;
         void flush_training_progress_log() const;
+        void apply_loaded_training_state_resets();
         std::vector<BatchTrainingItem> make_training_batch(
             const std::vector<CpuInputLine>& training_lines,
             const std::vector<size_t>& line_indices,
