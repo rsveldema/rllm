@@ -56,7 +56,7 @@ namespace rllm
     enum class EmbeddingDimension : size_t
     {
         START = 0,
-        MAX = 1024
+        MAX = 512
     };
 
     // position of a token in the input sequence. For example, in the input "the cat sat", the token "cat" has
@@ -113,11 +113,21 @@ namespace rllm
         MAX = static_cast<size_t>(EmbeddingDimension::MAX) / static_cast<size_t>(HeadsIndex::MAX)
     };
 
+    /**
+     * @brief the model expands each 512-element token embedding to a 2048-element intermediate representation.
+     *
+     * The SwiGLU feed-forward block processes data in this wider space, then projects it back to 512 dimensions.
+     * 4× is a conventional Transformer design choice that increases capacity;
+     * it isn’t a mathematical requirement and could be tuned, though changing it affects parameter count,
+     * memory, and compute roughly proportionally.
+     */
+    static constexpr size_t EMBEDDING_TO_INTERMEDIATE_RATIO = 4;
+
     // Feed-forward hidden dimension: static_cast<int>(FFDimension::MAX) = 4 × EmbeddingDimension::MAX.
     enum class FFDimension : size_t
     {
         START = 0,
-        MAX = static_cast<size_t>(EmbeddingDimension::MAX) * 4
+        MAX = static_cast<size_t>(EmbeddingDimension::MAX) * EMBEDDING_TO_INTERMEDIATE_RATIO
     };
 
     enum class TempStorage : size_t
@@ -125,7 +135,16 @@ namespace rllm
         START = 0,
         ZERO = 0,
         ONE = 1,
-        MAX = 2 // defines an array with up-to M temp variables in a kernel
+        OPTIMIZER_GRADIENT_MAX = 0,
+        OPTIMIZER_CLIPPED_COUNT = 1,
+        OPTIMIZER_ADAM_UPDATE_SQUARE_SUM = 2,
+        OPTIMIZER_ADAM_UPDATE_MAX = 3,
+        OPTIMIZER_WEIGHT_UPDATE_SQUARE_SUM = 4,
+        OPTIMIZER_WEIGHT_UPDATE_MAX = 5,
+        OPTIMIZER_PARAMETER_COUNT = 6,
+        OPTIMIZER_GRADIENT_SQUARE_SUM = 7,
+        OPTIMIZER_GLOBAL_CLIP_SCALE = 8,
+        MAX = 9 // maximum scratch/diagnostic slots used by kernels
     };
 
     static inline TempStorage inc(TempStorage id)
@@ -184,19 +203,6 @@ namespace rllm
     {
         assert(id < FFDimension::MAX);
         return static_cast<FFDimension>(static_cast<size_t>(id) + 1);
-    }
-
-    // Index of an outgoing connection slot within a single neuron's connection list.
-    enum class NeuronConnectionIndex : size_t
-    {
-        START = 0,
-        MAX = 128
-    };
-
-    static inline NeuronConnectionIndex inc(NeuronConnectionIndex id)
-    {
-        assert(id < NeuronConnectionIndex::MAX);
-        return static_cast<NeuronConnectionIndex>(static_cast<size_t>(id) + 1);
     }
 
     struct ConflictingToken

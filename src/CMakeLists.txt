@@ -5,6 +5,7 @@ set_property(CACHE PARALLEL_BACKEND PROPERTY STRINGS openmp fastfork sequential)
 set(OFFLOAD_BACKEND "none" CACHE STRING "Offload backend: none or vulkan")
 set_property(CACHE OFFLOAD_BACKEND PROPERTY STRINGS none vulkan)
 option(RLLM_ENABLE_STATISTICS "Enable runtime statistics gathering and reporting" ON)
+option(DEBUG_ATTENTION_DIAGNOSTICS "Compile forward Q/K/V and per-head attention diagnostics" ON)
 
 include(CheckCXXSourceCompiles)
 
@@ -109,6 +110,7 @@ function(rllm_define_lib target_name)
         "${RLLM_COMPILE_SRC_DIR}/vecmath.cc"
         "${RLLM_COMPILE_SRC_DIR}/TransformerBlock.cc"
         "${RLLM_COMPILE_SRC_DIR}/OutputLayer.cc"
+        "${RLLM_COMPILE_SRC_DIR}/OptimizerDiagnostics.cc"
         "${RLLM_COMPILE_SRC_DIR}/TextTrainer.cc"
         "${RLLM_COMPILE_SRC_DIR}/train_batch.cc"
         "${RLLM_COMPILE_SRC_DIR}/RuntimeConfig.cc"
@@ -139,6 +141,7 @@ function(rllm_define_lib target_name)
     )
     #target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_OVERFLOW_CHECK_ADD)
     target_compile_definitions(${target_name} PUBLIC PREFER_SPEED_OVER_MEMORY=$<BOOL:${PREFER_SPEED_OVER_MEMORY}>)
+    target_compile_definitions(${target_name} PUBLIC DEBUG_ATTENTION_DIAGNOSTICS=$<BOOL:${DEBUG_ATTENTION_DIAGNOSTICS}>)
     if(RLLM_ENABLE_STATISTICS)
         target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_STATISTICS)
     endif()

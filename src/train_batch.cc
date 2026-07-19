@@ -1,4 +1,5 @@
 #include <TextTrainer.hpp>
+#include <OptimizerDiagnostics.hpp>
 #include "TextTrainerInternal.hpp"
 #include <LogFormatting.hpp>
 
@@ -92,14 +93,14 @@ namespace rllm
             switch (m_training_method)
             {
             case TrainingMethod::RANDOM_LINE_FULL:
-                batch.push_back({line});
+                batch.push_back({line, false, std::nullopt});
                 break;
             case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
             {
                 std::uniform_int_distribution<int> length(2, static_cast<int>(line.size()));
                 CpuInputLine input;
                 line.sub_array(input, static_cast<PositionIndex>(length(rng)));
-                batch.push_back({input});
+                batch.push_back({input, false, std::nullopt});
                 break;
             }
             case TrainingMethod::TWO_TOK:
@@ -108,7 +109,7 @@ namespace rllm
                 const int requested = m_training_method == TrainingMethod::TWO_TOK ? 2 : 3;
                 CpuInputLine input;
                 line.sub_array(input, static_cast<PositionIndex>(std::min(requested, static_cast<int>(line.size()))));
-                batch.push_back({input});
+                batch.push_back({input, false, std::nullopt});
                 break;
             }
             case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
@@ -117,7 +118,7 @@ namespace rllm
                 {
                     CpuInputLine input;
                     line.sub_array(input, static_cast<PositionIndex>(length));
-                    batch.push_back({input});
+                    batch.push_back({input, false, std::nullopt});
                 }
                 break;
             case TrainingMethod::WINDOW:
@@ -138,7 +139,9 @@ namespace rllm
             if (batch[i].finished)
                 continue;
             const int length = static_cast<int>(batch[i].line.size());
-            const int input_length = batch_input_len(length);
+            const int input_length = batch[i].context_length.has_value()
+                ? static_cast<int>(*batch[i].context_length)
+                : batch_input_len(length);
             CpuInputLine context;
             batch[i].line.sub_array(context, static_cast<PositionIndex>(input_length));
             indices.push_back(i);
@@ -161,6 +164,12 @@ namespace rllm
                 head_order.push_back(head);
         head_order.push_back(MultiTokenPredictionIndex::START);
 
+        size_t active_prediction_count = 0;
+        for (const auto count : valid_heads)
+            active_prediction_count += static_cast<size_t>(count);
+        assert(active_prediction_count > 0);
+        const float loss_gradient_scale = 1.0f / static_cast<float>(active_prediction_count);
+
         for (const auto head : head_order)
         {
             auto& expected = expected_by_head[static_cast<size_t>(head)];
@@ -175,8 +184,11 @@ namespace rllm
                     continue;
                 }
                 const auto& line = batch[active_indices[active]].line;
-                expected.push_back(static_cast<int>(target_for_head(
-                    line, batch_input_len(static_cast<int>(line.size())), head)));
+                const auto& item = batch[active_indices[active]];
+                const int input_length = item.context_length.has_value()
+                    ? static_cast<int>(*item.context_length)
+                    : batch_input_len(static_cast<int>(line.size()));
+                expected.push_back(static_cast<int>(target_for_head(line, input_length, head)));
             }
         }
 
@@ -188,7 +200,8 @@ namespace rllm
             m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected_by_head[static_cast<size_t>(head)]);
             m_batched_output_workspace->active_examples.copy_from_cpu(queue, active_by_head[static_cast<size_t>(head)]);
             m_output_layers[head].compute_batched_delta(
-                m_batched_output_workspace->logits, batch_size, *m_batched_output_workspace, queue);
+                m_batched_output_workspace->logits, batch_size, *m_batched_output_workspace, queue,
+                loss_gradient_scale);
             m_output_layers[head].backward_batched_accumulate(
                 m_batched_output_workspace->delta, m_batched_output_workspace->h_last, batch_size,
                 m_batched_output_workspace->dh_last, m_gradient_accumulation_workspace->output_layers[head]);
@@ -211,12 +224,22 @@ namespace rllm
         auto* dh = &back.dh;
         auto* din = &back.din;
         const auto started = std::chrono::steady_clock::now();
+        const bool collect_diagnostics = m_backward_diagnostics_pending;
+        if (collect_diagnostics)
+            log_hidden_gradient_diagnostics(*dh, packed_rows,
+                std::format("output heads -> transformer layer {}", m_transformer_blocks.size() - 1));
         for (int index = static_cast<int>(m_transformer_blocks.size()) - 1; index >= 0; --index)
         {
-            m_transformer_blocks[index].backward(*dh, *din, back.transformer_block, forward.transformer_workspaces[index]);
+            m_transformer_blocks[index].backward(*dh, *din, back.transformer_block,
+                forward.transformer_workspaces[index], true, collect_diagnostics, index);
             m_transformer_blocks[index].accumulate_gradients(back.transformer_block, m_gradient_accumulation_workspace->transformer_blocks[index]);
+            if (collect_diagnostics)
+                log_hidden_gradient_diagnostics(*din, packed_rows,
+                    index == 0 ? "transformer layer 0 -> input embeddings" :
+                    std::format("transformer layer {} -> layer {}", index, index - 1));
             std::swap(dh, din);
         }
+        m_backward_diagnostics_pending = false;
         timing.backward_transformer_ms += elapsed_ms(started);
         (void) packed_rows;
     }
@@ -225,13 +248,17 @@ namespace rllm
         std::vector<BatchTrainingItem>& batch, const std::vector<size_t>& indices,
         const std::vector<float>& losses, size_t step)
     {
+        if (!m_example_convergence_enabled)
+            return 0;
         size_t finished = 0;
         for (size_t active = 0; active < indices.size(); ++active)
         {
             if (losses[active] >= CONVERGENCE_THRESHOLD)
                 continue;
             auto& item = batch[indices[active]];
-            const int input_length = batch_input_len(static_cast<int>(item.line.size()));
+            const int input_length = item.context_length.has_value()
+                ? static_cast<int>(*item.context_length)
+                : batch_input_len(static_cast<int>(item.line.size()));
             const auto target = target_for_head(item.line, input_length, MultiTokenPredictionIndex::START);
             LOG_INFO("Convergence reached after {} steps for expected '{}', full string: '{}', input size: {}",
                 step + 1, escape_whitespace_for_log(m_corpus.get_token_from_id(target)),

@@ -3,6 +3,7 @@
 #include <JsonTensorHelpers.hpp>
 #include <TokenIDFormatter.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <cstdlib>
@@ -17,6 +18,42 @@
 
 namespace rllm
 {
+    std::vector<WindowExample> make_line_windows(
+        const std::vector<CpuInputLine>& lines,
+        size_t window_size,
+        size_t stride,
+        bool reverse)
+    {
+        assert(window_size >= 2);
+        assert(stride > 0);
+
+        const size_t max_heads = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
+        std::vector<WindowExample> windows;
+        for (const auto& line : lines)
+        {
+            const size_t line_size = static_cast<size_t>(line.size());
+            if (line_size < 2)
+                continue;
+            for (size_t target = 1; target < line_size; target += stride)
+            {
+                const size_t context_length = std::min(target, window_size - 1);
+                const size_t start = target - context_length;
+                const size_t target_slots = std::min(max_heads, window_size - context_length);
+                const size_t end = std::min(line_size, target + target_slots);
+                CpuInputLine window;
+                for (size_t position = start; position < end; ++position)
+                    window.push_back(line.get(position));
+                windows.push_back({
+                    .line = std::move(window),
+                    .context_length = static_cast<PositionIndex>(context_length)
+                });
+            }
+        }
+        if (reverse)
+            std::reverse(windows.begin(), windows.end());
+        return windows;
+    }
+
     namespace
     {
         void rebalance_training_split(Corpus::TrainingSplit& split)

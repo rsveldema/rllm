@@ -13,6 +13,23 @@
 
 namespace rllm
 {
+    struct WindowExample
+    {
+        CpuInputLine line;
+        PositionIndex context_length;
+    };
+
+    /** Build next-token examples with explicit context lengths from corpus lines.
+     * Windows never cross a line boundary. Each stride-selected token is the
+     * primary target, followed by up to three additional MTP targets.
+     */
+    std::vector<WindowExample> make_line_windows(
+        const std::vector<CpuInputLine>& lines,
+        size_t window_size,
+        size_t stride,
+        bool reverse = false
+    );
+
     class Corpus
     {
       public:

@@ -33,6 +33,15 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     append_enum_pair(pairs, "TempStorage::START", static_cast<size_t>(rllm::TempStorage::START));
     append_enum_pair(pairs, "TempStorage::ZERO", static_cast<size_t>(rllm::TempStorage::ZERO));
     append_enum_pair(pairs, "TempStorage::ONE", static_cast<size_t>(rllm::TempStorage::ONE));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_GRADIENT_MAX", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_GRADIENT_MAX));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_CLIPPED_COUNT", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_CLIPPED_COUNT));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_ADAM_UPDATE_SQUARE_SUM", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_ADAM_UPDATE_SQUARE_SUM));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_ADAM_UPDATE_MAX", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_ADAM_UPDATE_MAX));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_WEIGHT_UPDATE_SQUARE_SUM", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_WEIGHT_UPDATE_SQUARE_SUM));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_WEIGHT_UPDATE_MAX", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_WEIGHT_UPDATE_MAX));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_PARAMETER_COUNT", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_PARAMETER_COUNT));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM));
+    append_enum_pair(pairs, "TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE", static_cast<size_t>(rllm::TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE));
     //append_enum_pair(pairs, "TempStorage::TWO", static_cast<size_t>(rllm::TempStorage::TWO));
     //append_enum_pair(pairs, "TempStorage::THREE", static_cast<size_t>(rllm::TempStorage::THREE));
     //append_enum_pair(pairs, "TempStorage::FOUR", static_cast<size_t>(rllm::TempStorage::FOUR));
@@ -96,17 +105,6 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     append_enum_pair(pairs, "FFDimension::START", static_cast<size_t>(rllm::FFDimension::START));
     append_enum_pair(pairs, "FFDimension::MAX", static_cast<size_t>(rllm::FFDimension::MAX));
 
-    append_enum_pair(
-        pairs,
-        "NeuronConnectionIndex::START",
-        static_cast<size_t>(rllm::NeuronConnectionIndex::START)
-    );
-    append_enum_pair(
-        pairs,
-        "NeuronConnectionIndex::MAX",
-        static_cast<size_t>(rllm::NeuronConnectionIndex::MAX)
-    );
-
     // Casts to enum types are not valid in generated shader code; force int casts.
     pairs.emplace_back("static_cast<TempStorage>", "(int)");
     pairs.emplace_back("static_cast<EmbeddingDimension>", "(int)");
@@ -117,7 +115,6 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     pairs.emplace_back("static_cast<MultiTokenPredictionIndex>", "(int)");
     pairs.emplace_back("static_cast<HeadDimension>", "(int)");
     pairs.emplace_back("static_cast<FFDimension>", "(int)");
-    pairs.emplace_back("static_cast<NeuronConnectionIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::TempStorage>", "(int)");
     pairs.emplace_back("static_cast<rllm::EmbeddingDimension>", "(int)");
     pairs.emplace_back("static_cast<PositionIndex>", "(int)");
@@ -127,7 +124,6 @@ void append_layer_primitives_enum_pairs(std::vector<SearchReplace>& pairs)
     pairs.emplace_back("static_cast<rllm::MultiTokenPredictionIndex>", "(int)");
     pairs.emplace_back("static_cast<rllm::HeadDimension>", "(int)");
     pairs.emplace_back("static_cast<rllm::FFDimension>", "(int)");
-    pairs.emplace_back("static_cast<rllm::NeuronConnectionIndex>", "(int)");
 }
 
 void append_transformer_block_constant_pairs(std::vector<SearchReplace>& pairs)

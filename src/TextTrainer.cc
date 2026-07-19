@@ -1,4 +1,5 @@
 #include <TextTrainer.hpp>
+#include <OptimizerDiagnostics.hpp>
 #include "TextTrainerInternal.hpp"
 #include <RuntimeConfig.hpp>
 #include <LogFormatting.hpp>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <enum_iterator2D.hpp>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -522,10 +524,11 @@ namespace rllm
             m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
         const float scheduled_rate = m_learning_rate_provider->get_rate();
         const float schedule_scale = scheduled_rate / m_learning_rate;
-        const float learning_rate = (scheduled_rate * learning_rate_scale) /
-            static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
-        const float peak_effective_rate = (m_learning_rate * learning_rate_scale) /
-            static_cast<float>(std::max<size_t>(1, m_transformer_blocks.size()));
+        // AdamW normalizes and updates every parameter tensor independently.
+        // Dividing by the transformer-block count made the meaning of the CLI
+        // rate depth-dependent and caused deeper models to learn too slowly.
+        const float learning_rate = scheduled_rate * learning_rate_scale;
+        const float peak_effective_rate = m_learning_rate * learning_rate_scale;
         const float log_delta = peak_effective_rate * 0.01f;
         const size_t warmup_steps = m_learning_rate_schedule_steps == 0
             ? 0
@@ -563,23 +566,35 @@ namespace rllm
         const float output_learning_rate = learning_rate *
             depth_learning_rate_multiplier(learned_stage_count - 1, learned_stage_count, m_layer_learning_rate_multiplier);
 
+        const bool collect_diagnostics = m_optimizer_diagnostics_pending;
         for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
+        {
+            if (collect_diagnostics)
+                begin_optimizer_diagnostics();
             m_output_layers[oi].apply_accumulated_update(
                 m_gradient_accumulation_workspace->output_layers[oi], output_learning_rate,
                 bias_correction1, bias_correction2);
+            if (collect_diagnostics)
+                log_optimizer_diagnostics(std::format("output head {}", static_cast<size_t>(oi)));
+        }
 
         for (size_t i = 0; i < m_transformer_blocks.size(); ++i)
         {
             const float layer_learning_rate = learning_rate *
                 depth_learning_rate_multiplier(i + 1, learned_stage_count, m_layer_learning_rate_multiplier);
+            if (collect_diagnostics)
+                begin_optimizer_diagnostics();
             m_transformer_blocks[i].apply_accumulated_update(
                 m_gradient_accumulation_workspace->transformer_blocks[i], layer_learning_rate,
                 bias_correction1, bias_correction2);
+            if (collect_diagnostics)
+                log_optimizer_diagnostics(std::format("transformer layer {}", i));
         }
 
         m_input_layer.apply_accumulated_update(
             m_gradient_accumulation_workspace->embeddings, input_learning_rate,
-            bias_correction1, bias_correction2);
+            bias_correction1, bias_correction2, collect_diagnostics);
+        m_optimizer_diagnostics_pending = false;
     }
 
     TextTrainer::TextTrainer(size_t num_layers, Corpus& corpus, Statistics& stats)
@@ -700,7 +715,22 @@ namespace rllm
 
     TextTrainer::EvaluationMetrics TextTrainer::evaluate(const std::vector<CpuInputLine>& evaluation_lines)
     {
-        if (evaluation_lines.empty())
+        std::vector<WindowExample> evaluation_windows;
+        evaluation_windows.reserve(evaluation_lines.size());
+        for (const auto& line : evaluation_lines)
+            evaluation_windows.push_back({
+                .line = line,
+                .context_length = static_cast<PositionIndex>(
+                    mtp_input_len_for_sequence(static_cast<int>(line.size())))
+            });
+        return evaluate(evaluation_windows);
+    }
+
+    TextTrainer::EvaluationMetrics TextTrainer::evaluate(
+        const std::vector<WindowExample>& evaluation_windows,
+        bool report_worst_predictions)
+    {
+        if (evaluation_windows.empty())
         {
             LOG_ERROR("evaluation lines are empty!!");
             std::abort();
@@ -714,21 +744,34 @@ namespace rllm
         Score& score = m_evaluation_score;
         auto& queue = rllm::vulkan_runtime::get_queue(0);
 
-        double total_loss = 0.0;
-        double total_correct_token_probability = 0.0;
-        for (const auto& example : evaluation_lines)
+        constexpr size_t MTP_HEAD_COUNT = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
+        std::array<double, MTP_HEAD_COUNT> per_head_loss_sum{};
+        std::array<double, MTP_HEAD_COUNT> per_head_probability_sum{};
+        std::array<size_t, MTP_HEAD_COUNT> per_head_count{};
+        struct WorstPrediction
         {
+            float loss;
+            float expected_probability;
+            float predicted_probability;
+            MultiTokenPredictionIndex head;
+            TokenID expected;
+            TokenID predicted;
+            std::string context;
+        };
+        std::vector<WorstPrediction> worst_predictions;
+        constexpr size_t WORST_PREDICTIONS_TO_REPORT = 5;
+        for (const auto& window : evaluation_windows)
+        {
+            const auto& example = window.line;
             const int seq_len = static_cast<int>(example.size());
             assert(seq_len >= 2);
-            const int input_len = mtp_input_len_for_sequence(seq_len);
+            const int input_len = static_cast<int>(window.context_length);
             const auto num_valid_heads = mtp_valid_head_count_for_sequence(seq_len, input_len);
 
             example.sub_array(get_last_input(), static_cast<PositionIndex>(input_len));
 
             propagate_forward();
 
-            double example_loss = 0.0;
-            double example_correct_token_probability = 0.0;
             for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
             {
                 const auto target = mtp_target_for_head(example, input_len, head);
@@ -748,20 +791,86 @@ namespace rllm
                     );
                     std::abort();
                 }
-                example_loss += static_cast<double>(loss);
-                example_correct_token_probability += std::exp(-static_cast<double>(loss));
+                const size_t head_index = static_cast<size_t>(head);
+                per_head_loss_sum[head_index] += static_cast<double>(loss);
+                per_head_probability_sum[head_index] += std::exp(-static_cast<double>(loss));
+                ++per_head_count[head_index];
+                if (report_worst_predictions)
+                {
+                    const auto top = m_output_layers[head].get_top_k_by_logit(1).front();
+                    const float max_logit = score.temp_values_cpu[TempStorage::START];
+                    const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
+                    const float predicted_probability = std::exp(top.activation - max_logit) / sum_exp;
+                    auto context = m_corpus.get_line(get_last_input()).value_or("<unable to decode>");
+                    worst_predictions.push_back({
+                        .loss = loss,
+                        .expected_probability = std::exp(-loss),
+                        .predicted_probability = predicted_probability,
+                        .head = head,
+                        .expected = target,
+                        .predicted = top.token_id,
+                        .context = escape_whitespace_for_log(context)
+                    });
+                    std::ranges::sort(worst_predictions, {}, &WorstPrediction::loss);
+                    if (worst_predictions.size() > WORST_PREDICTIONS_TO_REPORT)
+                        worst_predictions.erase(worst_predictions.begin());
+                }
             }
-            const double head_count = static_cast<double>(static_cast<size_t>(num_valid_heads));
-            total_loss += example_loss / head_count;
-            total_correct_token_probability += example_correct_token_probability / head_count;
         }
 
-        const double line_count = static_cast<double>(evaluation_lines.size());
-        const double average_loss = total_loss / line_count;
+        std::array<double, MTP_HEAD_COUNT> per_head_loss{};
+        double mtp_loss_sum = 0.0;
+        double mtp_probability_sum = 0.0;
+        size_t mtp_prediction_count = 0;
+        for (size_t head = 0; head < MTP_HEAD_COUNT; ++head)
+        {
+            per_head_loss[head] = per_head_count[head] == 0
+                ? std::numeric_limits<double>::quiet_NaN()
+                : per_head_loss_sum[head] / static_cast<double>(per_head_count[head]);
+            mtp_loss_sum += per_head_loss_sum[head];
+            mtp_probability_sum += per_head_probability_sum[head];
+            mtp_prediction_count += per_head_count[head];
+        }
+        assert(per_head_count[0] == evaluation_windows.size());
+        assert(mtp_prediction_count > 0);
+        const double primary_count = static_cast<double>(per_head_count[0]);
+        const double average_loss = per_head_loss[0];
+        const double average_probability = per_head_probability_sum[0] / primary_count;
+        const double mtp_average_loss = mtp_loss_sum / static_cast<double>(mtp_prediction_count);
+        const double mtp_average_probability = mtp_probability_sum / static_cast<double>(mtp_prediction_count);
+        if (report_worst_predictions)
+        {
+            for (size_t head = 0; head < MTP_HEAD_COUNT; ++head)
+            {
+                if (per_head_count[head] != 0)
+                    LOG_INFO(
+                        "validation MTP head {}: loss {:.6f} across {} predictions",
+                        head, per_head_loss[head], per_head_count[head]);
+            }
+            std::ranges::sort(worst_predictions, std::greater{}, &WorstPrediction::loss);
+            for (size_t rank = 0; rank < worst_predictions.size(); ++rank)
+            {
+                const auto& prediction = worst_predictions[rank];
+                LOG_INFO(
+                    "validation worst #{}: loss {:.6f}, expected '{}' ({:.6f}%), predicted '{}' ({:.3f}%), MTP head {}, context '{}'",
+                    rank + 1,
+                    prediction.loss,
+                    escape_whitespace_for_log(m_corpus.get_token_from_id(prediction.expected)),
+                    prediction.expected_probability * 100.0f,
+                    escape_whitespace_for_log(m_corpus.get_token_from_id(prediction.predicted)),
+                    prediction.predicted_probability * 100.0f,
+                    static_cast<size_t>(prediction.head),
+                    prediction.context);
+            }
+        }
         return {
             .average_loss = static_cast<float>(average_loss),
             .perplexity = std::exp(average_loss),
-            .average_correct_token_probability = total_correct_token_probability / line_count
+            .average_correct_token_probability = average_probability,
+            .mtp_average_loss = mtp_average_loss,
+            .mtp_average_correct_token_probability = mtp_average_probability,
+            .per_head_loss = per_head_loss,
+            .per_head_count = per_head_count
         };
     }
 
@@ -877,9 +986,15 @@ namespace rllm
         bool has_best_checkpoint = false;
         static constexpr const char* BEST_CHECKPOINT_FILENAME = "models/checkpoint-best.st";
 
+        // Allocate both the device buffer and its pinned host transfer buffers
+        // before batch training freezes steady-state allocations.
+        begin_optimizer_diagnostics();
+        log_optimizer_diagnostics("initialization");
         auto device_buffer_allocation_freeze = std::make_unique<ScopedDeviceBufferAllocationFreeze>();
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
+            m_optimizer_diagnostics_pending = true;
+            m_backward_diagnostics_pending = true;
             bool should_stop = false;
 
             batch_train(epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng, epoch_size);
@@ -914,7 +1029,7 @@ namespace rllm
                 {
                     epochs_without_improvement++;
                     LOG_INFO("Validation loss did not improve for {} epoch(s); best remains {:.6f}", epochs_without_improvement, best_validation_loss);
-                    if (epochs_without_improvement >= EARLY_STOPPING_PATIENCE)
+                    if (m_early_stopping_enabled && epochs_without_improvement >= EARLY_STOPPING_PATIENCE)
                     {
                         LOG_INFO("early stopping at epoch {} after {} epoch(s) without validation improvement", epoch, epochs_without_improvement);
                         should_stop = true;
@@ -959,47 +1074,55 @@ namespace rllm
             LOG_INFO("Window validation disabled for tiny corpus (fewer than 2 held-out lines)");
         }
 
-        // Flatten only the training side of the deterministic line split. This
-        // prevents the periodic validation examples from leaking into windows.
-        std::vector<TokenID> tokens;
-        for (const auto& line : split.training_lines)
-            for (const auto position : enum_iterator1D<PositionIndex>(line.size()))
-                tokens.push_back(line[position]);
+        const bool reverse = m_training_method == TrainingMethod::REVERSE_WINDOW;
+        auto training_windows = make_line_windows(
+            split.training_lines, static_cast<size_t>(window_size), m_window_stride, reverse);
+        auto validation_windows = make_line_windows(
+            split.validation_lines, static_cast<size_t>(window_size), m_window_stride, reverse);
 
-        if (tokens.size() < static_cast<size_t>(window_size))
+        if (validation_windows.size() < 2)
+        {
+            split.training_lines.insert(
+                split.training_lines.end(),
+                std::make_move_iterator(split.validation_lines.begin()),
+                std::make_move_iterator(split.validation_lines.end()));
+            split.validation_lines.clear();
+            training_windows = make_line_windows(
+                split.training_lines, static_cast<size_t>(window_size), m_window_stride, reverse);
+            validation_windows.clear();
+            LOG_INFO("Window validation disabled for tiny corpus (fewer than 2 held-out windows)");
+        }
+
+        if (training_windows.empty())
             return;
 
         LOG_INFO(
-            "Window split: {} training lines ({} flattened tokens), {} validation lines; validation interval 5 minutes",
+            "Window split: {} training lines producing {} boundary-preserving windows, {} validation lines producing {} comparable windows; validation interval 5 minutes",
             split.training_lines.size(),
-            tokens.size(),
-            split.validation_lines.size());
+            training_windows.size(),
+            split.validation_lines.size(),
+            validation_windows.size());
 
-        const size_t max_window_start = tokens.size() - static_cast<size_t>(window_size);
         const size_t steps_per_window = training_steps_per_example(m_transformer_blocks.size(), m_learn_depth);
-        const size_t offset_period = std::min(m_window_stride, max_window_start + 1);
-        auto windows_for_epoch = [&](size_t epoch) {
-            const size_t offset = epoch % offset_period;
-            return (max_window_start - offset) / m_window_stride + 1;
-        };
+        const size_t windows_per_epoch = training_windows.size();
         m_learning_rate_schedule_steps = 0;
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
-            const size_t count = windows_for_epoch(epoch);
-            const size_t batches = count / m_micro_batch_size + (count % m_micro_batch_size != 0 ? 1 : 0);
+            const size_t batches = windows_per_epoch / m_micro_batch_size +
+                (windows_per_epoch % m_micro_batch_size != 0 ? 1 : 0);
             m_learning_rate_schedule_steps += batches * steps_per_window;
         }
         if (m_learning_rate_schedule == LearningRateSchedule::Constant)
         {
             m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
-            LOG_INFO("Window training: size {}, stride {}, epoch-varying offset; constant learning rate {:.8f}",
+            LOG_INFO("Window training: maximum size {}, per-line stride {}; constant learning rate {:.8f}",
                 window_size, m_window_stride, m_learning_rate);
         }
         else if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
         {
             m_learning_rate_provider = std::make_unique<LoweringLearningRate>(m_learning_rate, m_learning_rate_schedule_steps);
             LOG_INFO(
-                "Window training: size {}, stride {}, epoch-varying offset; learning-rate schedule: {} planned optimizer steps, {:.1f}% warmup, cosine decay from {:.8f} to {:.8f}",
+                "Window training: maximum size {}, per-line stride {}; learning-rate schedule: {} planned optimizer steps, {:.1f}% warmup, cosine decay from {:.8f} to {:.8f}",
                 window_size, m_window_stride, m_learning_rate_schedule_steps,
                 LoweringLearningRate::WARMUP_FRACTION * 100.0f, m_learning_rate,
                 m_learning_rate * LoweringLearningRate::MIN_SCALE);
@@ -1011,7 +1134,7 @@ namespace rllm
                 m_simulated_annealing_initial_multiplier, m_simulated_annealing_decay_epochs,
                 m_simulated_annealing_min_multiplier);
             LOG_INFO(
-                "Window training: size {}, stride {}, epoch-varying offset; simulated_annealing learning rate multiplies by {:.4f} every {} epochs from {:.8f} to a floor of {:.8f}",
+                "Window training: maximum size {}, per-line stride {}; simulated_annealing learning rate multiplies by {:.4f} every {} epochs from {:.8f} to a floor of {:.8f}",
                 window_size, m_window_stride,
                 m_simulated_annealing_decay_factor,
                 m_simulated_annealing_decay_epochs,
@@ -1030,25 +1153,42 @@ namespace rllm
         bool has_best_checkpoint = false;
         const char* best_checkpoint_filename = m_training_method == TrainingMethod::REVERSE_WINDOW ?
             "models/checkpoint-best-reverse-window.st" : "models/checkpoint-best-window.st";
+        if (!validation_windows.empty())
+        {
+            const auto baseline = evaluate(validation_windows, true);
+            best_validation_loss = baseline.average_loss;
+            save(best_checkpoint_filename);
+            has_best_checkpoint = true;
+            LOG_INFO(
+                "window validation baseline before training: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows",
+                baseline.average_loss,
+                baseline.perplexity,
+                baseline.average_correct_token_probability * 100.0,
+                baseline.mtp_average_loss,
+                validation_windows.size());
+        }
+        // Optimizer update kernels always bind this buffer, even on updates for
+        // which diagnostics collection is disabled. Allocate it and both pinned
+        // transfer buffers before the window-training allocation freeze.
+        begin_optimizer_diagnostics();
+        log_optimizer_diagnostics("initialization");
         auto device_buffer_allocation_freeze = std::make_unique<ScopedDeviceBufferAllocationFreeze>();
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
+            m_optimizer_diagnostics_pending = true;
+            m_backward_diagnostics_pending = true;
             bool should_stop = false;
             const auto epoch_started_at = std::chrono::steady_clock::now();
             LOG_INFO("Epoch[{}%]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, 0.0f);
 
-            const size_t offset = epoch % offset_period;
-            const size_t num_windows = windows_for_epoch(epoch);
+            const size_t num_windows = training_windows.size();
             std::vector<size_t> indices(num_windows);
-            for (size_t i = 0; i < num_windows; ++i)
-            {
-                if (m_training_method == TrainingMethod::REVERSE_WINDOW)
-                    indices[i] = max_window_start - offset - i * m_window_stride;
-                else
-                    indices[i] = offset + i * m_window_stride;
-            }
+            std::iota(indices.begin(), indices.end(), 0);
             if (m_training_method == TrainingMethod::WINDOW)
                 std::shuffle(indices.begin(), indices.end(), rng);
+
+            double epoch_training_loss_sum = 0.0;
+            size_t epoch_training_loss_count = 0;
 
             for (size_t start = 0; start < num_windows; start += m_micro_batch_size)
             {
@@ -1057,10 +1197,8 @@ namespace rllm
                 batch.reserve(count);
                 for (size_t offset = 0; offset < count; ++offset)
                 {
-                    CpuInputLine window;
-                    for (int k = 0; k < window_size; ++k)
-                        window.push_back(tokens[indices[start + offset] + static_cast<size_t>(k)]);
-                    batch.push_back({window});
+                    const auto& window = training_windows[indices[start + offset]];
+                    batch.push_back({window.line, false, window.context_length});
                 }
                 total_windows_trained += batch.size();
 
@@ -1073,6 +1211,8 @@ namespace rllm
                 const auto started = std::chrono::steady_clock::now();
                 BatchTrainingTiming timing;
                 const size_t iterations = train_batch_items(batch, steps_per_window, timing);
+                epoch_training_loss_sum += timing.primary_loss_sum;
+                epoch_training_loss_count += timing.primary_loss_count;
                 const double total_ms = elapsed_ms(started);
                 const size_t completed_windows = start + count;
                 LOG_INFO(
@@ -1110,34 +1250,43 @@ namespace rllm
                         format_eta_for_log(all_epochs_remaining_seconds));
                 }
 
-                if (!split.validation_lines.empty() && std::chrono::steady_clock::now() >= next_validation_at)
+                if (!validation_windows.empty() && std::chrono::steady_clock::now() >= next_validation_at)
                 {
                     const auto validation_started = std::chrono::steady_clock::now();
-                    const auto validation = evaluate(split.validation_lines);
+                    const auto validation = evaluate(validation_windows);
                     LOG_INFO(
-                        "window validation at epoch {}, {:.2f}%: loss {:.6f}, perplexity {:.2f}, average correct-token probability {:.3f}% across {} held-out lines (evaluation {:.2f} s)",
+                        "window validation at epoch {}, {:.2f}%: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows (evaluation {:.2f} s)",
                         epoch,
                         static_cast<float>(start + count) / static_cast<float>(num_windows) * 100.0f,
                         validation.average_loss,
                         validation.perplexity,
                         validation.average_correct_token_probability * 100.0,
-                        split.validation_lines.size(),
+                        validation.mtp_average_loss,
+                        validation_windows.size(),
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
                     next_validation_at = std::chrono::steady_clock::now() + std::chrono::minutes{5};
                 }
             }
 
-            if (!split.validation_lines.empty())
+            const double epoch_training_loss = epoch_training_loss_count == 0
+                ? std::numeric_limits<double>::quiet_NaN()
+                : epoch_training_loss_sum / static_cast<double>(epoch_training_loss_count);
+            LOG_INFO(
+                "window training at epoch {} end: loss {:.6f} across {} optimizer examples",
+                epoch, epoch_training_loss, epoch_training_loss_count);
+
+            if (!validation_windows.empty())
             {
                 const auto validation_started = std::chrono::steady_clock::now();
-                const auto validation = evaluate(split.validation_lines);
+                const auto validation = evaluate(validation_windows, true);
                 LOG_INFO(
-                    "window validation at epoch {} end: loss {:.6f}, perplexity {:.2f}, average correct-token probability {:.3f}% across {} held-out lines (evaluation {:.2f} s)",
+                    "window validation at epoch {} end: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows (evaluation {:.2f} s)",
                     epoch,
                     validation.average_loss,
                     validation.perplexity,
                     validation.average_correct_token_probability * 100.0,
-                    split.validation_lines.size(),
+                    validation.mtp_average_loss,
+                    validation_windows.size(),
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
                 next_validation_at = std::chrono::steady_clock::now() + std::chrono::minutes{5};
 
@@ -1148,16 +1297,16 @@ namespace rllm
                     save(best_checkpoint_filename);
                     has_best_checkpoint = true;
                     LOG_INFO(
-                        "Saved new best window checkpoint '{}' with validation loss {:.6f}",
+                        "Saved new best window checkpoint '{}' with head-0 validation loss {:.6f}",
                         best_checkpoint_filename, best_validation_loss);
                 }
                 else
                 {
                     ++epochs_without_improvement;
                     LOG_INFO(
-                        "Window validation loss did not improve for {} epoch(s); best remains {:.6f}",
+                        "Window head-0 validation loss did not improve for {} epoch(s); best remains {:.6f}",
                         epochs_without_improvement, best_validation_loss);
-                    if (epochs_without_improvement >= EARLY_STOPPING_PATIENCE)
+                    if (m_early_stopping_enabled && epochs_without_improvement >= EARLY_STOPPING_PATIENCE)
                     {
                         LOG_INFO(
                             "early stopping window training at epoch {} after {} epoch(s) without validation improvement",
@@ -1184,7 +1333,7 @@ namespace rllm
             if (load(best_checkpoint_filename))
             {
                 LOG_INFO(
-                    "restored best window checkpoint '{}' with validation loss {:.6f}",
+                    "restored best window checkpoint '{}' with head-0 validation loss {:.6f}",
                     best_checkpoint_filename, best_validation_loss);
             }
             else
@@ -1196,7 +1345,7 @@ namespace rllm
 
     void TextTrainer::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
-        // Window methods operate on the flat token stream rather than per-line.
+        // Window methods use independent per-line sequences so no example crosses a boundary.
         assert(m_training_method == TrainingMethod::WINDOW || m_training_method == TrainingMethod::REVERSE_WINDOW);
         train_with_window(m_window_size, verbose, num_epochs, checkpointing_interval);
     }

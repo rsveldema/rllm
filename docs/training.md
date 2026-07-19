@@ -74,7 +74,7 @@ This is useful for faster validation/checkpoint feedback on large corpora. Windo
 
 `--learning-rate <R>` sets the base learning rate used during training. The
 binary default for AdamW is `0.0003`; `train_release.sh` currently selects
-`0.00003` explicitly.
+`0.00001` explicitly.
 
 `--learning-rate-schedule constant|lowering|simulated_annealing` selects the learning-rate
 implementation. `constant` keeps the configured rate unchanged for every
@@ -90,7 +90,9 @@ rate (default `0.02`, or one fiftieth). The factor must be
 greater than zero and less than one. `train_release.sh` currently selects
 `simulated_annealing`.
 
-The effective per-update rate is divided by the number of transformer blocks, matching the previous hardcoded behavior.
+The configured rate is the actual AdamW base rate and is not divided by the
+number of transformer blocks. Each parameter tensor has independent AdamW
+moments, so changing model depth does not silently change the CLI rate.
 
 The resulting effective rate is adjusted by model depth using a linear profile.
 `--layer-learning-rate-multiplier <M>` controls the output-head multiplier and
@@ -102,37 +104,56 @@ learning across depth without increasing the model's average configured rate.
 Window training applies a 5% linear learning-rate warmup followed by cosine
 decay to 10% of the configured base rate. The schedule is calculated from the
 number of windows, epochs, and allowed updates per window. For example, a base
-rate of `0.00003` decays to `0.000003`. Loading a checkpoint starts a new
+rate of `0.00005` decays to `0.000005`. Loading a checkpoint starts a new
 schedule because optimizer state and optimizer progress are not serialized.
 The log reports the base and effective scheduled rate at startup, at warmup and
 decay boundaries, and whenever the effective rate moves by at least 1% of its
 peak value. This exposes schedule progress without logging every optimizer step.
 
-`--window-stride <N>` controls the distance in tokens between fixed-size
-sliding-window starts and defaults to `1`. Window start positions are shuffled,
-and the initial offset advances each epoch so strides greater than one do not
-remain permanently aligned to one subset of token positions. A stride of `4`
-matches the four MTP target heads and substantially reduces overlapping work.
+`--window-stride <N>` controls the distance between primary next-token targets
+within each corpus line and defaults to `1`. Each example records an explicit
+context length followed by its primary target and up to three additional MTP
+targets, without exceeding the configured maximum window size. A stride of `4`
+matches the four MTP target heads and substantially reduces overlapping work;
+a stride of `1` trains head zero at every token position. For example, it
+includes an example whose context is `#in` and whose primary target is `clu`.
 
 Window training uses the same deterministic 80/20 line split as line-based
-training. Only training-split tokens are flattened into windows. Every five
-minutes it reports held-out loss, perplexity, average correct-token probability,
-and validation duration together with the current epoch and window progress.
+training. Training and validation use the same boundary-preserving window
+construction, so windows never join unrelated lines or bridge a held-out gap.
+Before the first optimizer update, training records a validation-window baseline.
+Every five minutes it reports held-out window loss, perplexity, average
+correct-token probability, and validation duration together with the current
+epoch and window progress.
 It also performs and reports a held-out validation at the end of every epoch,
 including epochs that finish before the five-minute interval.
+Window validation reports head-zero next-token loss as its primary metric, plus
+the aggregate loss and individual loss for all four MTP heads. Checkpointing and
+early stopping use head-zero loss so they optimize the completion objective and
+are directly comparable with reported training loss. The baseline and each
+end-of-epoch validation also report the five worst individual predictions. Each
+diagnostic includes loss, expected and predicted tokens with their probabilities,
+the MTP head, and the decoded input context.
 Each batch progress line also reports `training loss`, the mean primary
 next-token cross-entropy for the examples and optimizer rounds in that batch.
-This per-batch value is expected to be noisier than loss over the full held-out
-validation split.
+An epoch-level training-window mean is reported separately. These online
+training values are expected to be noisier than loss over the full held-out
+validation-window split.
 
-`--method reverse_window` visits fixed-size windows from the end of the
-flattened training text toward the start. It uses the current window size
+Batched backpropagation optimizes the mean loss over all active `(example, MTP
+head)` predictions. The softmax deltas are divided by that prediction count
+before output, transformer, and embedding gradients are accumulated, clipped,
+and passed to AdamW. This keeps update scale independent of micro-batch size,
+short-window head count, and examples that converge before the final round.
+
+`--method reverse_window` visits the boundary-preserving windows from the end
+toward the start. It uses the current maximum window size
 (default `2`); `--method reverse_window:<N>` selects the size inline. Unlike
 regular window training, reverse-window traversal is not shuffled. Window
-stride and the epoch-varying offset continue to apply.
+stride continues to apply within each line.
 
 Window training saves `models/checkpoint-best-window.st` whenever end-of-epoch
-validation loss improves by at least `1e-4`. It stops after three consecutive
+head-zero validation loss improves by at least `1e-4`. It stops after three consecutive
 epochs without improvement and restores that best checkpoint before the final
 model is saved. Timed intra-epoch validation remains diagnostic and does not
 advance early-stopping patience.
@@ -178,3 +199,36 @@ If the checkpoint has more blocks than `--layers`, the checkpoint block count is
 ## NaN Finding
 
 NaN/range validation is disabled by default. Pass `--nan-finding` to enable the expensive runtime checks while debugging numerical instability.
+
+# Early stopping
+
+Training stops after three consecutive epochs without validation-loss improvement by default. Pass
+`--disable-early-stopping` to run every epoch requested with `--epochs`. Validation, best-checkpoint
+saving, and restoration of the best checkpoint remain enabled.
+`--disable-example-convergence` keeps every example active instead of removing
+examples that cross the per-example convergence threshold. This is intended for
+optimizer-stability and memorization diagnostics.
+
+The first optimizer update of each window-training epoch logs per-group
+diagnostics: pre-clipping gradient maximum, clipping percentage, Adam update
+RMS/maximum, and applied weight-update RMS/maximum. The groups are embeddings,
+individual transformer layers, and individual output heads.
+
+Before each AdamW update, gradients are globally L2-clipped to norm `1.0`
+independently for each of those parameter groups. The existing element-wise
+clamp remains as a secondary safety check. Diagnostics also report the original
+group norm and the global scaling factor that was applied.
+
+The first backward pass of each epoch also logs hidden-gradient RMS, maximum,
+and L2 norm at the output heads and after every transformer block. Within each
+block it additionally logs the FFN down-projection output, the SwiGLU gate and
+upstream branches, both sides of the FFN RMSNorm backward pass, the attention
+output-projection result, attention `d_V`, aggregate `d_scores` and `d_raw`
+statistics across all heads, attention `d_Q` and `d_K`, and both sides of the
+attention RMSNorm backward pass. It also reports the stored forward Q/K/V
+activations and per-head `d_scores`, making an anomalous head or forward value
+visible when score gradients spike. These additional forward and per-head
+diagnostics are compiled when the CMake option `DEBUG_ATTENTION_DIAGNOSTICS` is
+enabled (the default); disable it to remove their runtime and binary overhead.
+The layer number and stage name on each line identify where amplification first
+appears without adding per-batch log volume.

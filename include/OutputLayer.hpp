@@ -105,7 +105,8 @@ namespace rllm
             const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
             BatchIndex batch_size,
             BatchedOutputWorkspace& workspace,
-            VulkanQueue& queue
+            VulkanQueue& queue,
+            float loss_gradient_scale = 1.0f
         );
 
         void apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);

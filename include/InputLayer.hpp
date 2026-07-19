@@ -77,7 +77,7 @@ namespace rllm
             EmbeddingGradientAccumulator& accumulator
         );
 
-        void apply_accumulated_update(EmbeddingGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
+        void apply_accumulated_update(EmbeddingGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2, bool log_diagnostics = false);
 
         void set_random_embeddings(EmbeddingInitializerType type = EmbeddingInitializerType::LegacyUniform);
 
@@ -106,6 +106,8 @@ namespace rllm
         // Per-call state for propagate_backward (moved out of the parallel loop to fix data race)
         // These are class members so each InputLayer instance has its own copy — no static shared state.
         cpu_fixed_vector<uint16_t, TokenID> m_updated_tokens;
+        // Duplicate token occurrences that require sequential embedding updates to avoid
+        // concurrent writes to the same embedding row during backpropagation.
         cpu_fixed_vector<ConflictingToken, ConflictIndex> m_conflicts;
 
         // GPU-side copy of the input line, synced from CpuInputLine before OFFLOAD regions.

@@ -39,6 +39,8 @@ namespace rllm
             size_t micro_batch_size,
             size_t num_epochs,
             std::optional<size_t> epoch_size,
+            bool disable_early_stopping,
+            bool disable_example_convergence,
             const std::string& train_corpus_dir
         );
       private:

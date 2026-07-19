@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Corpus.hpp>
+#include <array>
 #include <InputLayer.hpp>
 #include <LearningRate.hpp>
 #include <TransformerBlock.hpp>
@@ -109,6 +110,8 @@ namespace rllm
         void set_simulated_annealing_decay_epochs(size_t epochs) { assert(epochs > 0); m_simulated_annealing_decay_epochs = epochs; }
         void set_simulated_annealing_min_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_min_multiplier = multiplier; }
         void set_micro_batch_size(size_t n);
+        void set_early_stopping_enabled(bool enabled) { m_early_stopping_enabled = enabled; }
+        void set_example_convergence_enabled(bool enabled) { m_example_convergence_enabled = enabled; }
         void set_weight_initializer(WeightInitializerType type) { m_weight_initializer = type; }
         void set_ffn_initializer(FFNInitializerType type) { m_ffn_initializer = type; }
         void set_embedding_initializer(EmbeddingInitializerType type) { m_embedding_initializer = type; }
@@ -163,6 +166,10 @@ namespace rllm
         fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
         fixed_size_obj_vector<Score, MultiTokenPredictionIndex> m_training_scores;
         Score m_evaluation_score;
+        bool m_early_stopping_enabled = true;
+        bool m_example_convergence_enabled = true;
+        bool m_optimizer_diagnostics_pending = false;
+        bool m_backward_diagnostics_pending = false;
 
         // Hidden state at the final position after the last transformer block.
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_last_hidden;
@@ -195,11 +202,21 @@ namespace rllm
         );
         struct EvaluationMetrics
         {
+            // Head zero is the next-token completion objective and the metric
+            // used for checkpointing and early stopping.
             float average_loss = 0.0f;
             double perplexity = 0.0;
             double average_correct_token_probability = 0.0;
+            double mtp_average_loss = 0.0;
+            double mtp_average_correct_token_probability = 0.0;
+            std::array<double, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> per_head_loss{};
+            std::array<size_t, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> per_head_count{};
         };
         EvaluationMetrics evaluate(const std::vector<CpuInputLine>& evaluation_lines);
+        EvaluationMetrics evaluate(
+            const std::vector<WindowExample>& evaluation_windows,
+            bool report_worst_predictions = false
+        );
 
         TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
         int m_window_size = 2;
@@ -262,6 +279,7 @@ namespace rllm
         {
             CpuInputLine line;
             bool finished = false;
+            std::optional<PositionIndex> context_length;
         };
         struct BatchTrainingTiming
         {

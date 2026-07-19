@@ -226,7 +226,9 @@ def parse_macro_invocation(line: str) -> tuple[str, list[str], str] | None:
 
 
 def _defined_macros_for_backend(backend_namespace: str) -> set[str]:
-    defined: set[str] = set()
+    # Translate guarded diagnostic code so generated sources remain valid when
+    # the corresponding C++ build option enables the preserved #if branch.
+    defined: set[str] = {"DEBUG_ATTENTION_DIAGNOSTICS"}
     if backend_namespace == "vulkan":
         defined.add("USE_VULKAN_OFFLOAD")
     return defined
@@ -358,7 +360,6 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace(", HeadDimension", ", HeadDimension::MAX")
     out = out.replace(", RmsNormPartialSumIndex", ", RmsNormPartialSumIndex::MAX")
     out = out.replace(", MultiTokenPredictionIndex", ", MultiTokenPredictionIndex::MAX")
-    out = out.replace(", NeuronConnectionIndex", ", NeuronConnectionIndex::MAX")
     out = out.replace(", ConflictIndex", ", ConflictIndex::MAX")
 
 
@@ -382,8 +383,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     for _obsolete_type in (
         "TokenID", "PositionIndex", "EmbeddingDimension", "HeadsIndex", "BatchIndex",
         "TempStorage", "FFDimension", "HeadDimension",
-        "RmsNormPartialSumIndex", "MultiTokenPredictionIndex",
-        "NeuronConnectionIndex", "ConflictIndex"
+        "RmsNormPartialSumIndex", "MultiTokenPredictionIndex", "ConflictIndex"
     ):
         out = re.sub(rf"(?<!<)\b{_obsolete_type}\b(?!::)(?!\s*>)", "int", out)
     # Kernel dumps are parsed by kernel_compiler, not a C++ compiler. Strip

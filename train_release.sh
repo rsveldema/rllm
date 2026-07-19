@@ -121,28 +121,35 @@ echo "--- Starting training ---"
 
 #gdb --args  
 
+#     --filter iuring \
+#     --filter self \
+#     --filter preprocessor \
+#     --filter effective \
+#     --filter modern \
+#     --filter esched \
+#     --filter lama \
+#     --filter liburing \
+#     --learning-rate-schedule simulated_annealing \
+
+
 ./build_release/rllm --train $input_arg \
     -o models/after_training.st \
     --train-dir "$TRAIN_DIR" \
-     --filter iuring \
      --filter simple \
-     --filter self \
-     --filter preprocessor \
-     --filter effective \
-     --filter modern \
-     --filter esched \
      --method window:32 \
-     --window-stride 4 \
-     --epochs 20 \
-     --layers 6 \
+     --window-stride 1 \
+     --epochs 80 \
+     --disable-early-stopping \
+     --disable-example-convergence \
+     --layers 8 \
      --checkpoint-interval 300 \
-     --learn-depth 1 \
-     --learning-rate 0.00003 \
+     --learn-depth 4 \
+     --learning-rate 0.00001 \
      --layer-learning-rate-multiplier 1.05 \
      --weight-initializer xavier-input-projections \
      --ffn-initializer xavier-input-projections \
      --embedding-initializer legacy-uniform \
-     --learning-rate-schedule simulated_annealing \
+     --learning-rate-schedule lowering \
      --simulated-annealing-initial-multiplier 9 \
      --simulated-annealing-decay-factor 0.7 \
      --simulated-annealing-decay-epochs 1 \
