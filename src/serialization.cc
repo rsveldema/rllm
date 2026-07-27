@@ -1,4 +1,5 @@
 #include <JsonTensorHelpers.hpp>
+#include <ModelArtifacts.hpp>
 #include <Trainer.hpp>
 #include <safetensors.hh>
 
@@ -71,18 +72,21 @@ namespace rllm
 
     void InputLayer::load(const nlohmann::json& j)
     {
-        m_adam_first.zero();
-        m_adam_second.zero();
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_adam_first.zero(queue);
+        m_adam_second.zero(queue);
         if (!j.contains("embeddings"))
             return;
 
         json_helpers::deserialize_matrix(j.at("embeddings"), m_embeddings_cpu);
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
     }
 
     nlohmann::json InputLayer::save() const
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_embeddings.copy_to_cpu(queue, const_cast<cpu_fixed_matrix<float16, TokenID, EmbeddingDimension>&>(m_embeddings_cpu));
+        queue.wait("InputLayer JSON serialization");
         return {{"embeddings", *json_helpers::serialize_matrix(m_embeddings_cpu)}};
     }
 
@@ -266,7 +270,9 @@ namespace rllm
     void TextTrainer::checkpoint() const
     {
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        save(std::format("models/checkpoint-{}.st", now_ms));
+        const auto filename = model_artifact_path(std::format("checkpoint-{}.st", now_ms));
+        std::filesystem::create_directories(filename.parent_path());
+        save(filename.string());
     }
 
 
@@ -389,8 +395,9 @@ namespace rllm
 
     void InputLayer::load_from_safetensors(const std::string& filename, std::string* err)
     {
-        m_adam_first.zero();
-        m_adam_second.zero();
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_adam_first.zero(queue);
+        m_adam_second.zero(queue);
         safetensors::safetensors_t st;
         if (!safetensors::load_from_file(filename, &st, nullptr, err))
         {
@@ -400,7 +407,6 @@ namespace rllm
         }
 
         pull_matrix("input_layer.embeddings", st, m_embeddings);
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_embeddings.copy_to_cpu(queue, m_embeddings_cpu);
     }
 
@@ -525,8 +531,8 @@ namespace rllm
 
         // Input layer (friend grants access to m_embeddings)
         push_matrix(st, "input_layer.embeddings", m_input_layer.m_embeddings, storage);
-        push_cpu_matrix(st, "training.input_layer.adam_first", m_input_layer.m_adam_first, storage);
-        push_cpu_matrix(st, "training.input_layer.adam_second", m_input_layer.m_adam_second, storage);
+        push_matrix(st, "training.input_layer.adam_first", m_input_layer.m_adam_first, storage);
+        push_matrix(st, "training.input_layer.adam_second", m_input_layer.m_adam_second, storage);
 
         // Transformer blocks (friend grants access to W_q etc.)
         for (size_t bi = 0; bi < m_transformer_blocks.size(); ++bi)
@@ -731,8 +737,8 @@ namespace rllm
         m_input_layer.load_from_safetensors(filename);
         if (m_has_loaded_training_state)
         {
-            pull_cpu_matrix("training.input_layer.adam_first", st, m_input_layer.m_adam_first);
-            pull_cpu_matrix("training.input_layer.adam_second", st, m_input_layer.m_adam_second);
+            pull_matrix("training.input_layer.adam_first", st, m_input_layer.m_adam_first);
+            pull_matrix("training.input_layer.adam_second", st, m_input_layer.m_adam_second);
         }
 
         // Clear existing blocks and create new ones.

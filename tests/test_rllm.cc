@@ -29,15 +29,18 @@ using namespace rlmm;
 
 namespace
 {
-    // Deletes all files in models/ before each individual test case.
+    static constexpr const char* TEST_MODEL_DIRECTORY = "test_models";
+
+    // Deletes only test artifacts before each individual test case.
     class CleanModelsListener : public ::testing::EmptyTestEventListener
     {
         void OnTestStart(const ::testing::TestInfo&) override
         {
             ::parallel::statistics.reset();
-            if (std::filesystem::exists("models"))
-                for (const auto& entry : std::filesystem::directory_iterator("models"))
-                    std::filesystem::remove(entry.path());
+            std::filesystem::remove_all(TEST_MODEL_DIRECTORY);
+            std::filesystem::create_directories(TEST_MODEL_DIRECTORY);
+            rllm::set_tokenization_log_file(
+                (std::filesystem::path{TEST_MODEL_DIRECTORY} / "tokenization.log").string());
         }
     };
 } // namespace
@@ -116,6 +119,7 @@ TEST(LearningRateScheduleTest, SimulatedAnnealingUsesConfiguredMinimumMultiplier
 
 int main(int argc, char** argv)
 {
+    setenv("RLLM_MODEL_DIR", TEST_MODEL_DIRECTORY, 1);
     parallel::init_parallel();
     auto* vulkan_session = new VulkanSession();
     rllm::vulkan_runtime::set_session(*vulkan_session);
@@ -187,6 +191,67 @@ TEST(CorpusTest, TrainingLinesRetainPythonTabsAndTrailingNewline)
     EXPECT_EQ(lines[1].get(static_cast<size_t>(lines[1].size()) - 1), TokenID::TOK_NEWLINE);
 
     std::filesystem::remove_all(corpus_dir);
+}
+
+TEST(CorpusTest, CppKeywordAndPrefixesUseDedicatedTokens)
+{
+    std::vector<std::string> filters;
+    Corpus corpus(filters);
+
+    const auto keyword = corpus.get_token_ids("while");
+    ASSERT_EQ(static_cast<size_t>(keyword.size()), 1u);
+    EXPECT_EQ(corpus.get_token_from_id(keyword.get(0u)), "while");
+
+    for (const std::string_view prefix : {"wh", "whi", "whil"})
+    {
+        const auto tokens = corpus.get_token_ids(std::string{prefix});
+        ASSERT_EQ(static_cast<size_t>(tokens.size()), 1u) << "prefix: " << prefix;
+        EXPECT_EQ(corpus.get_token_from_id(tokens.get(0u)), prefix);
+        EXPECT_NE(tokens.get(0u), keyword.get(0u));
+    }
+}
+
+TEST(CorpusTest, OtherLanguageKeywordsAndPrefixesUseDedicatedTokens)
+{
+    std::vector<std::string> filters;
+    Corpus corpus(filters);
+
+    for (const std::string_view keyword :
+         {"#define", "#include", "def", "lambda", "then", "esac"})
+    {
+        const auto tokens = corpus.get_token_ids(std::string{keyword});
+        ASSERT_EQ(static_cast<size_t>(tokens.size()), 1u) << "keyword: " << keyword;
+        EXPECT_EQ(corpus.get_token_from_id(tokens.get(0u)), keyword);
+    }
+
+    for (const std::string_view prefix :
+         {"#d", "#de", "#def", "#defi", "la", "lamb", "th", "the"})
+    {
+        const auto tokens = corpus.get_token_ids(std::string{prefix});
+        ASSERT_EQ(static_cast<size_t>(tokens.size()), 1u) << "prefix: " << prefix;
+        EXPECT_EQ(corpus.get_token_from_id(tokens.get(0u)), prefix);
+    }
+}
+
+TEST(CorpusTest, RustAndJavaKeywordsAndPrefixesUseDedicatedTokens)
+{
+    std::vector<std::string> filters;
+    Corpus corpus(filters);
+
+    for (const std::string_view keyword :
+         {"fn", "impl", "unsafe", "interface", "record", "synchronized"})
+    {
+        const auto tokens = corpus.get_token_ids(std::string{keyword});
+        ASSERT_EQ(static_cast<size_t>(tokens.size()), 1u) << "keyword: " << keyword;
+        EXPECT_EQ(corpus.get_token_from_id(tokens.get(0u)), keyword);
+    }
+
+    for (const std::string_view prefix : {"im", "imp", "inter", "interf", "synch"})
+    {
+        const auto tokens = corpus.get_token_ids(std::string{prefix});
+        ASSERT_EQ(static_cast<size_t>(tokens.size()), 1u) << "prefix: " << prefix;
+        EXPECT_EQ(corpus.get_token_from_id(tokens.get(0u)), prefix);
+    }
 }
 
 TEST(CorpusTest, LineWindowsNeverCrossBoundaries)

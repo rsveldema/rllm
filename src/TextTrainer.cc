@@ -1,4 +1,5 @@
 #include <TextTrainer.hpp>
+#include <ModelArtifacts.hpp>
 #include <OptimizerDiagnostics.hpp>
 #include "TextTrainerInternal.hpp"
 #include <RuntimeConfig.hpp>
@@ -11,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <enum_iterator2D.hpp>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <fstream>
@@ -577,8 +579,8 @@ namespace rllm
         if (m_reset_optimizer_state_on_load)
         {
             auto& queue = rllm::vulkan_runtime::get_queue(0);
-            m_input_layer.m_adam_first.zero();
-            m_input_layer.m_adam_second.zero();
+            m_input_layer.m_adam_first.zero(queue);
+            m_input_layer.m_adam_second.zero(queue);
             for (auto& block : m_transformer_blocks)
             {
                 block.V_q.zero(queue);
@@ -731,6 +733,7 @@ namespace rllm
         , m_stats(stats)
         , m_input_layer()
     {
+        m_training_progress_filename = model_artifact_path("train.json").string();
         assert(static_cast<size_t>(TokenID::MAX) > 1);
         for (size_t i = 0; i < num_layers; ++i)
             m_transformer_blocks.emplace_back();
@@ -1112,24 +1115,57 @@ namespace rllm
         // each example only gets 8*num_layers gradient updates per
         // pass, so no single example can overwrite all the others.
         std::mt19937 rng{42};
+        if (m_has_loaded_training_state && !m_checkpoint_rng_state.empty())
+        {
+            std::istringstream state{m_checkpoint_rng_state};
+            if (!(state >> rng))
+            {
+                LOG_INFO("Invalid checkpoint shuffle state; refusing non-deterministic resume");
+                std::exit(1);
+            }
+        }
         auto last_checkpoint_at = std::chrono::steady_clock::now();
         float best_validation_loss = std::numeric_limits<float>::infinity();
         size_t epochs_without_improvement = 0;
         bool has_best_checkpoint = false;
-        static constexpr const char* BEST_CHECKPOINT_FILENAME = "models/checkpoint-best.st";
+        const auto best_checkpoint_filename = model_artifact_path("checkpoint-best.st");
+        std::filesystem::create_directories(best_checkpoint_filename.parent_path());
 
         // Allocate both the device buffer and its pinned host transfer buffers
         // before batch training freezes steady-state allocations.
         begin_optimizer_diagnostics();
         log_optimizer_diagnostics("initialization");
         auto device_buffer_allocation_freeze = std::make_unique<ScopedDeviceBufferAllocationFreeze>();
-        for (size_t epoch = 0; epoch < num_epochs; ++epoch)
+        const size_t first_epoch = m_has_loaded_training_state ? m_checkpoint_epoch : 0;
+        if (m_has_loaded_training_state)
+            LOG_INFO("Resuming line-based training at epoch {}", first_epoch);
+        for (size_t epoch = first_epoch; epoch < num_epochs; ++epoch)
         {
             m_optimizer_diagnostics_pending = m_training_diagnostics_enabled;
             m_backward_diagnostics_pending = m_training_diagnostics_enabled;
             bool should_stop = false;
 
+            // Line-based checkpoints resume at epoch granularity. Preserve the
+            // pre-shuffle RNG state so a timed mid-epoch checkpoint can restart
+            // the same epoch deterministically.
+            m_checkpoint_epoch = epoch;
+            m_checkpoint_window = 0;
+            m_checkpoint_window_count = 0;
+            {
+                std::ostringstream state;
+                state << rng;
+                m_checkpoint_rng_state = state.str();
+            }
             batch_train(epoch, training_lines, verbose, num_epochs, checkpointing_interval, last_checkpoint_at, rng, epoch_size);
+
+            if (m_learning_rate_provider)
+                m_learning_rate_provider->advance_epoch();
+            m_checkpoint_epoch = epoch + 1;
+            {
+                std::ostringstream state;
+                state << rng;
+                m_checkpoint_rng_state = state.str();
+            }
 
             epoch_checkpoint(last_checkpoint_at, epoch, [&] {
                 std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
@@ -1155,9 +1191,9 @@ namespace rllm
                 {
                     best_validation_loss = validation_loss;
                     epochs_without_improvement = 0;
-                    save(BEST_CHECKPOINT_FILENAME);
+                    save(best_checkpoint_filename.string());
                     has_best_checkpoint = true;
-                    LOG_INFO("Saved new best checkpoint '{}' with validation loss {:.6f}", BEST_CHECKPOINT_FILENAME, validation_loss);
+                    LOG_INFO("Saved new best checkpoint '{}' with validation loss {:.6f}", best_checkpoint_filename.string(), validation_loss);
                 }
                 else
                 {
@@ -1172,8 +1208,6 @@ namespace rllm
             }
 
             print_parallel_statistics_for_epoch(epoch);
-            if (m_learning_rate_provider)
-                m_learning_rate_provider->advance_epoch();
 
             if (should_stop)
                 break;
@@ -1182,13 +1216,13 @@ namespace rllm
 
         if (has_best_checkpoint)
         {
-            if (load(BEST_CHECKPOINT_FILENAME))
+            if (load(best_checkpoint_filename.string()))
             {
-                LOG_INFO("restored best checkpoint '{}' with validation loss {:.6f}", BEST_CHECKPOINT_FILENAME, best_validation_loss);
+                LOG_INFO("restored best checkpoint '{}' with validation loss {:.6f}", best_checkpoint_filename.string(), best_validation_loss);
             }
             else
             {
-                LOG_INFO("failed to restore best checkpoint '{}'", BEST_CHECKPOINT_FILENAME);
+                LOG_INFO("failed to restore best checkpoint '{}'", best_checkpoint_filename.string());
             }
         }
     }
@@ -1311,8 +1345,10 @@ namespace rllm
         float best_validation_loss = std::numeric_limits<float>::infinity();
         size_t epochs_without_improvement = 0;
         bool has_best_checkpoint = false;
-        const char* best_checkpoint_filename = m_training_method == TrainingMethod::REVERSE_WINDOW ?
-            "models/checkpoint-best-reverse-window.st" : "models/checkpoint-best-window.st";
+        const auto best_checkpoint_filename = model_artifact_path(
+            m_training_method == TrainingMethod::REVERSE_WINDOW ?
+                "checkpoint-best-reverse-window.st" : "checkpoint-best-window.st");
+        std::filesystem::create_directories(best_checkpoint_filename.parent_path());
         if (m_has_loaded_training_state && m_checkpoint_window != 0)
         {
             const bool saved_at_epoch_end =
@@ -1343,7 +1379,7 @@ namespace rllm
                 "baseline", m_checkpoint_epoch, num_epochs, 0.0,
                 validation_windows.size(), baseline);
             best_validation_loss = baseline.average_loss;
-            save(best_checkpoint_filename);
+            save(best_checkpoint_filename.string());
             has_best_checkpoint = true;
             LOG_INFO(
                 "window validation baseline before training: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows",
@@ -1515,11 +1551,11 @@ namespace rllm
                 {
                     best_validation_loss = validation.average_loss;
                     epochs_without_improvement = 0;
-                    save(best_checkpoint_filename);
+                    save(best_checkpoint_filename.string());
                     has_best_checkpoint = true;
                     LOG_INFO(
                         "Saved new best window checkpoint '{}' with head-0 validation loss {:.6f}",
-                        best_checkpoint_filename, best_validation_loss);
+                        best_checkpoint_filename.string(), best_validation_loss);
                 }
                 else
                 {
@@ -1549,15 +1585,15 @@ namespace rllm
         device_buffer_allocation_freeze.reset();
         if (has_best_checkpoint)
         {
-            if (load(best_checkpoint_filename))
+            if (load(best_checkpoint_filename.string()))
             {
                 LOG_INFO(
                     "restored best window checkpoint '{}' with head-0 validation loss {:.6f}",
-                    best_checkpoint_filename, best_validation_loss);
+                    best_checkpoint_filename.string(), best_validation_loss);
             }
             else
             {
-                LOG_INFO("failed to restore best window checkpoint '{}'", best_checkpoint_filename);
+                LOG_INFO("failed to restore best window checkpoint '{}'", best_checkpoint_filename.string());
             }
         }
     }

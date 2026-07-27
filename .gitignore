@@ -16,6 +16,7 @@ build_profile_cpu_seq
 ?
 *.dat
 *.log
+/test_models/
 *.bin
 *.glsl
 cmake_test_discovery*

@@ -13,6 +13,8 @@
 
 namespace rllm
 {
+    void set_tokenization_log_file(const std::string& filename);
+
     struct WindowExample
     {
         CpuInputLine line;

@@ -76,9 +76,16 @@ namespace rllm
     }
 
     bool log_info_enabled = true;
-    bool log_debug_enabled = true;
+    bool log_debug_enabled = false;
 
-    static std::ofstream s_log_file{"tokenization.log"};
+    static std::ofstream s_log_file;
+
+    void set_tokenization_log_file(const std::string& filename)
+    {
+        s_log_file.close();
+        s_log_file.clear();
+        s_log_file.open(filename, std::ios::trunc);
+    }
 
 #ifdef LOG_INFO
 #undef LOG_INFO
@@ -110,7 +117,10 @@ namespace rllm
 
     Corpus::Corpus(const std::vector<std::string>& filters)
         : m_filters(filters)
-    {}
+    {
+        if (!s_log_file.is_open())
+            set_tokenization_log_file("tokenization.log");
+    }
 
     void Corpus::load_files_from_dir(const std::string& train_corpus_dir)
     {

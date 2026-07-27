@@ -4,7 +4,7 @@
 #include <RandomHelpers.hpp>
 #include <RuntimeConfig.hpp>
 #include <TransformerBlock.hpp>
-#include <cpu/cpu_flex_rows_matrix.hpp>
+#include <vecmath.hpp>
 #include <enum_iterator2D.hpp>
 #include <parallel.hpp>
 
@@ -17,37 +17,33 @@
 
 namespace rllm
 {
-    static constexpr size_t embedding_gradient_index(TokenID tok, EmbeddingDimension dim)
-    {
-        return static_cast<size_t>(tok) * static_cast<size_t>(EmbeddingDimension::MAX) + static_cast<size_t>(dim);
-    }
-
     EmbeddingGradientAccumulator::EmbeddingGradientAccumulator()
-        : gradients(static_cast<size_t>(TokenID::MAX) * static_cast<size_t>(EmbeddingDimension::MAX), 0.0f)
-        , touched(static_cast<size_t>(TokenID::MAX), 0)
     {
     }
 
-    void EmbeddingGradientAccumulator::reset()
+    void EmbeddingGradientAccumulator::reset(VulkanQueue& queue)
     {
-        std::fill(gradients.begin(), gradients.end(), 0.0f);
-        std::fill(touched.begin(), touched.end(), 0);
+        gradients.zero(queue);
+        touched.zero(queue);
     }
 
-    void EmbeddingGradientAccumulator::add(TokenID tok, EmbeddingDimension dim, float value)
+    static void accumulate_embedding_gradients(
+        // OFFLOAD_PARAMETERS(tokens, dh, gradients, touched, rows)
+        const GpuInputLine& tokens,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
+        fixed_size_matrix<float, TokenID, EmbeddingDimension>& gradients,
+        fixed_size_vector<int, TokenID>& touched,
+        PositionIndex rows
+        // END_OFFLOAD_PARAMETERS
+    )
     {
-        gradients[embedding_gradient_index(tok, dim)] += value;
-        touched[static_cast<size_t>(tok)] = 1;
-    }
-
-    bool EmbeddingGradientAccumulator::is_touched(TokenID tok) const
-    {
-        return touched[static_cast<size_t>(tok)] != 0;
-    }
-
-    float EmbeddingGradientAccumulator::get(TokenID tok, EmbeddingDimension dim) const
-    {
-        return gradients[embedding_gradient_index(tok, dim)];
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (tokens, dh, gradients, touched, rows))
+        const auto tok = tokens[row];
+        atomicAdd(gradients[tok, d], dh[row, d]);
+        atomicMax(touched[tok], 1);
+        ENDFOR
     }
 
     static constexpr float NAN_FINDING_INPUT_HIDDEN_ABS_BOUND = 2.0f;
@@ -217,8 +213,8 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_embeddings.zero(queue);
         m_embeddings_cpu.zero();
-        m_adam_first.zero();
-        m_adam_second.zero();
+        m_adam_first.zero(queue);
+        m_adam_second.zero(queue);
     }
 
     void InputLayer::set_random_embeddings(EmbeddingInitializerType type)
@@ -368,15 +364,10 @@ namespace rllm
         EmbeddingGradientAccumulator& accumulator
     )
     {
-        cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dh_cpu;
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(queue, dh_cpu);
-        for (const auto row : enum_iterator1D<PositionIndex>(input.packed_rows()))
-        {
-            const auto tok = input.tokens()[row];
-            for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                accumulator.add(tok, d, dh_cpu[row, d]);
-        }
+        m_gpu_input.sync_to_device(queue, input.tokens());
+        accumulate_embedding_gradients(
+            m_gpu_input, dh, accumulator.gradients, accumulator.touched, input.packed_rows());
     }
 
     void InputLayer::accumulate_backward(
@@ -385,27 +376,12 @@ namespace rllm
         EmbeddingGradientAccumulator& accumulator
     )
     {
-        cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dh_cpu;
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         check_nan_finding_mode_matrix(dh, static_cast<PositionIndex>(input.size()), "gradient", "accumulate_backward:dh");
-        const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(queue, dh_cpu);
-
-        m_updated_tokens.zero();
-        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
-            m_updated_tokens[input.get(pos)]++;
-
-        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
-        {
-            const auto tok = input.get(pos);
-            const auto count = m_updated_tokens[tok];
-            assert(count > 0);
-            const float scale = 1.0f / static_cast<float>(count);
-            for (const auto di : enum_iterator1D<EmbeddingDimension>())
-                accumulator.add(tok, di, scale * dh_cpu.get(pos, di));
-        }
-
-        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
-            m_updated_tokens[input.get(pos)] = 0;
+        m_gpu_input.sync_to_device(queue, input);
+        accumulate_embedding_gradients(
+            m_gpu_input, dh, accumulator.gradients, accumulator.touched,
+            static_cast<PositionIndex>(input.size()));
     }
 
     void InputLayer::apply_accumulated_update(
@@ -416,80 +392,29 @@ namespace rllm
         bool log_diagnostics,
         OptimizerDiagnosticMetrics* diagnostics)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
-        float gradient_max = 0.0f, adam_max = 0.0f, weight_delta_max = 0.0f;
-        double adam_square_sum = 0.0, weight_delta_square_sum = 0.0;
-        size_t clipped_count = 0, parameter_count = 0;
-        double gradient_square_sum = 0.0;
-        for (const auto tok : enum_iterator1D<TokenID>())
-        {
-            if (!accumulator.is_touched(tok))
-                continue;
-            for (const auto di : enum_iterator1D<EmbeddingDimension>())
-            {
-                const double gradient = accumulator.get(tok, di);
-                gradient_square_sum += gradient * gradient;
-            }
-        }
-        const double global_gradient_norm = std::sqrt(gradient_square_sum);
-        const float global_clip_scale = global_gradient_norm > 1.0 ?
-            static_cast<float>(1.0 / global_gradient_norm) : 1.0f;
         check_nan_finding_mode_embeddings("apply_accumulated_update:start");
-        for (const auto tok : enum_iterator1D<TokenID>())
-        {
-            if (!accumulator.is_touched(tok))
-                continue;
-            for (const auto di : enum_iterator1D<EmbeddingDimension>())
-            {
-                const float raw_gradient = accumulator.get(tok, di);
-                const float scaled_gradient = raw_gradient * global_clip_scale;
-                const float gradient = math::clamp(scaled_gradient, -TransformerBlock::GRAD_CLIP, TransformerBlock::GRAD_CLIP);
-                const float first = (TransformerBlock::ADAM_BETA1 * m_adam_first.get(tok, di)) + ((1.0f - TransformerBlock::ADAM_BETA1) * gradient);
-                const float second = (TransformerBlock::ADAM_BETA2 * m_adam_second.get(tok, di)) + ((1.0f - TransformerBlock::ADAM_BETA2) * gradient * gradient);
-                m_adam_first.set(tok, di, first);
-                m_adam_second.set(tok, di, second);
-                const float update = (first / bias_correction1) / (std::sqrt(second / bias_correction2) + TransformerBlock::ADAM_EPSILON);
-                const float old_weight = static_cast<float>(m_embeddings_cpu.get(tok, di));
-                const float decayed = old_weight * (1.0f - learning_rate * TransformerBlock::WEIGHT_DECAY);
-                const float new_weight =
-                    math::clamp(decayed + learning_rate * update, RLMM_NEG_ONE, RLMM_ONE);
-                m_embeddings_cpu.set(tok, di,
-                    new_weight);
-                if (log_diagnostics)
-                {
-                    const float weight_delta = std::abs(new_weight - old_weight);
-                    gradient_max = std::max(gradient_max, std::abs(raw_gradient));
-                    clipped_count += std::abs(scaled_gradient) > TransformerBlock::GRAD_CLIP;
-                    adam_square_sum += static_cast<double>(update) * update;
-                    adam_max = std::max(adam_max, std::abs(update));
-                    weight_delta_square_sum += static_cast<double>(weight_delta) * weight_delta;
-                    weight_delta_max = std::max(weight_delta_max, weight_delta);
-                    ++parameter_count;
-                }
-            }
-            m_embeddings.copy_row_to_offload_buffer(queue, tok, m_embeddings_cpu);
-        }
-        if (log_diagnostics && parameter_count != 0)
-        {
-            LOG_INFO("Optimizer diagnostics [embeddings]: pre-clip gradient max {:.7g}, global norm {:.7g}, global clip scale {:.7g}, element-clipped {:.4f}%, Adam update RMS {:.7g} max {:.7g}, weight update RMS {:.7g} max {:.7g} ({} parameters)",
-                gradient_max, global_gradient_norm, global_clip_scale,
-                100.0 * clipped_count / parameter_count,
-                std::sqrt(adam_square_sum / parameter_count), adam_max,
-                std::sqrt(weight_delta_square_sum / parameter_count), weight_delta_max,
-                parameter_count);
-            if (diagnostics != nullptr)
-                *diagnostics = OptimizerDiagnosticMetrics{
-                    "embeddings",
-                    static_cast<float>(global_gradient_norm),
-                    global_clip_scale
-                };
-        }
+        if (log_diagnostics)
+            begin_optimizer_diagnostics();
+        auto& values = optimizer_diagnostics_buffer();
+        prepare_optimizer_gradient_clip(values);
+        accumulate_optimizer_gradient_norm(accumulator.gradients, values);
+        finalize_optimizer_gradient_clip(values);
+        adamw_update_embeddings(m_embeddings, m_adam_first, m_adam_second,
+            accumulator.gradients, accumulator.touched, learning_rate,
+            bias_correction1, bias_correction2, values, log_diagnostics ? 1 : 0);
+        if (log_diagnostics && diagnostics != nullptr)
+            if (auto metrics = log_optimizer_diagnostics("embeddings"))
+                *diagnostics = std::move(*metrics);
         check_nan_finding_mode_embeddings("apply_accumulated_update:end");
     }
 
 
     void InputLayer::get_embedding(TokenID tok, embedding_row_t& out) const
     {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_embeddings.copy_to_cpu(queue,
+            const_cast<cpu_fixed_matrix<float16, TokenID, EmbeddingDimension>&>(m_embeddings_cpu));
+        queue.wait("InputLayer embedding inspection");
         fixed_size_matrix<float16, TokenID, EmbeddingDimension>::export_row(tok, m_embeddings_cpu, out);
     }
 

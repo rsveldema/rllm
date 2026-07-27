@@ -138,10 +138,9 @@ train_rllm() {
     "./$build_dir/rllm" --train "${resume_args[@]}" \
         -o models/after_training.st \
         --train-dir "$train_dir" \
-        --filter simple \
         --method window:32 \
         --window-stride 1 \
-        --epochs 80 \
+        --epochs 160 \
         --disable-example-convergence \
         --layers 8 \
         --checkpoint-interval 300 \

@@ -11,11 +11,12 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Button
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", nargs="?", type=Path, default=Path("train.json"))
+    parser.add_argument("input", nargs="?", type=Path, default=Path("models/train.json"))
     parser.add_argument("-o", "--output", type=Path, default=Path("training_metrics.png"))
     display = parser.add_mutually_exclusive_group()
     display.add_argument(
@@ -88,25 +89,26 @@ def optimizer_gradient_series(
     return dict(grouped)
 
 
-def main() -> None:
-    args = parse_args()
-    with args.input.open(encoding="utf-8") as file:
+def load_entries(path: Path) -> list[dict[str, Any]]:
+    with path.open(encoding="utf-8") as file:
         raw = json.load(file)
     if not isinstance(raw, list):
-        raise SystemExit(f"{args.input} must contain a JSON array")
-    entries = [entry for entry in raw if isinstance(entry, dict)]
+        raise ValueError(f"{path} must contain a JSON array")
+    return [entry for entry in raw if isinstance(entry, dict)]
+
+
+def render_metrics(
+    fig: Any,
+    axes: dict[str, Any],
+    entries: list[dict[str, Any]],
+    input_path: Path,
+) -> None:
+    for axis in axes.values():
+        axis.clear()
+
     training = [entry for entry in entries if entry.get("item_type") != "validation"]
     validation = [entry for entry in entries if entry.get("item_type") == "validation"]
 
-    fig, axes = plt.subplot_mosaic(
-        [
-            ["loss", "perplexity"],
-            ["mtp", "probability"],
-            ["gradient", "gradient"],
-        ],
-        figsize=(14, 12),
-        constrained_layout=True,
-    )
     train_x, train_loss = series(training, "training_loss", False)
     val_x, val_loss = series(validation, "validation_loss", True)
     plot_or_note(axes["loss"], train_x, train_loss, "training loss", alpha=0.45, linewidth=1)
@@ -124,6 +126,8 @@ def main() -> None:
         xs, ys = series(validation, key, True)
         plot_or_note(axis, xs, ys, title, marker="o", linewidth=2)
         axis.set_title(title)
+    axes["perplexity"].set_yscale("log")
+    axes["perplexity"].set_ylabel("perplexity (log scale)")
 
     gradient_axis = axes["gradient"]
     gradient_series = optimizer_gradient_series(training)
@@ -143,7 +147,45 @@ def main() -> None:
     for axis in axes.values():
         axis.set_xlabel("epoch")
         axis.grid(True, alpha=0.25)
-    fig.suptitle(f"Training metrics — {args.input}", fontsize=14)
+    fig.suptitle(f"Training metrics — {input_path}", fontsize=14)
+
+
+def main() -> None:
+    args = parse_args()
+    try:
+        entries = load_entries(args.input)
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        raise SystemExit(f"Cannot load {args.input}: {error}") from error
+
+    fig, axes = plt.subplot_mosaic(
+        [
+            ["loss", "perplexity"],
+            ["mtp", "probability"],
+            ["gradient", "gradient"],
+        ],
+        figsize=(14, 12),
+        constrained_layout=True,
+    )
+    render_metrics(fig, axes, entries, args.input)
+
+    status = fig.text(0.875, 0.945, "", ha="right", va="center", fontsize=9)
+    button_axis = fig.add_axes((0.88, 0.955, 0.1, 0.03))
+    reload_button = Button(button_axis, "Reload")
+
+    def reload_metrics(_event: Any) -> None:
+        try:
+            latest_entries = load_entries(args.input)
+            render_metrics(fig, axes, latest_entries, args.input)
+            fig.savefig(args.output, dpi=160)
+        except (OSError, json.JSONDecodeError, ValueError) as error:
+            status.set_text(f"Reload failed: {error}")
+            status.set_color("tab:red")
+        else:
+            status.set_text(f"Reloaded {len(latest_entries)} records")
+            status.set_color("tab:green")
+        fig.canvas.draw_idle()
+
+    reload_button.on_clicked(reload_metrics)
     fig.savefig(args.output, dpi=160)
     print(f"Saved {args.output}")
     if args.show:

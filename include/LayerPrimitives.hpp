@@ -229,11 +229,13 @@ namespace rllm
 
         void sub_array(CpuInputLine& result, PositionIndex length) const
         {
-            m_cpu.sub_array(result.m_cpu, length);
+            assert(static_cast<size_t>(length) <= m_cpu.size());
+            result.m_cpu.assign(m_cpu.begin(), m_cpu.begin() + static_cast<size_t>(length));
         }
 
         void push_back(TokenID t)
         {
+            assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
             m_cpu.push_back(t);
         }
 
@@ -249,7 +251,7 @@ namespace rllm
 
         const TokenID& get(PositionIndex pos) const
         {
-            return m_cpu[pos];
+            return m_cpu[static_cast<size_t>(pos)];
         }
 
         const TokenID& get(size_t pos) const
@@ -259,7 +261,7 @@ namespace rllm
         
         const TokenID& operator[](PositionIndex pos) const
         {
-            return m_cpu[pos];
+            return m_cpu[static_cast<size_t>(pos)];
         }
 
         void clear()
@@ -274,7 +276,7 @@ namespace rllm
 
         PositionIndex size() const
         {
-            return m_cpu.size();
+            return static_cast<PositionIndex>(m_cpu.size());
         }
 
         uint64_t hash() const
@@ -283,9 +285,9 @@ namespace rllm
             constexpr uint64_t FNV_PRIME = 1099511628211ull;
 
             uint64_t hash = FNV_OFFSET_BASIS;
-            for (const auto i : enum_iterator1D<PositionIndex>(m_cpu.size()))
+            for (const auto token : m_cpu)
             {
-                uint64_t value = static_cast<uint64_t>(static_cast<int>(m_cpu[i])) + 1ull;
+                uint64_t value = static_cast<uint64_t>(static_cast<int>(token)) + 1ull;
                 for (int byte = 0; byte < 8; ++byte)
                 {
                     hash ^= (value & 0xffull);
@@ -296,7 +298,7 @@ namespace rllm
             return hash;
         }
 
-        cpu_fixed_vector<TokenID, PositionIndex> m_cpu;
+        std::vector<TokenID> m_cpu;
     };
 
     class GpuInputLine : public fixed_size_vector<TokenID, PositionIndex>
@@ -328,8 +330,16 @@ namespace rllm
         /** Upload from CpuInputLine to device. Call after modifying CpuInputLine. */
         void sync_to_device(VulkanQueue& queue, const CpuInputLine& cpu) const
         {
-            const_cast<GpuInputLine*>(this)->Base::copy_from_cpu(queue, cpu.m_cpu);
+            auto* self = const_cast<GpuInputLine*>(this);
+            self->m_upload_staging.clear();
+            for (const auto token : cpu.m_cpu)
+                self->m_upload_staging.push_back(token);
+            self->Base::copy_from_cpu(queue, self->m_upload_staging);
+            queue.wait("GpuInputLine upload staging");
         }
+
+      private:
+        cpu_fixed_vector<TokenID, PositionIndex> m_upload_staging;
     };
 
     /** CPU description of a ragged micro-batch packed into one row axis.

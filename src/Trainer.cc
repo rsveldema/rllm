@@ -72,7 +72,10 @@ namespace rllm
         const auto artifact_directory = output_directory.empty()
             ? std::filesystem::path{"."}
             : output_directory;
+        if (artifact_directory != std::filesystem::path{"."})
+            std::filesystem::create_directories(artifact_directory);
         set_nn_log_file((artifact_directory / "train.log").string());
+        set_tokenization_log_file((artifact_directory / "tokenization.log").string());
         ComputeKernelRegistry::instance().enableRegistrationLog("training-log.txt");
 
         Corpus corpus{m_filters};

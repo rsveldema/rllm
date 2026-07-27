@@ -25,6 +25,12 @@ generation operate directly on the batched logits; training reads back only the
 small primary-head loss vector used for convergence decisions. The Vulkan
 reduction kernels use tkernel workgroup reductions to limit global atomics.
 
+Input-embedding backpropagation is also GPU-resident. Packed hidden gradients
+are accumulated into token rows with a tkernel-backed atomic kernel, and the
+embedding Adam moments, global clipping, and weight update remain on the device.
+Embedding tensors are copied to the host only for explicit serialization or
+inspection.
+
 The progress log reports `iterations total` as the sum of the iterations used
 by all examples, `avg .../line` as that total divided by the batch size, and
 `rounds` as the number of batch-wide optimizer rounds. Consequently, the total

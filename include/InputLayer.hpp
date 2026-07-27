@@ -19,14 +19,11 @@ namespace rllm
 
     struct EmbeddingGradientAccumulator
     {
-        std::vector<float> gradients;
-        std::vector<uint8_t> touched;
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> gradients;
+        fixed_size_vector<int, TokenID> touched;
 
         EmbeddingGradientAccumulator();
-        void reset();
-        void add(TokenID tok, EmbeddingDimension dim, float value);
-        bool is_touched(TokenID tok) const;
-        float get(TokenID tok, EmbeddingDimension dim) const;
+        void reset(VulkanQueue& queue);
     };
 
       /**  InputLayer converts an CpuInputLine (sequence of token IDs) into a
@@ -106,8 +103,8 @@ namespace rllm
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> m_embeddings;
         // CPU-side copy used for gradient updates and serialization.
         cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> m_embeddings_cpu;
-        cpu_fixed_matrix<float, TokenID, EmbeddingDimension> m_adam_first;
-        cpu_fixed_matrix<float, TokenID, EmbeddingDimension> m_adam_second;
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> m_adam_first;
+        fixed_size_matrix<float, TokenID, EmbeddingDimension> m_adam_second;
 
         void reset_embeddings();
 

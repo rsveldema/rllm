@@ -31,6 +31,41 @@ def _greedy_tokenize(text: str, sorted_tokens: list[str]) -> tuple[list[str], li
     return matched, skipped
 
 
+def _runtime_greedy_tokenize(
+    text: str, tokenizer_map: dict[str, int]
+) -> tuple[list[str], list[str]]:
+    """Mirror generated C++ token spellings and end-of-word checks."""
+    token_specs = []
+    for token, token_id in tokenizer_map.items():
+        is_eow = token.endswith(ctm.EOW_MARKER)
+        spelling = token.removesuffix(ctm.EOW_MARKER) if is_eow else token
+        if spelling and spelling != " ":
+            token_specs.append((token_id, spelling, is_eow))
+    token_specs.sort()
+
+    matched, skipped = [], []
+    ix = 0
+    while ix < len(text):
+        for _, spelling, is_eow in token_specs:
+            if not text.startswith(spelling, ix):
+                continue
+            next_ix = ix + len(spelling)
+            if (
+                is_eow
+                and next_ix < len(text)
+                and (text[next_ix].isalnum() or text[next_ix] == "_")
+            ):
+                continue
+            matched.append(spelling)
+            ix = next_ix
+            break
+        else:
+            if not text[ix].isspace():
+                skipped.append(text[ix])
+            ix += 1
+    return matched, skipped
+
+
 @pytest.fixture(scope="session")
 def token_vocab():
     """Build a deterministic sorted token list once per session."""
@@ -68,3 +103,113 @@ def test_hash_prefixed_word_is_learned_as_single_token():
 def test_invalid_token_is_reserved_even_when_absent_from_training_text():
     tokenizer_map = ctm.create_tokenizer_map("abc abc")
     assert "INVALID" in tokenizer_map
+
+
+@pytest.mark.parametrize("keyword", ["while", "for", "if", "switch", "return"])
+def test_cpp_keywords_are_guaranteed_atomic_tokens(keyword):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert keyword + ctm.EOW_MARKER in tokenizer_map
+
+    matched, skipped = _runtime_greedy_tokenize(keyword + " (value)", tokenizer_map)
+    assert skipped == []
+    assert matched[0] == keyword
+    assert len(_runtime_greedy_tokenize(keyword, tokenizer_map)[0]) == 1
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    ["#define", "#include", "#ifdef", "#ifndef", "#pragma"],
+)
+def test_preprocessor_keywords_are_guaranteed_atomic_tokens(keyword):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert keyword + ctm.EOW_MARKER in tokenizer_map
+    matched, skipped = _runtime_greedy_tokenize(keyword, tokenizer_map)
+    assert skipped == []
+    assert matched == [keyword]
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    ["def", "import", "lambda", "nonlocal", "yield"],
+)
+def test_python_keywords_are_guaranteed_atomic_tokens(keyword):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert keyword + ctm.EOW_MARKER in tokenizer_map
+    matched, skipped = _runtime_greedy_tokenize(keyword, tokenizer_map)
+    assert skipped == []
+    assert matched == [keyword]
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    ["then", "fi", "esac", "done", "function"],
+)
+def test_shell_keywords_are_guaranteed_atomic_tokens(keyword):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert keyword + ctm.EOW_MARKER in tokenizer_map
+    matched, skipped = _runtime_greedy_tokenize(keyword, tokenizer_map)
+    assert skipped == []
+    assert matched == [keyword]
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    ["fn", "impl", "match", "mut", "unsafe", "where"],
+)
+def test_rust_keywords_are_guaranteed_atomic_tokens(keyword):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert keyword + ctm.EOW_MARKER in tokenizer_map
+    matched, skipped = _runtime_greedy_tokenize(keyword, tokenizer_map)
+    assert skipped == []
+    assert matched == [keyword]
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    ["interface", "instanceof", "record", "sealed", "synchronized", "throws"],
+)
+def test_java_keywords_are_guaranteed_atomic_tokens(keyword):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert keyword + ctm.EOW_MARKER in tokenizer_map
+    matched, skipped = _runtime_greedy_tokenize(keyword, tokenizer_map)
+    assert skipped == []
+    assert matched == [keyword]
+
+
+@pytest.mark.parametrize("prefix", ["w", "wh", "whi", "whil"])
+def test_partial_keyword_prefixes_remain_tokenizable(prefix):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    if len(prefix) >= 2:
+        assert prefix in tokenizer_map
+    matched, skipped = _runtime_greedy_tokenize(prefix, tokenizer_map)
+    assert skipped == []
+    assert "".join(matched) == prefix
+    assert "while" not in matched
+    if len(prefix) >= 2:
+        assert matched == [prefix]
+
+
+@pytest.mark.parametrize("prefix", ["#d", "#de", "#def", "#defi", "#defin"])
+def test_partial_preprocessor_prefixes_use_dedicated_tokens(prefix):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert prefix in tokenizer_map
+    matched, skipped = _runtime_greedy_tokenize(prefix, tokenizer_map)
+    assert skipped == []
+    assert matched == [prefix]
+
+
+@pytest.mark.parametrize("prefix", ["im", "imp", "impl", "inter", "interf"])
+def test_partial_rust_and_java_prefixes_use_dedicated_tokens(prefix):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert prefix in tokenizer_map
+    matched, skipped = _runtime_greedy_tokenize(prefix, tokenizer_map)
+    assert skipped == []
+    assert matched == [prefix]
+
+
+def test_keyword_token_requires_identifier_boundary():
+    tokenizer_map = ctm.create_tokenizer_map("meanwhile meanwhile")
+    matched, skipped = _runtime_greedy_tokenize("while_value", tokenizer_map)
+    assert skipped == []
+    assert "".join(matched) == "while_value"
+    assert matched[0] != "while"

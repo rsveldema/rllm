@@ -19,6 +19,96 @@ EOW_MARKER = '·'  # U+00B7 MIDDLE DOT
 
 training_file_extensions = [".cpp", ".cc", ".h", ".txt", ".text", ".md", ".json", ".yaml", ".yml"]
 
+# C++23 lexical keywords are guaranteed atomic, end-of-word tokens instead of
+# depending on whether BPE happens to learn them from a particular corpus.
+# Single ASCII characters and learned BPE pieces remain in the vocabulary, so
+# incomplete prompt prefixes such as "wh", "whi", and "whil" are still
+# representable.
+CPP_KEYWORDS = (
+    "alignas", "alignof", "and", "and_eq", "asm", "auto",
+    "bitand", "bitor", "bool", "break",
+    "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class",
+    "compl", "concept", "const", "consteval", "constexpr", "constinit",
+    "const_cast", "continue", "co_await", "co_return", "co_yield",
+    "decltype", "default", "delete", "do", "double", "dynamic_cast",
+    "else", "enum", "explicit", "export", "extern",
+    "false", "float", "for", "friend",
+    "goto",
+    "if", "inline", "int",
+    "long",
+    "mutable",
+    "namespace", "new", "noexcept", "not", "not_eq", "nullptr",
+    "operator", "or", "or_eq",
+    "private", "protected", "public",
+    "register", "reinterpret_cast", "requires", "return",
+    "short", "signed", "sizeof", "static", "static_assert", "static_cast",
+    "struct", "switch",
+    "template", "this", "thread_local", "throw", "true", "try", "typedef",
+    "typeid", "typename",
+    "union", "unsigned", "using",
+    "virtual", "void", "volatile",
+    "wchar_t", "while",
+    "xor", "xor_eq",
+)
+
+PREPROCESSOR_KEYWORDS = (
+    "#define", "#elif", "#else", "#endif", "#error", "#if", "#ifdef",
+    "#ifndef", "#include", "#line", "#pragma", "#undef", "#warning",
+)
+
+PYTHON_KEYWORDS = (
+    "False", "None", "True", "and", "as", "assert", "async", "await",
+    "break", "class", "continue", "def", "del", "elif", "else", "except",
+    "finally", "for", "from", "global", "if", "import", "in", "is",
+    "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+    "while", "with", "yield",
+)
+
+SHELL_KEYWORDS = (
+    "case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for",
+    "function", "if", "in", "select", "then", "time", "until", "while",
+)
+
+RUST_KEYWORDS = (
+    "Self", "abstract", "as", "async", "await", "become", "box", "break",
+    "const", "continue", "crate", "do", "dyn", "else", "enum", "extern",
+    "false", "final", "fn", "for", "if", "impl", "in", "let", "loop",
+    "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+    "return", "self", "static", "struct", "super", "trait", "true", "try",
+    "type", "typeof", "union", "unsafe", "unsized", "use", "virtual", "where",
+    "while", "yield",
+)
+
+JAVA_KEYWORDS = (
+    "_", "abstract", "assert", "boolean", "break", "byte", "case", "catch",
+    "char", "class", "const", "continue", "default", "do", "double", "else",
+    "enum", "exports", "extends", "false", "final", "finally", "float", "for",
+    "goto", "if", "implements", "import", "instanceof", "int", "interface",
+    "long", "module", "native", "new", "non-sealed", "null", "open", "opens",
+    "package", "permits", "private", "protected", "provides", "public", "record",
+    "requires", "return", "sealed", "short", "static", "strictfp", "super",
+    "switch", "synchronized", "this", "throw", "throws", "to", "transient",
+    "transitive", "true", "try", "uses", "var", "void", "volatile", "when",
+    "while", "with", "yield",
+)
+
+LANGUAGE_KEYWORDS = tuple(dict.fromkeys(
+    CPP_KEYWORDS
+    + PREPROCESSOR_KEYWORDS
+    + PYTHON_KEYWORDS
+    + SHELL_KEYWORDS
+    + RUST_KEYWORDS
+    + JAVA_KEYWORDS
+))
+
+LANGUAGE_KEYWORD_PREFIXES = tuple(
+    sorted({
+        keyword[:prefix_length]
+        for keyword in LANGUAGE_KEYWORDS
+        for prefix_length in range(2, len(keyword))
+    })
+)
+
 def read_all_files_in_directory(directory):
     all_text = ""
     for filename in os.listdir(directory):
@@ -154,6 +244,11 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
     # Reserved model-control tokens. INVALID is used as the supervised target
     # for MTP heads whose prediction horizon extends past the available input.
     tokens = ["INVALID"]
+
+    # The EOW suffix is metadata: generated runtime tables strip it from the
+    # token spelling and require an identifier boundary after the match.
+    tokens.extend(keyword + EOW_MARKER for keyword in LANGUAGE_KEYWORDS)
+    tokens.extend(LANGUAGE_KEYWORD_PREFIXES)
 
     # all seperators are tokens:
     for ch in seperators:

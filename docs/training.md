@@ -22,6 +22,10 @@ continue at the next unprocessed micro-batch with the same window order. Older
 weight-only checkpoints remain supported and start with fresh optimizer and
 schedule state.
 
+Line-based checkpoints resume at epoch granularity. An end-of-epoch checkpoint
+continues with the following epoch; a timed checkpoint written during an epoch
+restarts that epoch with the saved pre-shuffle generator state.
+
 The saved window count distinguishes mid-epoch checkpoints from completed
 epochs. If the corpus changes, an incomplete epoch restarts at cursor zero;
 epoch-complete checkpoints continue at the following epoch. Checkpoints written
@@ -32,7 +36,21 @@ Before auto-resuming, the scripts compare the checkpoint tokenizer vocabulary si
 
 This matters after tokenizer changes, such as adding the `INVALID` token, because old checkpoints have weight matrices with the previous vocabulary size.
 
-The release training script includes `training_data1/preprocessor.cpp` via the `preprocessor` filter. This keeps prompt completions for prefixes such as `#`, `#in`, and `#if` trained on the dedicated preprocessor examples instead of only the incidental directives in larger C++ files.
+The release and debug training scripts do not set a filename filter, so every
+program under `training_data1` is included by default. Passing one or more
+`--filter` options explicitly narrows loading to filenames containing any of
+those values. The unfiltered corpus includes `preprocessor.cpp`, keeping prompt
+completions for prefixes such as `#`, `#in`, and `#if` trained on its dedicated
+examples instead of only the incidental directives in larger C++ files.
+Corpus loading records processed files and tokenization errors in
+`tokenization.log` beside the output model. The standard scripts therefore
+write it to `models/tokenization.log`. Per-token match tracing is disabled by
+default so loading a large unfiltered corpus does not perform a synchronous log
+write for every token candidate.
+
+Unit tests set `RLLM_MODEL_DIR=test_models` and clean only that directory.
+Timed checkpoints, best checkpoints, training progress, and tokenization logs
+created by tests never use the production `models/` directory.
 
 ## Learn Depth
 
@@ -156,6 +174,10 @@ includes an example whose context is `#in` and whose primary target is `clu`.
 Window training uses the same deterministic 80/20 line split as line-based
 training. Training and validation use the same boundary-preserving window
 construction, so windows never join unrelated lines or bridge a held-out gap.
+Corpus lines and generated windows use compact ordinary CPU storage. Vulkan
+host-visible staging buffers are allocated only for reusable GPU upload
+objects, avoiding one driver allocation per window when large corpora are
+loaded.
 Before the first optimizer update, training records a validation-window baseline.
 Every five minutes it reports held-out window loss, perplexity, average
 correct-token probability, and validation duration together with the current
@@ -283,6 +305,12 @@ arguments from `scripts/train_common.sh`; they differ only in whether they build
 and run `build_debug/rllm` or `build_release/rllm`. Extra arguments passed to
 either wrapper are appended to the shared command, allowing a later option to
 override a default.
+
+Before the corpus is loaded, Python files under `training_data1` have every
+complete group of four leading spaces converted to a literal tab. The runtime
+tokenizer preserves each resulting tab as `TokenID::TOK_TAB`, allowing Python
+block indentation to participate in training instead of being discarded with
+ordinary spaces.
 
 For controlled resume experiments, `--reset-optimizer-state` keeps the loaded
 weights, training cursor, and learning-rate position but clears all Adam moments

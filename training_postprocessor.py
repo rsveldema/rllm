@@ -8,7 +8,9 @@ Rules:
    - trim leading whitespace
    - drop empty lines
    - move inline comments to their own next line
-3. For .md/.txt files:
+3. For Python files:
+   - replace each group of four leading spaces with one tab
+4. For .md/.txt files:
 	- split sentence punctuation ('.', '!', '?') into line breaks
 	- keep 'etc.' inside sentences
 """
@@ -20,6 +22,7 @@ from pathlib import Path
 
 
 C_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
+PYTHON_EXTENSIONS = {".py"}
 TEXT_EXTENSIONS = {".md", ".txt"}
 
 
@@ -87,6 +90,17 @@ def normalize_c_cpp(text: str) -> str:
 	return "\n".join(normalized_lines) + ("\n" if normalized_lines else "")
 
 
+def normalize_python_indentation(text: str) -> str:
+	"""Convert complete four-space groups in leading whitespace to tabs."""
+	normalized_lines: list[str] = []
+	for line in text.splitlines(keepends=True):
+		content = line.lstrip(" \t")
+		indent_length = len(line) - len(content)
+		indentation = line[:indent_length]
+		normalized_lines.append(indentation.replace("    ", "\t") + content)
+	return "".join(normalized_lines)
+
+
 def is_etc_abbreviation(text: str, dot_index: int) -> bool:
 	start = dot_index - 1
 	while start >= 0 and text[start].isalpha():
@@ -128,6 +142,8 @@ def process_file(path: Path) -> bool:
 	suffix = path.suffix.lower()
 	if suffix in C_EXTENSIONS:
 		updated = normalize_c_cpp(updated)
+	elif suffix in PYTHON_EXTENSIONS:
+		updated = normalize_python_indentation(updated)
 	elif suffix in TEXT_EXTENSIONS:
 		updated = split_text_sentences(updated)
 

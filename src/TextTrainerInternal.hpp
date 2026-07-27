@@ -73,7 +73,7 @@ namespace rllm
                 output_layers[oi].reset(queue);
             for (auto& block : transformer_blocks)
                 block.reset(queue);
-            embeddings.reset();
+            embeddings.reset(queue);
         }
     };
 }
