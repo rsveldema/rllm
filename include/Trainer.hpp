@@ -39,12 +39,14 @@ namespace rllm
             size_t micro_batch_size,
             size_t num_epochs,
             std::optional<size_t> epoch_size,
+            size_t max_validation_windows,
+            size_t validation_worst_count,
             bool disable_early_stopping,
             bool disable_example_convergence,
             bool disable_training_diagnostics,
             bool reset_optimizer_state,
             bool restart_learning_rate_schedule,
-            const std::string& train_corpus_dir
+            const std::vector<std::string>& train_corpus_dirs
         );
       private:
         const std::vector<std::string> m_filters;

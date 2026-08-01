@@ -28,12 +28,14 @@ namespace rllm
         fixed_size_vector<int, BatchIndex> expected_tokens;
         fixed_size_vector<int, BatchIndex> active_examples;
         fixed_size_vector<float, BatchIndex> losses;
+        fixed_size_vector<int, BatchIndex> row_indices;
 
         BatchedOutputWorkspace()
         {
             expected_tokens.set_size(BatchIndex::MAX);
             active_examples.set_size(BatchIndex::MAX);
             losses.set_size(BatchIndex::MAX);
+            row_indices.set_size(BatchIndex::MAX);
         }
     };
 

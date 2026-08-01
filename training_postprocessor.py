@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize training files in training_data1 before training.
+"""Normalize files in the selected training-data directory before training.
 
 Rules:
 1. Remove non-ASCII characters from every processed file.
@@ -158,8 +158,8 @@ def main() -> int:
 	parser = argparse.ArgumentParser(description="Normalize training data files.")
 	parser.add_argument(
 		"--dir",
-		default="training_data1",
-		help="Directory containing training files (default: training_data1)",
+		default="training_data2",
+		help="Directory containing training files (default: training_data2)",
 	)
 	args = parser.parse_args()
 

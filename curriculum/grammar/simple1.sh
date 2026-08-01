@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Grammar curriculum: strict mode turns common scripting mistakes into errors.
+# This script demonstrates variables, arrays, tests, loops, functions, and case arms.
+
 set -euo pipefail
 
 readonly script_name="${0##*/}"
@@ -150,6 +153,18 @@ time {
 printf -v formatted_value 'formatted-%03d' 7
 export formatted_value
 unset command_output
+
+extra_control_flow_sample() {
+    local limit="${1:-4}"
+    local total=0
+    local value
+    for ((value = 0; value < limit; value++)); do
+        if ((value % 2 == 0)); then
+            ((total += value))
+        fi
+    done
+    printf '%d\n' "${total}"
+}
 
 return_from_function() {
     local status="${1:-0}"

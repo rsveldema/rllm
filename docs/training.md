@@ -1,5 +1,17 @@
 # Training Utilities
 
+`--train-dir <path>` may be repeated. Add `:<weight>` to define the desired
+share of epoch draws for each source, for example `--train-dir curriculum:0.2
+--train-dir training_data2:0.8`. Weights are normalized across non-empty
+sources, so small curriculum corpora can remain represented without being
+overwhelmed by a larger source. Sampling cycles through shuffled source windows
+before repeating them. Unweighted directories default to weight `1`.
+
+The shared training launcher uses `training_data0`, the `curriculum/grammar`,
+`curriculum/syntax`, `curriculum/comments`, and `curriculum/systems` categories,
+and `training_data2` as a weighted mixture. Setting `TRAIN_DIR` keeps the legacy
+single-source override.
+
 `train_release.sh` and `train_debug.sh` try to resume from `RESUME_MODEL`, `models/after_training.st`, or the newest `models/checkpoint-*.st`.
 
 Every saved model has a sibling `<model filename>.training.json` containing the
@@ -36,12 +48,12 @@ Before auto-resuming, the scripts compare the checkpoint tokenizer vocabulary si
 
 This matters after tokenizer changes, such as adding the `INVALID` token, because old checkpoints have weight matrices with the previous vocabulary size.
 
-The release and debug training scripts do not set a filename filter, so every
-program under `training_data1` is included by default. Passing one or more
+The release and debug training scripts use `training_data2` by default and do
+not set a filename filter, so every program in that directory is included.
+Set `TRAIN_DIR` to select another corpus. Passing one or more
 `--filter` options explicitly narrows loading to filenames containing any of
-those values. The unfiltered corpus includes `preprocessor.cpp`, keeping prompt
-completions for prefixes such as `#`, `#in`, and `#if` trained on its dedicated
-examples instead of only the incidental directives in larger C++ files.
+those values. When using `curriculum`, its `preprocessor.cpp` supplies
+dedicated completion examples for prefixes such as `#`, `#in`, and `#if`.
 Corpus loading records processed files and tokenization errors in
 `tokenization.log` beside the output model. The standard scripts therefore
 write it to `models/tokenization.log`. Per-token match tracing is disabled by
@@ -74,8 +86,12 @@ and `\\t`, keeping each diagnostic on one physical log line.
 Each batch progress message is also recorded as an object in an in-memory JSON
 array. Entries include the method, epoch and item range, completion percentage,
 loss, optimizer rounds, iteration counts, and forward/backward/apply timings.
-After each model or checkpoint save, the complete array is written to
-`train.json` beside the output model. For example,
+Training creates `train.json` beside the output model immediately as a valid
+empty JSON array, before potentially lengthy baseline validation. After each
+model or checkpoint save, the complete progress array is written there.
+Training batches also flush it at most every 15 seconds. Long validation passes
+write `validation_progress` entries and text-log updates every 15 seconds with
+the completed count, running head-zero loss, elapsed time, and ETA. For example,
 `-o models/after_training.st` uses `models/train.json` and `models/train.log`.
 Restarting training loads and extends the existing JSON array, while truncating
 the text log for the new process. This preserves one continuous structured
@@ -111,6 +127,14 @@ legacy token embeddings.
 
 `--epoch-size <N>` limits line-based training methods to `N` shuffled training lines per epoch. The default is all training lines. Values larger than the training split are clamped to the full split.
 
+`--max-validation-windows <N>` deterministically samples at most `N` evenly
+spaced held-out windows. Its default is 4,096; the shared release/debug training
+wrapper sets that value explicitly.
+
+`--validation-worst-count <N>` controls how many of the highest-loss validation
+predictions are written to `train.log`. Its default is `5`; the shared
+release/debug training wrapper sets it to `100`.
+
 `--micro-batch-size <N>` must be between `1` and the compiled
 `BatchIndex::MAX`. Larger values are rejected during argument parsing because
 the packed batch metadata and output workspaces are statically bounded by that
@@ -121,7 +145,9 @@ This is useful for faster validation/checkpoint feedback on large corpora. Windo
 At startup, `train.log` reports the number of source tokens assigned to the
 training side of the deterministic split. Window training also reports token
 occurrences across all generated windows for one full epoch; that count includes
-overlap between windows. Validation tokens are excluded from both counts.
+overlap between windows. Validation tokens are excluded from both counts. The
+log records the configured maximum window size in tokens and the within-file
+stride before constructing the training and validation windows.
 
 ## Learning Rate
 
@@ -163,21 +189,49 @@ The log reports the base and effective scheduled rate at startup, at warmup and
 decay boundaries, and whenever the effective rate moves by at least 1% of its
 peak value. This exposes schedule progress without logging every optimizer step.
 
-`--window-stride <N>` controls the distance between primary next-token targets
-within each corpus line and defaults to `1`. Each example records an explicit
-context length followed by its primary target and up to three additional MTP
-targets, without exceeding the configured maximum window size. A stride of `4`
-matches the four MTP target heads and substantially reduces overlapping work;
-a stride of `1` trains head zero at every token position. For example, it
-includes an example whose context is `#in` and whose primary target is `clu`.
+`--window-stride <N>` controls the distance between supervised hidden rows and
+defaults to `1`. A window contains up to the configured token count and performs
+one causal transformer pass. Head zero predicts the following token from every
+stride-selected row; higher MTP heads predict the additional available future
+tokens. Adjacent windows overlap by one token, so stride `1` covers every
+next-token boundary exactly once without rebuilding every prefix.
 
-Window training uses the same deterministic 80/20 line split as line-based
-training. Training and validation use the same boundary-preserving window
-construction, so windows never join unrelated lines or bridge a held-out gap.
+Window training deterministically reserves 20% of the windows within each file
+for validation. Every file large enough to produce at least two windows
+therefore contributes to both training and validation; shorter files remain
+training-only. A window may span multiple lines within its source file,
+including newline tokens, but never crosses into another file.
+Every training and validation window begins with one of six language tokens:
+`<LANG_CPP>`, `<LANG_C>`, `<LANG_PYTHON>`, `<LANG_RUST>`, `<LANG_JAVA>`, or
+`<LANG_SHELL>`. The marker is input context rather than a prediction target and
+occupies one position inside the configured window size. Files with an unknown
+extension currently use the C++ marker.
+
+The lexer replaces source comment delimiters with
+`<LINE_COMMENT_START> ... <LINE_COMMENT_END>` or
+`<BLOCK_COMMENT_START> ... <BLOCK_COMMENT_END>` around C, C++, Java, Rust,
+Python, and shell comment contents. For example, Python `# hello` becomes
+`<LINE_COMMENT_START> hello <LINE_COMMENT_END>` in
+the model token stream. It recognizes `//`, `#`, and `/* ... */`
+outside quoted strings, carries block-comment state across lines, and supports
+nested Rust block comments. A window beginning in the middle of a block comment
+receives `<BLOCK_COMMENT_START>` after its language prefix. Metadata prefixes remain
+inside the configured window size, so the minimum supported window is four
+tokens.
+`<LINE_COMMENT_END>` replaces the source newline rather than preceding a
+separate newline token; prompt rendering converts it back to `\n`.
+
+Prompt mode uses the C++ marker by default. Use `/language <name>` (or `/lang
+<name>`) to select `cpp`, `c`, `python`, `rust`, `java`, or `shell`; subsequent
+prompts and hidden-state probes receive that language marker.
 Corpus lines and generated windows use compact ordinary CPU storage. Vulkan
 host-visible staging buffers are allocated only for reusable GPU upload
 objects, avoiding one driver allocation per window when large corpora are
 loaded.
+Generated Vulkan dispatches allocate descriptor sets from a reusable
+per-queue arena. The arena is reset only after that queue becomes idle, so
+forward and backward passes do not create and destroy a descriptor pool for
+every kernel invocation.
 Before the first optimizer update, training records a validation-window baseline.
 Every five minutes it reports held-out window loss, perplexity, average
 correct-token probability, and validation duration together with the current
@@ -191,14 +245,23 @@ are directly comparable with reported training loss. The baseline and each
 end-of-epoch validation also report the five worst individual predictions. Each
 diagnostic includes loss, expected and predicted tokens with their probabilities,
 the MTP head, and the decoded input context.
+When the per-file reservation produces more windows than `--max-validation-windows`,
+validation distributes that budget across the source files, including at
+least one window from every file when the budget permits, and samples evenly
+within each file. This keeps baseline, periodic, and end-of-epoch validation
+cost bounded while covering files of different sizes; training still uses
+every training window.
+Validation packs those windows into the configured micro-batch size and uses
+the same batched transformer and output-loss kernels as training. Worst-token
+diagnostics rerun only the five highest-loss predictions individually.
 Each batch progress line also reports `training loss`, the mean primary
 next-token cross-entropy for the examples and optimizer rounds in that batch.
 An epoch-level training-window mean is reported separately. These online
 training values are expected to be noisier than loss over the full held-out
 validation-window split.
 
-Batched backpropagation optimizes the mean loss over all active `(example, MTP
-head)` predictions. The softmax deltas are divided by that prediction count
+Batched backpropagation optimizes the mean loss over all active `(window row,
+MTP head)` predictions. The softmax deltas are divided by that prediction count
 before output, transformer, and embedding gradients are accumulated, clipped,
 and passed to AdamW. This keeps update scale independent of micro-batch size,
 short-window head count, and examples that converge before the final round.
@@ -306,7 +369,8 @@ and run `build_debug/rllm` or `build_release/rllm`. Extra arguments passed to
 either wrapper are appended to the shared command, allowing a later option to
 override a default.
 
-Before the corpus is loaded, Python files under `training_data1` have every
+Before the corpus is loaded, files in the selected training directory are
+normalized by `training_postprocessor.py`. Python files have every
 complete group of four leading spaces converted to a literal tab. The runtime
 tokenizer preserves each resulting tab as `TokenID::TOK_TAB`, allowing Python
 block indentation to participate in training instead of being discarded with

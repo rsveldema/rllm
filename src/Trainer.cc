@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <print>
+#include <charconv>
 #include <string>
 #include <type_traits>
 
@@ -13,6 +14,30 @@
 
 namespace rllm
 {
+    namespace
+    {
+        struct TrainingDirectorySpec
+        {
+            std::string path;
+            double weight = 1.0;
+        };
+
+        TrainingDirectorySpec parse_training_directory_spec(const std::string& value)
+        {
+            const auto separator = value.rfind(':');
+            if (separator == std::string::npos)
+                return {value, 1.0};
+            double weight = 0.0;
+            const auto weight_text = std::string_view{value}.substr(separator + 1);
+            const auto parsed = std::from_chars(
+                weight_text.data(), weight_text.data() + weight_text.size(), weight);
+            if (parsed.ec != std::errc{} || parsed.ptr != weight_text.data() + weight_text.size() ||
+                !(weight > 0.0))
+                return {value, 1.0};
+            return {value.substr(0, separator), weight};
+        }
+    }
+
     Trainer::Trainer(const std::vector<std::string>& filters)
         : m_filters(filters)
     {}
@@ -40,12 +65,14 @@ namespace rllm
         size_t micro_batch_size,
         size_t num_epochs,
         std::optional<size_t> epoch_size,
+        size_t max_validation_windows,
+        size_t validation_worst_count,
         bool disable_early_stopping,
         bool disable_example_convergence,
         bool disable_training_diagnostics,
         bool reset_optimizer_state,
         bool restart_learning_rate_schedule,
-        const std::string& train_corpus_dir
+        const std::vector<std::string>& train_corpus_dirs
     )
     {
         std::println(
@@ -79,7 +106,12 @@ namespace rllm
         ComputeKernelRegistry::instance().enableRegistrationLog("training-log.txt");
 
         Corpus corpus{m_filters};
-        corpus.load_files_from_dir(train_corpus_dir);
+        for (size_t source = 0; source < train_corpus_dirs.size(); ++source)
+        {
+            const auto spec = parse_training_directory_spec(train_corpus_dirs[source]);
+            std::println("Training source {}: '{}' weight {}", source, spec.path, spec.weight);
+            corpus.load_files_from_dir(spec.path, source, spec.weight);
+        }
         Statistics stats;
 
         auto nn = std::make_unique<TextTrainer>(num_layers, corpus, stats);
@@ -114,12 +146,14 @@ namespace rllm
             {"epochs", num_epochs},
             {"checkpoint_interval_seconds", checkpointing_interval ? nlohmann::json(checkpointing_interval->count()) : nlohmann::json(nullptr)},
             {"epoch_size", epoch_size ? nlohmann::json(*epoch_size) : nlohmann::json(nullptr)},
+            {"max_validation_windows", max_validation_windows},
+            {"validation_worst_count", validation_worst_count},
             {"disable_early_stopping", disable_early_stopping},
             {"disable_example_convergence", disable_example_convergence},
             {"disable_training_diagnostics", disable_training_diagnostics},
             {"reset_optimizer_state", reset_optimizer_state},
             {"restart_learning_rate_schedule", restart_learning_rate_schedule},
-            {"train_corpus_dir", train_corpus_dir},
+            {"train_corpus_dirs", train_corpus_dirs},
             {"filters", m_filters}
         };
         nn->set_training_parameters_json(training_parameters.dump(2));
@@ -139,6 +173,8 @@ namespace rllm
         nn->set_ffn_initializer(ffn_initializer);
         nn->set_embedding_initializer(embedding_initializer);
         nn->set_micro_batch_size(micro_batch_size);
+        nn->set_max_validation_windows(max_validation_windows);
+        nn->set_validation_worst_count(validation_worst_count);
         nn->set_early_stopping_enabled(!disable_early_stopping);
         nn->set_example_convergence_enabled(!disable_example_convergence);
         nn->set_training_diagnostics_enabled(!disable_training_diagnostics);

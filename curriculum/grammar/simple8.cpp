@@ -1,3 +1,5 @@
+// Grammar curriculum: loop conditions control when repeated work stops.
+// The functions compare while, do-while, for, and switch-based control flow.
 #include <cstddef>
 #include <print>
 #include <string>
@@ -123,6 +125,13 @@ std::println("item: {}", batch[item_index]);
 }
 }
 // namespace sample8
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
+}
 int main() {
 const std::vector<int> values{-4, -1, 3, 8, 12};
 std::string padded = "training ";

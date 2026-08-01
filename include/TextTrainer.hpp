@@ -47,13 +47,8 @@ namespace rllm
 
     enum class TrainingMethod
     {
-        TWO_TOK,
-        THREE_TOK,
-        INCREASINGLY_LONGER_SEQUENCES,
-        RANDOM_LINE_RANDOM_LEN,
-        RANDOM_LINE_FULL, // pick a random line, train on the full line (last token is target)
-        WINDOW, // fixed sliding window of N tokens over the flat corpus
-        REVERSE_WINDOW, // fixed windows visited from the end of the flat corpus
+        WINDOW,
+        REVERSE_WINDOW,
     };
 
     const char* training_method_to_string(TrainingMethod method);
@@ -111,6 +106,16 @@ namespace rllm
         void set_simulated_annealing_decay_epochs(size_t epochs) { assert(epochs > 0); m_simulated_annealing_decay_epochs = epochs; }
         void set_simulated_annealing_min_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_min_multiplier = multiplier; }
         void set_micro_batch_size(size_t n);
+        void set_max_validation_windows(size_t n)
+        {
+            assert(n > 0);
+            m_max_validation_windows = n;
+        }
+        void set_validation_worst_count(size_t n)
+        {
+            assert(n > 0);
+            m_validation_worst_count = n;
+        }
         void set_early_stopping_enabled(bool enabled) { m_early_stopping_enabled = enabled; }
         void set_example_convergence_enabled(bool enabled) { m_example_convergence_enabled = enabled; }
         void set_training_diagnostics_enabled(bool enabled) { m_training_diagnostics_enabled = enabled; }
@@ -226,8 +231,8 @@ namespace rllm
             bool report_worst_predictions = false
         );
 
-        TrainingMethod m_training_method = TrainingMethod::TWO_TOK;
-        int m_window_size = 2;
+        TrainingMethod m_training_method = TrainingMethod::WINDOW;
+        int m_window_size = 4;
         size_t m_window_stride = 1;
         size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
         float m_learning_rate = DEFAULT_LEARNING_RATE;
@@ -239,6 +244,8 @@ namespace rllm
         float m_simulated_annealing_min_multiplier = SimulatedAnnealingLearningRate::DEFAULT_MIN_MULTIPLIER;
         std::unique_ptr<ILearningRate> m_learning_rate_provider;
         size_t m_micro_batch_size = 1;
+        size_t m_max_validation_windows = 4096;
+        size_t m_validation_worst_count = 5;
         size_t m_optimizer_step = 0;
         size_t m_learning_rate_schedule_steps = 0;
         float m_last_logged_learning_rate = std::numeric_limits<float>::quiet_NaN();
@@ -256,41 +263,11 @@ namespace rllm
         std::string m_training_parameters_json;
         std::string m_training_progress_filename = "train.json";
 
-        void train_with_up_to_N(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations, int num_tokens);
-        void train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations);
-        void train_with_random_len_from_start(
-            const CpuInputLine& line_of_file,
-            bool verbose,
-            size_t max_iterations,
-            std::mt19937& rng,
-            float learning_rate_scale = 1.0f,
-            bool manage_accumulator = true
-        );
         void train_with_window(
             int window_size,
             bool verbose,
             size_t num_epochs,
             const std::optional<std::chrono::seconds>& checkpointing_interval
-        );
-        void train_random_line_random_len_epoch(
-            size_t epoch,
-            const std::vector<CpuInputLine>& training_lines,
-            bool verbose,
-            size_t num_epochs,
-            const std::optional<std::chrono::seconds>& checkpointing_interval,
-            std::chrono::steady_clock::time_point& last_checkpoint_at,
-            std::mt19937& rng,
-            std::optional<size_t> epoch_size
-        );
-        void batch_train(
-            size_t epoch,
-            const std::vector<CpuInputLine>& training_lines,
-            bool verbose,
-            size_t num_epochs,
-            const std::optional<std::chrono::seconds>& checkpointing_interval,
-            std::chrono::steady_clock::time_point& last_checkpoint_at,
-            std::mt19937& rng,
-            std::optional<size_t> epoch_size
         );
         struct BatchTrainingItem
         {
@@ -339,29 +316,31 @@ namespace rllm
             const EvaluationMetrics& metrics
         );
         std::unique_ptr<nlohmann::json> m_training_progress_entries;
+        std::chrono::steady_clock::time_point m_last_training_progress_flush{};
         std::vector<OptimizerDiagnosticMetrics> m_pending_optimizer_diagnostics;
         void flush_training_progress_log() const;
+        void flush_training_progress_log_if_due(bool force = false);
         void apply_loaded_training_state_resets();
-        std::vector<BatchTrainingItem> make_training_batch(
-            const std::vector<CpuInputLine>& training_lines,
-            const std::vector<size_t>& line_indices,
-            size_t batch_start,
-            size_t selected_count,
-            std::mt19937& rng
-        ) const;
         size_t train_batch_items(std::vector<BatchTrainingItem>& batch, size_t steps, BatchTrainingTiming& timing);
         size_t train_batch_step(std::vector<BatchTrainingItem>& batch, size_t step, BatchTrainingTiming& timing);
         void collect_active_batch_inputs(
             const std::vector<BatchTrainingItem>& batch,
             std::vector<size_t>& active_indices,
-            std::vector<CpuInputLine>& contexts,
-            std::vector<MultiTokenPredictionIndex>& valid_heads
+            std::vector<CpuInputLine>& contexts
         ) const;
         void train_batch_output_heads(
             const std::vector<BatchTrainingItem>& batch,
             const std::vector<size_t>& active_indices,
             const std::vector<MultiTokenPredictionIndex>& valid_heads,
             BatchIndex packed_batch_size,
+            VulkanQueue& queue,
+            std::vector<float>& primary_losses,
+            BatchTrainingTiming& timing
+        );
+        void train_window_all_positions(
+            const std::vector<BatchTrainingItem>& batch,
+            const std::vector<size_t>& active_indices,
+            const PackedBatchInput& packed,
             VulkanQueue& queue,
             std::vector<float>& primary_losses,
             BatchTrainingTiming& timing
@@ -379,29 +358,6 @@ namespace rllm
             size_t num_epochs,
             const std::optional<std::chrono::seconds>& checkpointing_interval
         );
-        void do_line_based_training(
-            bool verbose,
-            size_t num_epochs,
-            const std::optional<std::chrono::seconds>& checkpointing_interval,
-            std::optional<size_t> epoch_size
-        );
-
-        bool training_method_is_line_based() const
-        {
-            switch (m_training_method)
-            {
-            case TrainingMethod::TWO_TOK:
-            case TrainingMethod::THREE_TOK:
-            case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
-            case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
-            case TrainingMethod::RANDOM_LINE_FULL:
-                return true;
-            case TrainingMethod::WINDOW:
-            case TrainingMethod::REVERSE_WINDOW:
-                return false;
-            }
-            return false;
-        }
     };
 
 } // namespace rllm

@@ -29,7 +29,19 @@ train_rllm() {
             ;;
     esac
 
-    local train_dir="${TRAIN_DIR:-training_data1}"
+    local -a train_sources
+    if [[ -n "${TRAIN_DIR:-}" ]]; then
+        train_sources=("$TRAIN_DIR")
+    else
+        train_sources=(
+            "training_data0:0.05"
+            "curriculum/grammar:0.15"
+            "curriculum/syntax:0.10"
+            "curriculum/comments:0.10"
+            "curriculum/systems:0.10"
+            "training_data2:0.50"
+        )
+    fi
     local runtime_tokenizer_header="$build_dir/generated/tokenizer_map.hpp"
 
     runtime_vocab_size() {
@@ -79,20 +91,24 @@ train_rllm() {
         shopt -u nullglob
     }
 
-    echo "Normalizing training_data1 with training_postprocessor.py..."
-    python3 ./training_postprocessor.py --dir training_data1
+    for corpus_root in training_data0 curriculum training_data2; do
+        echo "Normalizing $corpus_root with training_postprocessor.py..."
+        python3 ./training_postprocessor.py --dir "$corpus_root"
+    done
 
-    echo "Formatting training_data0/*.cpp with maximum line length..."
-    if compgen -G "training_data0/*.cpp" > /dev/null; then
-        clang-format -i --style='{BasedOnStyle: LLVM, ColumnLimit: 0}' training_data0/*.cpp
-    else
-        echo "No .cpp files found in training_data0"
-    fi
-
-    if [[ ! -d "$train_dir" ]]; then
-        echo "Training directory '$train_dir' does not exist. Set TRAIN_DIR to an existing folder." >&2
-        return 1
-    fi
+    local -a train_dir_args=()
+    local source path
+    for source in "${train_sources[@]}"; do
+        path="${source%:*}"
+        if [[ "$path" == "$source" ]]; then
+            path="$source"
+        fi
+        if [[ ! -d "$path" ]]; then
+            echo "Training directory '$path' does not exist." >&2
+            return 1
+        fi
+        train_dir_args+=(--train-dir "$source")
+    done
 
     local -a resume_args=()
     local latest_checkpoint=""
@@ -135,11 +151,14 @@ train_rllm() {
     fi
 
     echo "--- Starting $build_type training ---"
+    # At stride 96, window:256 produces about half as many windows as
+    # window:128. The packed-row cap also halves the effective micro-batch
+    # (64 to 32), preserving optimizer updates and LR schedule steps.
     "./$build_dir/rllm" --train "${resume_args[@]}" \
         -o models/after_training.st \
-        --train-dir "$train_dir" \
-        --method window:32 \
-        --window-stride 1 \
+        "${train_dir_args[@]}" \
+        --method window:256 \
+        --window-stride 96 \
         --epochs 160 \
         --disable-example-convergence \
         --layers 8 \
@@ -156,6 +175,8 @@ train_rllm() {
         --simulated-annealing-decay-epochs 1 \
         --simulated-annealing-min-multiplier 0.02 \
         --micro-batch-size 256 \
+        --max-validation-windows 4096 \
+        --validation-worst-count 100 \
         --vulkan-device R9700 \
         "$@"
 }

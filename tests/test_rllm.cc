@@ -254,6 +254,100 @@ TEST(CorpusTest, RustAndJavaKeywordsAndPrefixesUseDedicatedTokens)
     }
 }
 
+TEST(CorpusTest, LanguageMarkersAreAtomicAndNamesAreParsed)
+{
+    Corpus corpus{{}};
+    for (const auto [name, expected] : {
+             std::pair{"cpp", SourceLanguage::Cpp},
+             std::pair{"c", SourceLanguage::C},
+             std::pair{"python", SourceLanguage::Python},
+             std::pair{"rust", SourceLanguage::Rust},
+             std::pair{"java", SourceLanguage::Java},
+             std::pair{"shell", SourceLanguage::Shell}})
+    {
+        ASSERT_EQ(parse_source_language(name), expected);
+        const auto spelling = corpus.get_token_from_id(language_token(expected));
+        const auto tokens = corpus.get_token_ids(spelling);
+        ASSERT_EQ(tokens.size(), static_cast<PositionIndex>(1));
+        EXPECT_EQ(tokens.get(0u), language_token(expected));
+    }
+    EXPECT_FALSE(parse_source_language("unknown").has_value());
+}
+
+TEST(CorpusTest, CommentMarkersTrackLineBlockAndNestedComments)
+{
+    Corpus corpus{{}};
+    CommentLexState state;
+
+    const auto line = corpus.get_token_ids("int x; // explanation", SourceLanguage::Cpp, state);
+    EXPECT_EQ(std::ranges::count(line.m_cpu, TokenID::LINE_COMMENT_START), 1);
+    EXPECT_EQ(std::ranges::count(line.m_cpu, TokenID::LINE_COMMENT_END), 1);
+    EXPECT_TRUE(state.line_comment_on_last_line);
+    EXPECT_EQ(state.block_depth, 0u);
+
+    const auto quoted = corpus.get_token_ids("const char* s = \"// not a comment\";", SourceLanguage::Cpp, state);
+    EXPECT_EQ(std::ranges::count(quoted.m_cpu, TokenID::LINE_COMMENT_START), 0);
+    EXPECT_EQ(std::ranges::count(quoted.m_cpu, TokenID::BLOCK_COMMENT_START), 0);
+    EXPECT_FALSE(state.line_comment_on_last_line);
+
+    const auto block_start = corpus.get_token_ids("/* first line", SourceLanguage::Cpp, state);
+    EXPECT_EQ(std::ranges::count(block_start.m_cpu, TokenID::BLOCK_COMMENT_START), 1);
+    EXPECT_EQ(std::ranges::count(block_start.m_cpu, TokenID::BLOCK_COMMENT_END), 0);
+    EXPECT_EQ(state.block_depth, 1u);
+    const auto block_end = corpus.get_token_ids("second line */ int y;", SourceLanguage::Cpp, state);
+    EXPECT_EQ(std::ranges::count(block_end.m_cpu, TokenID::BLOCK_COMMENT_END), 1);
+    EXPECT_EQ(state.block_depth, 0u);
+
+    const auto python = corpus.get_token_ids("value = 1  # explanation", SourceLanguage::Python, state);
+    EXPECT_EQ(std::ranges::count(python.m_cpu, TokenID::LINE_COMMENT_START), 1);
+    EXPECT_EQ(std::ranges::count(python.m_cpu, TokenID::LINE_COMMENT_END), 1);
+
+    const auto python_comment = corpus.get_token_ids("# hello world", SourceLanguage::Python, state);
+    const auto hash = corpus.get_token_ids("#");
+    ASSERT_FALSE(hash.empty());
+    ASSERT_GE(static_cast<size_t>(python_comment.size()), 3u);
+    EXPECT_EQ(python_comment.get(0u), TokenID::LINE_COMMENT_START);
+    EXPECT_EQ(python_comment.back(), TokenID::LINE_COMMENT_END);
+    EXPECT_TRUE(state.line_comment_on_last_line);
+    EXPECT_EQ(std::ranges::count(python_comment.m_cpu, hash.get(0u)), 0);
+
+    const auto nested = corpus.get_token_ids("/* outer /* inner */ outer */", SourceLanguage::Rust, state);
+    EXPECT_EQ(std::ranges::count(nested.m_cpu, TokenID::BLOCK_COMMENT_START), 2);
+    EXPECT_EQ(std::ranges::count(nested.m_cpu, TokenID::BLOCK_COMMENT_END), 2);
+    EXPECT_EQ(state.block_depth, 0u);
+}
+
+TEST(CorpusTest, LanguagePrefixesAndGenericCommentMarkersAreCombined)
+{
+    Corpus corpus{{}};
+    const auto tokenize_window = [&](SourceLanguage language, const std::string& text) {
+        CommentLexState state;
+        auto tokens = corpus.get_token_ids(text, language, state);
+        tokens.push_front(language_token(language));
+        return tokens;
+    };
+
+    const auto cpp_line = tokenize_window(SourceLanguage::Cpp, "int value; // C++ comment");
+    EXPECT_EQ(cpp_line.get(0u), TokenID::LANG_CPP);
+    EXPECT_EQ(std::ranges::count(cpp_line.m_cpu, TokenID::LINE_COMMENT_START), 1);
+    EXPECT_EQ(std::ranges::count(cpp_line.m_cpu, TokenID::LINE_COMMENT_END), 1);
+
+    const auto cpp_block = tokenize_window(SourceLanguage::Cpp, "/* C++ block */ int value;");
+    EXPECT_EQ(cpp_block.get(0u), TokenID::LANG_CPP);
+    EXPECT_EQ(std::ranges::count(cpp_block.m_cpu, TokenID::BLOCK_COMMENT_START), 1);
+    EXPECT_EQ(std::ranges::count(cpp_block.m_cpu, TokenID::BLOCK_COMMENT_END), 1);
+
+    const auto rust_block = tokenize_window(SourceLanguage::Rust, "/* Rust block */ let value = 1;");
+    EXPECT_EQ(rust_block.get(0u), TokenID::LANG_RUST);
+    EXPECT_EQ(std::ranges::count(rust_block.m_cpu, TokenID::BLOCK_COMMENT_START), 1);
+    EXPECT_EQ(std::ranges::count(rust_block.m_cpu, TokenID::BLOCK_COMMENT_END), 1);
+
+    const auto python_line = tokenize_window(SourceLanguage::Python, "value = 1  # Python comment");
+    EXPECT_EQ(python_line.get(0u), TokenID::LANG_PYTHON);
+    EXPECT_EQ(std::ranges::count(python_line.m_cpu, TokenID::LINE_COMMENT_START), 1);
+    EXPECT_EQ(std::ranges::count(python_line.m_cpu, TokenID::LINE_COMMENT_END), 1);
+}
+
 TEST(CorpusTest, LineWindowsNeverCrossBoundaries)
 {
     CpuInputLine first;
@@ -266,13 +360,13 @@ TEST(CorpusTest, LineWindowsNeverCrossBoundaries)
 
     const auto windows = make_line_windows({first, second}, 6, 2);
 
-    ASSERT_EQ(windows.size(), 4u);
-    EXPECT_EQ(windows[0].line.get(windows[0].context_length), TokenID::TOK_1);
-    EXPECT_EQ(windows[1].line.get(windows[1].context_length), TokenID::TOK_3);
-    EXPECT_EQ(windows[2].line.get(windows[2].context_length), TokenID::TOK_5);
-    EXPECT_EQ(windows[3].line.get(windows[3].context_length), TokenID::TOK_21);
-    EXPECT_EQ(windows[2].line.get(0u), TokenID::TOK_0);
-    EXPECT_EQ(windows[3].line.get(0u), TokenID::TOK_20);
+    ASSERT_EQ(windows.size(), 3u);
+    EXPECT_EQ(windows[0].line.get(0u), TokenID::TOK_0);
+    EXPECT_EQ(windows[0].line.get(windows[0].context_length), TokenID::TOK_4);
+    EXPECT_EQ(windows[1].line.get(0u), TokenID::TOK_4);
+    EXPECT_EQ(windows[1].line.get(windows[1].context_length), TokenID::TOK_6);
+    EXPECT_EQ(windows[2].line.get(0u), TokenID::TOK_20);
+    EXPECT_EQ(windows[2].line.get(windows[2].context_length), TokenID::TOK_22);
 }
 
 TEST(CorpusTest, LineWindowsTrainHashInToCluAsPrimaryTarget)
@@ -284,12 +378,68 @@ TEST(CorpusTest, LineWindowsTrainHashInToCluAsPrimaryTarget)
 
     const auto windows = make_line_windows({include_line}, 32, 1);
 
-    ASSERT_GE(windows.size(), 2u);
-    const auto& hash_in = windows[1];
-    ASSERT_EQ(hash_in.context_length, static_cast<PositionIndex>(2));
-    EXPECT_EQ(hash_in.line.get(0u), TokenID::TOK_545); // '#'
-    EXPECT_EQ(hash_in.line.get(1u), TokenID::TOK_417); // 'in'
-    EXPECT_EQ(hash_in.line.get(hash_in.context_length), TokenID::TOK_344); // 'clu'
+    ASSERT_EQ(windows.size(), 1u);
+    const auto& all_positions = windows[0];
+    ASSERT_EQ(all_positions.context_length, static_cast<PositionIndex>(5));
+    EXPECT_EQ(all_positions.line.get(0u), TokenID::TOK_545); // '#'
+    EXPECT_EQ(all_positions.line.get(1u), TokenID::TOK_417); // 'in'
+    EXPECT_EQ(all_positions.line.get(2u), TokenID::TOK_344); // 'clu', target from row 1
+}
+
+TEST(CorpusTest, LineWindowsPreserveStrideLargerThanWindow)
+{
+    CpuInputLine line;
+    for (size_t i = 0; i < 15; ++i)
+        line.push_back(static_cast<TokenID>(i));
+
+    const auto windows = make_line_windows({line}, 4, 6);
+
+    ASSERT_EQ(windows.size(), 3u);
+    EXPECT_EQ(windows[0].line.get(1u), static_cast<TokenID>(1));
+    EXPECT_EQ(windows[1].line.get(1u), static_cast<TokenID>(7));
+    EXPECT_EQ(windows[2].line.get(1u), static_cast<TokenID>(13));
+}
+
+TEST(CorpusTest, FileWindowsSpanLinesButNeverCrossFiles)
+{
+    const FileTokenSequence cpp_file = {
+        TokenID::TOK_0, TokenID::TOK_NEWLINE, TokenID::TOK_1, TokenID::TOK_2};
+    const FileTokenSequence python_file = {
+        TokenID::TOK_20, TokenID::TOK_NEWLINE, TokenID::TOK_21};
+
+    const auto windows = make_file_windows({cpp_file, python_file}, 8, 1);
+
+    ASSERT_EQ(windows.size(), 2u);
+    EXPECT_EQ(windows[0].line.get(1u), TokenID::TOK_NEWLINE);
+    EXPECT_EQ(windows[0].line.get(2u), TokenID::TOK_1);
+    EXPECT_EQ(windows[1].line.get(0u), TokenID::TOK_20);
+    for (const auto pos : enum_iterator1D<PositionIndex>(windows[0].line.size()))
+        EXPECT_NE(windows[0].line[pos], TokenID::TOK_20);
+}
+
+TEST(CorpusTest, LargeFilesContributeTrainingAndValidationWindows)
+{
+    const FileTokenSequence large_file(30, TokenID::TOK_1);
+    const FileTokenSequence other_large_file(30, TokenID::TOK_20);
+    const FileTokenSequence short_file = {TokenID::TOK_30, TokenID::TOK_31};
+
+    const auto split = make_file_window_training_split(
+        {large_file, other_large_file, short_file}, 4, 1, 20, 5);
+
+    ASSERT_EQ(split.validation_windows.size(), 4u);
+    EXPECT_EQ(split.split_file_count, 2u);
+    EXPECT_TRUE(std::ranges::any_of(split.training_windows, [](const auto& window) {
+        return window.line.get(0u) == TokenID::TOK_1;
+    }));
+    EXPECT_TRUE(std::ranges::any_of(split.validation_windows, [](const auto& window) {
+        return window.line.get(0u) == TokenID::TOK_1;
+    }));
+    EXPECT_TRUE(std::ranges::any_of(split.training_windows, [](const auto& window) {
+        return window.line.get(0u) == TokenID::TOK_20;
+    }));
+    EXPECT_TRUE(std::ranges::any_of(split.validation_windows, [](const auto& window) {
+        return window.line.get(0u) == TokenID::TOK_20;
+    }));
 }
 
 namespace
@@ -306,7 +456,7 @@ namespace
         std::srand(0);
         corpus.load_files_from_dir("training_data0");
         auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
-        nn->set_training_method(TrainingMethod::RANDOM_LINE_RANDOM_LEN);
+        nn->set_training_method(TrainingMethod::WINDOW);
         nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
         nn->train(false, 3, std::nullopt, std::nullopt);
         return nn;
@@ -345,7 +495,7 @@ TEST(PredictorRegressionTest, GuaranteedModel_HashPredictsInclude)
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
     auto nn = std::make_unique<TextTrainer>(2, corpus, stats);
-    nn->set_training_method(TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
+    nn->set_training_method(TrainingMethod::WINDOW);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
     nn->train(false, 3, std::nullopt, std::nullopt);
 
@@ -397,7 +547,7 @@ TEST(PredictorRegressionTest, MTP_HashPredictsInThenCluInParallel)
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
     auto nn = std::make_unique<TextTrainer>(2, corpus, stats);
-    nn->set_training_method(TrainingMethod::INCREASINGLY_LONGER_SEQUENCES);
+    nn->set_training_method(TrainingMethod::WINDOW);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
     nn->train(false, 3, std::nullopt, std::nullopt);
 
@@ -457,7 +607,7 @@ TEST(PredictorRegressionTest, IncludeATrainingKeepsMTPHeadsQueryable)
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
     auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
-    nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
+    nn->set_training_method(TrainingMethod::WINDOW);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
     nn->train(false, 3, std::nullopt, std::nullopt);
 
@@ -472,7 +622,7 @@ TEST(PredictorRegressionTest, IncludeATrainingKeepsMTPHeadsQueryable)
     EXPECT_LT(top1.front().token_id, TokenID::MAX);
 }
 
-TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeTwoSmoke)
+TEST(PredictorRegressionTest, WindowAllPositionsMicrobatchSizeTwoSmoke)
 {
     std::srand(0);
     std::vector<std::string> filters = {"include_a_training"};
@@ -480,7 +630,8 @@ TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeTwoSmoke)
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
     auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
-    nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
+    nn->set_training_method(TrainingMethod::WINDOW);
+    nn->set_window_size(64);
     nn->set_micro_batch_size(2);
     nn->set_learn_depth(1);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
@@ -497,7 +648,7 @@ TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeTwoSmoke)
     EXPECT_LT(top1.front().token_id, TokenID::MAX);
 }
 
-TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeOneSmoke)
+TEST(PredictorRegressionTest, WindowAllPositionsMicrobatchSizeOneSmoke)
 {
     std::srand(0);
     std::vector<std::string> filters = {"guaranteed_to_learn"};
@@ -505,9 +656,10 @@ TEST(PredictorRegressionTest, RandomLineFullMicrobatchSizeOneSmoke)
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
     auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
-    nn->set_training_method(TrainingMethod::RANDOM_LINE_FULL);
+    nn->set_training_method(TrainingMethod::WINDOW);
+    nn->set_window_size(64);
     nn->set_micro_batch_size(1);
-    nn->set_learn_depth(100);
+    nn->set_learn_depth(1);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
 
     nn->train(false, 1, std::nullopt, std::nullopt, 1);
@@ -533,7 +685,7 @@ TEST(PredictorRegressionTest, SimplestGuaranteedTraining_HashKeepsDefineAboveFlo
     corpus.load_files_from_dir("training_data0");
     Statistics stats;
     auto nn = std::make_unique<TextTrainer>(1, corpus, stats);
-    nn->set_training_method(TrainingMethod::RANDOM_LINE_RANDOM_LEN);
+    nn->set_training_method(TrainingMethod::WINDOW);
     nn->set_learning_rate(TINY_CORPUS_TEST_LEARNING_RATE);
 
     // 3 epochs is the smallest fast setting that consistently keeps both

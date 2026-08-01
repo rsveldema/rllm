@@ -1,3 +1,5 @@
+// Grammar curriculum: functions separate data transformations into named steps.
+// Conditions and loops below make the order of those transformations explicit.
 #include <algorithm>
 #include <cstddef>
 #include <future>
@@ -157,6 +159,13 @@ std::println("Fetched name: {}", name_future.get());
 }
 }
 // namespace sample5
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
+}
 int main() {
 const std::vector<int> values{-3, 2, 0, 7};
 const std::vector<std::string> names{"primary", "secondary"};

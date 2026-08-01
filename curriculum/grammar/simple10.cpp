@@ -1,3 +1,5 @@
+// Grammar curriculum: algorithms express iteration through reusable operations.
+// This file demonstrates ranges, spans, projections, predicates, and transformations.
 #include <algorithm>
 #include <array>
 #include <print>
@@ -84,6 +86,13 @@ if (verbose && text.empty()) {
 std::println("empty");
 }
 }
+}
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
 }
 int main() {
 const std::vector<int> values{1, 4, 7, 10};

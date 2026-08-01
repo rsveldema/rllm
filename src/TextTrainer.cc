@@ -35,16 +35,6 @@ namespace rllm
     {
         switch (method)
         {
-        case TrainingMethod::TWO_TOK:
-            return "two_tok";
-        case TrainingMethod::THREE_TOK:
-            return "three_tok";
-        case TrainingMethod::INCREASINGLY_LONGER_SEQUENCES:
-            return "increasingly_longer";
-        case TrainingMethod::RANDOM_LINE_RANDOM_LEN:
-            return "random_line_random_len";
-        case TrainingMethod::RANDOM_LINE_FULL:
-            return "random_line_full";
         case TrainingMethod::WINDOW:
             return "window";
         case TrainingMethod::REVERSE_WINDOW:
@@ -283,24 +273,85 @@ namespace rllm
         parallel::statistics.print_statistics();
     }
 
-    static size_t lines_per_epoch(size_t total_lines, std::optional<size_t> epoch_size)
+    template<typename Sequence>
+    static size_t token_count(const std::vector<Sequence>& sequences)
     {
-        assert(total_lines > 0);
-        if (!epoch_size.has_value())
-            return total_lines;
-        return std::min(epoch_size.value(), total_lines);
-    }
-
-    static size_t token_count(const std::vector<CpuInputLine>& lines)
-    {
-        return std::accumulate(lines.begin(), lines.end(), size_t{0},
-            [](size_t total, const CpuInputLine& line) { return total + static_cast<size_t>(line.size()); });
+        return std::accumulate(sequences.begin(), sequences.end(), size_t{0},
+            [](size_t total, const Sequence& sequence) { return total + sequence.size(); });
     }
 
     static size_t window_token_occurrence_count(const std::vector<WindowExample>& windows)
     {
         return std::accumulate(windows.begin(), windows.end(), size_t{0},
             [](size_t total, const WindowExample& window) { return total + static_cast<size_t>(window.line.size()); });
+    }
+
+    static std::vector<size_t> make_weighted_window_indices(
+        const std::vector<WindowExample>& windows,
+        const std::vector<double>& source_weights,
+        std::mt19937& rng,
+        bool shuffle_result)
+    {
+        std::vector<std::vector<size_t>> by_source(source_weights.size());
+        for (size_t index = 0; index < windows.size(); ++index)
+            by_source.at(windows[index].source_index).push_back(index);
+
+        double active_weight = 0.0;
+        for (size_t source = 0; source < by_source.size(); ++source)
+            if (!by_source[source].empty())
+                active_weight += source_weights[source];
+
+        std::vector<size_t> counts(by_source.size(), 0);
+        std::vector<std::pair<double, size_t>> remainders;
+        size_t assigned = 0;
+        for (size_t source = 0; source < by_source.size(); ++source)
+        {
+            if (by_source[source].empty())
+                continue;
+            const double exact = windows.size() * source_weights[source] / active_weight;
+            counts[source] = static_cast<size_t>(exact);
+            assigned += counts[source];
+            remainders.emplace_back(exact - counts[source], source);
+        }
+        std::ranges::sort(remainders, std::greater{});
+        for (size_t i = 0; assigned < windows.size(); ++i, ++assigned)
+            ++counts[remainders[i].second];
+
+        std::vector<size_t> result;
+        result.reserve(windows.size());
+        for (size_t source = 0; source < by_source.size(); ++source)
+        {
+            auto pool = by_source[source];
+            size_t emitted = 0;
+            while (emitted < counts[source])
+            {
+                if (shuffle_result)
+                    std::shuffle(pool.begin(), pool.end(), rng);
+                const size_t take = std::min(pool.size(), counts[source] - emitted);
+                result.insert(result.end(), pool.begin(), pool.begin() + take);
+                emitted += take;
+            }
+        }
+        if (shuffle_result)
+            std::shuffle(result.begin(), result.end(), rng);
+        return result;
+    }
+
+    static void gather_validation_last_hidden(
+        // OFFLOAD_PARAMETERS(h, last_rows, h_last, batch_size)
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+        const fixed_size_vector<int, BatchIndex>& last_rows,
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
+        int batch_size
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(
+            static_cast<BatchIndex>(batch_size));
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (h, last_rows, h_last, batch_size))
+        h_last[batch, d] = h[last_rows[batch], d];
+        ENDFOR
     }
 
     // Layers
@@ -384,20 +435,6 @@ namespace rllm
         return true;
     }
 
-    // Save a checkpoint, but skip it if less than MIN_TIME_BETWEEN_CHECKPOINTS
-    // has elapsed since the last one (avoids rapid-fire saves at epoch boundaries).
-    static void epoch_checkpoint(std::chrono::steady_clock::time_point& last_checkpoint_at, size_t epoch, const std::function<void()>& do_checkpoint)
-    {
-        const auto now = std::chrono::steady_clock::now();
-        if ((now - last_checkpoint_at) < MIN_TIME_BETWEEN_CHECKPOINTS)
-        {
-            LOG_INFO("Skipping end-of-epoch checkpoint at epoch {} (too soon since last checkpoint)", epoch);
-            return;
-        }
-        last_checkpoint_at = now;
-        do_checkpoint();
-    }
-
     // Returns top-K tokens selected by logit, with probabilities from the full
     // vocabulary softmax.
     std::vector<OutputToken> TextTrainer::get_best_output_token_ids(size_t top_k, MultiTokenPredictionIndex head) const
@@ -465,6 +502,8 @@ namespace rllm
         if (!file)
         {
             m_training_progress_entries = std::make_unique<nlohmann::json>(nlohmann::json::array());
+            flush_training_progress_log();
+            m_last_training_progress_flush = std::chrono::steady_clock::now();
             return;
         }
 
@@ -480,6 +519,7 @@ namespace rllm
             std::make_unique<nlohmann::json>(std::move(existing));
         LOG_INFO("Appending training progress to '{}' ({} existing entries)",
             m_training_progress_filename, m_training_progress_entries->size());
+        m_last_training_progress_flush = std::chrono::steady_clock::now();
     }
 
     void TextTrainer::log_training_progress(
@@ -531,6 +571,7 @@ namespace rllm
         if (!m_training_progress_entries)
             initialize_training_progress_log();
         m_training_progress_entries->push_back(std::move(entry));
+        flush_training_progress_log_if_due();
     }
 
     void TextTrainer::log_validation_progress(
@@ -557,6 +598,7 @@ namespace rllm
         if (!m_training_progress_entries)
             initialize_training_progress_log();
         m_training_progress_entries->push_back(std::move(entry));
+        flush_training_progress_log_if_due(true);
     }
 
     void TextTrainer::flush_training_progress_log() const
@@ -565,6 +607,17 @@ namespace rllm
             return;
         std::ofstream file{m_training_progress_filename, std::ios::trunc};
         file << m_training_progress_entries->dump(2) << '\n';
+    }
+
+    void TextTrainer::flush_training_progress_log_if_due(bool force)
+    {
+        static constexpr auto PROGRESS_FLUSH_INTERVAL = std::chrono::seconds{15};
+        const auto now = std::chrono::steady_clock::now();
+        if (!force && m_last_training_progress_flush != std::chrono::steady_clock::time_point{} &&
+            now - m_last_training_progress_flush < PROGRESS_FLUSH_INTERVAL)
+            return;
+        flush_training_progress_log();
+        m_last_training_progress_flush = now;
     }
 
     void TextTrainer::apply_loaded_training_state_resets()
@@ -890,63 +943,180 @@ namespace rllm
             TokenID predicted;
             std::string context;
         };
-        std::vector<WorstPrediction> worst_predictions;
-        constexpr size_t WORST_PREDICTIONS_TO_REPORT = 5;
-        for (const auto& window : evaluation_windows)
+        struct WorstCandidate
         {
-            const auto& example = window.line;
-            const int seq_len = static_cast<int>(example.size());
-            assert(seq_len >= 2);
-            const int input_len = static_cast<int>(window.context_length);
-            const auto num_valid_heads = mtp_valid_head_count_for_sequence(seq_len, input_len);
-
-            example.sub_array(get_last_input(), static_cast<PositionIndex>(input_len));
-
-            propagate_forward();
-
-            for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
+            float loss;
+            size_t window_index;
+            MultiTokenPredictionIndex head;
+            TokenID expected;
+        };
+        std::vector<WorstPrediction> worst_predictions;
+        std::vector<WorstCandidate> worst_candidates;
+        static constexpr auto EVALUATION_PROGRESS_INTERVAL = std::chrono::seconds{15};
+        const auto evaluation_started_at = std::chrono::steady_clock::now();
+        auto next_progress_at = evaluation_started_at + EVALUATION_PROGRESS_INTERVAL;
+        size_t completed_windows = 0;
+        while (completed_windows < evaluation_windows.size())
+        {
+            std::vector<CpuInputLine> contexts;
+            std::vector<MultiTokenPredictionIndex> valid_heads;
+            std::vector<size_t> window_indices;
+            size_t packed_rows = 0;
+            while (completed_windows + window_indices.size() < evaluation_windows.size() &&
+                   window_indices.size() < m_micro_batch_size)
             {
-                const auto target = mtp_target_for_head(example, input_len, head);
+                const size_t window_index = completed_windows + window_indices.size();
+                const auto& window = evaluation_windows[window_index];
+                const size_t context_length = static_cast<size_t>(window.context_length);
+                if (!window_indices.empty() &&
+                    packed_rows + context_length > static_cast<size_t>(PositionIndex::MAX))
+                    break;
+                CpuInputLine context;
+                window.line.sub_array(context, window.context_length);
+                contexts.push_back(std::move(context));
+                valid_heads.push_back(mtp_valid_head_count_for_sequence(
+                    static_cast<int>(window.line.size()),
+                    static_cast<int>(window.context_length)));
+                window_indices.push_back(window_index);
+                packed_rows += context_length;
+            }
+            assert(!window_indices.empty());
+
+            PackedBatchInput packed(contexts);
+            const auto rows = packed.packed_rows();
+            const auto batch_size = packed.batch_size();
+            auto& forward = *m_forward_workspace;
+            forward.reset(queue, rows);
+            m_input_layer.propagate_forward(packed, *m_gpu_packed_batch, forward.h);
+            for (size_t block = 0; block < m_transformer_blocks.size(); ++block)
+                m_transformer_blocks[block].forward_batched(
+                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[block]);
+            gather_validation_last_hidden(
+                forward.h, m_gpu_packed_batch->last_row,
+                m_batched_output_workspace->h_last, static_cast<int>(batch_size));
+
+            std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> expected_by_head;
+            std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> active_by_head;
+            for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>())
+            {
+                auto& expected = expected_by_head[static_cast<size_t>(head)];
+                auto& active = active_by_head[static_cast<size_t>(head)];
+                bool any_active = false;
+                for (size_t batch = 0; batch < window_indices.size(); ++batch)
+                {
+                    const bool used = head < valid_heads[batch];
+                    active.push_back(used ? 1 : 0);
+                    any_active |= used;
+                    const auto& window = evaluation_windows[window_indices[batch]];
+                    expected.push_back(used ? static_cast<int>(mtp_target_for_head(
+                        window.line, static_cast<int>(window.context_length), head)) : 0);
+                }
+                if (!any_active)
+                    continue;
+
+                m_output_layers[head].forward_batched(
+                    m_batched_output_workspace->h_last, batch_size,
+                    m_batched_output_workspace->logits, queue);
+                m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected);
+                m_batched_output_workspace->active_examples.copy_from_cpu(queue, active);
+                m_output_layers[head].compute_batched_delta(
+                    m_batched_output_workspace->logits, batch_size,
+                    *m_batched_output_workspace, queue);
+                cpu_fixed_vector<float, BatchIndex> losses;
+                losses.set_size(batch_size);
+                m_batched_output_workspace->losses.copy_to_cpu(queue, losses);
+
+                for (size_t batch = 0; batch < window_indices.size(); ++batch)
+                {
+                    if (active[batch] == 0)
+                        continue;
+                    const float loss = losses[batch];
+                    if (!std::isfinite(loss) || loss < -1e-4f)
+                    {
+                        std::println("Invalid batched evaluation loss {} for head {}.", loss, static_cast<size_t>(head));
+                        std::abort();
+                    }
+                    const size_t head_index = static_cast<size_t>(head);
+                    per_head_loss_sum[head_index] += loss;
+                    per_head_probability_sum[head_index] += std::exp(-static_cast<double>(loss));
+                    ++per_head_count[head_index];
+                    if (report_worst_predictions)
+                    {
+                        worst_candidates.push_back({
+                            .loss = loss,
+                            .window_index = window_indices[batch],
+                            .head = head,
+                            .expected = static_cast<TokenID>(expected[batch])
+                        });
+                        std::ranges::sort(worst_candidates, {}, &WorstCandidate::loss);
+                        if (worst_candidates.size() > m_validation_worst_count)
+                            worst_candidates.erase(worst_candidates.begin());
+                    }
+                }
+            }
+
+            completed_windows += window_indices.size();
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_progress_at)
+            {
+                const double elapsed_seconds =
+                    std::chrono::duration<double>(now - evaluation_started_at).count();
+                const double progress =
+                    static_cast<double>(completed_windows) / static_cast<double>(evaluation_windows.size());
+                const double eta_seconds = elapsed_seconds * (1.0 - progress) / progress;
+                const double running_loss =
+                    per_head_count[0] == 0 ? std::numeric_limits<double>::quiet_NaN() :
+                    per_head_loss_sum[0] / static_cast<double>(per_head_count[0]);
+                LOG_INFO(
+                    "validation evaluation progress: {}/{} ({:.2f}%), running head-0 loss {:.6f}, elapsed {}, ETA {}",
+                    completed_windows,
+                    evaluation_windows.size(),
+                    progress * 100.0,
+                    running_loss,
+                    format_eta_for_log(elapsed_seconds),
+                    format_eta_for_log(eta_seconds));
+                if (!m_training_progress_entries)
+                    initialize_training_progress_log();
+                m_training_progress_entries->push_back({
+                    {"timestamp_ms", std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count()},
+                    {"method", training_method_to_string(m_training_method)},
+                    {"item_type", "validation_progress"},
+                    {"completed", completed_windows},
+                    {"total_items", evaluation_windows.size()},
+                    {"progress_percent", progress * 100.0},
+                    {"running_validation_loss", running_loss},
+                    {"elapsed_seconds", elapsed_seconds},
+                    {"eta_seconds", eta_seconds}
+                });
+                flush_training_progress_log_if_due(true);
+                next_progress_at = now + EVALUATION_PROGRESS_INTERVAL;
+            }
+        }
+
+        if (report_worst_predictions)
+        {
+            std::ranges::sort(worst_candidates, std::greater{}, &WorstCandidate::loss);
+            for (const auto& candidate : worst_candidates)
+            {
+                const auto& window = evaluation_windows[candidate.window_index];
+                window.line.sub_array(get_last_input(), window.context_length);
+                propagate_forward();
                 score.reset(queue);
-                const float loss = m_output_layers[head].compute_score(score, target);
-                if (!std::isfinite(loss) || loss < -1e-4f)
-                {
-                    std::println(
-                        "Invalid evaluation loss detected for head {}, target '{}' ({}), input_len {}, seq_len {}, "
-                        "loss {}.",
-                        static_cast<size_t>(head),
-                        m_corpus.get_token_from_id(target),
-                        target,
-                        input_len,
-                        seq_len,
-                        loss
-                    );
-                    std::abort();
-                }
-                const size_t head_index = static_cast<size_t>(head);
-                per_head_loss_sum[head_index] += static_cast<double>(loss);
-                per_head_probability_sum[head_index] += std::exp(-static_cast<double>(loss));
-                ++per_head_count[head_index];
-                if (report_worst_predictions)
-                {
-                    const auto top = m_output_layers[head].get_top_k_by_logit(1).front();
-                    const float max_logit = score.temp_values_cpu[TempStorage::START];
-                    const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
-                    const float predicted_probability = std::exp(top.activation - max_logit) / sum_exp;
-                    auto context = m_corpus.get_line(get_last_input()).value_or("<unable to decode>");
-                    worst_predictions.push_back({
-                        .loss = loss,
-                        .expected_probability = std::exp(-loss),
-                        .predicted_probability = predicted_probability,
-                        .head = head,
-                        .expected = target,
-                        .predicted = top.token_id,
-                        .context = escape_whitespace_for_log(context)
-                    });
-                    std::ranges::sort(worst_predictions, {}, &WorstPrediction::loss);
-                    if (worst_predictions.size() > WORST_PREDICTIONS_TO_REPORT)
-                        worst_predictions.erase(worst_predictions.begin());
-                }
+                const float loss = m_output_layers[candidate.head].compute_score(score, candidate.expected);
+                const auto top = m_output_layers[candidate.head].get_top_k_by_logit(1).front();
+                const float max_logit = score.temp_values_cpu[TempStorage::START];
+                const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
+                worst_predictions.push_back({
+                    .loss = loss,
+                    .expected_probability = std::exp(-loss),
+                    .predicted_probability = std::exp(top.activation - max_logit) / sum_exp,
+                    .head = candidate.head,
+                    .expected = candidate.expected,
+                    .predicted = top.token_id,
+                    .context = escape_whitespace_for_log(
+                        m_corpus.get_line(get_last_input()).value_or("<unable to decode>"))
+                });
             }
         }
 
@@ -1006,6 +1176,7 @@ namespace rllm
         };
     }
 
+#if 0 // Retired prefix/line training implementations.
     void TextTrainer::train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations)
     {
         CpuInputLine line;
@@ -1227,62 +1398,100 @@ namespace rllm
         }
     }
 
+#endif
+
     void TextTrainer::train_with_window(int window_size, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
-        assert(window_size >= 2);
-
-        auto split = m_corpus.get_deterministic_training_split(VALIDATION_PERCENT);
-        if (split.validation_lines.size() < 2)
-        {
-            split.training_lines.insert(
-                split.training_lines.end(),
-                std::make_move_iterator(split.validation_lines.begin()),
-                std::make_move_iterator(split.validation_lines.end()));
-            split.validation_lines.clear();
-            LOG_INFO("Window validation disabled for tiny corpus (fewer than 2 held-out lines)");
-        }
+        assert(window_size >= 4);
+        LOG_INFO(
+            "Window configuration: maximum size {} tokens, within-file stride {}",
+            window_size,
+            m_window_stride);
 
         const bool reverse = m_training_method == TrainingMethod::REVERSE_WINDOW;
-        auto training_windows = make_line_windows(
-            split.training_lines, static_cast<size_t>(window_size), m_window_stride, reverse);
-        auto validation_windows = make_line_windows(
-            split.validation_lines, static_cast<size_t>(window_size), m_window_stride, reverse);
-
-        if (validation_windows.size() < 2)
+        const auto files = m_corpus.get_file_token_sequences();
+        const auto file_sources = m_corpus.get_file_source_indices();
+        const auto file_languages = m_corpus.get_file_languages();
+        const size_t source_window_size = static_cast<size_t>(std::max(2, window_size - 2));
+        auto split = make_file_window_training_split(
+            files,
+            source_window_size,
+            m_window_stride,
+            VALIDATION_PERCENT,
+            m_max_validation_windows,
+            reverse);
+        auto& training_windows = split.training_windows;
+        auto& validation_windows = split.validation_windows;
+        for (auto& window : training_windows)
         {
-            split.training_lines.insert(
-                split.training_lines.end(),
-                std::make_move_iterator(split.validation_lines.begin()),
-                std::make_move_iterator(split.validation_lines.end()));
-            split.validation_lines.clear();
-            training_windows = make_line_windows(
-                split.training_lines, static_cast<size_t>(window_size), m_window_stride, reverse);
-            validation_windows.clear();
-            LOG_INFO("Window validation disabled for tiny corpus (fewer than 2 held-out windows)");
+            if (window.starts_in_block_comment)
+            {
+                window.line.push_front(TokenID::BLOCK_COMMENT_START);
+                window.context_length = static_cast<PositionIndex>(
+                    static_cast<size_t>(window.context_length) + 1);
+            }
+            window.line.push_front(language_token(file_languages.at(window.source_index)));
+            window.context_length = static_cast<PositionIndex>(
+                static_cast<size_t>(window.context_length) + 1);
+            window.source_index = file_sources.at(window.source_index);
+        }
+        for (auto& window : validation_windows)
+        {
+            if (window.starts_in_block_comment)
+            {
+                window.line.push_front(TokenID::BLOCK_COMMENT_START);
+                window.context_length = static_cast<PositionIndex>(
+                    static_cast<size_t>(window.context_length) + 1);
+            }
+            window.line.push_front(language_token(file_languages.at(window.source_index)));
+            window.context_length = static_cast<PositionIndex>(
+                static_cast<size_t>(window.context_length) + 1);
+            window.source_index = file_sources.at(window.source_index);
         }
 
         if (training_windows.empty())
             return;
 
+        const size_t full_validation_window_count = split.full_validation_window_count;
+        if (validation_windows.size() != full_validation_window_count)
+        {
+            LOG_INFO(
+                "Validation sampling: evaluating {} file-balanced windows from {} reserved windows",
+                validation_windows.size(), full_validation_window_count);
+        }
+
         LOG_INFO(
-            "Window split: {} training lines producing {} boundary-preserving windows, {} validation lines producing {} comparable windows; validation interval 5 minutes",
-            split.training_lines.size(),
+            "Window split: {} source files producing {} training windows, {} files also contributing {} reserved validation windows ({} evaluated); validation interval 5 minutes",
+            files.size(),
             training_windows.size(),
-            split.validation_lines.size(),
+            split.split_file_count,
+            full_validation_window_count,
             validation_windows.size());
         LOG_INFO(
-            "Training token count: {} source tokens across {} training lines; {} token occurrences across {} windows per full epoch (overlap included, validation excluded)",
-            token_count(split.training_lines), split.training_lines.size(),
+            "Corpus token count: {} source tokens across {} files; {} training token occurrences across {} windows per full epoch (validation windows excluded)",
+            token_count(files), files.size(),
             window_token_occurrence_count(training_windows), training_windows.size());
 
         const size_t steps_per_window = training_steps_per_example(m_transformer_blocks.size(), m_learn_depth);
         const size_t windows_per_epoch = training_windows.size();
+        const size_t rows_per_full_window = static_cast<size_t>(window_size - 1);
+        const size_t max_windows_by_rows = std::max(
+            size_t{1}, static_cast<size_t>(PositionIndex::MAX) / rows_per_full_window);
+        const size_t effective_micro_batch_size = std::min(m_micro_batch_size, max_windows_by_rows);
+        if (effective_micro_batch_size != m_micro_batch_size)
+        {
+            LOG_INFO(
+                "Capping window micro-batch from {} to {} so at most {} packed rows fit the {}-row limit",
+                m_micro_batch_size, effective_micro_batch_size,
+                effective_micro_batch_size * rows_per_full_window,
+                static_cast<size_t>(PositionIndex::MAX));
+        }
         const size_t loaded_schedule_steps = m_learning_rate_schedule_steps;
         m_learning_rate_schedule_steps = 0;
         for (size_t epoch = 0; epoch < num_epochs; ++epoch)
         {
-            const size_t batches = windows_per_epoch / m_micro_batch_size +
-                (windows_per_epoch % m_micro_batch_size != 0 ? 1 : 0);
+            const size_t batches = windows_per_epoch / effective_micro_batch_size +
+                (windows_per_epoch % effective_micro_batch_size != 0 ? 1 : 0);
             m_learning_rate_schedule_steps += batches * steps_per_window;
         }
         if (m_has_loaded_training_state && loaded_schedule_steps != 0)
@@ -1290,14 +1499,14 @@ namespace rllm
         if (m_learning_rate_schedule == LearningRateSchedule::Constant)
         {
             m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
-            LOG_INFO("Window training: maximum size {}, per-line stride {}; constant learning rate {:.8f}",
+            LOG_INFO("Window training: maximum size {}, within-file stride {}; constant learning rate {:.8f}",
                 window_size, m_window_stride, m_learning_rate);
         }
         else if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
         {
             m_learning_rate_provider = std::make_unique<LoweringLearningRate>(m_learning_rate, m_learning_rate_schedule_steps);
             LOG_INFO(
-                "Window training: maximum size {}, per-line stride {}; learning-rate schedule: {} planned optimizer steps, {:.1f}% warmup, cosine decay from {:.8f} to {:.8f}",
+                "Window training: maximum size {}, within-file stride {}; learning-rate schedule: {} planned optimizer steps, {:.1f}% warmup, cosine decay from {:.8f} to {:.8f}",
                 window_size, m_window_stride, m_learning_rate_schedule_steps,
                 LoweringLearningRate::WARMUP_FRACTION * 100.0f, m_learning_rate,
                 m_learning_rate * LoweringLearningRate::MIN_SCALE);
@@ -1309,7 +1518,7 @@ namespace rllm
                 m_simulated_annealing_initial_multiplier, m_simulated_annealing_decay_epochs,
                 m_simulated_annealing_min_multiplier);
             LOG_INFO(
-                "Window training: maximum size {}, per-line stride {}; simulated_annealing learning rate multiplies by {:.4f} every {} epochs from {:.8f} to a floor of {:.8f}",
+                "Window training: maximum size {}, within-file stride {}; simulated_annealing learning rate multiplies by {:.4f} every {} epochs from {:.8f} to a floor of {:.8f}",
                 window_size, m_window_stride,
                 m_simulated_annealing_decay_factor,
                 m_simulated_annealing_decay_epochs,
@@ -1406,32 +1615,33 @@ namespace rllm
 
             const size_t num_windows = training_windows.size();
             m_checkpoint_window_count = num_windows;
-            std::vector<size_t> indices(num_windows);
-            std::iota(indices.begin(), indices.end(), 0);
             {
                 std::ostringstream state;
                 state << rng;
                 m_checkpoint_rng_state = state.str();
             }
-            if (m_training_method == TrainingMethod::WINDOW)
-                std::shuffle(indices.begin(), indices.end(), rng);
+            auto indices = make_weighted_window_indices(
+                training_windows,
+                m_corpus.source_weights(),
+                rng,
+                m_training_method == TrainingMethod::WINDOW);
 
             const size_t first_window = epoch == first_epoch ? m_checkpoint_window : 0;
-            if (first_window > num_windows || first_window % m_micro_batch_size != 0)
+            if (first_window > num_windows || first_window % effective_micro_batch_size != 0)
             {
                 LOG_INFO("Invalid checkpoint window cursor {} for {} windows and micro-batch size {}",
-                    first_window, num_windows, m_micro_batch_size);
+                    first_window, num_windows, effective_micro_batch_size);
                 std::exit(1);
             }
 
             double epoch_training_loss_sum = 0.0;
             size_t epoch_training_loss_count = 0;
 
-            for (size_t start = first_window; start < num_windows; start += m_micro_batch_size)
+            for (size_t start = first_window; start < num_windows; start += effective_micro_batch_size)
             {
                 m_checkpoint_epoch = epoch;
                 m_checkpoint_window = start;
-                const size_t count = std::min(m_micro_batch_size, num_windows - start);
+                const size_t count = std::min(effective_micro_batch_size, num_windows - start);
                 std::vector<BatchTrainingItem> batch;
                 batch.reserve(count);
                 for (size_t offset = 0; offset < count; ++offset)
@@ -1472,7 +1682,7 @@ namespace rllm
                     "window", epoch, num_epochs, start + 1, completed_windows,
                     num_windows, batch.size(), iterations, total_ms, timing);
 
-                const size_t batch_number = start / m_micro_batch_size + 1;
+                const size_t batch_number = start / effective_micro_batch_size + 1;
                 if (batch_number % 10 == 0)
                 {
                     const double elapsed_seconds = std::chrono::duration<double>(
@@ -1600,7 +1810,7 @@ namespace rllm
 
     void TextTrainer::do_whole_corpus_window_based_training(bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
-        // Window methods use independent per-line sequences so no example crosses a boundary.
+        // Window methods use independent per-file sequences so no example crosses a file boundary.
         assert(m_training_method == TrainingMethod::WINDOW || m_training_method == TrainingMethod::REVERSE_WINDOW);
         train_with_window(m_window_size, verbose, num_epochs, checkpointing_interval);
     }
@@ -1729,14 +1939,9 @@ namespace rllm
                 m_loaded_current_learning_rate,
                 m_loaded_epochs_at_current_rate);
 
-        if (training_method_is_line_based())
-        {
-            do_line_based_training(verbose, num_epochs, checkpointing_interval, epoch_size);
-        }
-        else
-        {
-            do_whole_corpus_window_based_training(verbose, num_epochs, checkpointing_interval);
-        }
+        if (epoch_size.has_value())
+            LOG_INFO("Ignoring --epoch-size: all-position window training covers the configured windows");
+        do_whole_corpus_window_based_training(verbose, num_epochs, checkpointing_interval);
     }
 
 

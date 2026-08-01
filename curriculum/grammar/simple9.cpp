@@ -1,3 +1,5 @@
+// Grammar curriculum: expected values carry either a result or a typed error.
+// The examples combine filesystem work, callbacks, ranges, and explicit recovery.
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -219,6 +221,13 @@ std::println("reverse value: {}", value);
 }
 }
 // namespace sample9
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
+}
 int main() {
 const std::array<int, 5> values{1, -2, 3, -4, 5};
 const std::vector<int> dynamic_values{1, 2, 2, 4};

@@ -239,6 +239,12 @@ namespace rllm
             m_cpu.push_back(t);
         }
 
+        void push_front(TokenID t)
+        {
+            assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
+            m_cpu.insert(m_cpu.begin(), t);
+        }
+
         const TokenID& back() const
         {
             return m_cpu.back();

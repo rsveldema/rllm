@@ -9,7 +9,7 @@ else
     input_arg=""
 fi
 
-echo "Normalizing training_data1 with training_postprocessor.py..."
+echo "Normalizing training_data0 with training_postprocessor.py..."
 python3 ./training_postprocessor.py --dir training_data0
 
 TRAIN_DIR="${TRAIN_DIR:-training_data0}"

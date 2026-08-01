@@ -1,3 +1,5 @@
+# Grammar curriculum: type aliases describe reusable shapes for values.
+# The examples below cover branching, iteration, exceptions, generators, and async code.
 import asyncio
 import math as mathematics
 from contextlib import asynccontextmanager, suppress
@@ -153,6 +155,14 @@ async def collect_numbers(limit: int) -> list[int]:
 		async for value in generate_numbers(limit):
 			result.append(value)
 	return result
+
+
+def extra_control_flow_sample(limit: int) -> int:
+	total = 0
+	for value in range(limit):
+		if value % 2 == 0:
+			total += value
+	return total
 
 
 async def run_example() -> None:

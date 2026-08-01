@@ -13,13 +13,55 @@
 #include <print>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 #include <unordered_set>
 
 
 namespace rllm
 {
-    std::vector<WindowExample> make_line_windows(
-        const std::vector<CpuInputLine>& lines,
+    TokenID language_token(SourceLanguage language)
+    {
+        switch (language)
+        {
+        case SourceLanguage::Cpp: return TokenID::LANG_CPP;
+        case SourceLanguage::C: return TokenID::LANG_C;
+        case SourceLanguage::Python: return TokenID::LANG_PYTHON;
+        case SourceLanguage::Rust: return TokenID::LANG_RUST;
+        case SourceLanguage::Java: return TokenID::LANG_JAVA;
+        case SourceLanguage::Shell: return TokenID::LANG_SHELL;
+        case SourceLanguage::Unknown: break;
+        }
+        return TokenID::LANG_CPP;
+    }
+
+    std::optional<SourceLanguage> parse_source_language(std::string_view name)
+    {
+        if (name == "cpp" || name == "c++" || name == "cc") return SourceLanguage::Cpp;
+        if (name == "c") return SourceLanguage::C;
+        if (name == "python" || name == "py") return SourceLanguage::Python;
+        if (name == "rust" || name == "rs") return SourceLanguage::Rust;
+        if (name == "java") return SourceLanguage::Java;
+        if (name == "shell" || name == "sh" || name == "bash") return SourceLanguage::Shell;
+        return std::nullopt;
+    }
+
+    SourceLanguage Corpus::TokenData::language() const
+    {
+        const auto extension = std::filesystem::path(filename).extension().string();
+        if (extension == ".c") return SourceLanguage::C;
+        if (extension == ".py") return SourceLanguage::Python;
+        if (extension == ".rs") return SourceLanguage::Rust;
+        if (extension == ".java") return SourceLanguage::Java;
+        if (extension == ".sh") return SourceLanguage::Shell;
+        if (extension == ".cpp" || extension == ".cc" || extension == ".cxx" ||
+            extension == ".h" || extension == ".hpp") return SourceLanguage::Cpp;
+        return SourceLanguage::Unknown;
+    }
+    namespace
+    {
+    template<typename Sequence>
+    std::vector<WindowExample> make_sequence_windows(
+        const std::vector<Sequence>& sequences,
         size_t window_size,
         size_t stride,
         bool reverse)
@@ -27,31 +69,165 @@ namespace rllm
         assert(window_size >= 2);
         assert(stride > 0);
 
-        const size_t max_heads = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
         std::vector<WindowExample> windows;
-        for (const auto& line : lines)
+        for (size_t sequence_index = 0; sequence_index < sequences.size(); ++sequence_index)
         {
-            const size_t line_size = static_cast<size_t>(line.size());
-            if (line_size < 2)
+            const auto& sequence = sequences[sequence_index];
+            const size_t sequence_size = static_cast<size_t>(sequence.size());
+            if (sequence_size < 2)
                 continue;
-            for (size_t target = 1; target < line_size; target += stride)
+            std::vector<bool> in_comment_at(sequence_size, false);
+            size_t comment_depth = 0;
+            for (size_t position = 0; position < sequence_size; ++position)
             {
-                const size_t context_length = std::min(target, window_size - 1);
-                const size_t start = target - context_length;
-                const size_t target_slots = std::min(max_heads, window_size - context_length);
-                const size_t end = std::min(line_size, target + target_slots);
+                in_comment_at[position] = comment_depth > 0;
+                const TokenID token = [&]() {
+                    if constexpr (std::is_same_v<Sequence, CpuInputLine>)
+                        return sequence[static_cast<PositionIndex>(position)];
+                    else
+                        return sequence[position];
+                }();
+                if (token == TokenID::BLOCK_COMMENT_START)
+                    ++comment_depth;
+                else if (token == TokenID::BLOCK_COMMENT_END && comment_depth > 0)
+                    --comment_depth;
+            }
+            const size_t prediction_capacity = window_size - 1;
+            const size_t block_span = prediction_capacity >= stride
+                ? (prediction_capacity / stride) * stride
+                : 1;
+            const size_t block_advance = prediction_capacity >= stride ? block_span : stride;
+            for (size_t first_target = 1; first_target < sequence_size; )
+            {
+                const size_t start = first_target - 1;
+                const size_t block_predictions = std::min(block_span, sequence_size - first_target);
+                const size_t end = first_target + block_predictions;
                 CpuInputLine window;
                 for (size_t position = start; position < end; ++position)
-                    window.push_back(line.get(position));
+                {
+                    if constexpr (std::is_same_v<Sequence, CpuInputLine>)
+                        window.push_back(sequence[static_cast<PositionIndex>(position)]);
+                    else
+                        window.push_back(sequence[position]);
+                }
                 windows.push_back({
                     .line = std::move(window),
-                    .context_length = static_cast<PositionIndex>(context_length)
+                    .context_length = static_cast<PositionIndex>(end - start - 1),
+                    .source_index = sequence_index,
+                    .starts_in_block_comment = in_comment_at[start]
                 });
+                first_target += block_advance;
             }
         }
         if (reverse)
             std::reverse(windows.begin(), windows.end());
         return windows;
+    }
+    }
+
+    std::vector<WindowExample> make_line_windows(
+        const std::vector<CpuInputLine>& lines, size_t window_size, size_t stride, bool reverse)
+    {
+        return make_sequence_windows(lines, window_size, stride, reverse);
+    }
+
+    std::vector<WindowExample> make_file_windows(
+        const std::vector<FileTokenSequence>& files, size_t window_size, size_t stride, bool reverse)
+    {
+        return make_sequence_windows(files, window_size, stride, reverse);
+    }
+
+    FileWindowTrainingSplit make_file_window_training_split(
+        const std::vector<FileTokenSequence>& files,
+        size_t window_size,
+        size_t stride,
+        size_t validation_percent,
+        size_t maximum_count,
+        bool reverse)
+    {
+        assert(validation_percent <= 100);
+        assert(maximum_count > 0);
+
+        FileWindowTrainingSplit split;
+        std::vector<std::vector<WindowExample>> validation_by_file;
+        validation_by_file.reserve(files.size());
+        for (size_t file_index = 0; file_index < files.size(); ++file_index)
+        {
+            const auto& file = files[file_index];
+            auto windows = make_sequence_windows(
+                std::vector<FileTokenSequence>{file}, window_size, stride, false);
+            for (auto& window : windows)
+                window.source_index = file_index;
+            if (windows.size() < 2 || validation_percent == 0)
+            {
+                split.training_windows.insert(
+                    split.training_windows.end(),
+                    std::make_move_iterator(windows.begin()),
+                    std::make_move_iterator(windows.end()));
+                validation_by_file.emplace_back();
+                continue;
+            }
+
+            size_t validation_count = windows.size() * validation_percent / 100;
+            validation_count = std::clamp(validation_count, size_t{1}, windows.size() - 1);
+            std::vector<bool> is_validation(windows.size(), false);
+            for (size_t sample = 0; sample < validation_count; ++sample)
+            {
+                const size_t index = (sample + 1) * windows.size() / (validation_count + 1);
+                is_validation[index] = true;
+            }
+
+            std::vector<WindowExample> file_validation;
+            file_validation.reserve(validation_count);
+            for (size_t index = 0; index < windows.size(); ++index)
+            {
+                auto& destination = is_validation[index]
+                    ? file_validation
+                    : split.training_windows;
+                destination.push_back(std::move(windows[index]));
+            }
+            split.full_validation_window_count += file_validation.size();
+            ++split.split_file_count;
+            validation_by_file.push_back(std::move(file_validation));
+        }
+
+        std::vector<size_t> quotas(files.size(), 0);
+        size_t assigned = 0;
+        const size_t sample_count = std::min(maximum_count, split.full_validation_window_count);
+        while (assigned < sample_count)
+        {
+            bool assigned_in_round = false;
+            for (size_t file_index = 0;
+                 file_index < validation_by_file.size() && assigned < sample_count;
+                 ++file_index)
+            {
+                if (quotas[file_index] >= validation_by_file[file_index].size())
+                    continue;
+                ++quotas[file_index];
+                ++assigned;
+                assigned_in_round = true;
+            }
+            if (!assigned_in_round)
+                break;
+        }
+
+        split.validation_windows.reserve(assigned);
+        for (size_t file_index = 0; file_index < validation_by_file.size(); ++file_index)
+        {
+            auto& source = validation_by_file[file_index];
+            const size_t quota = quotas[file_index];
+            for (size_t sample = 0; sample < quota; ++sample)
+            {
+                const size_t source_index = sample * source.size() / quota;
+                split.validation_windows.push_back(std::move(source[source_index]));
+            }
+        }
+        if (reverse)
+        {
+            std::reverse(split.training_windows.begin(), split.training_windows.end());
+            std::reverse(split.validation_windows.begin(), split.validation_windows.end());
+        }
+        return split;
     }
 
     namespace
@@ -122,8 +298,15 @@ namespace rllm
             set_tokenization_log_file("tokenization.log");
     }
 
-    void Corpus::load_files_from_dir(const std::string& train_corpus_dir)
+    void Corpus::load_files_from_dir(
+        const std::string& train_corpus_dir,
+        size_t source_index,
+        double source_weight)
     {
+        assert(source_weight > 0.0);
+        if (m_source_weights.size() <= source_index)
+            m_source_weights.resize(source_index + 1, 1.0);
+        m_source_weights[source_index] = source_weight;
         const std::filesystem::path corpus_dir{train_corpus_dir};
         if (!std::filesystem::exists(corpus_dir))
         {
@@ -163,7 +346,7 @@ namespace rllm
 
             LOG_INFO("Processing file: {}", entry.path().c_str());
 
-            auto& token_data = m_token_list.emplace_back(entry.path().string());
+            auto& token_data = m_token_list.emplace_back(entry.path().string(), source_index);
 
             std::ifstream file{entry.path()};
             if (!file)
@@ -173,16 +356,18 @@ namespace rllm
             }
 
             std::string line;
+            CommentLexState comment_state;
             while (std::getline(file, line))
             {
-                const auto input_line = get_token_ids(line);
+                const auto input_line = get_token_ids(line, token_data.language(), comment_state);
                 for (const auto i : enum_iterator1D<PositionIndex>(input_line.size()))
                 {
                     assert(input_line[i] >= TokenID::START);
                     assert(input_line[i] < TokenID::MAX);
                     token_data.add(input_line[i]);
                 }
-                token_data.add(TokenID::TOK_NEWLINE); // add a newline token at the end of each line
+                if (!comment_state.line_comment_on_last_line)
+                    token_data.add(TokenID::TOK_NEWLINE);
             }
         }
 
@@ -262,6 +447,109 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
             }
         }
 
+        return result;
+    }
+
+    CpuInputLine Corpus::get_token_ids(
+        const std::string& text,
+        SourceLanguage language,
+        CommentLexState& state) const
+    {
+        CpuInputLine result;
+        state.line_comment_on_last_line = false;
+        const auto append_text = [&](std::string_view part) {
+            const auto tokens = get_token_ids(std::string{part});
+            for (const auto position : enum_iterator1D<PositionIndex>(tokens.size()))
+                result.push_back(tokens[position]);
+        };
+
+        const bool slash_comments = language == SourceLanguage::Cpp ||
+            language == SourceLanguage::C || language == SourceLanguage::Rust ||
+            language == SourceLanguage::Java;
+        const bool hash_comments = language == SourceLanguage::Python ||
+            language == SourceLanguage::Shell;
+
+        size_t segment_start = 0;
+        size_t position = 0;
+        char quote = '\0';
+        bool escaped = false;
+        while (position < text.size())
+        {
+            if (state.block_depth > 0)
+            {
+                const bool nested_start = language == SourceLanguage::Rust &&
+                    position + 1 < text.size() && text.compare(position, 2, "/*") == 0;
+                const bool block_end = position + 1 < text.size() &&
+                    text.compare(position, 2, "*/") == 0;
+                if (!nested_start && !block_end)
+                {
+                    ++position;
+                    continue;
+                }
+                append_text(std::string_view{text}.substr(segment_start, position - segment_start));
+                if (nested_start)
+                {
+                    result.push_back(TokenID::BLOCK_COMMENT_START);
+                    ++state.block_depth;
+                }
+                else
+                {
+                    result.push_back(TokenID::BLOCK_COMMENT_END);
+                    --state.block_depth;
+                }
+                position += 2;
+                segment_start = position;
+                continue;
+            }
+
+            const char current = text[position];
+            if (quote != '\0')
+            {
+                if (escaped)
+                    escaped = false;
+                else if (current == '\\')
+                    escaped = true;
+                else if (current == quote)
+                    quote = '\0';
+                ++position;
+                continue;
+            }
+            if (current == '\'' || current == '"')
+            {
+                quote = current;
+                ++position;
+                continue;
+            }
+
+            const bool line_start =
+                (slash_comments && position + 1 < text.size() && text.compare(position, 2, "//") == 0) ||
+                (hash_comments && current == '#');
+            const bool block_start = slash_comments && position + 1 < text.size() &&
+                text.compare(position, 2, "/*") == 0;
+            if (!line_start && !block_start)
+            {
+                ++position;
+                continue;
+            }
+
+            append_text(std::string_view{text}.substr(segment_start, position - segment_start));
+            const size_t delimiter_size = current == '#' ? 1 : 2;
+            result.push_back(line_start
+                ? TokenID::LINE_COMMENT_START
+                : TokenID::BLOCK_COMMENT_START);
+            position += delimiter_size;
+            segment_start = position;
+            if (line_start)
+            {
+                append_text(std::string_view{text}.substr(segment_start));
+                result.push_back(TokenID::LINE_COMMENT_END);
+                state.line_comment_on_last_line = true;
+                return result;
+            }
+            state.block_depth = 1;
+        }
+
+        append_text(std::string_view{text}.substr(segment_start));
         return result;
     }
 
@@ -346,6 +634,39 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         return training_lines;
     }
 
+    std::vector<FileTokenSequence> Corpus::get_file_token_sequences() const
+    {
+        std::vector<FileTokenSequence> files;
+        for (const auto& token_data : m_token_list)
+        {
+            if (token_data.tokens().size() >= 2)
+                files.push_back(token_data.tokens());
+        }
+        return files;
+    }
+
+    std::vector<size_t> Corpus::get_file_source_indices() const
+    {
+        std::vector<size_t> indices;
+        for (const auto& token_data : m_token_list)
+        {
+            if (token_data.tokens().size() >= 2)
+                indices.push_back(token_data.source_index());
+        }
+        return indices;
+    }
+
+    std::vector<SourceLanguage> Corpus::get_file_languages() const
+    {
+        std::vector<SourceLanguage> languages;
+        for (const auto& token_data : m_token_list)
+        {
+            if (token_data.tokens().size() >= 2)
+                languages.push_back(token_data.language());
+        }
+        return languages;
+    }
+
     Corpus::TrainingSplit Corpus::get_deterministic_training_split(size_t validation_percent) const
     {
         assert(validation_percent <= 100);
@@ -371,6 +692,46 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         }
 
         rebalance_training_split(split);
+        return split;
+    }
+
+    Corpus::FileTrainingSplit Corpus::get_deterministic_file_split(size_t validation_percent) const
+    {
+        assert(validation_percent <= 100);
+
+        FileTrainingSplit split;
+        for (const auto& token_data : m_token_list)
+        {
+            const auto& tokens = token_data.tokens();
+            if (tokens.size() < 2)
+                continue;
+
+            uint64_t hash = 1469598103934665603ull;
+            for (const auto token : tokens)
+            {
+                hash ^= static_cast<uint64_t>(token);
+                hash *= 1099511628211ull;
+            }
+            if (validation_percent != 0 && hash % 100ull < validation_percent)
+                split.validation_files.push_back(tokens);
+            else
+                split.training_files.push_back(tokens);
+        }
+
+        const size_t total = split.training_files.size() + split.validation_files.size();
+        if (total >= 2)
+        {
+            if (split.validation_files.empty())
+            {
+                split.validation_files.push_back(std::move(split.training_files.back()));
+                split.training_files.pop_back();
+            }
+            else if (split.training_files.empty())
+            {
+                split.training_files.push_back(std::move(split.validation_files.back()));
+                split.validation_files.pop_back();
+            }
+        }
         return split;
     }
 

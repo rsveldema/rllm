@@ -1,3 +1,5 @@
+// Grammar curriculum: iterators connect containers to generic algorithms.
+// This file demonstrates transformations, conditions, loops, maps, and async calls.
 #include "RequestHandler.hpp"
 #include "ServerConnection.hpp"
 #include "StringProcessor.hpp"
@@ -136,6 +138,13 @@ std::println("Input value {} becomes {}", value, limited);
 }
 const int restricted = restrict_range(73, 10, 50);
 std::println("Restricted value: {}", restricted);
+}
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
 }
 int main(){
 const std::vector<int> values{2, 4, 6, 8, 10, 12};

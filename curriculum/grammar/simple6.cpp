@@ -1,3 +1,5 @@
+// Grammar curriculum: namespaces group related declarations and avoid name collisions.
+// The examples combine containers, loops, branching, functions, and returned values.
 #include <cstddef>
 #include <future>
 #include <map>
@@ -132,6 +134,13 @@ ending->first);
 // namespace alternate
 }
 // namespace sample6
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
+}
 int main() {
 const std::vector<int> codes{100, 200, 301, 404};
 const sample6::NameTable names{{"primary", "main"}, {"backup", "secondary"}};

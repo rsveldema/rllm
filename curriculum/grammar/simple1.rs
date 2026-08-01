@@ -1,3 +1,5 @@
+// Grammar curriculum: traits describe shared behavior without fixing a concrete type.
+// The examples below combine matches, loops, errors, closures, and ownership.
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 
@@ -138,6 +140,14 @@ mod utilities {
             super::super::APPLICATION_NAME
         }
     }
+}
+
+fn extra_control_flow_sample(limit: i32) -> i32 {
+    let mut total = 0;
+    for value in 0..limit {
+        if value % 2 == 0 { total += value; }
+    }
+    total
 }
 
 fn main() {

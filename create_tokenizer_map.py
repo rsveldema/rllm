@@ -243,7 +243,19 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
 
     # Reserved model-control tokens. INVALID is used as the supervised target
     # for MTP heads whose prediction horizon extends past the available input.
-    tokens = ["INVALID"]
+    tokens = [
+        "INVALID",
+        "<LANG_CPP>",
+        "<LANG_C>",
+        "<LANG_PYTHON>",
+        "<LANG_RUST>",
+        "<LANG_JAVA>",
+        "<LANG_SHELL>",
+        "<LINE_COMMENT_START>",
+        "<LINE_COMMENT_END>",
+        "<BLOCK_COMMENT_START>",
+        "<BLOCK_COMMENT_END>",
+    ]
 
     # The EOW suffix is metadata: generated runtime tables strip it from the
     # token spelling and require an identifier boundary after the match.
@@ -377,6 +389,20 @@ def generate_cpp_table_header(tokenizer_map) -> str:
             cpp_table += f'    TOK_EOW = TOK_{idx},\n'
         if _token == "INVALID":
             cpp_table += f'    INVALID = TOK_{idx},\n'
+        language_aliases = {
+            "<LANG_CPP>": "LANG_CPP",
+            "<LANG_C>": "LANG_C",
+            "<LANG_PYTHON>": "LANG_PYTHON",
+            "<LANG_RUST>": "LANG_RUST",
+            "<LANG_JAVA>": "LANG_JAVA",
+            "<LANG_SHELL>": "LANG_SHELL",
+            "<LINE_COMMENT_START>": "LINE_COMMENT_START",
+            "<LINE_COMMENT_END>": "LINE_COMMENT_END",
+            "<BLOCK_COMMENT_START>": "BLOCK_COMMENT_START",
+            "<BLOCK_COMMENT_END>": "BLOCK_COMMENT_END",
+        }
+        if _token in language_aliases:
+            cpp_table += f'    {language_aliases[_token]} = TOK_{idx},\n'
     cpp_table += "    START = TOK_0,\n"
     cpp_table += f"    MAX = {len(tokenizer_map)},\n"
     cpp_table += "    UNKNOWN_TOKEN_ID = -1\n"

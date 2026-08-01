@@ -1,3 +1,5 @@
+// Grammar curriculum: asynchronous work returns values through futures.
+// This file combines functions, loops, conditions, containers, and task coordination.
 #include "TaskQueue.hpp"
 #include "WorkerPool.hpp"
 #include <algorithm>
@@ -129,6 +131,13 @@ void print_array(const std::array<T, Size>& values){
 for (std::size_t index = 0; index < values.size(); ++index){
 std::println("array[{}] = {}", index, values[index]);
 }
+}
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
 }
 int main(){
 BufferAllocator allocator(512);

@@ -1,3 +1,5 @@
+// Grammar curriculum: interfaces define behavior that several classes can implement.
+// The examples below combine declarations, branching, loops, exceptions, and lambdas.
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -164,6 +166,14 @@ public final class simple1 {
 
     static Function<Integer, Integer> multiplier(int factor) {
         return value -> value * factor;
+    }
+
+    static int extraControlFlowSample(int limit) {
+        int total = 0;
+        for (int value = 0; value < limit; value++) {
+            if (value % 2 == 0) total += value;
+        }
+        return total;
     }
 
     public static void main(String[] arguments) {

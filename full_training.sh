@@ -18,12 +18,12 @@ echo "--- Stage 0: training on training_data0 ---"
     --epochs 50 \
     --checkpoint-interval 30
 
-echo "Normalizing training_data1 with training_postprocessor.py..."
-python3 ./training_postprocessor.py --dir training_data1
+echo "Normalizing curriculum with training_postprocessor.py..."
+python3 ./training_postprocessor.py --dir curriculum
 
-echo "--- Stage 1: training on training_data1 from $STAGE0_MODEL ---"
+echo "--- Stage 1: training on curriculum from $STAGE0_MODEL ---"
 ./build_release/rllm --train \
-    --train-dir training_data1 \
+    --train-dir curriculum \
     -i "$STAGE0_MODEL" \
     -o "$STAGE1_MODEL" \
     --method increasingly_longer \

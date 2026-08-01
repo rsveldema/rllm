@@ -1,3 +1,5 @@
+// Grammar curriculum: optional values represent results that may be absent.
+// The examples combine scheduling, branching, loops, callbacks, and timeouts.
 #include "CommandBuffer.hpp"
 #include "NetworkClient.hpp"
 #include "TaskScheduler.hpp"
@@ -160,6 +162,13 @@ std::println("Sample {} has value {}", index, samples[index]);
 const int positive_count = count_values_above(samples, 0);
 const int even_count = count_even_values(samples);
 std::println("Sample counts: positive={}, even={}", positive_count, even_count);
+}
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
 }
 int main(){
 ByteStorage storage(1024);

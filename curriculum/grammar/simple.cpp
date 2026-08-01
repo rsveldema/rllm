@@ -257,6 +257,13 @@ using KMapShared = std::map<std::string, std::shared_ptr<E>>;
 using my_int = int;
 using my_float = float;
 using my_shared_int = std::shared_ptr<int>;
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
+}
 int main(){
 C c;
 printf("sizeof(A) = %zu\n", sizeof(A));

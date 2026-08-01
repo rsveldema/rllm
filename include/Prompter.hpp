@@ -16,6 +16,7 @@ namespace rllm
             bool highest_prio_only = true;
             // How many MTP heads to use for token generation (1 = head 0 only, up to MAX).
             size_t mtp_heads = 1;
+            SourceLanguage language = SourceLanguage::Cpp;
         };
 
         explicit Prompter(const std::vector<std::string>& filters);

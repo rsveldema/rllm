@@ -1,3 +1,5 @@
+// Syntax curriculum: preprocessing happens before ordinary C++ parsing.
+// These examples cover object macros, function macros, token joining, and conditions.
 #include <print>
 #include <string_view>
 #define SAMPLE7_VERSION_MAJOR 1
@@ -79,6 +81,13 @@ std::println("version macro: {}", SAMPLE7_STRINGIFY(SAMPLE7_VERSION_MAJOR));
 #endif
 #define SAMPLE7_MAIN_ENABLED 1
 #if defined(SAMPLE7_MAIN_ENABLED)
+int extra_control_flow_sample(int limit) {
+int total = 0;
+for (int value = 0; value < limit; ++value) {
+if (value % 2 == 0) total += value;
+}
+return total;
+}
 int main() {
 sample7::print_configuration();
 }

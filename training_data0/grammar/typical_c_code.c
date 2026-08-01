@@ -4,8 +4,7 @@
 #include <assert.h>
 #include <math.h>
 #define M_PI 3.14159265358979323846
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]){
 int verbose = 0;
 int i;
 float cos = cosf(M_PI / 4);

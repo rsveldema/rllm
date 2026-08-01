@@ -1,3 +1,5 @@
+// Grammar curriculum: Result makes successful values and failures explicit.
+// Pattern matching below handles every error variant without hidden control flow.
 use std::fmt::{self, Display};
 
 #[derive(Debug)]
@@ -53,6 +55,14 @@ fn describe_value<T: Describe>(value: &T) -> String {
 
 fn describe_pair<T: Describe>(first: &T, second: &T) -> String {
     format!("{} {}", first.describe(), second.describe())
+}
+
+fn extra_control_flow_sample(limit: i32) -> i32 {
+    let mut total = 0;
+    for value in 0..limit {
+        if value % 2 == 0 { total += value; }
+    }
+    total
 }
 
 fn main() {

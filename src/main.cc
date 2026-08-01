@@ -38,7 +38,7 @@ struct CommandLineOption
 struct CommandLineParser
 {
 
-    std::optional<std::string> train_corpus_dir;
+    std::vector<std::string> train_corpus_dirs;
     std::vector<std::string> filters;
     bool train_mode = false;
     std::string output_filename = "model.json";
@@ -47,8 +47,8 @@ struct CommandLineParser
     int num_layers = 4;
     bool verbose = false;
     size_t num_epochs = 1000;
-    rllm::TrainingMethod method = rllm::TrainingMethod::TWO_TOK;
-    int window_size = 2;
+    rllm::TrainingMethod method = rllm::TrainingMethod::WINDOW;
+    int window_size = 4;
     size_t window_stride = 1;
     std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
     std::string executable_name = "./rllm";
@@ -66,6 +66,8 @@ struct CommandLineParser
     rllm::EmbeddingInitializerType embedding_initializer = rllm::EmbeddingInitializerType::LegacyUniform;
     size_t micro_batch_size = 1;
     std::optional<size_t> epoch_size;
+    size_t max_validation_windows = 4096;
+    size_t validation_worst_count = 5;
     bool disable_early_stopping = false;
     bool disable_example_convergence = false;
     bool disable_training_diagnostics = false;
@@ -106,10 +108,19 @@ struct CommandLineParser
                 "micro_batch_size must be between 1 and {}",
                 static_cast<size_t>(rllm::BatchIndex::MAX)));
         num_epochs = j.value("epochs", num_epochs);
-        train_corpus_dir = j.value("train_corpus_dir", train_corpus_dir.value_or(""));
+        if (j.contains("train_corpus_dirs"))
+            train_corpus_dirs = j["train_corpus_dirs"].get<std::vector<std::string>>();
+        else if (j.contains("train_corpus_dir"))
+            train_corpus_dirs = {j["train_corpus_dir"].get<std::string>()};
         filters = j.value("filters", filters);
         if (j.contains("epoch_size"))
             epoch_size = j["epoch_size"].is_null() ? std::nullopt : std::optional<size_t>{j["epoch_size"].get<size_t>()};
+        max_validation_windows = j.value("max_validation_windows", max_validation_windows);
+        if (max_validation_windows == 0)
+            fail("max_validation_windows must be positive");
+        validation_worst_count = j.value("validation_worst_count", validation_worst_count);
+        if (validation_worst_count == 0)
+            fail("validation_worst_count must be positive");
         disable_early_stopping = j.value("disable_early_stopping", disable_early_stopping);
         disable_example_convergence = j.value("disable_example_convergence", disable_example_convergence);
         disable_training_diagnostics = j.value("disable_training_diagnostics", disable_training_diagnostics);
@@ -119,13 +130,8 @@ struct CommandLineParser
             checkpointing_interval = j["checkpoint_interval_seconds"].is_null() ? std::nullopt :
                 std::optional<std::chrono::seconds>{std::chrono::seconds{j["checkpoint_interval_seconds"].get<long long>()}};
 
-        const auto method_name = j.value("method", "two_tok");
-        if (method_name == "two_tok") method = rllm::TrainingMethod::TWO_TOK;
-        else if (method_name == "three_tok") method = rllm::TrainingMethod::THREE_TOK;
-        else if (method_name == "increasingly_longer") method = rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
-        else if (method_name == "random_line_random_len") method = rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN;
-        else if (method_name == "random_line_full") method = rllm::TrainingMethod::RANDOM_LINE_FULL;
-        else if (method_name == "window") method = rllm::TrainingMethod::WINDOW;
+        const auto method_name = j.value("method", "window");
+        if (method_name == "window") method = rllm::TrainingMethod::WINDOW;
         else if (method_name == "reverse_window") method = rllm::TrainingMethod::REVERSE_WINDOW;
         else fail(std::format("unknown training method '{}'", method_name));
 
@@ -217,7 +223,7 @@ struct CommandLineParser
                  learn_depth = static_cast<size_t>(n);
              }},
         {.options = {"--window-stride"},
-         .description = "Token positions between consecutive window starts (default: 1)",
+         .description = "Token positions between supervised rows inside each window (default: 1)",
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
@@ -407,6 +413,36 @@ struct CommandLineParser
                  }
                  micro_batch_size = static_cast<size_t>(n);
              }},
+        {.options = {"--max-validation-windows"},
+         .description = "Maximum number of deterministic held-out windows to validate (default: 4096)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const unsigned long n = std::strtoul(args[0].c_str(), &end, 10);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE || n == 0)
+                 {
+                     std::println("--max-validation-windows requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 max_validation_windows = static_cast<size_t>(n);
+             }},
+        {.options = {"--validation-worst-count"},
+         .description = "Number of highest-loss validation predictions to log (default: 5)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const unsigned long n = std::strtoul(args[0].c_str(), &end, 10);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE || n == 0)
+                 {
+                     std::println("--validation-worst-count requires a positive integer, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 validation_worst_count = static_cast<size_t>(n);
+             }},
         {.options = {"--nan-finding"},
          .description = "Enable expensive NaN/range validation checks (default: disabled)",
          .action =
@@ -456,11 +492,11 @@ struct CommandLineParser
                  vulkan_device = args[0];
              }},
         {.options = {"--train-dir"},
-         .description = "Directory containing training text files",
+         .description = "Training directory, optionally PATH:WEIGHT; repeat for a weighted source mixture",
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
-                 train_corpus_dir = args[0];
+                 train_corpus_dirs.push_back(args[0]);
              }},
         {.options = {"--epochs"},
          .description = "Number of training epochs",
@@ -505,27 +541,18 @@ struct CommandLineParser
              }},
         {.options = {"--method"},
          .description = std::format(
-             "Training method. Valid values: two_tok, three_tok, increasingly_longer, random_line_random_len, "
-             "window:<N>, reverse_window[:N] Sliding window of N tokens (N >= 2)"
+             "Training method: window:<N> or reverse_window[:N], with metadata prefixes and all-position causal loss (N >= 4)"
          ),
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
                  const std::string m = args[0];
-                 if (m == "two_tok")
-                     method = rllm::TrainingMethod::TWO_TOK;
-                 else if (m == "three_tok")
-                     method = rllm::TrainingMethod::THREE_TOK;
-                 else if (m == "increasingly_longer")
-                     method = rllm::TrainingMethod::INCREASINGLY_LONGER_SEQUENCES;
-                 else if (m == "random_line_random_len")
-                     method = rllm::TrainingMethod::RANDOM_LINE_RANDOM_LEN;
-                 else if (m.starts_with("window:"))
+                 if (m.starts_with("window:"))
                  {
                      const int n = std::atoi(m.c_str() + 7);
-                     if (n < 2)
+                     if (n < 4)
                      {
-                         std::println("window:<N> requires N >= 2, got '{}'", m);
+                         std::println("window:<N> requires N >= 4, got '{}'", m);
                          std::exit(1);
                      }
                      method = rllm::TrainingMethod::WINDOW;
@@ -534,9 +561,9 @@ struct CommandLineParser
                  else if (m == "reverse_window" || m.starts_with("reverse_window:"))
                  {
                      const int n = m == "reverse_window" ? window_size : std::atoi(m.c_str() + 15);
-                     if (n < 2)
+                     if (n < 4)
                      {
-                         std::println("reverse_window:<N> requires N >= 2, got '{}'", m);
+                         std::println("reverse_window:<N> requires N >= 4, got '{}'", m);
                          std::exit(1);
                      }
                      method = rllm::TrainingMethod::REVERSE_WINDOW;
@@ -545,8 +572,7 @@ struct CommandLineParser
                  else
                  {
                      std::println(
-                         "Unknown training method '{}'. Valid values: two_tok, three_tok, increasingly_longer, "
-                         "random_line_random_len, window:<N>, reverse_window[:N]",
+                         "Unknown training method '{}'. Valid values: window:<N>, reverse_window[:N]",
                          m
                      );
                      std::exit(1);
@@ -617,7 +643,7 @@ struct CommandLineParser
             i += static_cast<int>(option_it->required_args);
         }
 
-        if (train_mode && !train_corpus_dir.has_value())
+        if (train_mode && train_corpus_dirs.empty())
         {
             std::println("Error: --train requires --train-dir <path>");
             print_usage_and_exit(argv[0], 1);
@@ -682,12 +708,14 @@ int main(int argc, char* argv[])
             parser.micro_batch_size,
             parser.num_epochs,
             parser.epoch_size,
+            parser.max_validation_windows,
+            parser.validation_worst_count,
             parser.disable_early_stopping,
             parser.disable_example_convergence,
             parser.disable_training_diagnostics,
             parser.reset_optimizer_state,
             parser.restart_learning_rate_schedule,
-            parser.train_corpus_dir.value()
+            parser.train_corpus_dirs
         );
     }
     else

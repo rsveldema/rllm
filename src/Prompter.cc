@@ -16,6 +16,29 @@ namespace rllm
     // This is a tunable hyperparameter.
     static constexpr float VALID_PREDICTION_THRESHOLD = 0.5f / 100.0f;
 
+    static std::string render_prompt_text(std::string text, SourceLanguage language)
+    {
+        const auto replace_all = [&](std::string_view from, std::string_view to) {
+            size_t position = 0;
+            while ((position = text.find(from, position)) != std::string::npos)
+            {
+                text.replace(position, from.size(), to);
+                position += to.size();
+            }
+        };
+        for (const auto marker : {
+                 "<LANG_CPP>", "<LANG_C>", "<LANG_PYTHON>",
+                 "<LANG_RUST>", "<LANG_JAVA>", "<LANG_SHELL>"})
+            replace_all(marker, "");
+        replace_all(
+            "<LINE_COMMENT_START>",
+            language == SourceLanguage::Python || language == SourceLanguage::Shell ? "#" : "//");
+        replace_all("<LINE_COMMENT_END>", "\n");
+        replace_all("<BLOCK_COMMENT_START>", "/*");
+        replace_all("<BLOCK_COMMENT_END>", "*/");
+        return text;
+    }
+
     static void process_command(const std::string& _command, Prompter::PromptOptions& options, TextTrainer& nn)
     {
         const auto command = _command.empty() ? "/help" : _command;
@@ -53,6 +76,22 @@ namespace rllm
                  std::println("  Attention heads:      {}", static_cast<size_t>(HeadsIndex::MAX));
                  std::println("  Transformer layers:   {}", nn.get_transformer_block_count());
              }},
+            {{"/language", "/lang"}, "Set prompt language: /language <cpp|c|python|rust|java|shell>", [&]() {
+                const auto space = command.find(' ');
+                if (space == std::string::npos)
+                {
+                    std::println("Usage: /language <cpp|c|python|rust|java|shell>");
+                    return;
+                }
+                const auto language = parse_source_language(command.substr(space + 1));
+                if (!language.has_value())
+                {
+                    std::println("Unknown language. Choose cpp, c, python, rust, java, or shell.");
+                    return;
+                }
+                options.language = *language;
+                std::println("Prompt language set to '{}'.", command.substr(space + 1));
+            }},
             {{"/toggle_prio"}, "Toggle highest priority only mode", [&]() {
                  options.highest_prio_only = !options.highest_prio_only;
                  std::println(
@@ -68,7 +107,9 @@ namespace rllm
                  }
                  const std::string arg = command.substr(space + 1);
                  const auto& corpus = nn.get_corpus();
-                 const auto token_ids = corpus.get_token_ids(arg);
+                 CommentLexState comment_state;
+                 auto token_ids = corpus.get_token_ids(arg, options.language, comment_state);
+                 token_ids.push_front(language_token(options.language));
 
                  nn.get_last_input() = token_ids; // set the input to the probe token(s) for tracing
 
@@ -96,7 +137,9 @@ namespace rllm
                  const std::string arg = command.substr(space + 1);
                  const auto& corpus = nn.get_corpus();
                  const auto& input_layer = nn.get_input_layer();
-                 const auto token_ids = corpus.get_token_ids(arg);
+                 CommentLexState comment_state;
+                 auto token_ids = corpus.get_token_ids(arg, options.language, comment_state);
+                 token_ids.push_front(language_token(options.language));
                  constexpr size_t D = static_cast<size_t>(EmbeddingDimension::MAX);
                  constexpr size_t COLS = 8;
                  for (const auto pos : enum_iterator1D<PositionIndex>(token_ids.size()))
@@ -192,7 +235,9 @@ namespace rllm
             return;
         }
 
-        auto token_id_list = corpus.get_token_ids(line);
+        CommentLexState comment_state;
+        auto token_id_list = corpus.get_token_ids(line, options.language, comment_state);
+        token_id_list.push_front(language_token(options.language));
         const auto full_string_opt = corpus.get_line(token_id_list);
         if (!full_string_opt.has_value())
         {
@@ -311,7 +356,7 @@ namespace rllm
             std::println("Input contains unknown tokens. Please try again.");
             return;
         }
-        std::println("Full answer string: {}", *full_answer_string_opt);
+        std::println("Full answer string: {}", render_prompt_text(*full_answer_string_opt, options.language));
     }
 
 } // namespace rllm
