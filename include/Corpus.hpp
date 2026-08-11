@@ -73,7 +73,9 @@ namespace rllm
     };
 
     /** Split the windows of every sufficiently large file between training
-     * and validation. The validation cap is distributed across files. */
+     * and validation. Validation windows reserve up to one target per MTP
+     * head after context_length. The validation cap is distributed across
+     * files. */
     FileWindowTrainingSplit make_file_window_training_split(
         const std::vector<FileTokenSequence>& files,
         size_t window_size,

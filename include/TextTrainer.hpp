@@ -18,6 +18,7 @@
 #include <chrono>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -28,6 +29,12 @@ namespace rllm
     struct TextTrainerForwardWorkspace;
     struct BackwardPropWorkspace;
     struct GradientAccumulationWorkspace;
+    /** Resolve the persisted frozen-layer boundary for a depth-increasing upgrade.
+     * Returns nullopt when the checkpoint/target combination is incompatible. */
+    std::optional<size_t> upgrade_frozen_transformer_block_count(
+        size_t saved_blocks, size_t requested_blocks, size_t saved_frozen_blocks,
+        bool freeze_old_blocks);
+
     enum class TrainingStepOutcome
     {
         Continue,
@@ -93,6 +100,10 @@ namespace rllm
         const OutputLayer& get_output_layer(MultiTokenPredictionIndex idx) const { return m_output_layers[idx]; }
         const InputLayer& get_input_layer() const { return m_input_layer; }
         size_t get_transformer_block_count() const { return m_transformer_blocks.size(); }
+        size_t get_frozen_transformer_block_count() const { return m_frozen_transformer_block_count; }
+        void set_upgrade_mode(bool enabled) { m_upgrade_mode = enabled; }
+        void set_freeze_old_blocks_on_upgrade(bool enabled) { m_freeze_old_blocks_on_upgrade = enabled; }
+        void set_all_blocks_read_write(bool enabled) { m_all_blocks_read_write = enabled; }
 
         void set_training_method(TrainingMethod m) { m_training_method = m; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
@@ -100,6 +111,7 @@ namespace rllm
         void set_learn_depth(size_t n) { assert(n > 0); m_learn_depth = n; }
         void set_learning_rate(float rate) { assert(rate > 0.0f); m_learning_rate = rate; }
         void set_layer_learning_rate_multiplier(float multiplier) { assert(multiplier >= 1.0f && multiplier < 2.0f); m_layer_learning_rate_multiplier = multiplier; }
+        void set_warmup_percent(float percent) { assert(percent > 0.0f && percent <= 100.0f); m_warmup_percent = percent; }
         void set_learning_rate_schedule(LearningRateSchedule schedule) { m_learning_rate_schedule = schedule; }
         void set_simulated_annealing_decay_factor(float factor) { assert(factor > 0.0f && factor < 1.0f); m_simulated_annealing_decay_factor = factor; }
         void set_simulated_annealing_initial_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_initial_multiplier = multiplier; }
@@ -115,6 +127,11 @@ namespace rllm
         {
             assert(n > 0);
             m_validation_worst_count = n;
+        }
+        void set_validation_interval(std::chrono::seconds interval)
+        {
+            assert(interval.count() > 0);
+            m_validation_interval = interval;
         }
         void set_early_stopping_enabled(bool enabled) { m_early_stopping_enabled = enabled; }
         void set_example_convergence_enabled(bool enabled) { m_example_convergence_enabled = enabled; }
@@ -173,6 +190,10 @@ namespace rllm
         InputLayer  m_input_layer;
         CpuInputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
         std::vector<TransformerBlock> m_transformer_blocks;
+        size_t m_frozen_transformer_block_count = 0;
+        bool m_upgrade_mode = false;
+        bool m_freeze_old_blocks_on_upgrade = false;
+        bool m_all_blocks_read_write = false;
         fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
         fixed_size_obj_vector<Score, MultiTokenPredictionIndex> m_training_scores;
         Score m_evaluation_score;
@@ -237,6 +258,7 @@ namespace rllm
         size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
         float m_learning_rate = DEFAULT_LEARNING_RATE;
         float m_layer_learning_rate_multiplier = DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER;
+        float m_warmup_percent = LoweringLearningRate::DEFAULT_WARMUP_PERCENT;
         LearningRateSchedule m_learning_rate_schedule = LearningRateSchedule::Lowering;
         float m_simulated_annealing_decay_factor = 0.8f;
         float m_simulated_annealing_initial_multiplier = 50.0f;
@@ -246,6 +268,7 @@ namespace rllm
         size_t m_micro_batch_size = 1;
         size_t m_max_validation_windows = 4096;
         size_t m_validation_worst_count = 5;
+        std::chrono::seconds m_validation_interval{1800};
         size_t m_optimizer_step = 0;
         size_t m_learning_rate_schedule_steps = 0;
         float m_last_logged_learning_rate = std::numeric_limits<float>::quiet_NaN();
@@ -314,6 +337,12 @@ namespace rllm
             double epoch_progress,
             size_t sample_count,
             const EvaluationMetrics& metrics
+        );
+        void log_timed_checkpoint(
+            size_t epoch,
+            size_t window,
+            size_t total_windows_trained,
+            double duration_ms
         );
         std::unique_ptr<nlohmann::json> m_training_progress_entries;
         std::chrono::steady_clock::time_point m_last_training_progress_flush{};

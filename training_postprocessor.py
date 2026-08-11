@@ -18,7 +18,10 @@ Rules:
 from __future__ import annotations
 
 import argparse
+import io
 from pathlib import Path
+import shutil
+import tokenize
 
 
 C_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
@@ -101,6 +104,63 @@ def normalize_python_indentation(text: str) -> str:
 	return "".join(normalized_lines)
 
 
+def strip_c_cpp_comments(text: str) -> str:
+	"""Remove C/C++ comments while preserving literals and line boundaries."""
+	out: list[str] = []
+	i = 0
+	state = "code"
+	while i < len(text):
+		ch = text[i]
+		next_ch = text[i + 1] if i + 1 < len(text) else ""
+		if state == "line_comment":
+			if ch == "\n":
+				out.append(ch)
+				state = "code"
+			i += 1
+			continue
+		if state == "block_comment":
+			if ch == "*" and next_ch == "/":
+				state = "code"
+				i += 2
+			elif ch == "\n":
+				out.append(ch)
+				i += 1
+			else:
+				i += 1
+			continue
+		if state == "code":
+			if ch == "/" and next_ch == "/":
+				state = "line_comment"
+				i += 2
+				continue
+			if ch == "/" and next_ch == "*":
+				state = "block_comment"
+				i += 2
+				continue
+			if ch == '"':
+				state = "string"
+			elif ch == "'":
+				state = "character"
+			out.append(ch)
+			i += 1
+			continue
+		out.append(ch)
+		if ch == "\\" and i + 1 < len(text):
+			out.append(text[i + 1])
+			i += 2
+			continue
+		if (state == "string" and ch == '"') or (state == "character" and ch == "'"):
+			state = "code"
+		i += 1
+	return "".join(out)
+
+
+def strip_python_comments(text: str) -> str:
+	"""Remove Python COMMENT tokens without treating '#' in strings as comments."""
+	tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+	return tokenize.untokenize(token for token in tokens if token.type != tokenize.COMMENT)
+
+
 def is_etc_abbreviation(text: str, dot_index: int) -> bool:
 	start = dot_index - 1
 	while start >= 0 and text[start].isalpha():
@@ -135,15 +195,19 @@ def split_text_sentences(text: str) -> str:
 	return "".join(out_chars)
 
 
-def process_file(path: Path) -> bool:
+def process_file(path: Path, strip_comments: bool = False) -> bool:
 	original = path.read_text(encoding="utf-8", errors="ignore")
 	updated = remove_non_ascii(original)
 
 	suffix = path.suffix.lower()
 	if suffix in C_EXTENSIONS:
 		updated = normalize_c_cpp(updated)
+		if strip_comments:
+			updated = strip_c_cpp_comments(updated)
 	elif suffix in PYTHON_EXTENSIONS:
 		updated = normalize_python_indentation(updated)
+		if strip_comments:
+			updated = strip_python_comments(updated)
 	elif suffix in TEXT_EXTENSIONS:
 		updated = split_text_sentences(updated)
 
@@ -161,11 +225,26 @@ def main() -> int:
 		default="training_data2",
 		help="Directory containing training files (default: training_data2)",
 	)
+	parser.add_argument(
+		"--output-dir",
+		help="Write a processed copy to this directory instead of modifying --dir",
+	)
+	parser.add_argument(
+		"--strip-comments",
+		action="store_true",
+		help="Remove comments from C/C++ and Python source files",
+	)
 	args = parser.parse_args()
 
 	root = Path(args.dir)
 	if not root.is_dir():
 		raise SystemExit(f"Directory not found: {root}")
+	if args.output_dir:
+		output_root = Path(args.output_dir)
+		if output_root.exists():
+			raise SystemExit(f"Output directory already exists: {output_root}")
+		shutil.copytree(root, output_root)
+		root = output_root
 
 	changed_count = 0
 	file_count = 0
@@ -173,7 +252,7 @@ def main() -> int:
 		if not path.is_file():
 			continue
 		file_count += 1
-		if process_file(path):
+		if process_file(path, strip_comments=args.strip_comments):
 			changed_count += 1
 
 	print(f"Processed {file_count} files in {root}; updated {changed_count}.")

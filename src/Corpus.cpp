@@ -184,6 +184,13 @@ namespace rllm
                 auto& destination = is_validation[index]
                     ? file_validation
                     : split.training_windows;
+                if (is_validation[index])
+                {
+                    const size_t sequence_length = static_cast<size_t>(windows[index].line.size());
+                    const size_t maximum_heads = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
+                    windows[index].context_length = static_cast<PositionIndex>(
+                        std::max<size_t>(1, sequence_length - maximum_heads));
+                }
                 destination.push_back(std::move(windows[index]));
             }
             split.full_validation_window_count += file_validation.size();

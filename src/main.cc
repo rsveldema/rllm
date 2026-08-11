@@ -51,11 +51,13 @@ struct CommandLineParser
     int window_size = 4;
     size_t window_stride = 1;
     std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
+    std::chrono::seconds validation_interval{1800};
     std::string executable_name = "./rllm";
     size_t mtp_heads = 1;
     size_t learn_depth = rllm::TextTrainer::DEFAULT_LEARN_DEPTH;
     float learning_rate = rllm::TextTrainer::DEFAULT_LEARNING_RATE;
     float layer_learning_rate_multiplier = rllm::DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER;
+    float warmup_percent = rllm::LoweringLearningRate::DEFAULT_WARMUP_PERCENT;
     rllm::LearningRateSchedule learning_rate_schedule = rllm::LearningRateSchedule::Lowering;
     float simulated_annealing_decay_factor = 0.8f;
     float simulated_annealing_initial_multiplier = 50.0f;
@@ -73,6 +75,9 @@ struct CommandLineParser
     bool disable_training_diagnostics = false;
     bool reset_optimizer_state = false;
     bool restart_learning_rate_schedule = false;
+    bool upgrade_mode = false;
+    bool freeze_old_blocks = false;
+    bool all_blocks_read_write = false;
     bool nan_finding_mode = false;
     std::optional<std::string> vulkan_device;
 
@@ -98,6 +103,9 @@ struct CommandLineParser
         if (!std::isfinite(layer_learning_rate_multiplier) ||
             layer_learning_rate_multiplier < 1.0f || layer_learning_rate_multiplier >= 2.0f)
             fail("layer_learning_rate_multiplier must be in [1, 2)");
+        warmup_percent = j.value("warmup_percent", warmup_percent);
+        if (!std::isfinite(warmup_percent) || warmup_percent <= 0.0f || warmup_percent > 100.0f)
+            fail("warmup_percent must be in (0, 100]");
         simulated_annealing_decay_factor = j.value("simulated_annealing_decay_factor", simulated_annealing_decay_factor);
         simulated_annealing_initial_multiplier = j.value("simulated_annealing_initial_multiplier", simulated_annealing_initial_multiplier);
         simulated_annealing_decay_epochs = j.value("simulated_annealing_decay_epochs", simulated_annealing_decay_epochs);
@@ -126,9 +134,19 @@ struct CommandLineParser
         disable_training_diagnostics = j.value("disable_training_diagnostics", disable_training_diagnostics);
         reset_optimizer_state = j.value("reset_optimizer_state", reset_optimizer_state);
         restart_learning_rate_schedule = j.value("restart_learning_rate_schedule", restart_learning_rate_schedule);
+        upgrade_mode = j.value("upgrade_mode", upgrade_mode);
+        freeze_old_blocks = j.value("freeze_old_blocks", freeze_old_blocks);
+        all_blocks_read_write = j.value("all_blocks_read_write", all_blocks_read_write);
         if (j.contains("checkpoint_interval_seconds"))
             checkpointing_interval = j["checkpoint_interval_seconds"].is_null() ? std::nullopt :
                 std::optional<std::chrono::seconds>{std::chrono::seconds{j["checkpoint_interval_seconds"].get<long long>()}};
+        if (j.contains("validation_interval_seconds"))
+        {
+            const auto seconds = j["validation_interval_seconds"].get<long long>();
+            if (seconds <= 0)
+                fail("validation_interval_seconds must be positive");
+            validation_interval = std::chrono::seconds{seconds};
+        }
 
         const auto method_name = j.value("method", "window");
         if (method_name == "window") method = rllm::TrainingMethod::WINDOW;
@@ -198,6 +216,21 @@ struct CommandLineParser
              [&](const std::vector<std::string>& args) {
                  num_layers = std::atoi(args[0].c_str());
              }},
+        {.options = {"--upgrade-mode"},
+         .description = "Increase a checkpoint's transformer-layer count",
+         .action = [&](const std::vector<std::string>&) { upgrade_mode = true; }},
+        {.options = {"--freeze-old-blocks"},
+         .description = "With --upgrade-mode, keep the original transformer blocks read-only",
+         .action = [&](const std::vector<std::string>&) {
+             freeze_old_blocks = true;
+             all_blocks_read_write = false;
+         }},
+        {.options = {"--all-blocks-read-write"},
+         .description = "Clear a checkpoint's frozen boundary and train the complete model",
+         .action = [&](const std::vector<std::string>&) {
+             all_blocks_read_write = true;
+             freeze_old_blocks = false;
+         }},
         {.options = {"--checkpoint-interval"},
          .description = "Extra timed checkpoint cadence; <=0 disables",
          .required_args = 1,
@@ -209,6 +242,18 @@ struct CommandLineParser
                  else
                      checkpointing_interval = std::chrono::seconds{seconds};
              }},
+        {.options = {"--validation-interval"},
+         .description = "Timed validation cadence in seconds (default: 1800)",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             const int seconds = std::atoi(args[0].c_str());
+             if (seconds <= 0)
+             {
+                 std::println("--validation-interval requires a positive number of seconds, got '{}'", args[0]);
+                 std::exit(1);
+             }
+             validation_interval = std::chrono::seconds{seconds};
+         }},
         {.options = {"--learn-depth"},
          .description = std::format("Gradient-update passes per training example (default: {})", learn_depth),
          .required_args = 1,
@@ -266,6 +311,21 @@ struct CommandLineParser
                  }
                  layer_learning_rate_multiplier = multiplier;
              }},
+        {.options = {"--warmup-percent"},
+         .description = "Lowering-schedule warmup as a percentage of planned epochs (default: 5)",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             char* end = nullptr;
+             errno = 0;
+             const float percent = std::strtof(args[0].c_str(), &end);
+             if (end == args[0].c_str() || *end != '\0' || errno == ERANGE ||
+                 !std::isfinite(percent) || percent <= 0.0f || percent > 100.0f)
+             {
+                 std::println("--warmup-percent requires a number in (0, 100], got '{}'", args[0]);
+                 std::exit(1);
+             }
+             warmup_percent = percent;
+         }},
         {.options = {"--weight-initializer"},
          .description = "Weight initializer: xavier-uniform, xavier-input-projections, or legacy-uniform (default: xavier-input-projections)",
          .required_args = 1,
@@ -692,11 +752,13 @@ int main(int argc, char* argv[])
             parser.verbose,
             parser.method,
             parser.checkpointing_interval,
+            parser.validation_interval,
             parser.window_size,
             parser.window_stride,
             parser.learn_depth,
             parser.learning_rate,
             parser.layer_learning_rate_multiplier,
+            parser.warmup_percent,
             parser.learning_rate_schedule,
             parser.simulated_annealing_decay_factor,
             parser.simulated_annealing_initial_multiplier,
@@ -715,6 +777,9 @@ int main(int argc, char* argv[])
             parser.disable_training_diagnostics,
             parser.reset_optimizer_state,
             parser.restart_learning_rate_schedule,
+            parser.upgrade_mode,
+            parser.freeze_old_blocks,
+            parser.all_blocks_read_write,
             parser.train_corpus_dirs
         );
     }

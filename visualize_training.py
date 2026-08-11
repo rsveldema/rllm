@@ -14,9 +14,18 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
 
 
+def discover_default_inputs() -> list[Path]:
+    return sorted(Path.cwd().glob("models-*/train.json"))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", nargs="?", type=Path, default=Path("models/train.json"))
+    parser.add_argument(
+        "inputs",
+        nargs="*",
+        type=Path,
+        help="training metrics JSON files (default: all models-*/train.json files)",
+    )
     parser.add_argument("-o", "--output", type=Path, default=Path("training_metrics.png"))
     display = parser.add_mutually_exclusive_group()
     display.add_argument(
@@ -32,7 +41,11 @@ def parse_args() -> argparse.Namespace:
         help="save the plot without opening an interactive window",
     )
     parser.set_defaults(show=True)
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.discover_inputs = not args.inputs
+    if args.discover_inputs:
+        args.inputs = discover_default_inputs()
+    return args
 
 
 def number(entry: dict[str, Any], key: str) -> float | None:
@@ -57,16 +70,6 @@ def series(entries: list[dict[str, Any]], key: str, validation: bool) -> tuple[l
         [x for x, y in points if y is not None],
         [y for _, y in points if y is not None],
     )
-
-
-def plot_or_note(axis: Any, xs: list[float], ys: list[float], label: str, **kwargs: Any) -> None:
-    if ys:
-        axis.plot(xs, ys, label=label, **kwargs)
-    else:
-        axis.text(
-            0.5, 0.5, "No validation records in this file\n(new runs record this metric)",
-            ha="center", va="center", transform=axis.transAxes,
-        )
 
 
 def optimizer_gradient_series(
@@ -100,41 +103,70 @@ def load_entries(path: Path) -> list[dict[str, Any]]:
 def render_metrics(
     fig: Any,
     axes: dict[str, Any],
-    entries: list[dict[str, Any]],
-    input_path: Path,
+    datasets: list[tuple[Path, list[dict[str, Any]]]],
 ) -> None:
     for axis in axes.values():
         axis.clear()
 
-    training = [entry for entry in entries if entry.get("item_type") != "validation"]
-    validation = [entry for entry in entries if entry.get("item_type") == "validation"]
-
-    train_x, train_loss = series(training, "training_loss", False)
-    val_x, val_loss = series(validation, "validation_loss", True)
-    plot_or_note(axes["loss"], train_x, train_loss, "training loss", alpha=0.45, linewidth=1)
-    if val_loss:
-        axes["loss"].plot(val_x, val_loss, "o-", label="validation loss", linewidth=2)
-    axes["loss"].set_title("Loss")
-    axes["loss"].legend()
-
+    has_loss = False
+    has_gradient = False
+    has_metric = {"perplexity": False, "mtp": False, "probability": False}
     specifications = (
-        (axes["perplexity"], "perplexity", "Validation perplexity"),
-        (axes["mtp"], "all_mtp_loss", "Validation all-MTP loss"),
-        (axes["probability"], "correct_token_probability_percent", "Correct-token probability (%)"),
+        ("perplexity", "perplexity", "Validation perplexity"),
+        ("mtp", "all_mtp_loss", "Validation all-MTP loss"),
+        ("probability", "correct_token_probability_percent", "Correct-token probability (%)"),
     )
-    for axis, key, title in specifications:
-        xs, ys = series(validation, key, True)
-        plot_or_note(axis, xs, ys, title, marker="o", linewidth=2)
+
+    for input_path, entries in datasets:
+        label = input_path.parent.name
+        training = [entry for entry in entries if entry.get("item_type") != "validation"]
+        validation = [entry for entry in entries if entry.get("item_type") == "validation"]
+
+        train_x, train_loss = series(training, "training_loss", False)
+        val_x, val_loss = series(validation, "validation_loss", True)
+        if train_loss:
+            axes["loss"].plot(
+                train_x, train_loss, label=f"{label} training", alpha=0.45, linewidth=1)
+            has_loss = True
+        if val_loss:
+            axes["loss"].plot(
+                val_x, val_loss, "o-", label=f"{label} validation", linewidth=2)
+            has_loss = True
+
+        for axis_name, key, _title in specifications:
+            xs, ys = series(validation, key, True)
+            if ys:
+                axes[axis_name].plot(xs, ys, marker="o", linewidth=2, label=label)
+                has_metric[axis_name] = True
+
+        for group, (xs, ys) in optimizer_gradient_series(training).items():
+            axes["gradient"].plot(
+                xs, ys, "o-", label=f"{label}: {group}", linewidth=1.5, markersize=4)
+            has_gradient = True
+
+    if not has_loss:
+        axes["loss"].text(
+            0.5, 0.5, "No loss records in these files",
+            ha="center", va="center", transform=axes["loss"].transAxes)
+    axes["loss"].set_title("Loss")
+    if has_loss:
+        axes["loss"].legend()
+
+    for axis_name, _key, title in specifications:
+        axis = axes[axis_name]
+        if has_metric[axis_name]:
+            axis.legend()
+        else:
+            axis.text(
+                0.5, 0.5, "No validation records in these files",
+                ha="center", va="center", transform=axis.transAxes)
         axis.set_title(title)
     axes["perplexity"].set_yscale("log")
     axes["perplexity"].set_ylabel("perplexity (log scale)")
 
     gradient_axis = axes["gradient"]
-    gradient_series = optimizer_gradient_series(training)
-    if gradient_series:
-        for group, (xs, ys) in gradient_series.items():
-            gradient_axis.plot(xs, ys, "o-", label=group, linewidth=1.5, markersize=4)
-        gradient_axis.legend(fontsize="small", ncols=min(4, len(gradient_series)))
+    if has_gradient:
+        gradient_axis.legend(fontsize="small", ncols=min(4, len(datasets)))
     else:
         gradient_axis.text(
             0.5, 0.5,
@@ -147,15 +179,25 @@ def render_metrics(
     for axis in axes.values():
         axis.set_xlabel("epoch")
         axis.grid(True, alpha=0.25)
-    fig.suptitle(f"Training metrics — {input_path}", fontsize=14)
+    fig.suptitle(f"Training metrics — {len(datasets)} run(s)", fontsize=14)
 
 
 def main() -> None:
     args = parse_args()
+
+    def current_input_paths() -> list[Path]:
+        return discover_default_inputs() if args.discover_inputs else args.inputs
+
+    def load_datasets() -> list[tuple[Path, list[dict[str, Any]]]]:
+        paths = current_input_paths()
+        if not paths:
+            raise FileNotFoundError("no models-*/train.json files found")
+        return [(path, load_entries(path)) for path in paths]
+
     try:
-        entries = load_entries(args.input)
+        datasets = load_datasets()
     except (OSError, json.JSONDecodeError, ValueError) as error:
-        raise SystemExit(f"Cannot load {args.input}: {error}") from error
+        raise SystemExit(f"Cannot load training metrics: {error}") from error
 
     fig, axes = plt.subplot_mosaic(
         [
@@ -166,7 +208,7 @@ def main() -> None:
         figsize=(14, 12),
         constrained_layout=True,
     )
-    render_metrics(fig, axes, entries, args.input)
+    render_metrics(fig, axes, datasets)
 
     status = fig.text(0.875, 0.945, "", ha="right", va="center", fontsize=9)
     button_axis = fig.add_axes((0.88, 0.955, 0.1, 0.03))
@@ -174,14 +216,15 @@ def main() -> None:
 
     def reload_metrics(_event: Any) -> None:
         try:
-            latest_entries = load_entries(args.input)
-            render_metrics(fig, axes, latest_entries, args.input)
+            latest_datasets = load_datasets()
+            render_metrics(fig, axes, latest_datasets)
             fig.savefig(args.output, dpi=160)
         except (OSError, json.JSONDecodeError, ValueError) as error:
             status.set_text(f"Reload failed: {error}")
             status.set_color("tab:red")
         else:
-            status.set_text(f"Reloaded {len(latest_entries)} records")
+            record_count = sum(len(entries) for _path, entries in latest_datasets)
+            status.set_text(f"Reloaded {record_count} records from {len(latest_datasets)} files")
             status.set_color("tab:green")
         fig.canvas.draw_idle()
 

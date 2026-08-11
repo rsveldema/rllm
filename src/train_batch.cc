@@ -242,11 +242,15 @@ namespace rllm
         if (collect_diagnostics)
             log_hidden_gradient_diagnostics(*dh, packed_rows,
                 std::format("output heads -> transformer layer {}", m_transformer_blocks.size() - 1));
-        for (int index = static_cast<int>(m_transformer_blocks.size()) - 1; index >= 0; --index)
+        for (int index = static_cast<int>(m_transformer_blocks.size()) - 1;
+             index >= 0; --index)
         {
             m_transformer_blocks[index].backward(*dh, *din, back.transformer_block,
                 forward.transformer_workspaces[index], true, collect_diagnostics, index);
-            m_transformer_blocks[index].accumulate_gradients(back.transformer_block, m_gradient_accumulation_workspace->transformer_blocks[index]);
+            if (static_cast<size_t>(index) >= m_frozen_transformer_block_count)
+                m_transformer_blocks[index].accumulate_gradients(
+                    back.transformer_block,
+                    m_gradient_accumulation_workspace->transformer_blocks[index]);
             if (collect_diagnostics)
                 log_hidden_gradient_diagnostics(*din, packed_rows,
                     index == 0 ? "transformer layer 0 -> input embeddings" :
@@ -322,7 +326,8 @@ namespace rllm
         train_batch_transformer_backward(rows, timing);
         const auto input_started = std::chrono::steady_clock::now();
         auto& input_gradient = (m_transformer_blocks.size() % 2 == 0) ? back.dh : back.din;
-        m_input_layer.accumulate_backward_packed(packed, input_gradient, m_gradient_accumulation_workspace->embeddings);
+        m_input_layer.accumulate_backward_packed(
+            packed, input_gradient, m_gradient_accumulation_workspace->embeddings);
         timing.backward_input_ms += elapsed_ms(input_started);
         timing.backward_ms += elapsed_ms(backward_started);
         const auto apply_started = std::chrono::steady_clock::now();

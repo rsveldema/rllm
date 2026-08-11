@@ -12,7 +12,20 @@ The shared training launcher uses `training_data0`, the `curriculum/grammar`,
 and `training_data2` as a weighted mixture. Setting `TRAIN_DIR` keeps the legacy
 single-source override.
 
-`train_release.sh` and `train_debug.sh` try to resume from `RESUME_MODEL`, `models/after_training.st`, or the newest `models/checkpoint-*.st`.
+`train_release.sh` and `train_debug.sh` store artifacts in a layer-specific
+directory such as `models-4/`. They try to resume from `RESUME_MODEL`, the
+matching layer directory, or—when starting a depth-increasing upgrade—the best
+checkpoint or final model in the deepest available `models-N/` below the target
+depth.
+The launcher derives the maximum training window from model depth as
+`min(256, 16 * layers)`, so 2-, 4-, 8-, and 16-layer models use window sizes
+32, 64, 128, and 256 respectively. A trailing `--method window:N` argument
+overrides this default. The launcher sets window stride to half the computed
+window size (16, 32, 64, and 128 respectively); a trailing `--window-stride N`
+argument overrides it.
+Learn depth is `max(1, layers / 2)`, so 2-, 4-, 8-, and 16-layer models use
+learn depths 1, 2, 4, and 8 respectively. A trailing `--learn-depth N` argument
+overrides this default.
 
 Every saved model has a sibling `<model filename>.training.json` containing the
 training configuration. Resume both weights and settings with, for example,
@@ -20,6 +33,32 @@ training configuration. Resume both weights and settings with, for example,
 models/checkpoint-123.st`. Options appearing after `--training-parameters`
 override the archived value, which makes deliberate changes such as extending
 the epoch count explicit while retaining all other settings.
+
+Pass `--upgrade-mode --layers N` while loading a shallower checkpoint to append
+newly initialized transformer layers up to depth `N`. By default, the complete
+expanded model remains trainable. Add `--freeze-old-blocks` to keep only the
+original transformer layers read-only. The global token embeddings, output
+heads, and appended layers remain trainable, and gradients pass through the
+read-only layers to reach the embeddings. Upgrade mode rejects targets that are
+shallower than their source checkpoint.
+Extending a checkpoint starts a fresh optimization phase: it resets the saved
+epoch and window cursor, Adam moments and bias-correction step, and learning-rate
+schedule. The resized model therefore starts at epoch 0 with the configured base
+learning rate. Loading a checkpoint that is already at the requested depth
+remains a normal resume and preserves its training state.
+
+Checkpoints persist the frozen boundary. Loading one normally restores its
+read-only blocks; pass `--all-blocks-read-write` to clear that boundary and let
+the complete model participate in learning again. The next checkpoint persists
+the cleared boundary. At startup, `train.log` and the console report the exact
+number of read-only and read-write transformer blocks.
+
+When the shared debug/release launcher finds a checkpoint to resume, it supplies
+`--upgrade-mode --freeze-old-blocks` by default, using the layer count configured
+later in the launcher (currently 4). A fresh-start run uses a random model at that
+configured depth without upgrade mode. Because user arguments are
+placed last, passing `--all-blocks-read-write` to the launcher overrides its
+default freeze for a resumed model.
 
 Safetensors checkpoints created during training also embed resumable optimizer
 state: Adam first and second moments for embeddings, transformer parameters,
@@ -63,6 +102,9 @@ write for every token candidate.
 Unit tests set `RLLM_MODEL_DIR=test_models` and clean only that directory.
 Timed checkpoints, best checkpoints, training progress, and tokenization logs
 created by tests never use the production `models/` directory.
+The shared debug/release training launcher requests a timed checkpoint every
+600 seconds, for at most six timed checkpoints per hour of uninterrupted
+training.
 
 ## Learn Depth
 
@@ -92,13 +134,18 @@ model or checkpoint save, the complete progress array is written there.
 Training batches also flush it at most every 15 seconds. Long validation passes
 write `validation_progress` entries and text-log updates every 15 seconds with
 the completed count, running head-zero loss, elapsed time, and ETA. For example,
-`-o models/after_training.st` uses `models/train.json` and `models/train.log`.
+The shared launcher output `models-<layers>/after_training.st` uses
+`models-<layers>/train.json` and `models-<layers>/train.log`.
 Restarting training loads and extends the existing JSON array, while truncating
 the text log for the new process. This preserves one continuous structured
 history while keeping `train.log` scoped to the current run and retaining a
 valid JSON snapshot without doing file I/O for every training batch.
+Completed timed checkpoints write a `checkpoint` entry with phase `timed`, the
+epoch and window cursor, total windows trained, and duration in milliseconds and
+seconds. The same duration is reported in `train.log` and on the console.
 Validation records include head-zero loss, perplexity, all-MTP loss, and the
-average correct-token probability. Generate `training_metrics.png` with
+average correct-token probability. Generate `training_metrics.png` with an
+overlay of every `models-*/train.json` with
 `python visualize_training.py`, or choose paths with
 `python visualize_training.py path/to/train.json -o plot.png`.
 The generated figure also plots the normalized global gradient norm for every
@@ -157,8 +204,9 @@ binary default for AdamW is `0.0003`; `train_release.sh` currently selects
 
 `--learning-rate-schedule constant|lowering|simulated_annealing` selects the learning-rate
 implementation. `constant` keeps the configured rate unchanged for every
-optimizer update. `lowering` (the binary default) applies the existing 5%
-linear warmup and cosine decay.
+optimizer update. `lowering` (the binary default) applies a configurable linear
+warmup and cosine decay. `--warmup-percent <P>` specifies warmup as a percentage
+of the planned epochs and accepts values in `(0, 100]`; its default is `5`.
 `simulated_annealing` starts at
 `--simulated-annealing-initial-multiplier <M>` times the configured rate
 (default `50`) and remains constant within each epoch. Every
@@ -180,11 +228,13 @@ gradually between those endpoints. Accepted values are `[1, 2)`. The profile is
 symmetric with a mean multiplier of `1.0x`, so it changes the distribution of
 learning across depth without increasing the model's average configured rate.
 
-Window training applies a 5% linear learning-rate warmup followed by cosine
-decay to 10% of the configured base rate. The schedule is calculated from the
-number of windows, epochs, and allowed updates per window. For example, a base
-rate of `0.00005` decays to `0.000005`. Current checkpoints restore the
-optimizer and schedule position; legacy checkpoints start a new schedule.
+Window training applies the configured linear learning-rate warmup followed by
+cosine decay to 10% of the configured base rate. The schedule is calculated
+from the number of windows, epochs, and allowed updates per window, so a 1%
+warmup spans 1% of the planned epochs. The shared debug/release launcher selects
+`--warmup-percent 1`. For example, a base rate of `0.00005` decays to
+`0.000005`. Current checkpoints restore the optimizer, warmup percentage, and
+schedule position; legacy checkpoints use the CLI/default warmup percentage.
 The log reports the base and effective scheduled rate at startup, at warmup and
 decay boundaries, and whenever the effective rate moves by at least 1% of its
 peak value. This exposes schedule progress without logging every optimizer step.
@@ -245,6 +295,9 @@ are directly comparable with reported training loss. The baseline and each
 end-of-epoch validation also report the five worst individual predictions. Each
 diagnostic includes loss, expected and predicted tokens with their probabilities,
 the MTP head, and the decoded input context.
+Held-out windows reserve up to four trailing tokens beyond their validation
+context, so each available MTP head is evaluated against a real future token.
+Short final windows contribute only the heads for which a future token exists.
 When the per-file reservation produces more windows than `--max-validation-windows`,
 validation distributes that budget across the source files, including at
 least one window from every file when the budget permits, and samples evenly
@@ -272,11 +325,16 @@ toward the start. It uses the current maximum window size
 regular window training, reverse-window traversal is not shuffled. Window
 stride continues to apply within each line.
 
-Window training saves `models/checkpoint-best-window.st` whenever end-of-epoch
+Window training saves `checkpoint-best-window.st` in the configured model
+artifact directory whenever end-of-epoch
 head-zero validation loss improves by at least `1e-4`. It stops after three consecutive
 epochs without improvement and restores that best checkpoint before the final
 model is saved. Timed intra-epoch validation remains diagnostic and does not
 advance early-stopping patience.
+`--validation-interval <seconds>` controls timed intra-epoch validation and
+defaults to 1,800 seconds. The shared debug/release launcher sets it explicitly
+to 1,800 seconds. Its timer restarts after evaluation completes; baseline and
+end-of-epoch validation are unchanged.
 Every tenth completed batch logs `HH:MM:SS` estimates of the wall-clock time
 remaining in the current epoch and until all planned epochs finish. The
 estimates use elapsed epoch time and the completed example/window fraction, so
@@ -308,7 +366,9 @@ token. Values inherited from the previous SGD configuration, such as `0.03`,
 are too large for AdamW; start with `0.0003` and use validation trends when
 tuning it.
 
-If a previous run saturated or learned bad prompt completions, start a new release run with `FRESH_START=1 ./train_release.sh` so the script does not resume from the bad `models/after_training.st`.
+If a previous run saturated or learned bad prompt completions, start a new release
+run with `FRESH_START=1 ./train_release.sh` so the script does not resume from the
+layer-specific `after_training.st`.
 
 ## Extending Checkpoints
 
@@ -369,6 +429,13 @@ and run `build_debug/rllm` or `build_release/rllm`. Extra arguments passed to
 either wrapper are appended to the shared command, allowing a later option to
 override a default.
 
+Pass `--strip-comments` to either training wrapper to train on code without
+C/C++ or Python comments. This is a wrapper-only option: preprocessing creates
+temporary corpus copies, removes comments without removing comment-like text
+inside string literals, passes those copies to `rllm`, and leaves the source
+training directories unchanged. The temporary copies are removed when the
+training wrapper returns.
+
 Before the corpus is loaded, files in the selected training directory are
 normalized by `training_postprocessor.py`. Python files have every
 complete group of four leading spaces converted to a literal tab. The runtime
@@ -379,7 +446,9 @@ ordinary spaces.
 For controlled resume experiments, `--reset-optimizer-state` keeps the loaded
 weights, training cursor, and learning-rate position but clears all Adam moments
 and restarts the bias-correction step. `--restart-learning-rate-schedule` keeps
-the loaded weights, cursor, and Adam state but restarts the configured schedule.
+the loaded weights, cursor, and Adam state, discards the checkpoint's schedule
+position and total-step count, and recomputes a fresh schedule from the current
+training configuration.
 The options are independent and can be combined.
 The layer number and stage name on each line identify where amplification first
 appears without adding per-batch log volume.

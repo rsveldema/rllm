@@ -601,6 +601,28 @@ namespace rllm
         flush_training_progress_log_if_due(true);
     }
 
+    void TextTrainer::log_timed_checkpoint(
+        size_t epoch, size_t window, size_t total_windows_trained, double duration_ms)
+    {
+        const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        nlohmann::json entry{
+            {"timestamp_ms", timestamp_ms},
+            {"method", training_method_to_string(m_training_method)},
+            {"item_type", "checkpoint"},
+            {"phase", "timed"},
+            {"epoch", epoch},
+            {"window", window},
+            {"total_windows_trained", total_windows_trained},
+            {"duration_ms", duration_ms},
+            {"duration_seconds", duration_ms / 1000.0}
+        };
+        if (!m_training_progress_entries)
+            initialize_training_progress_log();
+        m_training_progress_entries->push_back(std::move(entry));
+        flush_training_progress_log_if_due(true);
+    }
+
     void TextTrainer::flush_training_progress_log() const
     {
         if (!m_training_progress_entries)
@@ -662,10 +684,11 @@ namespace rllm
 
         if (m_restart_learning_rate_schedule_on_load)
         {
+            m_learning_rate_schedule_steps = 0;
             m_loaded_learning_rate_step = 0;
             m_loaded_current_learning_rate = m_learning_rate;
             m_loaded_epochs_at_current_rate = 0;
-            LOG_INFO("Restarted loaded learning-rate schedule");
+            LOG_INFO("Restarted loaded learning-rate schedule and discarded its saved total-step count");
         }
     }
 
@@ -704,10 +727,8 @@ namespace rllm
         const float learning_rate = scheduled_rate * learning_rate_scale;
         const float peak_effective_rate = m_learning_rate * learning_rate_scale;
         const float log_delta = peak_effective_rate * 0.01f;
-        const size_t warmup_steps = m_learning_rate_schedule_steps == 0
-            ? 0
-            : std::max<size_t>(1, m_learning_rate_schedule_steps / 20 +
-                (m_learning_rate_schedule_steps % 20 != 0 ? 1 : 0));
+        const size_t warmup_steps = LoweringLearningRate::warmup_steps_for(
+            m_learning_rate_schedule_steps, m_warmup_percent);
         const size_t schedule_step = m_learning_rate_provider->step();
         const bool phase_boundary = schedule_step == warmup_steps ||
             schedule_step == m_learning_rate_schedule_steps;
@@ -756,7 +777,7 @@ namespace rllm
                     m_pending_optimizer_diagnostics.push_back(std::move(*metrics));
         }
 
-        for (size_t i = 0; i < m_transformer_blocks.size(); ++i)
+        for (size_t i = m_frozen_transformer_block_count; i < m_transformer_blocks.size(); ++i)
         {
             const float layer_learning_rate = learning_rate *
                 depth_learning_rate_multiplier(i + 1, learned_stage_count, m_layer_learning_rate_multiplier);
@@ -843,14 +864,18 @@ namespace rllm
         auto* p_dh = &ws.dh;
         auto* p_din = &ws.din;
         const auto transformer_started_at = std::chrono::steady_clock::now();
-        for (int i = static_cast<int>(m_transformer_blocks.size()) - 1; i >= 0; --i)
+        for (int i = static_cast<int>(m_transformer_blocks.size()) - 1;
+             i >= 0; --i)
         {
             {
                 const auto phase = std::format("before transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, phase.c_str());
             }
             m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, m_forward_workspace->transformer_workspaces[static_cast<size_t>(i)]);
-            m_transformer_blocks[i].accumulate_gradients(ws.transformer_block, m_gradient_accumulation_workspace->transformer_blocks[static_cast<size_t>(i)]);
+            if (static_cast<size_t>(i) >= m_frozen_transformer_block_count)
+                m_transformer_blocks[i].accumulate_gradients(
+                    ws.transformer_block,
+                    m_gradient_accumulation_workspace->transformer_blocks[static_cast<size_t>(i)]);
             {
                 const auto phase = std::format("after transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_din, m_seq_len, phase.c_str());
@@ -862,7 +887,8 @@ namespace rllm
 
         const auto input_started_at = std::chrono::steady_clock::now();
         check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, "before input layer backward");
-        m_input_layer.accumulate_backward(m_last_input, *p_dh, m_gradient_accumulation_workspace->embeddings);
+        m_input_layer.accumulate_backward(
+            m_last_input, *p_dh, m_gradient_accumulation_workspace->embeddings);
         if (timing)
             timing->backward_input_ms += elapsed_ms(input_started_at);
     }
@@ -1461,12 +1487,13 @@ namespace rllm
         }
 
         LOG_INFO(
-            "Window split: {} source files producing {} training windows, {} files also contributing {} reserved validation windows ({} evaluated); validation interval 5 minutes",
+            "Window split: {} source files producing {} training windows, {} files also contributing {} reserved validation windows ({} evaluated); validation interval {} seconds",
             files.size(),
             training_windows.size(),
             split.split_file_count,
             full_validation_window_count,
-            validation_windows.size());
+            validation_windows.size(),
+            m_validation_interval.count());
         LOG_INFO(
             "Corpus token count: {} source tokens across {} files; {} training token occurrences across {} windows per full epoch (validation windows excluded)",
             token_count(files), files.size(),
@@ -1504,11 +1531,12 @@ namespace rllm
         }
         else if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
         {
-            m_learning_rate_provider = std::make_unique<LoweringLearningRate>(m_learning_rate, m_learning_rate_schedule_steps);
+            m_learning_rate_provider = std::make_unique<LoweringLearningRate>(
+                m_learning_rate, m_learning_rate_schedule_steps, m_warmup_percent);
             LOG_INFO(
                 "Window training: maximum size {}, within-file stride {}; learning-rate schedule: {} planned optimizer steps, {:.1f}% warmup, cosine decay from {:.8f} to {:.8f}",
                 window_size, m_window_stride, m_learning_rate_schedule_steps,
-                LoweringLearningRate::WARMUP_FRACTION * 100.0f, m_learning_rate,
+                m_warmup_percent, m_learning_rate,
                 m_learning_rate * LoweringLearningRate::MIN_SCALE);
         }
         else
@@ -1550,7 +1578,7 @@ namespace rllm
         }
         size_t total_windows_trained = 0;
         auto last_checkpoint_at = std::chrono::steady_clock::now();
-        auto next_validation_at = std::chrono::steady_clock::now() + std::chrono::minutes{5};
+        auto next_validation_at = std::chrono::steady_clock::now() + m_validation_interval;
         float best_validation_loss = std::numeric_limits<float>::infinity();
         size_t epochs_without_improvement = 0;
         bool has_best_checkpoint = false;
@@ -1654,7 +1682,13 @@ namespace rllm
                 if (timed_checkpoint_due(checkpointing_interval, last_checkpoint_at))
                 {
                     LOG_INFO("creating timed checkpoint at epoch {}, window {}, total windows trained {}", epoch, start, total_windows_trained);
+                    const auto checkpoint_started_at = std::chrono::steady_clock::now();
                     checkpoint();
+                    const double checkpoint_ms = elapsed_ms(checkpoint_started_at);
+                    LOG_INFO(
+                        "timed checkpoint at epoch {}, window {} completed in {:.3f} seconds",
+                        epoch, start, checkpoint_ms / 1000.0);
+                    log_timed_checkpoint(epoch, start, total_windows_trained, checkpoint_ms);
                 }
 
                 const auto started = std::chrono::steady_clock::now();
@@ -1718,7 +1752,7 @@ namespace rllm
                         validation.mtp_average_loss,
                         validation_windows.size(),
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
-                    next_validation_at = std::chrono::steady_clock::now() + std::chrono::minutes{5};
+                    next_validation_at = std::chrono::steady_clock::now() + m_validation_interval;
                 }
             }
 
@@ -1755,7 +1789,7 @@ namespace rllm
                     validation.mtp_average_loss,
                     validation_windows.size(),
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
-                next_validation_at = std::chrono::steady_clock::now() + std::chrono::minutes{5};
+                next_validation_at = std::chrono::steady_clock::now() + m_validation_interval;
 
                 if ((validation.average_loss + VALIDATION_IMPROVEMENT_EPSILON) < best_validation_loss)
                 {
@@ -1821,6 +1855,12 @@ namespace rllm
         initialize_training_progress_log();
         Statistics::TotalLearnRecorderScope total_learn_recorder_scope(m_stats);
 
+        if (m_upgrade_mode && !input_filename)
+        {
+            std::println("Upgrade mode requires an input checkpoint");
+            std::exit(1);
+        }
+
         if (input_filename)
         {
             if (!load(*input_filename))
@@ -1835,6 +1875,20 @@ namespace rllm
         {
             LOG_INFO("No input model specified, starting with random weights.");
             set_random_weights_and_connections();
+        }
+
+        const size_t read_write_transformer_blocks =
+            m_transformer_blocks.size() - m_frozen_transformer_block_count;
+        LOG_INFO(
+            "Transformer block access: {} read-only, {} read-write",
+            m_frozen_transformer_block_count,
+            read_write_transformer_blocks);
+        if (m_frozen_transformer_block_count != 0)
+        {
+            LOG_INFO(
+                "Layer upgrade training keeps embeddings and output heads trainable; trainable transformer range is [{}, {})",
+                m_frozen_transformer_block_count,
+                m_transformer_blocks.size());
         }
 
         const size_t vocab = static_cast<size_t>(TokenID::MAX);

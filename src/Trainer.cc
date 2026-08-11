@@ -49,11 +49,13 @@ namespace rllm
         bool verbose,
         TrainingMethod method,
         std::optional<std::chrono::seconds> checkpointing_interval,
+        std::chrono::seconds validation_interval,
         int window_size,
         size_t window_stride,
         size_t learn_depth,
         float learning_rate,
         float layer_learning_rate_multiplier,
+        float warmup_percent,
         LearningRateSchedule learning_rate_schedule,
         float simulated_annealing_decay_factor,
         float simulated_annealing_initial_multiplier,
@@ -72,6 +74,9 @@ namespace rllm
         bool disable_training_diagnostics,
         bool reset_optimizer_state,
         bool restart_learning_rate_schedule,
+        bool upgrade_mode,
+        bool freeze_old_blocks,
+        bool all_blocks_read_write,
         const std::vector<std::string>& train_corpus_dirs
     )
     {
@@ -87,6 +92,18 @@ namespace rllm
             std::println("Per-example convergence removal disabled");
         if (disable_training_diagnostics)
             std::println("Optimizer and backward training diagnostics disabled");
+        if (upgrade_mode)
+            std::println("Layer upgrade mode enabled");
+        if (freeze_old_blocks && !upgrade_mode)
+        {
+            std::println("--freeze-old-blocks requires --upgrade-mode");
+            std::exit(1);
+        }
+        if (freeze_old_blocks && all_blocks_read_write)
+        {
+            std::println("--freeze-old-blocks and --all-blocks-read-write cannot be used together");
+            std::exit(1);
+        }
         if (learning_rate > 0.25f)
         {
             std::println(
@@ -135,6 +152,7 @@ namespace rllm
             {"learning_rate", learning_rate},
             {"learning_rate_schedule", schedule_name},
             {"layer_learning_rate_multiplier", layer_learning_rate_multiplier},
+            {"warmup_percent", warmup_percent},
             {"simulated_annealing_decay_factor", simulated_annealing_decay_factor},
             {"simulated_annealing_initial_multiplier", simulated_annealing_initial_multiplier},
             {"simulated_annealing_decay_epochs", simulated_annealing_decay_epochs},
@@ -145,6 +163,7 @@ namespace rllm
             {"micro_batch_size", micro_batch_size},
             {"epochs", num_epochs},
             {"checkpoint_interval_seconds", checkpointing_interval ? nlohmann::json(checkpointing_interval->count()) : nlohmann::json(nullptr)},
+            {"validation_interval_seconds", validation_interval.count()},
             {"epoch_size", epoch_size ? nlohmann::json(*epoch_size) : nlohmann::json(nullptr)},
             {"max_validation_windows", max_validation_windows},
             {"validation_worst_count", validation_worst_count},
@@ -153,6 +172,9 @@ namespace rllm
             {"disable_training_diagnostics", disable_training_diagnostics},
             {"reset_optimizer_state", reset_optimizer_state},
             {"restart_learning_rate_schedule", restart_learning_rate_schedule},
+            {"upgrade_mode", upgrade_mode},
+            {"freeze_old_blocks", freeze_old_blocks},
+            {"all_blocks_read_write", all_blocks_read_write},
             {"train_corpus_dirs", train_corpus_dirs},
             {"filters", m_filters}
         };
@@ -164,6 +186,7 @@ namespace rllm
         nn->set_learn_depth(learn_depth);
         nn->set_learning_rate(learning_rate);
         nn->set_layer_learning_rate_multiplier(layer_learning_rate_multiplier);
+        nn->set_warmup_percent(warmup_percent);
         nn->set_learning_rate_schedule(learning_rate_schedule);
         nn->set_simulated_annealing_decay_factor(simulated_annealing_decay_factor);
         nn->set_simulated_annealing_initial_multiplier(simulated_annealing_initial_multiplier);
@@ -175,11 +198,15 @@ namespace rllm
         nn->set_micro_batch_size(micro_batch_size);
         nn->set_max_validation_windows(max_validation_windows);
         nn->set_validation_worst_count(validation_worst_count);
+        nn->set_validation_interval(validation_interval);
         nn->set_early_stopping_enabled(!disable_early_stopping);
         nn->set_example_convergence_enabled(!disable_example_convergence);
         nn->set_training_diagnostics_enabled(!disable_training_diagnostics);
         nn->set_reset_optimizer_state_on_load(reset_optimizer_state);
         nn->set_restart_learning_rate_schedule_on_load(restart_learning_rate_schedule);
+        nn->set_upgrade_mode(upgrade_mode);
+        nn->set_freeze_old_blocks_on_upgrade(freeze_old_blocks);
+        nn->set_all_blocks_read_write(all_blocks_read_write);
 
         nn->train(verbose, num_epochs, input_filename, checkpointing_interval, epoch_size);
 

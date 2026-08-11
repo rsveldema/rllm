@@ -53,32 +53,47 @@ namespace rllm
     class LoweringLearningRate final : public ILearningRate
     {
       public:
-        static constexpr float WARMUP_FRACTION = 0.05f;
+        static constexpr float DEFAULT_WARMUP_PERCENT = 5.0f;
         static constexpr float MIN_SCALE = 0.10f;
 
-        LoweringLearningRate(float rate, size_t total_steps)
+        LoweringLearningRate(
+            float rate, size_t total_steps,
+            float warmup_percent = DEFAULT_WARMUP_PERCENT)
             : m_rate(rate)
             , m_total_steps(total_steps)
-        {}
+            , m_warmup_percent(warmup_percent)
+        {
+            assert(warmup_percent > 0.0f && warmup_percent <= 100.0f);
+        }
 
         float get_rate() override
         {
             ++m_step;
-            return m_rate * scale_for_step(m_step, m_total_steps);
+            return m_rate * scale_for_step(m_step, m_total_steps, m_warmup_percent);
         }
 
         size_t step() const override { return m_step; }
-        float current_rate() const override { return m_rate * scale_for_step(std::max<size_t>(m_step, 1), m_total_steps); }
+        float current_rate() const override { return m_rate * scale_for_step(std::max<size_t>(m_step, 1), m_total_steps, m_warmup_percent); }
         void restore(size_t step, float, size_t) override { m_step = step; }
 
-        static float scale_for_step(size_t step, size_t total_steps)
+        static size_t warmup_steps_for(size_t total_steps, float warmup_percent)
+        {
+            assert(warmup_percent > 0.0f && warmup_percent <= 100.0f);
+            if (total_steps == 0)
+                return 0;
+            return std::max<size_t>(1, static_cast<size_t>(std::ceil(
+                static_cast<double>(total_steps) * static_cast<double>(warmup_percent) / 100.0)));
+        }
+
+        static float scale_for_step(
+            size_t step, size_t total_steps,
+            float warmup_percent = DEFAULT_WARMUP_PERCENT)
         {
             if (total_steps == 0)
                 return 1.0f;
 
             step = std::clamp(step, size_t{1}, total_steps);
-            const size_t warmup_steps = std::max<size_t>(
-                1, total_steps / 20 + (total_steps % 20 != 0 ? 1 : 0));
+            const size_t warmup_steps = warmup_steps_for(total_steps, warmup_percent);
             if (step <= warmup_steps)
                 return static_cast<float>(step) / static_cast<float>(warmup_steps);
             if (warmup_steps == total_steps)
@@ -93,6 +108,7 @@ namespace rllm
       private:
         float m_rate;
         size_t m_total_steps;
+        float m_warmup_percent;
         size_t m_step = 0;
     };
 

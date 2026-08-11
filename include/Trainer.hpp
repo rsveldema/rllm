@@ -23,11 +23,13 @@ namespace rllm
             bool verbose,
             TrainingMethod method,
             std::optional<std::chrono::seconds> checkpointing_interval,
+            std::chrono::seconds validation_interval,
             int window_size,
             size_t window_stride,
             size_t learn_depth,
             float learning_rate,
             float layer_learning_rate_multiplier,
+            float warmup_percent,
             LearningRateSchedule learning_rate_schedule,
             float simulated_annealing_decay_factor,
             float simulated_annealing_initial_multiplier,
@@ -46,6 +48,9 @@ namespace rllm
             bool disable_training_diagnostics,
             bool reset_optimizer_state,
             bool restart_learning_rate_schedule,
+            bool upgrade_mode,
+            bool freeze_old_blocks,
+            bool all_blocks_read_write,
             const std::vector<std::string>& train_corpus_dirs
         );
       private:

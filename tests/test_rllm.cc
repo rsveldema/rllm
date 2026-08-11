@@ -59,6 +59,16 @@ TEST(LearningRateScheduleTest, WarmsUpThenCosineDecays)
     EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(1, 0), 1.0f);
 }
 
+TEST(LearningRateScheduleTest, WarmupPercentageControlsPlannedEpochFraction)
+{
+    constexpr size_t total_steps = 1000;
+    EXPECT_EQ(LoweringLearningRate::warmup_steps_for(total_steps, 1.0f), 10u);
+    EXPECT_EQ(LoweringLearningRate::warmup_steps_for(total_steps, 2.5f), 25u);
+    EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(5, total_steps, 1.0f), 0.5f);
+    EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(10, total_steps, 1.0f), 1.0f);
+    EXPECT_LT(LoweringLearningRate::scale_for_step(11, total_steps, 1.0f), 1.0f);
+}
+
 TEST(LearningRateScheduleTest, ConstantRateDoesNotChange)
 {
     ConstantLearningRate rate{0.25f};
@@ -415,6 +425,28 @@ TEST(CorpusTest, FileWindowsSpanLinesButNeverCrossFiles)
     EXPECT_EQ(windows[1].line.get(0u), TokenID::TOK_20);
     for (const auto pos : enum_iterator1D<PositionIndex>(windows[0].line.size()))
         EXPECT_NE(windows[0].line[pos], TokenID::TOK_20);
+}
+
+TEST(CorpusTest, ValidationWindowsReserveTargetsForAllAvailableMtpHeads)
+{
+    FileTokenSequence file;
+    for (size_t i = 0; i < 24; ++i)
+        file.push_back(static_cast<TokenID>(i));
+
+    const auto split = make_file_window_training_split(
+        {file}, 8, 1, 50, 32);
+
+    ASSERT_FALSE(split.validation_windows.empty());
+    for (const auto& window : split.validation_windows)
+    {
+        const size_t future_tokens = static_cast<size_t>(window.line.size())
+            - static_cast<size_t>(window.context_length);
+        EXPECT_EQ(
+            future_tokens,
+            std::min(
+                static_cast<size_t>(MultiTokenPredictionIndex::MAX),
+                static_cast<size_t>(window.line.size()) - 1));
+    }
 }
 
 TEST(CorpusTest, LargeFilesContributeTrainingAndValidationWindows)

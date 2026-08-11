@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -17,6 +18,23 @@
 
 namespace rllm
 {
+    std::optional<size_t> upgrade_frozen_transformer_block_count(
+        size_t saved_blocks, size_t requested_blocks, size_t saved_frozen_blocks,
+        bool freeze_old_blocks)
+    {
+        const bool starting_upgrade =
+            saved_blocks > 0 && requested_blocks > saved_blocks &&
+            saved_frozen_blocks < saved_blocks;
+        const bool resuming_upgrade =
+            saved_blocks > 0 && requested_blocks == saved_blocks &&
+            saved_frozen_blocks < saved_blocks;
+        if (!starting_upgrade && !resuming_upgrade)
+            return std::nullopt;
+        if (starting_upgrade && freeze_old_blocks)
+            return saved_blocks;
+        return saved_frozen_blocks;
+    }
+
     namespace
     {
         bool is_safetensors_model_filename(std::string_view filename)
@@ -127,6 +145,7 @@ namespace rllm
     {
         m_optimizer_step = 0;
         m_has_loaded_training_state = false;
+        m_frozen_transformer_block_count = 0;
         if (is_safetensors_model_filename(filename))
             return load_from_safetensors(filename);
 
@@ -178,6 +197,32 @@ namespace rllm
             const size_t requested_blocks = m_transformer_blocks.size();
             const size_t saved_blocks = blocks_j.size();
             const size_t target_blocks = std::max(requested_blocks, saved_blocks);
+            const size_t saved_frozen_blocks = j.value("frozen_transformer_blocks", size_t{0});
+            if (m_upgrade_mode)
+            {
+                const auto frozen_blocks = upgrade_frozen_transformer_block_count(
+                    saved_blocks, requested_blocks, saved_frozen_blocks,
+                    m_freeze_old_blocks_on_upgrade);
+                if (!frozen_blocks)
+                {
+                    std::println(
+                        "Upgrade mode requires a target deeper than its checkpoint, or a resumable checkpoint at the requested depth; got {} saved, {} requested, {} frozen",
+                        saved_blocks, requested_blocks, saved_frozen_blocks);
+                    return false;
+                }
+                m_frozen_transformer_block_count = *frozen_blocks;
+            }
+            else
+            {
+                if (saved_frozen_blocks > target_blocks)
+                {
+                    std::println("Invalid frozen transformer block count {} in {}", saved_frozen_blocks, filename);
+                    return false;
+                }
+                m_frozen_transformer_block_count = saved_frozen_blocks;
+            }
+            if (m_all_blocks_read_write)
+                m_frozen_transformer_block_count = 0;
             m_transformer_blocks.clear();
             m_transformer_blocks.reserve(target_blocks);
             for (const auto& b : blocks_j)
@@ -188,7 +233,7 @@ namespace rllm
             for (size_t i = saved_blocks; i < target_blocks; ++i)
             {
                 auto& block = m_transformer_blocks.emplace_back();
-                block.randomize();
+                block.randomize(m_weight_initializer, m_ffn_initializer);
             }
             if (target_blocks != saved_blocks)
             {
@@ -240,6 +285,7 @@ namespace rllm
         j["version"] = 1;
         j["tokenizer_vocab_size"] = static_cast<size_t>(TokenID::MAX);
         j["tokenizer_signature"] = tokenizer_signature();
+        j["frozen_transformer_blocks"] = m_frozen_transformer_block_count;
         j["input_layer"] = m_input_layer.save();
 
         auto blocks = nlohmann::json::array();
@@ -575,12 +621,14 @@ namespace rllm
         // Tokenizer metadata for validation on load.
         st.metadata.insert("tokenizer_vocab_size", std::to_string(static_cast<size_t>(TokenID::MAX)));
         st.metadata.insert("tokenizer_signature", std::to_string(tokenizer_signature()));
+        st.metadata.insert("frozen_transformer_blocks", std::to_string(m_frozen_transformer_block_count));
         if (m_learning_rate_provider)
         {
             st.metadata.insert("training_state_version", "1");
             st.metadata.insert("training.optimizer_step", std::to_string(m_optimizer_step));
             st.metadata.insert("training.learning_rate", std::to_string(m_learning_rate));
             st.metadata.insert("training.layer_learning_rate_multiplier", std::to_string(m_layer_learning_rate_multiplier));
+            st.metadata.insert("training.warmup_percent", std::to_string(m_warmup_percent));
             st.metadata.insert("training.learning_rate_schedule", std::to_string(static_cast<int>(m_learning_rate_schedule)));
             st.metadata.insert("training.learning_rate_schedule_steps", std::to_string(m_learning_rate_schedule_steps));
             st.metadata.insert("training.simulated_annealing_decay_factor", std::to_string(m_simulated_annealing_decay_factor));
@@ -655,6 +703,16 @@ namespace rllm
                 return header.count(key) && header.at(key, &value);
             };
             int schedule = 0;
+            std::string warmup_percent_text;
+            if (header.count("training.warmup_percent") &&
+                (!header.at("training.warmup_percent", &warmup_percent_text) ||
+                 !parse_metadata_number(warmup_percent_text, m_warmup_percent) ||
+                 !std::isfinite(m_warmup_percent) ||
+                 m_warmup_percent <= 0.0f || m_warmup_percent > 100.0f))
+            {
+                std::println("Invalid warmup percentage in {}", filename);
+                return false;
+            }
             if (!parse_value("training.optimizer_step", m_optimizer_step) ||
                 !parse_value("training.learning_rate", m_learning_rate) ||
                 !parse_value("training.layer_learning_rate_multiplier", m_layer_learning_rate_multiplier) ||
@@ -733,6 +791,55 @@ namespace rllm
             ++num_blocks;
         const size_t requested_blocks = m_transformer_blocks.size();
         const size_t target_blocks = std::max(requested_blocks, num_blocks);
+        const bool resized_model = target_blocks != num_blocks;
+        size_t saved_frozen_blocks = 0;
+        std::string frozen_blocks_text;
+        if (header.count("frozen_transformer_blocks") &&
+            (!header.at("frozen_transformer_blocks", &frozen_blocks_text) ||
+             !parse_metadata_number(frozen_blocks_text, saved_frozen_blocks)))
+        {
+            std::println("Invalid frozen transformer block count in {}", filename);
+            return false;
+        }
+        if (m_upgrade_mode)
+        {
+            const auto frozen_blocks = upgrade_frozen_transformer_block_count(
+                num_blocks, requested_blocks, saved_frozen_blocks,
+                m_freeze_old_blocks_on_upgrade);
+            if (!frozen_blocks)
+            {
+                std::println(
+                    "Upgrade mode requires a target deeper than its checkpoint, or a resumable checkpoint at the requested depth; got {} saved, {} requested, {} frozen",
+                    num_blocks, requested_blocks, saved_frozen_blocks);
+                return false;
+            }
+            m_frozen_transformer_block_count = *frozen_blocks;
+        }
+        else
+        {
+            if (saved_frozen_blocks > target_blocks)
+            {
+                std::println("Invalid frozen transformer block count {} in {}", saved_frozen_blocks, filename);
+                return false;
+            }
+            m_frozen_transformer_block_count = saved_frozen_blocks;
+        }
+        if (m_all_blocks_read_write)
+            m_frozen_transformer_block_count = 0;
+
+        if (resized_model && m_has_loaded_training_state)
+        {
+            m_checkpoint_epoch = 0;
+            m_checkpoint_window = 0;
+            m_checkpoint_window_count = 0;
+            m_reset_optimizer_state_on_load = true;
+            m_restart_learning_rate_schedule_on_load = true;
+            m_learning_rate_schedule_steps = 0;
+            std::println(
+                "Reset training cursor, optimizer, and learning-rate schedule after extending model from {} to {} transformer blocks",
+                num_blocks,
+                target_blocks);
+        }
 
         m_input_layer.load_from_safetensors(filename);
         if (m_has_loaded_training_state)
@@ -781,7 +888,7 @@ namespace rllm
         for (size_t bi = num_blocks; bi < target_blocks; ++bi)
         {
             auto& block = m_transformer_blocks.emplace_back();
-            block.randomize();
+            block.randomize(m_weight_initializer, m_ffn_initializer);
         }
         if (target_blocks != num_blocks)
         {

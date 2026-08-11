@@ -16,6 +16,30 @@
 #include <nlohmann/json.hpp>
 #include <gtest/gtest.h>
 
+TEST(SerializationTest, UpgradeModeAcceptsAnyDepthIncreaseAndItsResume)
+{
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(2, 4, 0, true), 2u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(2, 4, 0, false), 0u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(4, 4, 2, false), 2u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(4, 4, 0, true), 0u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(4, 6, 0, true), 4u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(4, 6, 0, false), 0u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(4, 6, 2, false), 2u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(8, 16, 0, true), 8u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(8, 16, 0, false), 0u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(16, 16, 8, false), 8u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(16, 16, 0, false), 0u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(16, 16, 0, true), 0u);
+
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(8, 8, 0, true), 0u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(4, 8, 0, true), 4u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(2, 4, 1, true), 2u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(3, 3, 0, true), 0u);
+    EXPECT_EQ(rllm::upgrade_frozen_transformer_block_count(16, 16, 4, false), 4u);
+    EXPECT_FALSE(rllm::upgrade_frozen_transformer_block_count(6, 4, 0, true).has_value());
+    EXPECT_FALSE(rllm::upgrade_frozen_transformer_block_count(4, 6, 4, true).has_value());
+}
+
 // ---------------------------------------------------------------------------
 // JSON layer round-trip: InputLayer embeddings
 // ---------------------------------------------------------------------------
