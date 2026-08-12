@@ -1,5 +1,21 @@
 # Training Utilities
 
+Launch training by passing a JSON configuration file:
+
+```bash
+./train.py config-6.json
+./train.py config-6.json --fresh-start
+./train.py config-6.json --resume-model models-6/checkpoint-best-window.st
+```
+
+The configuration owns the build type, model directory, layer
+count, window size and stride, learn depth, source mixture, comment processing,
+CMake arguments, and rLLM training arguments. `config-6.json` describes the
+six-layer release model. The launcher does not read training options from
+environment variables. Resume behavior is selected with the mutually exclusive
+`--fresh-start` and `--resume-model PATH` command-line options; with neither,
+the launcher selects a compatible checkpoint automatically.
+
 `--train-dir <path>` may be repeated. Add `:<weight>` to define the desired
 share of epoch draws for each source, for example `--train-dir curriculum:0.2
 --train-dir training_data2:0.8`. Weights are normalized across non-empty
@@ -7,25 +23,17 @@ sources, so small curriculum corpora can remain represented without being
 overwhelmed by a larger source. Sampling cycles through shuffled source windows
 before repeating them. Unweighted directories default to weight `1`.
 
-The shared training launcher uses `training_data0`, the `curriculum/grammar`,
+The Python training launcher uses `training_data0`, the `curriculum/grammar`,
 `curriculum/syntax`, `curriculum/comments`, and `curriculum/systems` categories,
-and `training_data2` as a weighted mixture. Setting `TRAIN_DIR` keeps the legacy
-single-source override.
+and `training_data2` as a weighted mixture. Change `sources` in the JSON to use
+a different corpus or weighting.
 
-`train_release.sh` and `train_debug.sh` store artifacts in a layer-specific
-directory such as `models-4/`. They try to resume from `RESUME_MODEL`, the
-matching layer directory, or—when starting a depth-increasing upgrade—the best
-checkpoint or final model in the deepest available `models-N/` below the target
-depth.
-The launcher derives the maximum training window from model depth as
-`min(256, 16 * layers)`, so 2-, 4-, 8-, and 16-layer models use window sizes
-32, 64, 128, and 256 respectively. A trailing `--method window:N` argument
-overrides this default. The launcher sets window stride to half the computed
-window size (16, 32, 64, and 128 respectively); a trailing `--window-stride N`
-argument overrides it.
-Learn depth is `max(1, layers / 2)`, so 2-, 4-, 8-, and 16-layer models use
-learn depths 1, 2, 4, and 8 respectively. A trailing `--learn-depth N` argument
-overrides this default.
+`./train.py config-6.json` stores artifacts in the configured model directory.
+Unless `--fresh-start` or `--resume-model` is supplied, it tries to resume from
+the matching model directory or—when starting a depth-increasing upgrade—the
+best checkpoint or final model in the deepest available `models-N/` below the
+target depth. Window size, stride, and learn depth are explicit JSON fields; the
+six-layer configuration uses 96, 48, and 3 respectively.
 
 Every saved model has a sibling `<model filename>.training.json` containing the
 training configuration. Resume both weights and settings with, for example,
@@ -53,12 +61,11 @@ the complete model participate in learning again. The next checkpoint persists
 the cleared boundary. At startup, `train.log` and the console report the exact
 number of read-only and read-write transformer blocks.
 
-When the shared debug/release launcher finds a checkpoint to resume, it supplies
+When the Python launcher finds a checkpoint to resume, it supplies
 `--upgrade-mode --freeze-old-blocks` by default, using the layer count configured
-later in the launcher (currently 4). A fresh-start run uses a random model at that
-configured depth without upgrade mode. Because user arguments are
-placed last, passing `--all-blocks-read-write` to the launcher overrides its
-default freeze for a resumed model.
+in JSON. A fresh-start run uses a random model at that configured depth without
+upgrade mode. Add `--all-blocks-read-write` to the JSON `training_arguments` to
+override the default freeze for a resumed model.
 
 Safetensors checkpoints created during training also embed resumable optimizer
 state: Adam first and second moments for embeddings, transformer parameters,
@@ -83,13 +90,13 @@ epoch-complete checkpoints continue at the following epoch. Checkpoints written
 before the window-count metadata was introduced recover a non-batch-aligned
 cursor as the old end-of-epoch representation.
 
-Before auto-resuming, the scripts compare the checkpoint tokenizer vocabulary size with the generated runtime tokenizer. Incompatible automatic checkpoints are skipped and training starts from random weights. An explicitly supplied `RESUME_MODEL` must be compatible; if it is not, the script exits instead of silently ignoring the requested model.
+Before auto-resuming, the launcher compares the checkpoint tokenizer vocabulary size with the generated runtime tokenizer. Incompatible automatic checkpoints are skipped and training starts from random weights. A model supplied through `--resume-model` must be compatible; if it is not, the launcher exits instead of silently ignoring the requested model.
 
 This matters after tokenizer changes, such as adding the `INVALID` token, because old checkpoints have weight matrices with the previous vocabulary size.
 
-The release and debug training scripts use `training_data2` by default and do
-not set a filename filter, so every program in that directory is included.
-Set `TRAIN_DIR` to select another corpus. Passing one or more
+The supplied configuration uses `training_data2` and does not set a filename
+filter, so every program in that directory is included.
+Edit the configuration's `sources` array to select another corpus. Passing one or more
 `--filter` options explicitly narrows loading to filenames containing any of
 those values. When using `curriculum`, its `preprocessor.cpp` supplies
 dedicated completion examples for prefixes such as `#`, `#in`, and `#if`.
@@ -102,7 +109,7 @@ write for every token candidate.
 Unit tests set `RLLM_MODEL_DIR=test_models` and clean only that directory.
 Timed checkpoints, best checkpoints, training progress, and tokenization logs
 created by tests never use the production `models/` directory.
-The shared debug/release training launcher requests a timed checkpoint every
+The Python training launcher requests a timed checkpoint every
 600 seconds, for at most six timed checkpoints per hour of uninterrupted
 training.
 
@@ -134,7 +141,7 @@ model or checkpoint save, the complete progress array is written there.
 Training batches also flush it at most every 15 seconds. Long validation passes
 write `validation_progress` entries and text-log updates every 15 seconds with
 the completed count, running head-zero loss, elapsed time, and ETA. For example,
-The shared launcher output `models-<layers>/after_training.st` uses
+The Python launcher output `models-<layers>/after_training.st` uses
 `models-<layers>/train.json` and `models-<layers>/train.log`.
 Restarting training loads and extends the existing JSON array, while truncating
 the text log for the new process. This preserves one continuous structured
@@ -167,7 +174,7 @@ legacy-uniform`. Fresh-model runs log all three selected initializers in
 
 The `xavier-input-projections` weight/FFN profile applies Xavier initialization
 only to Q/K/V and FFN gate/up matrices. Attention output, FFN down, and the LM
-head use legacy scaling. `train_release.sh` selects this mixed profile and uses
+head use legacy scaling. `train.py` selects this mixed profile and uses
 legacy token embeddings.
 
 ## Epoch Size
@@ -180,7 +187,7 @@ wrapper sets that value explicitly.
 
 `--validation-worst-count <N>` controls how many of the highest-loss validation
 predictions are written to `train.log`. Its default is `5`; the shared
-release/debug training wrapper sets it to `100`.
+Python training launcher sets it to `100`.
 
 `--micro-batch-size <N>` must be between `1` and the compiled
 `BatchIndex::MAX`. Larger values are rejected during argument parsing because
@@ -199,7 +206,7 @@ stride before constructing the training and validation windows.
 ## Learning Rate
 
 `--learning-rate <R>` sets the base learning rate used during training. The
-binary default for AdamW is `0.0003`; `train_release.sh` currently selects
+binary default for AdamW is `0.0003`; `train.py` currently selects
 `0.00001` explicitly.
 
 `--learning-rate-schedule constant|lowering|simulated_annealing` selects the learning-rate
@@ -214,7 +221,7 @@ of the planned epochs and accepts values in `(0, 100]`; its default is `5`.
 rate by `--simulated-annealing-decay-factor <F>` (default `0.8`) until
 reaching `--simulated-annealing-min-multiplier <M>` times the configured base
 rate (default `0.02`, or one fiftieth). The factor must be
-greater than zero and less than one. `train_release.sh` currently selects
+greater than zero and less than one. `train.py` currently selects
 `simulated_annealing`.
 
 The configured rate is the actual AdamW base rate and is not divided by the
@@ -231,7 +238,7 @@ learning across depth without increasing the model's average configured rate.
 Window training applies the configured linear learning-rate warmup followed by
 cosine decay to 10% of the configured base rate. The schedule is calculated
 from the number of windows, epochs, and allowed updates per window, so a 1%
-warmup spans 1% of the planned epochs. The shared debug/release launcher selects
+warmup spans 1% of the planned epochs. The Python launcher selects
 `--warmup-percent 1`. For example, a base rate of `0.00005` decays to
 `0.000005`. Current checkpoints restore the optimizer, warmup percentage, and
 schedule position; legacy checkpoints use the CLI/default warmup percentage.
@@ -332,7 +339,7 @@ epochs without improvement and restores that best checkpoint before the final
 model is saved. Timed intra-epoch validation remains diagnostic and does not
 advance early-stopping patience.
 `--validation-interval <seconds>` controls timed intra-epoch validation and
-defaults to 1,800 seconds. The shared debug/release launcher sets it explicitly
+defaults to 1,800 seconds. The Python launcher sets it explicitly
 to 1,800 seconds. Its timer restarts after evaluation completes; baseline and
 end-of-epoch validation are unchanged.
 Every tenth completed batch logs `HH:MM:SS` estimates of the wall-clock time
@@ -366,9 +373,9 @@ token. Values inherited from the previous SGD configuration, such as `0.03`,
 are too large for AdamW; start with `0.0003` and use validation trends when
 tuning it.
 
-If a previous run saturated or learned bad prompt completions, start a new release
-run with `FRESH_START=1 ./train_release.sh` so the script does not resume from the
-layer-specific `after_training.st`.
+If a previous run saturated or learned bad prompt completions, pass
+`--fresh-start` so the launcher does not resume from the configured
+`after_training.st`.
 
 ## Extending Checkpoints
 
@@ -417,24 +424,23 @@ activations and per-head `d_scores`, making an anomalous head or forward value
 visible when score gradients spike. These additional forward and per-head
 diagnostics are compiled when the CMake option `DEBUG_ATTENTION_DIAGNOSTICS` is
 enabled (the default); disable it to remove their runtime and binary overhead.
-`train_release.sh` explicitly enables this option and leaves per-epoch optimizer
+`train.py` explicitly enables this option and leaves per-epoch optimizer
 and backward-pass diagnostic collection enabled so `train.json` contains the
 optimizer diagnostic samples. Additional CMake options can be passed directly
 to `build_release.sh`.
 
-`train_debug.sh` and `train_release.sh` use the same preprocessing, compatible
-checkpoint selection, diagnostic-enabled training configuration, and runtime
-arguments from `scripts/train_common.sh`; they differ only in whether they build
-and run `build_debug/rllm` or `build_release/rllm`. Extra arguments passed to
-either wrapper are appended to the shared command, allowing a later option to
-override a default.
+The `build_type` field selects whether the launcher builds and runs
+`build_debug/rllm` or `build_release/rllm`. All other runtime arguments come
+from the same JSON file. For example, change the value following `--epochs` in
+`training_arguments` to alter the epoch count.
 
-Pass `--strip-comments` to either training wrapper to train on code without
-C/C++ or Python comments. This is a wrapper-only option: preprocessing creates
-temporary corpus copies, removes comments without removing comment-like text
-inside string literals, passes those copies to `rllm`, and leaves the source
-training directories unchanged. The temporary copies are removed when the
-training wrapper returns.
+The Python launcher removes comments by default. The default source mix omits
+the dedicated `curriculum/comments` corpus, and preprocessing creates temporary
+copies of the remaining corpora with C/C++ and Python comments removed. Text
+that merely resembles a comment inside a string literal is preserved. The
+source training directories remain unchanged and the temporary copies are
+removed when the launcher returns. Set `strip_comments` to `false` to preserve
+comments in the selected source corpora.
 
 Before the corpus is loaded, files in the selected training directory are
 normalized by `training_postprocessor.py`. Python files have every

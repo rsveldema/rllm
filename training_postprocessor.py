@@ -161,6 +161,12 @@ def strip_python_comments(text: str) -> str:
 	return tokenize.untokenize(token for token in tokens if token.type != tokenize.COMMENT)
 
 
+def drop_blank_lines(text: str) -> str:
+	"""Remove lines left empty after their comments were stripped."""
+	lines = [line for line in text.splitlines() if line.strip()]
+	return "\n".join(lines) + ("\n" if lines else "")
+
+
 def is_etc_abbreviation(text: str, dot_index: int) -> bool:
 	start = dot_index - 1
 	while start >= 0 and text[start].isalpha():
@@ -203,11 +209,11 @@ def process_file(path: Path, strip_comments: bool = False) -> bool:
 	if suffix in C_EXTENSIONS:
 		updated = normalize_c_cpp(updated)
 		if strip_comments:
-			updated = strip_c_cpp_comments(updated)
+			updated = drop_blank_lines(strip_c_cpp_comments(updated))
 	elif suffix in PYTHON_EXTENSIONS:
 		updated = normalize_python_indentation(updated)
 		if strip_comments:
-			updated = strip_python_comments(updated)
+			updated = drop_blank_lines(strip_python_comments(updated))
 	elif suffix in TEXT_EXTENSIONS:
 		updated = split_text_sentences(updated)
 

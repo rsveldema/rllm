@@ -20,7 +20,7 @@ Offload dispatch note:
 
 - In `vulkan` offload mode, kernel launch helpers dispatch through kernel_compiler generated stubs and SPIR-V.
 - Set `NAN_FINDING_MODE=1` to run extra offloaded checks around `TransformerBlock` and `OutputLayer` forward/backward passes. The checks abort if model weights or optimizer velocities become NaN or leave their clamp ranges.
-- Set `FRESH_START=1` when running `train_release.sh` to ignore existing checkpoints and start from random weights.
+- Run `./train.py config-6.json --fresh-start` to ignore existing checkpoints and start from random weights.
 
 Compatibility matrix:
 

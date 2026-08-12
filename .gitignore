@@ -23,7 +23,7 @@ cmake_test_discovery*
 perf*.data
 build_profile_vulkan_stats
 cmake_test_discovery*
-models/*
+models-*/*
 VP_VULKANINFO_AMD_Radeon_AI_PRO_R9700_(RADV_GFX1201)_26_1_3.json
 old-training.txt
 tiny-full-corpus-reference.json
