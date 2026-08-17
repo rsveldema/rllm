@@ -44,6 +44,9 @@ struct CommandLineParser
     std::string output_filename = "model.json";
     std::optional<std::string> input_filename;
     std::optional<std::string> one_shot_prompt;
+    std::optional<std::string> dump_concepts_filename;
+    size_t concept_neighbors = 10;
+    float concept_min_similarity = 0.5f;
     int num_layers = 4;
     bool verbose = false;
     size_t num_epochs = 1000;
@@ -58,6 +61,7 @@ struct CommandLineParser
     float learning_rate = rllm::TextTrainer::DEFAULT_LEARNING_RATE;
     float layer_learning_rate_multiplier = rllm::DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER;
     float warmup_percent = rllm::LoweringLearningRate::DEFAULT_WARMUP_PERCENT;
+    bool skip_warmup = false;
     rllm::LearningRateSchedule learning_rate_schedule = rllm::LearningRateSchedule::Lowering;
     float simulated_annealing_decay_factor = 0.8f;
     float simulated_annealing_initial_multiplier = 50.0f;
@@ -78,6 +82,8 @@ struct CommandLineParser
     bool upgrade_mode = false;
     bool freeze_old_blocks = false;
     bool all_blocks_read_write = false;
+    float upgrade_residual_output_scale = 1.0f;
+    bool reset_training_cursor = false;
     bool nan_finding_mode = false;
     std::optional<std::string> vulkan_device;
 
@@ -106,6 +112,7 @@ struct CommandLineParser
         warmup_percent = j.value("warmup_percent", warmup_percent);
         if (!std::isfinite(warmup_percent) || warmup_percent <= 0.0f || warmup_percent > 100.0f)
             fail("warmup_percent must be in (0, 100]");
+        skip_warmup = j.value("skip_warmup", skip_warmup);
         simulated_annealing_decay_factor = j.value("simulated_annealing_decay_factor", simulated_annealing_decay_factor);
         simulated_annealing_initial_multiplier = j.value("simulated_annealing_initial_multiplier", simulated_annealing_initial_multiplier);
         simulated_annealing_decay_epochs = j.value("simulated_annealing_decay_epochs", simulated_annealing_decay_epochs);
@@ -134,9 +141,12 @@ struct CommandLineParser
         disable_training_diagnostics = j.value("disable_training_diagnostics", disable_training_diagnostics);
         reset_optimizer_state = j.value("reset_optimizer_state", reset_optimizer_state);
         restart_learning_rate_schedule = j.value("restart_learning_rate_schedule", restart_learning_rate_schedule);
+        reset_training_cursor = j.value("reset_training_cursor", reset_training_cursor);
         upgrade_mode = j.value("upgrade_mode", upgrade_mode);
         freeze_old_blocks = j.value("freeze_old_blocks", freeze_old_blocks);
         all_blocks_read_write = j.value("all_blocks_read_write", all_blocks_read_write);
+        upgrade_residual_output_scale = j.value(
+            "upgrade_residual_output_scale", upgrade_residual_output_scale);
         if (j.contains("checkpoint_interval_seconds"))
             checkpointing_interval = j["checkpoint_interval_seconds"].is_null() ? std::nullopt :
                 std::optional<std::chrono::seconds>{std::chrono::seconds{j["checkpoint_interval_seconds"].get<long long>()}};
@@ -231,6 +241,22 @@ struct CommandLineParser
              all_blocks_read_write = true;
              freeze_old_blocks = false;
          }},
+        {.options = {"--upgrade-residual-output-scale"},
+         .description = "Scale W_o and W_down when initializing newly added transformer blocks (default: 1)",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             char* end = nullptr;
+             const float value = std::strtof(args[0].c_str(), &end);
+             if (end == args[0].c_str() || *end != '\0' || !std::isfinite(value) || value <= 0.0f || value > 1.0f)
+             {
+                 std::println("--upgrade-residual-output-scale requires a value in (0, 1], got '{}'", args[0]);
+                 std::exit(1);
+             }
+             upgrade_residual_output_scale = value;
+         }},
+        {.options = {"--reset-training-cursor"},
+         .description = "Start a fresh local epoch phase after loading checkpoint weights",
+         .action = [&](const std::vector<std::string>&) { reset_training_cursor = true; }},
         {.options = {"--checkpoint-interval"},
          .description = "Extra timed checkpoint cadence; <=0 disables",
          .required_args = 1,
@@ -325,6 +351,11 @@ struct CommandLineParser
                  std::exit(1);
              }
              warmup_percent = percent;
+         }},
+        {.options = {"--skip-warmup"},
+         .description = "Use the full base learning rate during the lowering schedule's warmup interval",
+         .action = [&](const std::vector<std::string>&) {
+             skip_warmup = true;
          }},
         {.options = {"--weight-initializer"},
          .description = "Weight initializer: xavier-uniform, xavier-input-projections, or legacy-uniform (default: xavier-input-projections)",
@@ -599,6 +630,41 @@ struct CommandLineParser
              [&](const std::vector<std::string>& args) {
                  one_shot_prompt = args[0];
              }},
+        {.options = {"--dump-concepts"},
+         .description = "Write token embedding nearest neighbors as JSON, then exit",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) { dump_concepts_filename = args[0]; }},
+        {.options = {"--concept-neighbors"},
+         .description = "Maximum neighbors per dumped concept (default: 10)",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             char* end = nullptr;
+             errno = 0;
+             const unsigned long long value = std::strtoull(args[0].c_str(), &end, 10);
+             if (errno != 0 || end == args[0].c_str() || *end != '\0' || value == 0 ||
+                 value >= static_cast<size_t>(rllm::TokenID::MAX))
+             {
+                 std::println("--concept-neighbors requires an integer between 1 and {}, got '{}'",
+                     static_cast<size_t>(rllm::TokenID::MAX) - 1, args[0]);
+                 std::exit(1);
+             }
+             concept_neighbors = static_cast<size_t>(value);
+         }},
+        {.options = {"--concept-min-similarity"},
+         .description = "Minimum cosine similarity for dumped neighbors (default: 0.5)",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             char* end = nullptr;
+             errno = 0;
+             const float value = std::strtof(args[0].c_str(), &end);
+             if (errno != 0 || end == args[0].c_str() || *end != '\0' ||
+                 !std::isfinite(value) || value < -1.0f || value > 1.0f)
+             {
+                 std::println("--concept-min-similarity requires a value in [-1, 1], got '{}'", args[0]);
+                 std::exit(1);
+             }
+             concept_min_similarity = value;
+         }},
         {.options = {"--method"},
          .description = std::format(
              "Training method: window:<N> or reverse_window[:N], with metadata prefixes and all-position causal loss (N >= 4)"
@@ -610,9 +676,10 @@ struct CommandLineParser
                  if (m.starts_with("window:"))
                  {
                      const int n = std::atoi(m.c_str() + 7);
-                     if (n < 4)
+                     const int max_window = static_cast<int>(rllm::PositionIndex::MAX);
+                     if (n < 4 || n > max_window)
                      {
-                         std::println("window:<N> requires N >= 4, got '{}'", m);
+                         std::println("window:<N> requires N in [4, {}], got '{}'", max_window, m);
                          std::exit(1);
                      }
                      method = rllm::TrainingMethod::WINDOW;
@@ -621,9 +688,10 @@ struct CommandLineParser
                  else if (m == "reverse_window" || m.starts_with("reverse_window:"))
                  {
                      const int n = m == "reverse_window" ? window_size : std::atoi(m.c_str() + 15);
-                     if (n < 4)
+                     const int max_window = static_cast<int>(rllm::PositionIndex::MAX);
+                     if (n < 4 || n > max_window)
                      {
-                         std::println("reverse_window:<N> requires N >= 4, got '{}'", m);
+                         std::println("reverse_window:<N> requires N in [4, {}], got '{}'", max_window, m);
                          std::exit(1);
                      }
                      method = rllm::TrainingMethod::REVERSE_WINDOW;
@@ -639,14 +707,19 @@ struct CommandLineParser
                  }
              }},
         {.options = {"--mtp-heads"},
-         .description = "Number of MTP heads to use for token generation during prompting (default: 1, max: 4)",
+         .description = std::format(
+             "Number of MTP heads to use for token generation during prompting (default: 1, max: {})",
+             static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX)),
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
                  const int n = std::atoi(args[0].c_str());
-                 if (n < 1 || n > 4)
+                 const int max_heads = static_cast<int>(rllm::MultiTokenPredictionIndex::MAX);
+                 if (n < 1 || n > max_heads)
                  {
-                     std::println("--mtp-heads requires a value between 1 and 4, got '{}'", args[0]);
+                     std::println(
+                         "--mtp-heads requires a value between 1 and {}, got '{}'",
+                         max_heads, args[0]);
                      std::exit(1);
                  }
                  mtp_heads = static_cast<size_t>(n);
@@ -708,6 +781,11 @@ struct CommandLineParser
             std::println("Error: --train requires --train-dir <path>");
             print_usage_and_exit(argv[0], 1);
         }
+        if (train_mode && dump_concepts_filename)
+        {
+            std::println("Error: --dump-concepts cannot be combined with --train");
+            print_usage_and_exit(argv[0], 1);
+        }
     }
 };
 
@@ -739,7 +817,6 @@ int main(int argc, char* argv[])
 #endif
 
     std::println("Offload type: Vulkan");
-    parallel::print_vulkan_provider();
     rllm::set_nan_finding_mode_enabled(parser.nan_finding_mode);
 
     if (parser.train_mode)
@@ -759,6 +836,7 @@ int main(int argc, char* argv[])
             parser.learning_rate,
             parser.layer_learning_rate_multiplier,
             parser.warmup_percent,
+            parser.skip_warmup,
             parser.learning_rate_schedule,
             parser.simulated_annealing_decay_factor,
             parser.simulated_annealing_initial_multiplier,
@@ -780,17 +858,24 @@ int main(int argc, char* argv[])
             parser.upgrade_mode,
             parser.freeze_old_blocks,
             parser.all_blocks_read_write,
+            parser.upgrade_residual_output_scale,
+            parser.reset_training_cursor,
             parser.train_corpus_dirs
         );
     }
     else
     {
+        parallel::print_vulkan_provider();
         rllm::Prompter prompter(parser.filters);
-        prompter.prompt_mode(
-            parser.input_filename ? *parser.input_filename : parser.output_filename,
-            parser.one_shot_prompt,
-            parser.mtp_heads
-        );
+        const std::string model_filename = parser.input_filename ? *parser.input_filename : parser.output_filename;
+        if (parser.dump_concepts_filename)
+        {
+            if (!prompter.dump_concepts(model_filename, *parser.dump_concepts_filename,
+                                        parser.concept_neighbors, parser.concept_min_similarity))
+                return 1;
+        }
+        else
+            prompter.prompt_mode(model_filename, parser.one_shot_prompt, parser.mtp_heads);
     }
 
     return 0;

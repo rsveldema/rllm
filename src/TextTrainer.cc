@@ -534,6 +534,9 @@ namespace rllm
             {"timestamp_ms", timestamp_ms},
             {"method", training_method_to_string(m_training_method)},
             {"item_type", item_type},
+            {"layers", m_transformer_blocks.size()},
+            {"window_size", m_window_size},
+            {"window_stride", m_window_stride},
             {"epoch", epoch},
             {"epoch_percent", static_cast<double>(epoch) / static_cast<double>(num_epochs) * 100.0},
             {"range_start", range_start},
@@ -737,7 +740,8 @@ namespace rllm
         {
             const char* phase = "constant";
             if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
-                phase = schedule_step <= warmup_steps ? "warmup" : "cosine-decay";
+                phase = schedule_step <= warmup_steps ?
+                    (m_skip_warmup ? "warmup-skipped" : "warmup") : "cosine-decay";
             else if (m_learning_rate_schedule == LearningRateSchedule::SimulatedAnnealing)
                 phase = "simulated_annealing";
             LOG_INFO(
@@ -1014,12 +1018,25 @@ namespace rllm
             auto& forward = *m_forward_workspace;
             forward.reset(queue, rows);
             m_input_layer.propagate_forward(packed, *m_gpu_packed_batch, forward.h);
+            const bool diagnose_first_batch = completed_windows == 0;
+            if (diagnose_first_batch)
+                queue.wait("baseline validation input-layer forward");
             for (size_t block = 0; block < m_transformer_blocks.size(); ++block)
+            {
                 m_transformer_blocks[block].forward_batched(
                     forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[block]);
+                if (diagnose_first_batch)
+                {
+                    const auto label = std::format(
+                        "baseline validation transformer block {} forward", block);
+                    queue.wait(label.c_str());
+                }
+            }
             gather_validation_last_hidden(
                 forward.h, m_gpu_packed_batch->last_row,
                 m_batched_output_workspace->h_last, static_cast<int>(batch_size));
+            if (diagnose_first_batch)
+                queue.wait("baseline validation hidden-state gather");
 
             std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> expected_by_head;
             std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> active_by_head;
@@ -1043,11 +1060,25 @@ namespace rllm
                 m_output_layers[head].forward_batched(
                     m_batched_output_workspace->h_last, batch_size,
                     m_batched_output_workspace->logits, queue);
+                if (diagnose_first_batch)
+                {
+                    const auto label = std::format(
+                        "baseline validation output head {} forward",
+                        static_cast<size_t>(head));
+                    queue.wait(label.c_str());
+                }
                 m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected);
                 m_batched_output_workspace->active_examples.copy_from_cpu(queue, active);
                 m_output_layers[head].compute_batched_delta(
                     m_batched_output_workspace->logits, batch_size,
                     *m_batched_output_workspace, queue);
+                if (diagnose_first_batch)
+                {
+                    const auto label = std::format(
+                        "baseline validation output head {} loss",
+                        static_cast<size_t>(head));
+                    queue.wait(label.c_str());
+                }
                 cpu_fixed_vector<float, BatchIndex> losses;
                 losses.set_size(batch_size);
                 m_batched_output_workspace->losses.copy_to_cpu(queue, losses);
@@ -1532,11 +1563,12 @@ namespace rllm
         else if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
         {
             m_learning_rate_provider = std::make_unique<LoweringLearningRate>(
-                m_learning_rate, m_learning_rate_schedule_steps, m_warmup_percent);
+                m_learning_rate, m_learning_rate_schedule_steps, m_warmup_percent,
+                m_skip_warmup);
             LOG_INFO(
-                "Window training: maximum size {}, within-file stride {}; learning-rate schedule: {} planned optimizer steps, {:.1f}% warmup, cosine decay from {:.8f} to {:.8f}",
+                "Window training: maximum size {}, within-file stride {}; learning-rate schedule: {} planned optimizer steps, {:.1f}% {}warmup, cosine decay from {:.8f} to {:.8f}",
                 window_size, m_window_stride, m_learning_rate_schedule_steps,
-                m_warmup_percent, m_learning_rate,
+                m_warmup_percent, m_skip_warmup ? "skipped " : "", m_learning_rate,
                 m_learning_rate * LoweringLearningRate::MIN_SCALE);
         }
         else
@@ -1612,11 +1644,32 @@ namespace rllm
         if (!validation_windows.empty())
         {
             const auto baseline = evaluate(validation_windows, true);
+            const double baseline_epoch_progress =
+                m_has_loaded_training_state && m_checkpoint_window_count == training_windows.size() &&
+                m_checkpoint_window_count != 0
+                ? static_cast<double>(m_checkpoint_window) /
+                    static_cast<double>(m_checkpoint_window_count)
+                : 0.0;
             log_validation_progress(
-                "baseline", m_checkpoint_epoch, num_epochs, 0.0,
+                "baseline", m_checkpoint_epoch, num_epochs, baseline_epoch_progress,
                 validation_windows.size(), baseline);
             best_validation_loss = baseline.average_loss;
-            save(best_checkpoint_filename.string());
+            const auto normalized_best_checkpoint =
+                std::filesystem::absolute(best_checkpoint_filename).lexically_normal();
+            const bool restored_best_checkpoint =
+                !m_loaded_model_path.empty() &&
+                m_loaded_model_path == normalized_best_checkpoint &&
+                std::filesystem::is_regular_file(best_checkpoint_filename);
+            if (restored_best_checkpoint)
+            {
+                LOG_INFO(
+                    "Reusing restored best window checkpoint '{}' after baseline validation",
+                    best_checkpoint_filename.string());
+            }
+            else
+            {
+                save(best_checkpoint_filename.string());
+            }
             has_best_checkpoint = true;
             LOG_INFO(
                 "window validation baseline before training: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows",
@@ -1639,7 +1692,10 @@ namespace rllm
             m_backward_diagnostics_pending = m_training_diagnostics_enabled;
             bool should_stop = false;
             const auto epoch_started_at = std::chrono::steady_clock::now();
-            LOG_INFO("Epoch[{}%]: {:0.2f}% done", epoch / static_cast<float>(num_epochs) * 100.0f, 0.0f);
+            LOG_INFO(
+                "Epoch[{}%] layers[{}] window-size[{}]: {:0.2f}% done",
+                epoch / static_cast<float>(num_epochs) * 100.0f,
+                m_transformer_blocks.size(), window_size, 0.0f);
 
             const size_t num_windows = training_windows.size();
             m_checkpoint_window_count = num_windows;
@@ -1700,8 +1756,9 @@ namespace rllm
                 const double total_ms = elapsed_ms(started);
                 const size_t completed_windows = start + count;
                 LOG_INFO(
-                    "Epoch[{}%] window[{}..{}]: {:0.2f}% done (micro-batch {}, training loss {:.6f}, avg {:.2f} ms/window, iterations total {}, avg {:.2f}/window, rounds {}, batch {:.2f} ms)",
+                    "Epoch[{}%] layers[{}] window-size[{}] window[{}..{}]: {:0.2f}% done (micro-batch {}, training loss {:.6f}, avg {:.2f} ms/window, iterations total {}, avg {:.2f}/window, rounds {}, batch {:.2f} ms)",
                     epoch / static_cast<float>(num_epochs) * 100.0f,
+                    m_transformer_blocks.size(), window_size,
                     start + 1,
                     completed_windows,
                     static_cast<float>(completed_windows) / static_cast<float>(num_windows) * 100.0f,

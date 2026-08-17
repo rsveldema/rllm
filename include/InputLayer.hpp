@@ -28,8 +28,8 @@ namespace rllm
 
       /**  InputLayer converts an CpuInputLine (sequence of token IDs) into a
     * flat hidden-state vector h[seq_len × EmbeddingDimension::MAX].
-    * Each position receives its learned token embedding plus a
-    * fixed sinusoidal positional encoding.
+    * Positional information is injected later by rotary Q/K embeddings in
+    * each transformer block.
     */
 
     class InputLayer
@@ -43,7 +43,7 @@ namespace rllm
         InputLayer(const InputLayer&) = delete;
         InputLayer& operator=(const InputLayer&) = delete;
 
-        // Fill h[seq_len × D_MODEL] with (token_embedding + positional_encoding).
+        // Fill h[seq_len × D_MODEL] with token embeddings.
         void propagate_forward(const CpuInputLine& input,
                 flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h) const;
         void propagate_forward(
@@ -58,7 +58,7 @@ namespace rllm
         ) const;
 
         // Update token embeddings using dh[seq_len × D_MODEL] = ∂L/∂h.
-        // Positional encodings are fixed (sinusoidal), so only embeddings change.
+        // RoPE has no input-layer parameters, so only embeddings change.
         void propagate_backward(
             const CpuInputLine& input,
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
@@ -88,6 +88,9 @@ namespace rllm
 
         // Returns the raw learned embedding for a single token (without positional encoding).
         void get_embedding(TokenID tok, embedding_row_t& out) const;
+
+        // Returns every raw token embedding after a single device-to-host transfer.
+        std::vector<embedding_row_t> get_all_embeddings() const;
 
         void load(const nlohmann::json& j);
         nlohmann::json save() const;

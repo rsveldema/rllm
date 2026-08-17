@@ -238,7 +238,8 @@ namespace rllm
 
         void randomize(
             WeightInitializerType weight_type = WeightInitializerType::XavierInputProjections,
-            FFNInitializerType ffn_type = FFNInitializerType::XavierInputProjections);
+            FFNInitializerType ffn_type = FFNInitializerType::XavierInputProjections,
+            float residual_output_scale = 1.0f);
 
         void load(const nlohmann::json& j);
         std::unique_ptr<nlohmann::json> save() const;

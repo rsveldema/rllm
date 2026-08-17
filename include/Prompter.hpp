@@ -23,6 +23,8 @@ namespace rllm
 
         void prompt_mode(const std::string& filename, const std::optional<std::string>& one_shot_prompt,
                          size_t mtp_heads = 1);
+        bool dump_concepts(const std::string& model_filename, const std::string& output_filename,
+                           size_t neighbor_count, float minimum_similarity);
 
       private:
         void process_line(const std::string& line, Corpus& corpus, TextTrainer& nn, PromptOptions& options);

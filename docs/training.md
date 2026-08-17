@@ -4,8 +4,11 @@ Launch training by passing a JSON configuration file:
 
 ```bash
 ./train.py config-6.json
+./train.py config-6.json --latest
+./train.py config-6.json --clean
 ./train.py config-6.json --fresh-start
 ./train.py config-6.json --resume-model models-6/checkpoint-best-window.st
+./train.py configs/incremental.json --incremental-window
 ```
 
 The configuration owns the build type, model directory, layer
@@ -13,8 +16,69 @@ count, window size and stride, learn depth, source mixture, comment processing,
 CMake arguments, and rLLM training arguments. `config-6.json` describes the
 six-layer release model. The launcher does not read training options from
 environment variables. Resume behavior is selected with the mutually exclusive
-`--fresh-start` and `--resume-model PATH` command-line options; with neither,
+`--latest`, `--fresh-start`, and `--resume-model PATH` command-line options.
+`--latest` resumes the newest numbered timed checkpoint in the configured model
+directory, even when a best-validation checkpoint exists. With none of these,
 the launcher selects a compatible checkpoint automatically.
+
+`RLLM_MAX_POSITION` controls the compile-time context and workspace capacity
+(default `8192`). Because activation and attention workspaces are allocated per
+transformer layer, builds intended for shorter contexts should set this close
+to their actual maximum. The incremental configuration uses `256` for its
+96-token target, substantially reducing per-layer GPU memory without changing
+serialized weight shapes.
+
+`--incremental-window` runs a fresh staged curriculum in the configured model
+directory. For the standard eight-layer, 96-token target it uses windows of 12,
+16, 24, 48, 72, and 96 tokens for layers 3 through 8 respectively. It adds one
+layer and grows the window and proportional stride every
+`incremental_stage_epochs` epochs (default `4`).
+New blocks use Xavier-uniform weights while their residual output projections
+(`W_o` and `W_down`) are scaled by `incremental_upgrade_output_scale` (default
+`0.1`). At every depth increase, earlier blocks remain frozen for
+`incremental_new_block_epochs` epochs (default `2`), then all blocks are made
+read-write for the rest of that depth's epoch allocation. Thus a normal
+four-epoch growth depth uses two new-block-only epochs followed by two joint
+epochs. The configured total epoch budget is unchanged.
+The Python controller writes every active incremental step (`bootstrap`,
+`growth`, or `all-blocks`), shape, and exact command to `train.log` and the
+controller state. The C++ executable has no incremental curriculum mode; it
+only performs the explicitly requested generic operations such as adding a
+layer, freezing or unfreezing blocks, resetting a phase cursor, and running the
+specified epoch count.
+`train.py` also atomically maintains `incremental-controller.json` in the model
+directory before and after every subprocess. It records the complete plan and
+configuration, active step, exact command and input/output checkpoints, shape,
+and requested epochs. If the
+launcher or terminal connection is lost, running the same config again resumes
+that step from a timed checkpoint created after the step began, or from its
+recorded input when no such checkpoint exists. A changed plan or configuration is rejected
+instead of being applied silently; `--latest` remains the explicit recovery
+override.
+Earlier blocks are frozen when the next layer is appended. The final stage uses
+all epochs remaining from the configured `--epochs` budget at the target shape.
+This mode cannot be combined with resume-selection or cleanup options other
+than `--latest`.
+Set `"incremental_window": true` to activate the same mode from a configuration
+file; `configs/incremental.json` enables it, so it does not require the CLI flag.
+Pass `--latest` to continue the active incremental stage from the newest timed
+checkpoint. The checkpoint sidecar's layer, window, and stride identify the
+stage; after that stage completes, the remaining curriculum continues normally.
+Each stage publishes an `incremental_stage` record to the shared `train.json`
+before training starts. `visualize_training.py` uses those records to display a
+continuous epoch axis and labeled layer/window boundaries while Reload continues
+to pick up batch and validation updates from the active stage. In incremental
+plots, every epoch tick also includes the active depth, such as `6 (5L)`.
+When a checkpoint restarts partway through a stage, its baseline validation and
+subsequent records continue from the latest plotted position rather than
+drawing a line backward to the stage's local epoch zero.
+
+`--clean` is a cleanup-only operation. It renames the newest numbered timed
+checkpoint and its sidecar to `checkpoint-latest.st` and
+`checkpoint-latest.st.training.json`, removes the older numbered checkpoints
+and sidecars, and exits without building or training. `--latest` performs the
+same cleanup before building, then resumes training from
+`checkpoint-latest.st`.
 
 `--train-dir <path>` may be repeated. Add `:<weight>` to define the desired
 share of epoch draws for each source, for example `--train-dir curriculum:0.2
@@ -29,11 +93,13 @@ and `training_data2` as a weighted mixture. Change `sources` in the JSON to use
 a different corpus or weighting.
 
 `./train.py config-6.json` stores artifacts in the configured model directory.
-Unless `--fresh-start` or `--resume-model` is supplied, it tries to resume from
+Unless `--latest`, `--fresh-start`, or `--resume-model` is supplied, it tries to resume from
 the matching model directory or—when starting a depth-increasing upgrade—the
 best checkpoint or final model in the deepest available `models-N/` below the
 target depth. Window size, stride, and learn depth are explicit JSON fields; the
-six-layer configuration uses 96, 48, and 3 respectively.
+six-layer configuration uses 96, 48, and 3 respectively. Resume selection is
+non-destructive: numbered checkpoints and their sidecars remain available for
+later `--latest` or explicit-resume runs.
 
 Every saved model has a sibling `<model filename>.training.json` containing the
 training configuration. Resume both weights and settings with, for example,
@@ -74,11 +140,19 @@ learning-rate settings; the schedule type and planned step count; and the
 current lowering or simulated-annealing position. Loading such a checkpoint
 restores this embedded state after parsing the command-line configuration, so
 the next optimizer update uses the same bias correction and effective learning
-rate. Window-training checkpoints additionally store the epoch/window cursor
+rate. At optimizer step zero, Adam moments are known to be zero and are
+initialized directly on the device instead of uploaded from the checkpoint;
+`--reset-optimizer-state` uses the same reduced-transfer path. Window-training
+checkpoints additionally store the epoch/window cursor
 and the shuffle generator state, allowing a timed mid-epoch checkpoint to
 continue at the next unprocessed micro-batch with the same window order. Older
 weight-only checkpoints remain supported and start with fresh optimizer and
 schedule state.
+
+Same-depth checkpoint restore loads tensors into the model's existing GPU
+allocations and retains its existing workspaces. Device buffers are rebuilt
+only when loading changes the transformer depth, avoiding heap fragmentation
+for models that occupy most of GPU memory.
 
 Line-based checkpoints resume at epoch granularity. An end-of-epoch checkpoint
 continues with the following epoch; a timed checkpoint written during an epoch
@@ -105,6 +179,10 @@ Corpus loading records processed files and tokenization errors in
 write it to `models/tokenization.log`. Per-token match tracing is disabled by
 default so loading a large unfiltered corpus does not perform a synchronous log
 write for every token candidate.
+
+`train.log` begins with the selected Vulkan provider, training mode and feature
+flags, weighted source directories, and checkpoint optimizer-state restore
+strategy, so startup configuration is retained alongside later progress.
 
 Unit tests set `RLLM_MODEL_DIR=test_models` and clean only that directory.
 Timed checkpoints, best checkpoints, training progress, and tokenization logs
@@ -134,7 +212,10 @@ and `\\t`, keeping each diagnostic on one physical log line.
 
 Each batch progress message is also recorded as an object in an in-memory JSON
 array. Entries include the method, epoch and item range, completion percentage,
-loss, optimizer rounds, iteration counts, and forward/backward/apply timings.
+active layer count, window size and stride, loss, optimizer rounds, iteration
+counts, and forward/backward/apply timings. The text progress line likewise
+prints `layers[N]` and `window-size[N]`, making incremental stage changes visible
+in both the console and `train.log`.
 Training creates `train.json` beside the output model immediately as a valid
 empty JSON array, before potentially lengthy baseline validation. After each
 model or checkpoint save, the complete progress array is written there.
@@ -156,8 +237,18 @@ overlay of every `models-*/train.json` with
 `python visualize_training.py`, or choose paths with
 `python visualize_training.py path/to/train.json -o plot.png`.
 The generated figure also plots the normalized global gradient norm for every
-recorded optimizer parameter group. The plot opens interactively by default;
+recorded optimizer parameter group. When training diagnostics are disabled and
+no optimizer diagnostic records exist, the gradient panel is hidden instead of
+showing an empty plot. The plot opens interactively by default;
 pass `--no-show` for headless or save-only use.
+
+Inspect the raw token embedding space in a saved model with
+`./rllm -i MODEL.st --dump-concepts concepts.json`. The JSON contains every
+token and its nearest neighbors by cosine similarity. Use
+`--concept-neighbors N` to change the maximum neighbors per token (default 10)
+and `--concept-min-similarity S` to filter scores below `S` (default 0.5,
+accepted range -1 through 1). These are token-level relationships rather than
+contextual, multi-token concepts.
 
 Line-based training retains the newline token appended to every corpus line, so
 line endings are learned as prediction targets. Whitespace within a line is also
@@ -214,6 +305,12 @@ implementation. `constant` keeps the configured rate unchanged for every
 optimizer update. `lowering` (the binary default) applies a configurable linear
 warmup and cosine decay. `--warmup-percent <P>` specifies warmup as a percentage
 of the planned epochs and accepts values in `(0, 100]`; its default is `5`.
+`--skip-warmup` applies the full base rate during that initial interval while
+preserving its length and the original cosine-decay boundary. This is useful
+when restarting a schedule for an already trained checkpoint. The Python
+launcher accepts the same flag and passes it through, for example
+`./train.py configs/config-8.json --latest --restart-learning-rate-schedule
+--skip-warmup`.
 `simulated_annealing` starts at
 `--simulated-annealing-initial-multiplier <M>` times the configured rate
 (default `50`) and remains constant within each epoch. Every
@@ -296,7 +393,7 @@ epoch and window progress.
 It also performs and reports a held-out validation at the end of every epoch,
 including epochs that finish before the five-minute interval.
 Window validation reports head-zero next-token loss as its primary metric, plus
-the aggregate loss and individual loss for all four MTP heads. Checkpointing and
+the aggregate loss and individual loss for all configured MTP heads. Checkpointing and
 early stopping use head-zero loss so they optimize the completion objective and
 are directly comparable with reported training loss. The baseline and each
 end-of-epoch validation also report the five worst individual predictions. Each
@@ -336,8 +433,15 @@ Window training saves `checkpoint-best-window.st` in the configured model
 artifact directory whenever end-of-epoch
 head-zero validation loss improves by at least `1e-4`. It stops after three consecutive
 epochs without improvement and restores that best checkpoint before the final
-model is saved. Timed intra-epoch validation remains diagnostic and does not
+model is saved. When that best checkpoint is itself the resume source, baseline
+validation reuses the existing artifact instead of immediately rewriting it.
+Timed intra-epoch validation remains diagnostic and does not
 advance early-stopping patience.
+The Python launcher option `--lowest-loss` instead scans `train.json` and
+resumes from the numbered timed checkpoint paired with the lowest recorded
+head-zero validation loss. A validation result is paired only when the
+checkpoint filename timestamp follows it by at most five seconds, preventing
+an unrelated later checkpoint from inheriting a stale validation score.
 `--validation-interval <seconds>` controls timed intra-epoch validation and
 defaults to 1,800 seconds. The Python launcher sets it explicitly
 to 1,800 seconds. Its timer restarts after evaluation completes; baseline and

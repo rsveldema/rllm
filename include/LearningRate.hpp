@@ -58,10 +58,12 @@ namespace rllm
 
         LoweringLearningRate(
             float rate, size_t total_steps,
-            float warmup_percent = DEFAULT_WARMUP_PERCENT)
+            float warmup_percent = DEFAULT_WARMUP_PERCENT,
+            bool skip_warmup = false)
             : m_rate(rate)
             , m_total_steps(total_steps)
             , m_warmup_percent(warmup_percent)
+            , m_skip_warmup(skip_warmup)
         {
             assert(warmup_percent > 0.0f && warmup_percent <= 100.0f);
         }
@@ -69,11 +71,11 @@ namespace rllm
         float get_rate() override
         {
             ++m_step;
-            return m_rate * scale_for_step(m_step, m_total_steps, m_warmup_percent);
+            return m_rate * scale_for_step(m_step, m_total_steps, m_warmup_percent, m_skip_warmup);
         }
 
         size_t step() const override { return m_step; }
-        float current_rate() const override { return m_rate * scale_for_step(std::max<size_t>(m_step, 1), m_total_steps, m_warmup_percent); }
+        float current_rate() const override { return m_rate * scale_for_step(std::max<size_t>(m_step, 1), m_total_steps, m_warmup_percent, m_skip_warmup); }
         void restore(size_t step, float, size_t) override { m_step = step; }
 
         static size_t warmup_steps_for(size_t total_steps, float warmup_percent)
@@ -87,7 +89,8 @@ namespace rllm
 
         static float scale_for_step(
             size_t step, size_t total_steps,
-            float warmup_percent = DEFAULT_WARMUP_PERCENT)
+            float warmup_percent = DEFAULT_WARMUP_PERCENT,
+            bool skip_warmup = false)
         {
             if (total_steps == 0)
                 return 1.0f;
@@ -95,7 +98,8 @@ namespace rllm
             step = std::clamp(step, size_t{1}, total_steps);
             const size_t warmup_steps = warmup_steps_for(total_steps, warmup_percent);
             if (step <= warmup_steps)
-                return static_cast<float>(step) / static_cast<float>(warmup_steps);
+                return skip_warmup ? 1.0f :
+                    static_cast<float>(step) / static_cast<float>(warmup_steps);
             if (warmup_steps == total_steps)
                 return 1.0f;
 
@@ -109,6 +113,7 @@ namespace rllm
         float m_rate;
         size_t m_total_steps;
         float m_warmup_percent;
+        bool m_skip_warmup;
         size_t m_step = 0;
     };
 

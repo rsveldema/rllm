@@ -56,6 +56,19 @@ namespace rllm
         virtual float getNextValue() = 0;
     };
 
+    template<typename Initializer>
+    class ScaledInitializer
+    {
+      public:
+        ScaledInitializer(Initializer& initializer, float scale)
+            : m_initializer(initializer), m_scale(scale)
+        {}
+        float getNextValue() { return m_initializer.getNextValue() * m_scale; }
+      private:
+        Initializer& m_initializer;
+        float m_scale;
+    };
+
     inline float xavier_uniform_bound(size_t fan_in, size_t fan_out)
     {
         assert(fan_in > 0 && fan_out > 0);

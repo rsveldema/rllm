@@ -145,9 +145,15 @@ namespace rllm
     {
         m_optimizer_step = 0;
         m_has_loaded_training_state = false;
+        m_loaded_model_path.clear();
         m_frozen_transformer_block_count = 0;
         if (is_safetensors_model_filename(filename))
-            return load_from_safetensors(filename);
+        {
+            const bool loaded = load_from_safetensors(filename);
+            if (loaded)
+                m_loaded_model_path = std::filesystem::absolute(filename).lexically_normal();
+            return loaded;
+        }
 
         if (filename.empty() || filename.size() < 5 || filename.compare(filename.size() - 5, 5, ".json") != 0)
         {
@@ -233,7 +239,9 @@ namespace rllm
             for (size_t i = saved_blocks; i < target_blocks; ++i)
             {
                 auto& block = m_transformer_blocks.emplace_back();
-                block.randomize(m_weight_initializer, m_ffn_initializer);
+                block.randomize(
+                    m_weight_initializer, m_ffn_initializer,
+                    m_upgrade_residual_output_scale);
             }
             if (target_blocks != saved_blocks)
             {
@@ -254,6 +262,7 @@ namespace rllm
             for (size_t i = 0; i < n; ++i)
                 m_output_layers[static_cast<MultiTokenPredictionIndex>(i)].load(output_layers_j.at(i));
         }
+        m_loaded_model_path = std::filesystem::absolute(filename).lexically_normal();
         return true;
     }
 
@@ -827,7 +836,7 @@ namespace rllm
         if (m_all_blocks_read_write)
             m_frozen_transformer_block_count = 0;
 
-        if (resized_model && m_has_loaded_training_state)
+        if ((resized_model || m_reset_training_cursor_on_load) && m_has_loaded_training_state)
         {
             m_checkpoint_epoch = 0;
             m_checkpoint_window = 0;
@@ -835,28 +844,51 @@ namespace rllm
             m_reset_optimizer_state_on_load = true;
             m_restart_learning_rate_schedule_on_load = true;
             m_learning_rate_schedule_steps = 0;
-            std::println(
-                "Reset training cursor, optimizer, and learning-rate schedule after extending model from {} to {} transformer blocks",
-                num_blocks,
-                target_blocks);
+            if (resized_model)
+                std::println(
+                    "Reset training cursor, optimizer, and learning-rate schedule after extending model from {} to {} transformer blocks",
+                    num_blocks,
+                    target_blocks);
+            else
+                std::println(
+                    "Reset training cursor, optimizer, and learning-rate schedule as explicitly requested");
+        }
+
+        const bool load_optimizer_tensors =
+            m_has_loaded_training_state &&
+            m_optimizer_step != 0 &&
+            !m_reset_optimizer_state_on_load;
+        if (m_has_loaded_training_state && !load_optimizer_tensors)
+        {
+            LOG_INFO(
+                "Initializing Adam moments on the device instead of uploading checkpoint tensors ({})",
+                m_reset_optimizer_state_on_load ? "optimizer reset requested" : "optimizer step is zero");
         }
 
         m_input_layer.load_from_safetensors(filename);
-        if (m_has_loaded_training_state)
+        if (load_optimizer_tensors)
         {
             pull_matrix("training.input_layer.adam_first", st, m_input_layer.m_adam_first);
             pull_matrix("training.input_layer.adam_second", st, m_input_layer.m_adam_second);
         }
 
-        // Clear existing blocks and create new ones.
-        m_transformer_blocks.clear();
-        m_transformer_blocks.reserve(target_blocks);
+        // Same-depth resume already has correctly sized device allocations.
+        // Reusing them avoids fragmenting a nearly full device heap and avoids
+        // transiently rebuilding the large forward/backward workspaces.
+        const bool rebuild_blocks = m_transformer_blocks.size() != target_blocks;
+        if (rebuild_blocks)
+        {
+            m_transformer_blocks.clear();
+            m_transformer_blocks.reserve(target_blocks);
+            for (size_t bi = 0; bi < target_blocks; ++bi)
+                m_transformer_blocks.emplace_back();
+        }
 
         for (size_t bi = 0; bi < num_blocks; ++bi)
         {
             std::string pfx = "transformer_blocks." + std::to_string(bi) + ".";
 
-            auto& block = m_transformer_blocks.emplace_back();
+            auto& block = m_transformer_blocks[bi];
 
             // Directly pull each weight matrix into the block's members.
             pull_matrix(pfx + "W_q", st, block.W_q);
@@ -866,7 +898,7 @@ namespace rllm
             pull_matrix(pfx + "W_gate", st, block.W_gate);
             pull_matrix(pfx + "W_up", st, block.W_up);
             pull_matrix(pfx + "W_down", st, block.W_down);
-            if (m_has_loaded_training_state)
+            if (load_optimizer_tensors)
             {
                 const std::string tpfx = "training." + pfx;
                 pull_matrix(tpfx + "V_q", st, block.V_q);
@@ -884,11 +916,31 @@ namespace rllm
                 pull_matrix(tpfx + "S_up", st, block.S_up);
                 pull_matrix(tpfx + "S_down", st, block.S_down);
             }
+            else
+            {
+                auto& queue = rllm::vulkan_runtime::get_queue(0);
+                block.V_q.zero(queue);
+                block.V_k.zero(queue);
+                block.V_v.zero(queue);
+                block.V_o.zero(queue);
+                block.V_gate.zero(queue);
+                block.V_up.zero(queue);
+                block.V_down.zero(queue);
+                block.S_q.zero(queue);
+                block.S_k.zero(queue);
+                block.S_v.zero(queue);
+                block.S_o.zero(queue);
+                block.S_gate.zero(queue);
+                block.S_up.zero(queue);
+                block.S_down.zero(queue);
+            }
         }
         for (size_t bi = num_blocks; bi < target_blocks; ++bi)
         {
-            auto& block = m_transformer_blocks.emplace_back();
-            block.randomize(m_weight_initializer, m_ffn_initializer);
+            auto& block = m_transformer_blocks[bi];
+            block.randomize(
+                m_weight_initializer, m_ffn_initializer,
+                m_upgrade_residual_output_scale);
         }
         if (target_blocks != num_blocks)
         {
@@ -899,7 +951,8 @@ namespace rllm
                 filename
             );
         }
-        reset_workspaces();
+        if (rebuild_blocks)
+            reset_workspaces();
 
         if (st.tensors.count("output_layers.0.W_lm_head"))
         {
@@ -909,7 +962,7 @@ namespace rllm
                 pull_matrix(out_key, st, m_output_layers[oi].W_lm_head);
                 auto& queue = rllm::vulkan_runtime::get_queue(0);
                 m_output_layers[oi].m_inputs.zero(queue);
-                if (m_has_loaded_training_state)
+                if (load_optimizer_tensors)
                 {
                     const auto tpfx = "training.output_layers." + std::to_string(static_cast<size_t>(oi)) + ".";
                     pull_matrix(tpfx + "V_lm_head", st, m_output_layers[oi].V_lm_head);

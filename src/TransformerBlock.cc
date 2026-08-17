@@ -429,7 +429,9 @@ namespace rllm
 
     // ── randomize ─────────────────────────────────────────────────────────────
 
-    void TransformerBlock::randomize(WeightInitializerType weight_type, FFNInitializerType ffn_type)
+    void TransformerBlock::randomize(
+        WeightInitializerType weight_type, FFNInitializerType ffn_type,
+        float residual_output_scale)
     {
         const size_t d_model = static_cast<size_t>(EmbeddingDimension::MAX);
         const size_t d_ff = static_cast<size_t>(FFDimension::MAX);
@@ -445,15 +447,17 @@ namespace rllm
         auto attention_output_initializer = make_weight_initializer(attention_output_type, d_model, d_model);
         auto ffn_up_initializer = make_ffn_initializer(ffn_input_type, d_model, d_ff);
         auto ffn_down_initializer = make_ffn_initializer(ffn_output_type, d_ff, d_model);
+        ScaledInitializer scaled_attention_output{*attention_output_initializer, residual_output_scale};
+        ScaledInitializer scaled_ffn_down{*ffn_down_initializer, residual_output_scale};
 
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         W_q.fill_rand(queue, *attention_input_initializer);
         W_k.fill_rand(queue, *attention_input_initializer);
         W_v.fill_rand(queue, *attention_input_initializer);
-        W_o.fill_rand(queue, *attention_output_initializer);
+        W_o.fill_rand(queue, scaled_attention_output);
         W_gate.fill_rand(queue, *ffn_up_initializer);
         W_up.fill_rand(queue, *ffn_up_initializer);
-        W_down.fill_rand(queue, *ffn_down_initializer);
+        W_down.fill_rand(queue, scaled_ffn_down);
 
         V_q.zero(queue);
         V_k.zero(queue);

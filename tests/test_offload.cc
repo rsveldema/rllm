@@ -386,22 +386,15 @@ TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_actual;
     actual.copy_to_cpu(queue, cpu_actual);
 
-    constexpr float model_dim = static_cast<float>(EmbeddingDimension::MAX);
     constexpr float max_abs_error = 1e-5f;
 
     for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
     {
         embedding_row_t embedding;
         input_layer.get_embedding(input[pos], embedding);
-        const float pos_f = static_cast<float>(pos);
-
         for (const auto di : enum_iterator1D<EmbeddingDimension>())
         {
-            const int di_int = static_cast<int>(di);
-            const float emb_val = embedding[static_cast<size_t>(di)];
-            const float freq = 1.0f / std::pow(10000.0f, static_cast<float>(di_int & ~1) / model_dim);
-            const float pe = (di_int % 2 == 0) ? std::sin(pos_f * freq) : std::cos(pos_f * freq);
-            const float expected = emb_val + pe;
+            const float expected = embedding[static_cast<size_t>(di)];
             const float actual_value = cpu_actual[pos, di];
 
             ASSERT_NEAR(actual_value, expected, max_abs_error)
@@ -553,12 +546,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
     // OFFLOAD_PARAMETERS(values)
     flexible_rows_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
-    values.set_rows(static_cast<MultiTokenPredictionIndex>(3));
+    values.set_rows(MultiTokenPredictionIndex::MAX);
     auto& queue = rllm::vulkan_runtime::get_queue(0);
     values.zero(queue);
     {
         const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>(
-            static_cast<MultiTokenPredictionIndex>(3)
+            MultiTokenPredictionIndex::MAX
         );
         OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (values))
         values[i, j] = static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 2)));
@@ -570,7 +563,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
 
     cpu_flex_rows_matrix<float, MultiTokenPredictionIndex, HeadsIndex> cpu_flex_rows;
     values.copy_to_cpu(queue, cpu_flex_rows);
-    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(MultiTokenPredictionIndex::THREE))
+    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(MultiTokenPredictionIndex::MAX))
         for (const auto j : enum_iterator1D<HeadsIndex>())
         {
             const float actual_value = cpu_flex_rows[i, j];
@@ -603,7 +596,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
 
     cpu_flex_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> cpu_flex_cols;
     values.copy_to_cpu(queue, cpu_flex_cols);
-    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(static_cast<MultiTokenPredictionIndex>(3)))
+    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>())
         for (const auto j : enum_iterator1D<HeadsIndex>())
         {
             const float actual_value = cpu_flex_cols[i, j];
@@ -621,12 +614,12 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
     // OFFLOAD_PARAMETERS(values)
     flexible_rows_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
-    values.set_size(static_cast<MultiTokenPredictionIndex>(3), HeadsIndex::MAX);
+    values.set_size(MultiTokenPredictionIndex::MAX, HeadsIndex::MAX);
     auto& queue = rllm::vulkan_runtime::get_queue(0);
     values.zero(queue);
     {
         const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>(
-            static_cast<MultiTokenPredictionIndex>(3)
+            MultiTokenPredictionIndex::MAX
         );
         OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (values))
         values[i, j] = static_cast<float>(((static_cast<size_t>(i) * 100) + (static_cast<size_t>(j) + 4)));
@@ -638,7 +631,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
 
     cpu_flex_rows_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> cpu_flex_rc;
     values.copy_to_cpu(queue, cpu_flex_rc);
-    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>(static_cast<MultiTokenPredictionIndex>(3)))
+    for (const auto i : enum_iterator1D<MultiTokenPredictionIndex>())
         for (const auto j : enum_iterator1D<HeadsIndex>())
         {
             const float actual_value = cpu_flex_rc[i, j];

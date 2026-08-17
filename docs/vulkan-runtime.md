@@ -1,5 +1,10 @@
 # Vulkan Runtime
 
+Vulkan failures include the operation or synchronization label alongside the
+`VkResult`. The first validation batch also synchronizes between model stages so
+a device loss identifies the input layer, transformer block, gather, or output
+head that triggered it.
+
 Generated Vulkan kernel stubs submit compute dispatches asynchronously. They do
 not wait for queue idle after every dispatch. Work on the same queue remains
 ordered by submission, and explicit host transfers or `VulkanQueue::wait()`

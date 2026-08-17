@@ -69,6 +69,18 @@ TEST(LearningRateScheduleTest, WarmupPercentageControlsPlannedEpochFraction)
     EXPECT_LT(LoweringLearningRate::scale_for_step(11, total_steps, 1.0f), 1.0f);
 }
 
+TEST(LearningRateScheduleTest, SkipWarmupUsesPeakRateUntilCosineDecay)
+{
+    constexpr size_t total_steps = 100;
+    EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(1, total_steps, 5.0f, true), 1.0f);
+    EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(5, total_steps, 5.0f, true), 1.0f);
+    EXPECT_LT(LoweringLearningRate::scale_for_step(6, total_steps, 5.0f, true), 1.0f);
+    EXPECT_NEAR(
+        LoweringLearningRate::scale_for_step(total_steps, total_steps, 5.0f, true),
+        LoweringLearningRate::MIN_SCALE,
+        1e-6f);
+}
+
 TEST(LearningRateScheduleTest, ConstantRateDoesNotChange)
 {
     ConstantLearningRate rate{0.25f};
@@ -648,7 +660,7 @@ TEST(PredictorRegressionTest, IncludeATrainingKeepsMTPHeadsQueryable)
 
     nn->get_last_input() = hash_toks; // set the input to the probe token(s) for tracing
     nn->propagate_forward();
-    const auto top1 = nn->get_best_output_token_ids(1, MultiTokenPredictionIndex::THREE);
+    const auto top1 = nn->get_best_output_token_ids(1, MultiTokenPredictionIndex::ONE);
     ASSERT_FALSE(top1.empty());
     EXPECT_GE(top1.front().token_id, TokenID::START);
     EXPECT_LT(top1.front().token_id, TokenID::MAX);

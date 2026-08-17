@@ -1,7 +1,7 @@
 {
   "build_type": "release",
-  "model_directory": "models-6",
-  "layers": 6,
+  "model_directory": "models-8",
+  "layers": 8,
   "window_size": 96,
   "window_stride": 48,
   "learn_depth": 3,
@@ -23,7 +23,7 @@
     "--validation-interval", "600",
     "--learning-rate", "0.00001",
     "--layer-learning-rate-multiplier", "1.05",
-    "--warmup-percent", "10",
+    "--warmup-percent", "1",
     "--weight-initializer", "xavier-input-projections",
     "--ffn-initializer", "xavier-input-projections",
     "--embedding-initializer", "legacy-uniform",

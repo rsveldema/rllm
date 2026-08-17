@@ -16,6 +16,7 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <chrono>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -104,6 +105,8 @@ namespace rllm
         void set_upgrade_mode(bool enabled) { m_upgrade_mode = enabled; }
         void set_freeze_old_blocks_on_upgrade(bool enabled) { m_freeze_old_blocks_on_upgrade = enabled; }
         void set_all_blocks_read_write(bool enabled) { m_all_blocks_read_write = enabled; }
+        void set_upgrade_residual_output_scale(float scale) { m_upgrade_residual_output_scale = scale; }
+        void set_reset_training_cursor_on_load(bool enabled) { m_reset_training_cursor_on_load = enabled; }
 
         void set_training_method(TrainingMethod m) { m_training_method = m; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
@@ -112,6 +115,7 @@ namespace rllm
         void set_learning_rate(float rate) { assert(rate > 0.0f); m_learning_rate = rate; }
         void set_layer_learning_rate_multiplier(float multiplier) { assert(multiplier >= 1.0f && multiplier < 2.0f); m_layer_learning_rate_multiplier = multiplier; }
         void set_warmup_percent(float percent) { assert(percent > 0.0f && percent <= 100.0f); m_warmup_percent = percent; }
+        void set_skip_warmup(bool enabled) { m_skip_warmup = enabled; }
         void set_learning_rate_schedule(LearningRateSchedule schedule) { m_learning_rate_schedule = schedule; }
         void set_simulated_annealing_decay_factor(float factor) { assert(factor > 0.0f && factor < 1.0f); m_simulated_annealing_decay_factor = factor; }
         void set_simulated_annealing_initial_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_initial_multiplier = multiplier; }
@@ -194,6 +198,8 @@ namespace rllm
         bool m_upgrade_mode = false;
         bool m_freeze_old_blocks_on_upgrade = false;
         bool m_all_blocks_read_write = false;
+        float m_upgrade_residual_output_scale = 1.0f;
+        bool m_reset_training_cursor_on_load = false;
         fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex> m_output_layers;
         fixed_size_obj_vector<Score, MultiTokenPredictionIndex> m_training_scores;
         Score m_evaluation_score;
@@ -259,6 +265,7 @@ namespace rllm
         float m_learning_rate = DEFAULT_LEARNING_RATE;
         float m_layer_learning_rate_multiplier = DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER;
         float m_warmup_percent = LoweringLearningRate::DEFAULT_WARMUP_PERCENT;
+        bool m_skip_warmup = false;
         LearningRateSchedule m_learning_rate_schedule = LearningRateSchedule::Lowering;
         float m_simulated_annealing_decay_factor = 0.8f;
         float m_simulated_annealing_initial_multiplier = 50.0f;
@@ -273,6 +280,7 @@ namespace rllm
         size_t m_learning_rate_schedule_steps = 0;
         float m_last_logged_learning_rate = std::numeric_limits<float>::quiet_NaN();
         bool m_has_loaded_training_state = false;
+        std::filesystem::path m_loaded_model_path;
         size_t m_loaded_learning_rate_step = 0;
         float m_loaded_current_learning_rate = 0.0f;
         size_t m_loaded_epochs_at_current_rate = 0;

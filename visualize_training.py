@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 from matplotlib.widgets import Button
 
 
@@ -54,7 +55,7 @@ def number(entry: dict[str, Any], key: str) -> float | None:
 
 
 def position(entry: dict[str, Any], validation: bool) -> float:
-    epoch = float(entry.get("epoch", 0))
+    epoch = float(entry.get("epoch", 0)) + float(entry.get("_epoch_offset", 0))
     if validation:
         progress = entry.get("epoch_progress", 1.0)
         return epoch + float(progress if isinstance(progress, (int, float)) else 1.0)
@@ -97,7 +98,48 @@ def load_entries(path: Path) -> list[dict[str, Any]]:
         raw = json.load(file)
     if not isinstance(raw, list):
         raise ValueError(f"{path} must contain a JSON array")
-    return [entry for entry in raw if isinstance(entry, dict)]
+    entries: list[dict[str, Any]] = []
+    stage_offset = 0.0
+    resume_offset = 0.0
+    latest_position = 0.0
+    for raw_entry in raw:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry = dict(raw_entry)
+        if entry.get("item_type") == "incremental_stage":
+            marker_offset = number(entry, "epoch_offset")
+            if marker_offset is not None:
+                stage_offset = marker_offset
+                resume_offset = 0.0
+                latest_position = max(latest_position, stage_offset)
+
+        # Older checkpoints logged every restart baseline at the beginning of
+        # its local epoch. Rebase a backwards baseline, and the records that
+        # follow it, onto the latest position already shown for this stage.
+        if entry.get("item_type") == "validation" and entry.get("phase") == "baseline":
+            epoch = number(entry, "epoch") or 0.0
+            progress = number(entry, "epoch_progress") or 0.0
+            raw_position = stage_offset + epoch + progress
+            if raw_position + resume_offset < latest_position:
+                resume_offset = latest_position - raw_position
+
+        entry["_epoch_offset"] = stage_offset + resume_offset
+        entries.append(entry)
+        if entry.get("item_type") in ("window", "validation"):
+            latest_position = max(
+                latest_position,
+                position(entry, entry.get("item_type") == "validation"),
+            )
+    return entries
+
+
+def epoch_layer_label(epoch: float, stages: list[tuple[float, int]]) -> str:
+    epoch_text = f"{epoch:g}"
+    active_layer = next(
+        (layers for offset, layers in reversed(stages) if epoch >= offset),
+        None,
+    )
+    return epoch_text if active_layer is None else f"{epoch_text} ({active_layer}L)"
 
 
 def render_metrics(
@@ -106,6 +148,7 @@ def render_metrics(
     datasets: list[tuple[Path, list[dict[str, Any]]]],
 ) -> None:
     for axis in axes.values():
+        axis.set_visible(True)
         axis.clear()
 
     has_loss = False
@@ -116,11 +159,35 @@ def render_metrics(
         ("mtp", "all_mtp_loss", "Validation all-MTP loss"),
         ("probability", "correct_token_probability_percent", "Correct-token probability (%)"),
     )
+    incremental_stages: list[tuple[float, int]] = []
 
     for input_path, entries in datasets:
         label = input_path.parent.name
         training = [entry for entry in entries if entry.get("item_type") != "validation"]
         validation = [entry for entry in entries if entry.get("item_type") == "validation"]
+        stages = [entry for entry in entries if entry.get("item_type") == "incremental_stage"]
+        if stages and not incremental_stages:
+            incremental_stages = sorted(
+                (offset, int(layers))
+                for stage in stages
+                if (offset := number(stage, "epoch_offset")) is not None
+                and (layers := number(stage, "layers")) is not None
+            )
+
+        for stage in stages:
+            stage_x = number(stage, "epoch_offset")
+            if stage_x is None:
+                continue
+            for axis in axes.values():
+                axis.axvline(stage_x, color="0.55", linestyle="--", linewidth=0.8, alpha=0.45)
+            layers = stage.get("layers", "?")
+            window = stage.get("window_size", "?")
+            axes["loss"].annotate(
+                f"{layers}L/{window}W", (stage_x, 1),
+                xycoords=("data", "axes fraction"), xytext=(3, -3),
+                textcoords="offset points", rotation=90,
+                va="top", ha="left", fontsize=7, color="0.35",
+            )
 
         train_x, train_loss = series(training, "training_loss", False)
         val_x, val_loss = series(validation, "validation_loss", True)
@@ -167,17 +234,19 @@ def render_metrics(
     gradient_axis = axes["gradient"]
     if has_gradient:
         gradient_axis.legend(fontsize="small", ncols=min(4, len(datasets)))
+        gradient_axis.set_title("Normalized global gradient norm by parameter group")
+        gradient_axis.set_ylabel("L2 norm after global clipping")
     else:
-        gradient_axis.text(
-            0.5, 0.5,
-            "No optimizer diagnostics in this file\n(new diagnostic-enabled runs record this metric)",
-            ha="center", va="center", transform=gradient_axis.transAxes,
-        )
-    gradient_axis.set_title("Normalized global gradient norm by parameter group")
-    gradient_axis.set_ylabel("L2 norm after global clipping")
+        gradient_axis.set_visible(False)
 
     for axis in axes.values():
+        if not axis.get_visible():
+            continue
         axis.set_xlabel("epoch")
+        if incremental_stages:
+            axis.xaxis.set_major_formatter(FuncFormatter(
+                lambda value, _position: epoch_layer_label(value, incremental_stages)
+            ))
         axis.grid(True, alpha=0.25)
     fig.suptitle(f"Training metrics — {len(datasets)} run(s)", fontsize=14)
 

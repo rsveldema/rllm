@@ -56,6 +56,7 @@ namespace rllm
         float learning_rate,
         float layer_learning_rate_multiplier,
         float warmup_percent,
+        bool skip_warmup,
         LearningRateSchedule learning_rate_schedule,
         float simulated_annealing_decay_factor,
         float simulated_annealing_initial_multiplier,
@@ -77,23 +78,35 @@ namespace rllm
         bool upgrade_mode,
         bool freeze_old_blocks,
         bool all_blocks_read_write,
+        float upgrade_residual_output_scale,
+        bool reset_training_cursor,
         const std::vector<std::string>& train_corpus_dirs
     )
     {
-        std::println(
+        const auto output_directory = std::filesystem::path(output_filename).parent_path();
+        const auto artifact_directory = output_directory.empty()
+            ? std::filesystem::path{"."}
+            : output_directory;
+        if (artifact_directory != std::filesystem::path{"."})
+            std::filesystem::create_directories(artifact_directory);
+        set_nn_log_file((artifact_directory / "train.log").string());
+        set_tokenization_log_file((artifact_directory / "tokenization.log").string());
+
+        parallel::print_vulkan_provider();
+        LOG_INFO(
             "Training mode: depth {}, learning rate {}, micro-batch size {}",
             learn_depth,
             learning_rate,
             micro_batch_size
         );
         if (disable_early_stopping)
-            std::println("Early stopping disabled; all {} requested epochs will run", num_epochs);
+            LOG_INFO("Early stopping disabled; all {} requested epochs will run", num_epochs);
         if (disable_example_convergence)
-            std::println("Per-example convergence removal disabled");
+            LOG_INFO("Per-example convergence removal disabled");
         if (disable_training_diagnostics)
-            std::println("Optimizer and backward training diagnostics disabled");
+            LOG_INFO("Optimizer and backward training diagnostics disabled");
         if (upgrade_mode)
-            std::println("Layer upgrade mode enabled");
+            LOG_INFO("Layer upgrade mode enabled");
         if (freeze_old_blocks && !upgrade_mode)
         {
             std::println("--freeze-old-blocks requires --upgrade-mode");
@@ -104,6 +117,12 @@ namespace rllm
             std::println("--freeze-old-blocks and --all-blocks-read-write cannot be used together");
             std::exit(1);
         }
+        if (!std::isfinite(upgrade_residual_output_scale) ||
+            upgrade_residual_output_scale <= 0.0f || upgrade_residual_output_scale > 1.0f)
+        {
+            std::println("Upgrade residual output scale must be in (0, 1]");
+            std::exit(1);
+        }
         if (learning_rate > 0.25f)
         {
             std::println(
@@ -112,21 +131,13 @@ namespace rllm
                 learning_rate
             );
         }
-        const auto output_directory = std::filesystem::path(output_filename).parent_path();
-        const auto artifact_directory = output_directory.empty()
-            ? std::filesystem::path{"."}
-            : output_directory;
-        if (artifact_directory != std::filesystem::path{"."})
-            std::filesystem::create_directories(artifact_directory);
-        set_nn_log_file((artifact_directory / "train.log").string());
-        set_tokenization_log_file((artifact_directory / "tokenization.log").string());
         ComputeKernelRegistry::instance().enableRegistrationLog("training-log.txt");
 
         Corpus corpus{m_filters};
         for (size_t source = 0; source < train_corpus_dirs.size(); ++source)
         {
             const auto spec = parse_training_directory_spec(train_corpus_dirs[source]);
-            std::println("Training source {}: '{}' weight {}", source, spec.path, spec.weight);
+            LOG_INFO("Training source {}: '{}' weight {}", source, spec.path, spec.weight);
             corpus.load_files_from_dir(spec.path, source, spec.weight);
         }
         Statistics stats;
@@ -153,6 +164,7 @@ namespace rllm
             {"learning_rate_schedule", schedule_name},
             {"layer_learning_rate_multiplier", layer_learning_rate_multiplier},
             {"warmup_percent", warmup_percent},
+            {"skip_warmup", skip_warmup},
             {"simulated_annealing_decay_factor", simulated_annealing_decay_factor},
             {"simulated_annealing_initial_multiplier", simulated_annealing_initial_multiplier},
             {"simulated_annealing_decay_epochs", simulated_annealing_decay_epochs},
@@ -175,6 +187,8 @@ namespace rllm
             {"upgrade_mode", upgrade_mode},
             {"freeze_old_blocks", freeze_old_blocks},
             {"all_blocks_read_write", all_blocks_read_write},
+            {"upgrade_residual_output_scale", upgrade_residual_output_scale},
+            {"reset_training_cursor", reset_training_cursor},
             {"train_corpus_dirs", train_corpus_dirs},
             {"filters", m_filters}
         };
@@ -187,6 +201,7 @@ namespace rllm
         nn->set_learning_rate(learning_rate);
         nn->set_layer_learning_rate_multiplier(layer_learning_rate_multiplier);
         nn->set_warmup_percent(warmup_percent);
+        nn->set_skip_warmup(skip_warmup);
         nn->set_learning_rate_schedule(learning_rate_schedule);
         nn->set_simulated_annealing_decay_factor(simulated_annealing_decay_factor);
         nn->set_simulated_annealing_initial_multiplier(simulated_annealing_initial_multiplier);
@@ -207,6 +222,8 @@ namespace rllm
         nn->set_upgrade_mode(upgrade_mode);
         nn->set_freeze_old_blocks_on_upgrade(freeze_old_blocks);
         nn->set_all_blocks_read_write(all_blocks_read_write);
+        nn->set_upgrade_residual_output_scale(upgrade_residual_output_scale);
+        nn->set_reset_training_cursor_on_load(reset_training_cursor);
 
         nn->train(verbose, num_epochs, input_filename, checkpointing_interval, epoch_size);
 

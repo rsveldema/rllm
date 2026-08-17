@@ -2,13 +2,111 @@
 #include <rllm_vulkan_runtime.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <fstream>
 #include <iostream>
+#include <limits>
 #include <print>
 #include <string>
 #include <isocline.h>
+#include <nlohmann/json.hpp>
 
 namespace rllm
 {
+    bool Prompter::dump_concepts(const std::string& model_filename, const std::string& output_filename,
+                                 size_t neighbor_count, float minimum_similarity)
+    {
+        set_nn_log_file("prompt.log");
+        Corpus corpus{m_filters};
+        Statistics stats;
+        auto nn = std::make_unique<TextTrainer>(2, corpus, stats);
+        std::println("Loading '{}'...", model_filename);
+        if (!nn->load(model_filename))
+        {
+            std::println("Failed to load model from file: '{}'", model_filename);
+            return false;
+        }
+
+        auto embeddings = nn->get_input_layer().get_all_embeddings();
+        const size_t dimension = static_cast<size_t>(EmbeddingDimension::MAX);
+        std::vector<std::vector<float>> normalized(embeddings.size(), std::vector<float>(dimension));
+        for (size_t token = 0; token < embeddings.size(); ++token)
+        {
+            float squared_norm = 0.0f;
+            for (size_t d = 0; d < dimension; ++d)
+            {
+                const float value = static_cast<float>(embeddings[token][d]);
+                normalized[token][d] = value;
+                squared_norm += value * value;
+            }
+            const float inverse_norm = squared_norm > 0.0f ? 1.0f / std::sqrt(squared_norm) : 0.0f;
+            for (auto& value : normalized[token])
+                value *= inverse_norm;
+        }
+        embeddings.clear();
+
+        nlohmann::json concepts = nlohmann::json::array();
+        for (size_t token = 0; token < normalized.size(); ++token)
+        {
+            std::vector<std::pair<float, size_t>> nearest;
+            nearest.reserve(neighbor_count);
+            for (size_t candidate = 0; candidate < normalized.size(); ++candidate)
+            {
+                if (candidate == token)
+                    continue;
+                float similarity = 0.0f;
+#pragma omp simd reduction(+:similarity)
+                for (size_t d = 0; d < dimension; ++d)
+                    similarity += normalized[token][d] * normalized[candidate][d];
+                if (!std::isfinite(similarity) || similarity < minimum_similarity)
+                    continue;
+
+                nearest.emplace_back(similarity, candidate);
+                std::ranges::push_heap(nearest, std::greater{});
+                if (nearest.size() > neighbor_count)
+                {
+                    std::ranges::pop_heap(nearest, std::greater{});
+                    nearest.pop_back();
+                }
+            }
+            std::ranges::sort(nearest, std::greater{});
+
+            nlohmann::json neighbors = nlohmann::json::array();
+            for (const auto& [similarity, candidate] : nearest)
+                neighbors.push_back({
+                    {"id", candidate},
+                    {"token", corpus.get_token_from_id(static_cast<TokenID>(candidate))},
+                    {"similarity", similarity}
+                });
+            concepts.push_back({
+                {"id", token},
+                {"token", corpus.get_token_from_id(static_cast<TokenID>(token))},
+                {"neighbors", std::move(neighbors)}
+            });
+        }
+
+        std::ofstream output{output_filename};
+        if (!output)
+        {
+            std::println("Failed to open concept output file: '{}'", output_filename);
+            return false;
+        }
+        output << nlohmann::json{
+            {"model", model_filename},
+            {"embedding_dimension", dimension},
+            {"neighbor_count", neighbor_count},
+            {"minimum_similarity", minimum_similarity},
+            {"concepts", std::move(concepts)}
+        }.dump(2) << '\n';
+        if (!output)
+        {
+            std::println("Failed to write concept output file: '{}'", output_filename);
+            return false;
+        }
+        std::println("Wrote {} token concepts to '{}'.", normalized.size(), output_filename);
+        return true;
+    }
+
     // maximum number of tokens to generate in response to a prompt before stopping
     static constexpr size_t MAX_NUM_ANSWER_TOKENS = 10;
 

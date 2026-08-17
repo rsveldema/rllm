@@ -1,4 +1,5 @@
 #include <parallel.hpp>
+#include <logging.hpp>
 #include <print>
 #include <algorithm>
 #include <cctype>
@@ -146,14 +147,14 @@ void print_vulkan_provider()
     VkInstance instance = VK_NULL_HANDLE;
     if (vkCreateInstance(&instance_info, nullptr, &instance) != VK_SUCCESS)
     {
-        std::println("Offload provider: Vulkan (failed to create instance)");
+        LOG_INFO("Offload provider: Vulkan (failed to create instance)");
         return;
     }
 
     uint32_t physical_count = 0;
     if (vkEnumeratePhysicalDevices(instance, &physical_count, nullptr) != VK_SUCCESS || physical_count == 0)
     {
-        std::println("Offload provider: Vulkan (no physical device)");
+        LOG_INFO("Offload provider: Vulkan (no physical device)");
         vkDestroyInstance(instance, nullptr);
         return;
     }
@@ -161,7 +162,7 @@ void print_vulkan_provider()
     std::vector<VkPhysicalDevice> physical_devices(physical_count);
     if (vkEnumeratePhysicalDevices(instance, &physical_count, physical_devices.data()) != VK_SUCCESS)
     {
-        std::println("Offload provider: Vulkan (enumeration failure)");
+        LOG_INFO("Offload provider: Vulkan (enumeration failure)");
         vkDestroyInstance(instance, nullptr);
         return;
     }
@@ -193,12 +194,12 @@ void print_vulkan_provider()
     const VulkanCandidate* selected = pick_candidate(candidates);
     if (selected == nullptr)
     {
-        std::println("Offload provider: Vulkan (no compute-capable device)");
+        LOG_INFO("Offload provider: Vulkan (no compute-capable device)");
         vkDestroyInstance(instance, nullptr);
         return;
     }
 
-    std::println(
+    LOG_INFO(
         "Offload provider: Vulkan ({}, vendor=0x{:x}, device={}, index={})",
         vendor_name_from_id(selected->props.vendorID),
         selected->props.vendorID,

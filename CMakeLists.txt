@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(PREFER_SPEED_OVER_MEMORY 0 CACHE BOOL "Use faster full attention matrices instead of compact triangular storage")
+set(RLLM_MAX_POSITION 8192 CACHE STRING "Maximum compiled token context/workspace capacity")
+if(NOT RLLM_MAX_POSITION MATCHES "^[0-9]+$" OR RLLM_MAX_POSITION LESS 4)
+    message(FATAL_ERROR "RLLM_MAX_POSITION must be an integer of at least 4")
+endif()
 
 include(CheckIPOSupported)
 include(CTest)

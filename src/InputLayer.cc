@@ -163,48 +163,35 @@ namespace rllm
         }
     }
 
-    static void fill_embeddings_with_positional_encoding(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(tokens, embeddings, h, model_dim)
+    static void fill_embeddings(VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(tokens, embeddings, h)
         const GpuInputLine& tokens,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
-        float model_dim
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
         // END_OFFLOAD_PARAMETERS
     )
     {
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(tokens.size());
 
-        OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, embeddings, h, model_dim))
+        OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, embeddings, h))
         const int tok = static_cast<int>(tokens[pos]);
-        const int di_int = static_cast<int>(di);
-        const float emb_val = embeddings[tok, di];
-        const float freq = (1.0f / std::pow(10000.0f, (static_cast<float>((di_int & ~1)) / model_dim)));
-        const float pos_f = static_cast<float>(pos);
-        const float pe = ((di_int % 2) == 0) ? std::sin((pos_f * freq)) : std::cos((pos_f * freq));
-        h[pos, di] = static_cast<float>((emb_val + pe));
+        h[pos, di] = static_cast<float>(embeddings[tok, di]);
         ENDFOR
     }
 
-    static void fill_packed_embeddings_with_positional_encoding(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(tokens, local_positions, embeddings, h, model_dim, packed_rows)
+    static void fill_packed_embeddings(VulkanQueue& queue,
+        // OFFLOAD_PARAMETERS(tokens, embeddings, h, packed_rows)
         const GpuInputLine& tokens,
-        const fixed_size_vector<int, PositionIndex>& local_positions,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
-        float model_dim,
         PositionIndex packed_rows
         // END_OFFLOAD_PARAMETERS
     )
     {
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(packed_rows);
-        OFFLOAD_PARFOR_2D_PARAM(queue, row, di, grid, (tokens, local_positions, embeddings, h, model_dim))
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, di, grid, (tokens, embeddings, h, packed_rows))
         const int tok = static_cast<int>(tokens[row]);
-        const int di_int = static_cast<int>(di);
-        const float emb_val = embeddings[tok, di];
-        const float freq = (1.0f / std::pow(10000.0f, (static_cast<float>((di_int & ~1)) / model_dim)));
-        const float pos_f = static_cast<float>(local_positions[row]);
-        const float pe = ((di_int % 2) == 0) ? std::sin((pos_f * freq)) : std::cos((pos_f * freq));
-        h[row, di] = static_cast<float>((emb_val + pe));
+        h[row, di] = static_cast<float>(embeddings[tok, di]);
         ENDFOR
     }
 
@@ -227,9 +214,8 @@ namespace rllm
         m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
     }
 
-    // Fill h[T × D_MODEL] = token_embedding + sinusoidal positional encoding.
-    // PE[pos, 2i]   = sin(pos / 10000^(2i / D_MODEL))
-    // PE[pos, 2i+1] = cos(pos / 10000^(2i / D_MODEL))
+    // Fill h[T × D_MODEL] with token embeddings. Transformer blocks inject
+    // positional information by applying RoPE to Q and K.
     void InputLayer::propagate_forward(
         const CpuInputLine& input,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
@@ -252,7 +238,7 @@ namespace rllm
         gpu_input.sync_to_device(queue, input);
 
         check_nan_finding_mode_embeddings("forward:start");
-        fill_embeddings_with_positional_encoding(queue, gpu_input, m_embeddings, h, static_cast<float>(EmbeddingDimension::MAX));
+        fill_embeddings(queue, gpu_input, m_embeddings, h);
         check_nan_finding_mode_matrix(h, static_cast<PositionIndex>(input.size()), "hidden state", "forward:end");
     }
 
@@ -266,21 +252,13 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         gpu_input.sync_to_device(queue, input);
         check_nan_finding_mode_embeddings("batched-forward:start");
-        fill_packed_embeddings_with_positional_encoding(
-            queue,
-            gpu_input.tokens,
-            gpu_input.local_position,
-            m_embeddings,
-            h,
-            static_cast<float>(EmbeddingDimension::MAX),
-            input.packed_rows()
-        );
+        fill_packed_embeddings(queue, gpu_input.tokens, m_embeddings, h, input.packed_rows());
         check_nan_finding_mode_matrix(h, input.packed_rows(), "batched hidden state", "batched-forward:end");
     }
 
 
     // Update token embeddings.  dh[T × D_MODEL] = ∂L/∂h.
-    // Positional encodings are fixed, so only the embedding contribution is updated.
+    // RoPE is parameter-free and applied in transformer blocks, so only embeddings update here.
     void InputLayer::propagate_backward(
         const CpuInputLine& input,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
@@ -416,6 +394,20 @@ namespace rllm
             const_cast<cpu_fixed_matrix<float16, TokenID, EmbeddingDimension>&>(m_embeddings_cpu));
         queue.wait("InputLayer embedding inspection");
         fixed_size_matrix<float16, TokenID, EmbeddingDimension>::export_row(tok, m_embeddings_cpu, out);
+    }
+
+    std::vector<embedding_row_t> InputLayer::get_all_embeddings() const
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_embeddings.copy_to_cpu(queue,
+            const_cast<cpu_fixed_matrix<float16, TokenID, EmbeddingDimension>&>(m_embeddings_cpu));
+        queue.wait("InputLayer embedding export");
+
+        std::vector<embedding_row_t> result(static_cast<size_t>(TokenID::MAX));
+        for (const auto tok : enum_iterator1D<TokenID>())
+            fixed_size_matrix<float16, TokenID, EmbeddingDimension>::export_row(
+                tok, m_embeddings_cpu, result[static_cast<size_t>(tok)]);
+        return result;
     }
 
 } // namespace rllm

@@ -30,6 +30,9 @@
 
 namespace rllm
 {
+#ifndef RLLM_MAX_POSITION
+#define RLLM_MAX_POSITION 8192
+#endif
 
     static constexpr float MIN_NEURON_INPUT = -0.01f;
     static constexpr float MAX_NEURON_INPUT = 1.0f;
@@ -52,11 +55,12 @@ namespace rllm
     using Token = std::string;
 
     // Dimensionality of each token's learned embedding vector.
-    // The first intermediate layer is tiled as: neuron[p * EmbeddingDimension::MAX + d] for position p, dimension d.
+    // The first intermediate layer is tiled across multiple attention heads,
+    // so the embedding dimension must be divisible by the number of heads.
     enum class EmbeddingDimension : size_t
     {
         START = 0,
-        MAX = 512
+        MAX = 1024 * 2
     };
 
     // position of a token in the input sequence. For example, in the input "the cat sat", the token "cat" has
@@ -64,15 +68,17 @@ namespace rllm
     enum class PositionIndex : size_t
     {
         START = 0,
-        MAX = 1024 * 8,
+        MAX = RLLM_MAX_POSITION,
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
     // Index of an attention head (0..HeadsIndex::MAX-1).
+    // this is used to partition the embedding dimension into multiple heads,
+    // each of which has its own attention mechanism.
     enum class HeadsIndex : size_t
     {
         START = 0,
-        MAX = 8
+        MAX = 32
     };
 
     // Batch axis for batched forward/backward paths.
@@ -89,9 +95,9 @@ namespace rllm
         START = 0,
         ONE = 1,
         TWO = 2,
-        THREE = 3,
-        FOUR = 4,
-        MAX = 4
+        //THREE = 3,
+        //FOUR = 4,
+        MAX = TWO
     };
 
     enum class RmsNormPartialSumIndex : size_t

@@ -30,6 +30,7 @@ namespace rllm
             float learning_rate,
             float layer_learning_rate_multiplier,
             float warmup_percent,
+            bool skip_warmup,
             LearningRateSchedule learning_rate_schedule,
             float simulated_annealing_decay_factor,
             float simulated_annealing_initial_multiplier,
@@ -51,6 +52,8 @@ namespace rllm
             bool upgrade_mode,
             bool freeze_old_blocks,
             bool all_blocks_read_write,
+            float upgrade_residual_output_scale,
+            bool reset_training_cursor,
             const std::vector<std::string>& train_corpus_dirs
         );
       private:
