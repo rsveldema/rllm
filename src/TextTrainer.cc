@@ -367,7 +367,7 @@ namespace rllm
         auto& ws = *m_forward_workspace;
         ws.h.set_rows(m_seq_len);
 
-        // Embed tokens + sinusoidal positional encoding → h[T × D_MODEL]
+        // Embed tokens; transformer attention applies RoPE to Q and K.
         m_input_layer.propagate_forward(m_last_input, ws.h);
         check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, "after input layer forward");
 
@@ -1164,6 +1164,29 @@ namespace rllm
                 const auto top = m_output_layers[candidate.head].get_top_k_by_logit(1).front();
                 const float max_logit = score.temp_values_cpu[TempStorage::START];
                 const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
+                constexpr size_t SURROUNDING_TOKEN_COUNT = 3;
+                const size_t target_index = static_cast<size_t>(window.context_length) +
+                    static_cast<size_t>(candidate.head);
+                const size_t line_size = static_cast<size_t>(window.line.size());
+                const size_t excerpt_begin = target_index > SURROUNDING_TOKEN_COUNT
+                    ? target_index - SURROUNDING_TOKEN_COUNT
+                    : 0;
+                const size_t excerpt_end = std::min(
+                    line_size, target_index + SURROUNDING_TOKEN_COUNT + 1);
+                std::string context_excerpt;
+                if (excerpt_begin != 0)
+                    context_excerpt += "…";
+                for (size_t token_index = excerpt_begin; token_index < excerpt_end; ++token_index)
+                {
+                    if (token_index == target_index)
+                        context_excerpt += '(';
+                    context_excerpt += m_corpus.get_token_from_id(
+                        window.line.get(static_cast<PositionIndex>(token_index)));
+                    if (token_index == target_index)
+                        context_excerpt += ')';
+                }
+                if (excerpt_end != line_size)
+                    context_excerpt += "…";
                 worst_predictions.push_back({
                     .loss = loss,
                     .expected_probability = std::exp(-loss),
@@ -1171,8 +1194,7 @@ namespace rllm
                     .head = candidate.head,
                     .expected = candidate.expected,
                     .predicted = top.token_id,
-                    .context = escape_whitespace_for_log(
-                        m_corpus.get_line(get_last_input()).value_or("<unable to decode>"))
+                    .context = escape_whitespace_for_log(context_excerpt)
                 });
             }
         }

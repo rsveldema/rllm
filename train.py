@@ -305,17 +305,35 @@ def incremental_window_stages(
     target_stride: int,
     total_epochs: int,
     stage_epochs: int = 4,
+    new_block_epochs: int = 2,
 ) -> list[tuple[int, int, int, int]]:
     if target_layers < 3:
         raise ValueError("Incremental-window mode requires a target of at least 3 layers.")
     if stage_epochs < 1:
         raise ValueError("incremental_stage_epochs must be positive.")
-    stage_count = target_layers - 2
-    growth_epoch_count = stage_epochs * (stage_count - 1)
-    if total_epochs <= growth_epoch_count:
+    if new_block_epochs < 1:
+        raise ValueError("incremental_new_block_epochs must be positive.")
+    if stage_epochs <= new_block_epochs:
         raise ValueError(
-            f"Incremental-window mode needs more than {growth_epoch_count} epochs "
-            f"for {stage_count} stages of {stage_epochs} epochs."
+            "incremental_stage_epochs must leave at least one all-blocks epoch."
+        )
+    stage_count = target_layers - 2
+    joint_epochs = stage_epochs - new_block_epochs
+    non_final_epochs = [
+        new_block_epochs * upgrade + joint_epochs
+        for upgrade in range(1, stage_count - 1)
+    ]
+    growth_epoch_count = 0 if stage_count == 1 else stage_epochs + sum(non_final_epochs)
+    final_new_block_epochs = new_block_epochs * (stage_count - 1)
+    minimum_total_epochs = (
+        1 if stage_count == 1
+        else growth_epoch_count + final_new_block_epochs + joint_epochs
+    )
+    if total_epochs < minimum_total_epochs:
+        raise ValueError(
+            f"Incremental-window mode needs at least {minimum_total_epochs} epochs "
+            "so each added block gets progressively longer training and every "
+            "depth retains an all-blocks phase."
         )
 
     # Shallow stages focus on short-range syntax before deeper stages introduce
@@ -329,13 +347,18 @@ def incremental_window_stages(
         7: 72,
     }
     stages: list[tuple[int, int, int, int]] = []
-    for layers in range(3, target_layers + 1):
+    for stage_index, layers in enumerate(range(3, target_layers + 1)):
         window = target_window if layers == target_layers else min(
             target_window,
             curriculum_windows.get(layers, target_window),
         )
         stride = max(1, round(target_stride * window / target_window))
-        epochs = total_epochs - growth_epoch_count if layers == target_layers else stage_epochs
+        if layers == target_layers:
+            epochs = total_epochs - growth_epoch_count
+        elif stage_index == 0:
+            epochs = stage_epochs
+        else:
+            epochs = non_final_epochs[stage_index - 1]
         stages.append((layers, window, stride, epochs))
     return stages
 
@@ -348,13 +371,14 @@ def incremental_training_steps(
         raise ValueError("incremental_new_block_epochs must be positive.")
     first_layers, first_window, first_stride, first_epochs = stages[0]
     steps = [(first_layers, first_window, first_stride, first_epochs, "bootstrap")]
-    for layers, window, stride, epochs in stages[1:]:
-        if epochs <= new_block_epochs:
+    for upgrade, (layers, window, stride, epochs) in enumerate(stages[1:], start=1):
+        layer_new_block_epochs = new_block_epochs * upgrade
+        if epochs <= layer_new_block_epochs:
             raise ValueError(
-                f"Layer {layers} needs more than {new_block_epochs} epochs so both "
+                f"Layer {layers} needs more than {layer_new_block_epochs} epochs so both "
                 "new-block and all-blocks steps can run.")
-        steps.append((layers, window, stride, new_block_epochs, "growth"))
-        steps.append((layers, window, stride, epochs - new_block_epochs, "all-blocks"))
+        steps.append((layers, window, stride, layer_new_block_epochs, "growth"))
+        steps.append((layers, window, stride, epochs - layer_new_block_epochs, "all-blocks"))
     return steps
 
 
@@ -638,9 +662,10 @@ def main(arguments: list[str] | None = None) -> int:
             try:
                 total_epochs = configured_epochs(training_arguments)
                 stage_epochs = int(config.get("incremental_stage_epochs", 4))
-                stages = incremental_window_stages(
-                    num_layers, window_size, window_stride, total_epochs, stage_epochs)
                 new_block_epochs = int(config.get("incremental_new_block_epochs", 2))
+                stages = incremental_window_stages(
+                    num_layers, window_size, window_stride, total_epochs,
+                    stage_epochs, new_block_epochs)
                 steps = incremental_training_steps(stages, new_block_epochs)
                 upgrade_output_scale = float(
                     config.get("incremental_upgrade_output_scale", 0.1))

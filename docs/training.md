@@ -36,10 +36,12 @@ layer and grows the window and proportional stride every
 New blocks use Xavier-uniform weights while their residual output projections
 (`W_o` and `W_down`) are scaled by `incremental_upgrade_output_scale` (default
 `0.1`). At every depth increase, earlier blocks remain frozen for
-`incremental_new_block_epochs` epochs (default `2`), then all blocks are made
-read-write for the rest of that depth's epoch allocation. Thus a normal
-four-epoch growth depth uses two new-block-only epochs followed by two joint
-epochs. The configured total epoch budget is unchanged.
+`incremental_new_block_epochs` epochs (default `2`) multiplied by the layer's
+upgrade number, then all blocks are made read-write for the rest of that
+depth's epoch allocation. With the defaults, layers 4 through 8 receive 2, 4,
+6, 8, and 10 new-block-only epochs respectively, each followed by two joint
+epochs. The configured total epoch budget must be large enough for this growing
+schedule; the standard eight-layer configuration therefore uses 44 epochs.
 The Python controller writes every active incremental step (`bootstrap`,
 `growth`, or `all-blocks`), shape, and exact command to `train.log` and the
 controller state. The C++ executable has no incremental curriculum mode; it
@@ -398,7 +400,9 @@ early stopping use head-zero loss so they optimize the completion objective and
 are directly comparable with reported training loss. The baseline and each
 end-of-epoch validation also report the five worst individual predictions. Each
 diagnostic includes loss, expected and predicted tokens with their probabilities,
-the MTP head, and the decoded input context.
+the MTP head, and a decoded seven-token excerpt with up to three tokens before
+and after the expected target. The target token is enclosed in parentheses;
+ellipses mark excerpt truncation.
 Held-out windows reserve up to four trailing tokens beyond their validation
 context, so each available MTP head is evaluated against a real future token.
 Short final windows contribute only the heads for which a future token exists.

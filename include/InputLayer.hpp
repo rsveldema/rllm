@@ -86,7 +86,7 @@ namespace rllm
 
         void set_random_embeddings(EmbeddingInitializerType type = EmbeddingInitializerType::LegacyUniform);
 
-        // Returns the raw learned embedding for a single token (without positional encoding).
+        // Returns the learned embedding for a single token.
         void get_embedding(TokenID tok, embedding_row_t& out) const;
 
         // Returns every raw token embedding after a single device-to-host transfer.

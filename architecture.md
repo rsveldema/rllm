@@ -1,6 +1,6 @@
 # RLLM Architecture
 
-RLLM is a small-scale experimental language model for next-token prediction. It implements a transformer decoder stack with multi-head causal self-attention, SwiGLU feed-forward blocks, and sinusoidal positional encodings, trained with SGD + momentum.
+RLLM is a small-scale experimental language model for next-token prediction. It implements a transformer decoder stack with multi-head causal self-attention, SwiGLU feed-forward blocks, and rotary positional embeddings (RoPE), trained with AdamW.
 
 ---
 
@@ -23,7 +23,7 @@ graph TD
     end
 
     subgraph NN["TextTrainer"]
-        IL["InputLayer\nToken Embeddings\n+ Sinusoidal Pos. Enc."]
+        IL["InputLayer\nToken Embeddings"]
         TB0["TransformerBlock 0"]
         TBN["TransformerBlock 1..N"]
         OL["OutputLayer\nLM Head (linear)"]
@@ -49,7 +49,6 @@ graph TD
 graph LR
     Tokens["Input Token IDs\n[t₀, t₁, ..., tₙ]"]
     Embed["Token Embedding Lookup\nE[T × 512]"]
-    PosEnc["+ Sinusoidal\nPositional Encoding"]
     H["Hidden State h\n[T × 512]"]
     Blocks["Transformer Blocks × N\n(stacked)"]
     HLast["h_last[512]\n(final position)"]
@@ -57,7 +56,7 @@ graph LR
     Softmax["Softmax\nProbabilities[vocab]"]
     TopK["Top-K OutputTokens\n{token_id, probability}"]
 
-    Tokens --> Embed --> PosEnc --> H --> Blocks --> HLast --> LMHead --> Softmax --> TopK
+    Tokens --> Embed --> H --> Blocks --> HLast --> LMHead --> Softmax --> TopK
 ```
 
 ---
@@ -73,7 +72,8 @@ graph TD
         Q["Q = h_norm @ W_q"]
         K["K = h_norm @ W_k"]
         V["V = h_norm @ W_v"]
-        Scores["scores = softmax(Q·Kᵀ / √64)\n(causal mask)"]
+        RoPE["Rotate Q and K by token position\n(per head)"]
+        Scores["scores = softmax(Q_rope·K_ropeᵀ / √64)\n(causal mask)"]
         AttnOut["attn_out = scores · V"]
         Proj["out = attn_out @ W_o"]
     end
@@ -92,7 +92,7 @@ graph TD
     Output["h_out [T × 512]"]
 
     Input --> RN1 --> Q & K & V
-    Q & K --> Scores
+    Q & K --> RoPE --> Scores
     Scores & V --> AttnOut --> Proj --> Res1
     Input --> Res1 --> RN2 --> Gate & Up
     Gate & Up --> SiLU --> Down --> Res2
@@ -205,7 +205,7 @@ flowchart TD
 include/
   RLLM.hpp              – Top-level orchestrator interface
   TextTrainer.hpp     – Core model: forward / backward / serialization
-  InputLayer.hpp        – Token embeddings + positional encoding
+  InputLayer.hpp        – Token embeddings
   TransformerBlock.hpp  – Single decoder block (attention + FFN)
   OutputLayer.hpp       – LM head (linear projection to vocab logits)
   Corpus.hpp            – Tokenizer, vocabulary, training data iteration
@@ -216,7 +216,7 @@ src/
   RLLM.cc               – train_mode() and prompt_mode() implementations
   TextTrainer.cc      – Forward pass, backward pass, serialization
   TransformerBlock.cc   – Attention + SwiGLU forward & backward
-  InputLayer.cc         – Embedding lookup + sinusoidal enc.
+  InputLayer.cc         – Embedding lookup
   OutputLayer.cc        – LM head forward, loss, backward
   Corpus.cpp            – File loading, tokenization, line iteration
   serialization.cc      – JSON load/save helpers

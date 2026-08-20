@@ -74,34 +74,43 @@ def test_incremental_window_rejects_other_resume_selection():
 
 
 def test_incremental_window_stages_grow_depth_and_context():
-    stages = train.incremental_window_stages(8, 96, 48, 40)
+    stages = train.incremental_window_stages(8, 96, 48, 44)
 
     assert stages == [
         (3, 12, 6, 4),
         (4, 16, 8, 4),
-        (5, 24, 12, 4),
-        (6, 48, 24, 4),
-        (7, 72, 36, 4),
-        (8, 96, 48, 20),
+        (5, 24, 12, 6),
+        (6, 48, 24, 8),
+        (7, 72, 36, 10),
+        (8, 96, 48, 12),
     ]
 
 
 def test_incremental_steps_train_new_block_then_all_blocks_at_each_upgrade():
-    stages = train.incremental_window_stages(8, 96, 48, 40, 4)
+    stages = train.incremental_window_stages(8, 96, 48, 44, 4, 2)
 
     assert train.incremental_training_steps(stages, 2) == [
         (3, 12, 6, 4, "bootstrap"),
         (4, 16, 8, 2, "growth"),
         (4, 16, 8, 2, "all-blocks"),
-        (5, 24, 12, 2, "growth"),
+        (5, 24, 12, 4, "growth"),
         (5, 24, 12, 2, "all-blocks"),
-        (6, 48, 24, 2, "growth"),
+        (6, 48, 24, 6, "growth"),
         (6, 48, 24, 2, "all-blocks"),
-        (7, 72, 36, 2, "growth"),
+        (7, 72, 36, 8, "growth"),
         (7, 72, 36, 2, "all-blocks"),
-        (8, 96, 48, 2, "growth"),
-        (8, 96, 48, 18, "all-blocks"),
+        (8, 96, 48, 10, "growth"),
+        (8, 96, 48, 2, "all-blocks"),
     ]
+
+
+def test_incremental_stages_reject_budget_too_small_for_growing_new_block_time():
+    with pytest.raises(ValueError, match="at least 44 epochs"):
+        train.incremental_window_stages(8, 96, 48, 40, 4, 2)
+
+
+def test_three_layer_incremental_target_uses_the_complete_budget():
+    assert train.incremental_window_stages(3, 12, 6, 7) == [(3, 12, 6, 7)]
 
 
 def test_incremental_controller_state_round_trip(tmp_path):
