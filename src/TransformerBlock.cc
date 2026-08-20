@@ -590,6 +590,114 @@ namespace rllm
         ENDFOR
     }
 
+    // ── rotary positional embeddings ─────────────────────────────────────────
+
+    static void apply_rope(
+        // OFFLOAD_PARAMETERS(Q, K, rows, direction)
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K,
+        PositionIndex rows,
+        float direction
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (Q, K, rows, direction))
+        const int dimension = static_cast<int>(d);
+        if (dimension % 2 == 0)
+        {
+            const int head_dimension = static_cast<int>(HeadDimension::MAX);
+            const int dimension_in_head = (dimension - ((dimension / head_dimension) * head_dimension));
+            const float inverse_frequency = std::pow(
+                10000.0f, -(static_cast<float>(dimension_in_head) / static_cast<float>(head_dimension)));
+            const float angle = ((static_cast<float>(row) * inverse_frequency) * direction);
+            const float cosine = std::cos(angle);
+            const float sine = std::sin(angle);
+            const auto next = static_cast<EmbeddingDimension>((dimension + 1));
+            const float q0 = Q[row, d];
+            const float q1 = Q[row, next];
+            const float k0 = K[row, d];
+            const float k1 = K[row, next];
+            Q[row, d] = ((q0 * cosine) - (q1 * sine));
+            Q[row, next] = ((q0 * sine) + (q1 * cosine));
+            K[row, d] = ((k0 * cosine) - (k1 * sine));
+            K[row, next] = ((k0 * sine) + (k1 * cosine));
+        }
+        ENDFOR
+    }
+
+    static void apply_packed_rope(
+        // OFFLOAD_PARAMETERS(Q, K, local_positions, rows, direction)
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K,
+        const fixed_size_vector<int, PositionIndex>& local_positions,
+        PositionIndex rows,
+        float direction
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (Q, K, local_positions, rows, direction))
+        const int dimension = static_cast<int>(d);
+        if (dimension % 2 == 0)
+        {
+            const int head_dimension = static_cast<int>(HeadDimension::MAX);
+            const int dimension_in_head = (dimension - ((dimension / head_dimension) * head_dimension));
+            const float inverse_frequency = std::pow(
+                10000.0f, -(static_cast<float>(dimension_in_head) / static_cast<float>(head_dimension)));
+            const float angle = ((static_cast<float>(local_positions[row]) * inverse_frequency) * direction);
+            const float cosine = std::cos(angle);
+            const float sine = std::sin(angle);
+            const auto next = static_cast<EmbeddingDimension>((dimension + 1));
+            const float q0 = Q[row, d];
+            const float q1 = Q[row, next];
+            const float k0 = K[row, d];
+            const float k1 = K[row, next];
+            Q[row, d] = ((q0 * cosine) - (q1 * sine));
+            Q[row, next] = ((q0 * sine) + (q1 * cosine));
+            K[row, d] = ((k0 * cosine) - (k1 * sine));
+            K[row, next] = ((k0 * sine) + (k1 * cosine));
+        }
+        ENDFOR
+    }
+
+    static void apply_inverse_rope_to_gradients(
+        // OFFLOAD_PARAMETERS(d_Q, d_K, local_positions, rows)
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_Q,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_K,
+        const fixed_size_vector<int, PositionIndex>& local_positions,
+        PositionIndex rows
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+            OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (d_Q, d_K, local_positions, rows))
+            const int dimension = static_cast<int>(d);
+            if (dimension % 2 == 0)
+            {
+                const int head_dimension = static_cast<int>(HeadDimension::MAX);
+                const int dimension_in_head = (dimension - ((dimension / head_dimension) * head_dimension));
+                const float inverse_frequency = std::pow(
+                    10000.0f, -(static_cast<float>(dimension_in_head) / static_cast<float>(head_dimension)));
+                const float angle = (static_cast<float>(local_positions[row]) * inverse_frequency);
+                const float cosine = std::cos(angle);
+                const float sine = std::sin(angle);
+                const auto next = static_cast<EmbeddingDimension>((dimension + 1));
+                const float q0 = d_Q[row, d];
+                const float q1 = d_Q[row, next];
+                const float k0 = d_K[row, d];
+                const float k1 = d_K[row, next];
+                d_Q[row, d] = ((q0 * cosine) + (q1 * sine));
+                d_Q[row, next] = ((-q0 * sine) + (q1 * cosine));
+                d_K[row, d] = ((k0 * cosine) + (k1 * sine));
+                d_K[row, next] = ((-k0 * sine) + (k1 * cosine));
+            }
+            ENDFOR
+    }
+
     // ── attention helpers ──────────────────────────────────────────────────────
 
     /** In-place causal softmax over a [T × T] score matrix (row i only attends
@@ -894,6 +1002,8 @@ namespace rllm
 
         // ── 2. Q / K / V projections ─────────────────────────────────────────
         matmul_ABt_3_matrix_muls(ws.h_norm_attn, W_q, ws.Q, W_k, ws.K, W_v, ws.V);
+        // RoPE injects token position by rotating each head's Q/K dimension pairs.
+        apply_rope(ws.Q, ws.K, seq_len, 1.0f);
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
         {
@@ -936,6 +1046,8 @@ namespace rllm
         ws.h_in = h;
         rms_norm(h, ws.h_norm_attn);
         matmul_ABt_3_matrix_muls(ws.h_norm_attn, W_q, ws.Q, W_k, ws.K, W_v, ws.V);
+        // Use per-example local positions so RoPE restarts at zero in each packed sequence.
+        apply_packed_rope(ws.Q, ws.K, batch.local_position, packed_rows, 1.0f);
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         ws.attn_concat.zero(queue);
         forward_batched_attention_heads(ws, packed_rows, batch);
@@ -1308,6 +1420,12 @@ namespace rllm
             log_attention_matrix_gradient_diagnostics(ws.d_raw, fwd.seq_len, diagnostic_label("attention d_raw"));
         backward_accumulate_attention_dq_for_heads(ws, fwd);
         backward_accumulate_attention_dk_for_heads(ws, fwd);
+        // Backpropagate through RoPE with the transpose (inverse) Q/K rotation.
+        if (fwd.packed_batch)
+            apply_inverse_rope_to_gradients(
+                ws.d_Q, ws.d_K, fwd.packed_batch->local_position, fwd.seq_len);
+        else
+            apply_rope(ws.d_Q, ws.d_K, fwd.seq_len, -1.0f);
         if (log_gradient_diagnostics)
         {
             log_hidden_gradient_diagnostics(ws.d_Q, fwd.seq_len, diagnostic_label("attention d_Q"));

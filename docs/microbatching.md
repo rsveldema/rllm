@@ -14,6 +14,7 @@ without recomputing all prefixes. Windows are shuffled each epoch.
 
 True tensor batching uses a packed ragged row axis. Each example owns a
 contiguous row interval, positional indices restart at zero for every example,
+RoPE uses those local indices to rotate Q and K independently in every example,
 and causal attention is restricted to keys in the query's interval. This is a
 block-diagonal causal mask; examples in a micro-batch must never attend to one
 another.

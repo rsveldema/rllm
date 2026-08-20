@@ -358,7 +358,7 @@ namespace rllm
      *
      * Rows belonging to an example are contiguous. `row_begin(b)` and
      * `row_end(b)` define the block used by causal attention, while
-     * `local_position(row)` resets positional encoding at each example.
+     * `local_position(row)` resets RoPE at each example.
      */
     class PackedBatchInput
     {

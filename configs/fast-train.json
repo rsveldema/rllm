@@ -1,0 +1,43 @@
+{
+  "build_type": "release",
+  "model_directory": "models-8-fast",
+  "layers": 8,
+  "window_size": 96,
+  "window_stride": 48,
+  "learn_depth": 1,
+  "strip_comments": true,
+  "sources": [
+    "training_data0:0.05",
+    "curriculum/grammar:0.15",
+    "curriculum/syntax:0.10",
+    "curriculum/systems:0.10",
+    "training_data2:0.50"
+  ],
+  "cmake_arguments": [
+    "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
+    "-DRLLM_ENABLE_STATISTICS=OFF"
+  ],
+  "training_arguments": [
+    "--epochs", "40",
+    "--disable-example-convergence",
+    "--disable-training-diagnostics",
+    "--checkpoint-interval", "3600",
+    "--validation-interval", "3600",
+    "--learning-rate", "0.00001",
+    "--layer-learning-rate-multiplier", "1.05",
+    "--warmup-percent", "1",
+    "--weight-initializer", "xavier-input-projections",
+    "--ffn-initializer", "xavier-input-projections",
+    "--embedding-initializer", "legacy-uniform",
+    "--learning-rate-schedule", "lowering",
+    "--simulated-annealing-initial-multiplier", "9",
+    "--simulated-annealing-decay-factor", "0.7",
+    "--simulated-annealing-decay-epochs", "1",
+    "--simulated-annealing-min-multiplier", "0.02",
+    "--micro-batch-size", "256",
+    "--max-validation-windows", "512",
+    "--validation-worst-count", "100",
+    "--vulkan-device", "R9700",
+    "--restart-learning-rate-schedule"
+  ]
+}
