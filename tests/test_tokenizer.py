@@ -83,26 +83,33 @@ def test_neural_network_hpp_no_skipped_chars(token_vocab):
     assert skipped == [], f"Characters not covered by any token: {skipped!r}"
 
 
-def test_neural_network_hpp_token_sequence(token_vocab):
-    """'"NeuralNetwork.hpp"' must tokenize to the expected sequence."""
+def test_concrete_identifier_is_not_learned_as_a_token(token_vocab):
     matched, _ = _greedy_tokenize('"NeuralNetwork.hpp"', token_vocab)
-    assert matched == ['"', 'Neural', 'Network', '.', 'hpp', '"']
+    assert "Neural" not in matched
+    assert "Network" not in matched
+    assert "hpp" not in matched
 
 
-def test_hash_prefixed_word_is_learned_as_single_token():
-    """Repeated hash-prefixed words should survive preprocessing as one token."""
+def test_hash_prefixed_identifier_is_not_learned_as_a_token():
     tokenizer_map = ctm.create_tokenizer_map("#xxxx #xxxx")
-    assert "#xxxx" in tokenizer_map
-
-    token_vocab = sorted(tokenizer_map.keys(), key=lambda t: -len(t))
-    matched, skipped = _greedy_tokenize("#xxxx", token_vocab)
-    assert skipped == []
-    assert matched == ["#xxxx"]
+    assert "#xxxx" not in tokenizer_map
 
 
 def test_invalid_token_is_reserved_even_when_absent_from_training_text():
     tokenizer_map = ctm.create_tokenizer_map("abc abc")
     assert "INVALID" in tokenizer_map
+
+
+@pytest.mark.parametrize("token", [
+    "<MCP>", "</MCP>", "<LOOP_0>", "<LOOP_7>", "<LOOP_OVERFLOW>",
+    "<LOCAL_0>", "<LOCAL_15>",
+    "<LOCAL_OVERFLOW>", "<PARAM_0>", "<PARAM_15>", "<PARAM_OVERFLOW>",
+    "<GLOBAL_0>", "<GLOBAL_15>", "<GLOBAL_OVERFLOW>",
+    "<FIELD_ACCESS_IDENT>", "<STRING>",
+])
+def test_source_abstraction_tokens_are_reserved(token):
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert token in tokenizer_map
 
 
 @pytest.mark.parametrize("keyword", ["while", "for", "if", "switch", "return"])

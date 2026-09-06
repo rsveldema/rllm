@@ -90,9 +90,30 @@ overwhelmed by a larger source. Sampling cycles through shuffled source windows
 before repeating them. Unweighted directories default to weight `1`.
 
 The Python training launcher uses `training_data0`, the `curriculum/grammar`,
-`curriculum/syntax`, `curriculum/comments`, and `curriculum/systems` categories,
+`curriculum/syntax`, `curriculum/comments`, `curriculum/systems`, and
+`curriculum/algos` categories,
 and `training_data2` as a weighted mixture. Change `sources` in the JSON to use
 a different corpus or weighting.
+
+During language-aware tokenization, program sources are abstracted in memory so
+the model learns language structure rather than project or library vocabulary.
+The source files retain ordinary source spelling. Language keywords and
+punctuation are retained. Loop variables use `<LOOP_0>` through `<LOOP_7>`,
+then `<LOOP_OVERFLOW>`. Local variables use `<LOCAL_0>` through `<LOCAL_15>`,
+parameters use `<PARAM_0>` through `<PARAM_15>`, and function, type, member,
+namespace, library, or unknown-scope names use `<GLOBAL_0>` through
+`<GLOBAL_15>`. Each category has an `_OVERFLOW` token. String and
+character contents become `<STRING>`. Syntactic function-call targets and
+qualified accesses such as C++ `namespace::member` are enclosed in `<MCP>` and
+`</MCP>`; the concrete names inside are abstracted as well. These markers define
+the boundary where library support is expected to be supplied by MCP. Comments
+remain prose and are not identifier-normalized.
+
+The launcher also writes a persistent inspection mirror to
+`/tmp/rllm/training_data0`, `/tmp/rllm/curriculum`, and
+`/tmp/rllm/training_data2`. These copies materialize the in-memory abstraction
+so placement of identifier-category tokens, `<STRING>`, and `<MCP>...</MCP>` can be reviewed
+without rewriting repository sources. Each training launch refreshes them.
 
 `./train.py config-6.json` stores artifacts in the configured model directory.
 Unless `--latest`, `--fresh-start`, or `--resume-model` is supplied, it tries to resume from
@@ -206,7 +227,9 @@ equally likely next-token choices, so lower is better. Correct-token probability
 is the arithmetic mean of each evaluated target's softmax probability, so
 higher is better.
 
-For multi-token prediction, each example trains only the heads that have real future tokens. Short prefixes no longer train missing future heads toward `INVALID`.
+The model currently uses a single prediction head, so each example trains only
+the immediate next-token target. Additional MTP enum names remain reserved for
+checkpoint and tooling compatibility but are not allocated or trained.
 
 Training diagnostics render unknown, missing, or out-of-range token IDs as `<UNK>` instead of aborting while formatting a log line. `Corpus::get_line` returns `std::nullopt` for those sequences.
 Full training strings in `train.log` render newline and tab characters as `\\n`
@@ -550,8 +573,9 @@ source training directories remain unchanged and the temporary copies are
 removed when the launcher returns. Set `strip_comments` to `false` to preserve
 comments in the selected source corpora.
 
-Before the corpus is loaded, files in the selected training directory are
-normalized by `training_postprocessor.py`. Python files have every
+Before the corpus is loaded, files in the selected training directory receive
+formatting normalization from `training_postprocessor.py`; it does not write
+identifier-category, `<STRING>`, or MCP markers into source files. Python files have every
 complete group of four leading spaces converted to a literal tab. The runtime
 tokenizer preserves each resulting tab as `TokenID::TOK_TAB`, allowing Python
 block indentation to participate in training instead of being discarded with

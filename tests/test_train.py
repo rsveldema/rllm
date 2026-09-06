@@ -208,6 +208,7 @@ def test_incremental_config_enables_mode_without_cli_flag():
     assert config["incremental_stage_epochs"] == 4
     assert config["incremental_new_block_epochs"] == 2
     assert config["incremental_upgrade_output_scale"] == 0.1
+    assert "curriculum/algos:0.10" in config["sources"]
     assert config["model_directory"] == "models-8-incremental"
     assert not options.incremental_window
     assert options.incremental_window or config["incremental_window"]

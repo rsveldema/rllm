@@ -15,8 +15,47 @@ included as atomic, end-of-word tokens. They only match at identifier
 boundaries, so `while` is a single token but the `while` portion of
 `while_value` is not treated as the keyword. Every nontrivial keyword prefix is
 also retained explicitly, so `wh`, `whi`, `whil`, `#de`, `#def`, `impl`, and
-`interf` remain tokens for incomplete prompts. ASCII character tokens and
-learned BPE subtokens remain as fallbacks for all other incomplete text.
+`interf` remain tokens for incomplete prompts. ASCII character tokens remain
+as fallbacks for all other incomplete text. Corpus-derived BPE pieces are
+deliberately excluded so concrete identifiers and literal vocabulary cannot
+become learned tokens.
+
+`<MCP>`, `</MCP>`, eight indexed loop slots, 16 indexed local slots, 16 indexed
+parameter slots, 16 indexed global slots, an overflow token for each category,
+`<FIELD_ACCESS_IDENT>`, and `<STRING>` are reserved atomic tokens. Identifiers
+following `.`, `->`, or C/C++ `::` use `<FIELD_ACCESS_IDENT>`; the base
+expression retains its normal scoped identifier category. Rust `::` paths keep
+indexed global identifiers because they describe module paths rather than C++
+member or namespace access.
+The training postprocessor uses them to remove concrete program vocabulary and
+mark calls or qualified library accesses as MCP-provided operations.
+Identifier bindings are held in a stack of lexical scope maps. Parameters enter
+the function-body scope, while loop and local declarations enter the current
+scope. Leaving a brace-delimited scope, or dedenting Python source, discards its
+bindings so the lowest free indexed token can be reused by a later declaration.
+Parameter indices therefore restart at `<PARAM_0>` for every function.
+At each free function, global aliases also restart at `<GLOBAL_0>`. Class and
+struct methods retain their enclosing type's global alias table so member
+declarations remain distinct within that type.
+
+Language-aware tokenization always has an `IMCP`. Whenever raw source spelling
+is replaced by `<IDENTIFIER>` or `<STRING>`, the tokenizer calls
+`record_seen_identifier` or `record_seen_string` with the concrete spelling.
+Generated placeholders can be converted back with `map_identifier` and
+`map_string`; `resolve_model_placeholders` applies those mappings to output.
+The default MCP returns `???` when a concrete mapping is unavailable.
+Complete MCP expressions are reported through `record_seen_mcp`. During output
+resolution, each `<MCP>...</MCP>` section is passed to `map_mcp` as a unit, so
+its internal placeholder sequence is not resolved independently.
+Every `map_identifier`, `map_string`, and `map_mcp` call receives an
+`MCPContext` reference. It exposes the complete generated text, placeholder
+offset and length, and `before`, `placeholder`, and `after` views so an MCP can
+use surrounding syntax when choosing a concrete spelling.
+The three `record_seen_*` methods receive an owning `SourceContext` alongside
+the concrete spelling. It provides the original source text and the occurrence
+offset, length, preceding text, and following text. `DefaultMCP` stores each
+value in separate `std::map<SourceContext, std::string>` collections exposed by
+`identifiers()`, `strings()`, and `mcp_sections()`.
 
 Changing the explicit keyword set or any other vocabulary-generation rule
 changes the tokenizer signature and vocabulary size. Existing checkpoints must

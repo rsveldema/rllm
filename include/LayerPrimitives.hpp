@@ -33,6 +33,9 @@ namespace rllm
 #ifndef RLLM_MAX_POSITION
 #define RLLM_MAX_POSITION 8192
 #endif
+#ifndef RLLM_MTP_HEAD_COUNT
+#define RLLM_MTP_HEAD_COUNT 1
+#endif
 
     static constexpr float MIN_NEURON_INPUT = -0.01f;
     static constexpr float MAX_NEURON_INPUT = 1.0f;
@@ -53,6 +56,17 @@ namespace rllm
 
 
     using Token = std::string;
+
+    // Number of simultaneously distinguishable identifier aliases in each
+    // source-abstraction category before its overflow representation is used.
+    enum class IdentifierCategoryCount : size_t
+    {
+        LOCALS = 16,
+        PARAMETERS = 16,
+        FIELDS = 1,
+        LOOP_VARIABLES = 8,
+        GLOBALS = 16
+    };
 
     // Dimensionality of each token's learned embedding vector.
     // The first intermediate layer is tiled across multiple attention heads,
@@ -93,12 +107,16 @@ namespace rllm
     enum class MultiTokenPredictionIndex : size_t
     {
         START = 0,
+#if RLLM_MTP_HEAD_COUNT > 1
         ONE = 1,
+#endif
+#if RLLM_MTP_HEAD_COUNT > 2
         TWO = 2,
-        //THREE = 3,
-        //FOUR = 4,
-        MAX = TWO
+#endif
+        MAX = RLLM_MTP_HEAD_COUNT
     };
+
+    static_assert(RLLM_MTP_HEAD_COUNT >= 1 && RLLM_MTP_HEAD_COUNT <= 3);
 
     enum class RmsNormPartialSumIndex : size_t
     {

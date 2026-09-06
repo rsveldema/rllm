@@ -14,7 +14,8 @@
     "training_data0:0.05",
     "curriculum/grammar:0.15",
     "curriculum/syntax:0.10",
-    "curriculum/systems:0.10"
+    "curriculum/systems:0.10",
+    "curriculum/algos:0.10"
   ],
   "cmake_arguments": [
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",

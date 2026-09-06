@@ -643,13 +643,25 @@ def main(arguments: list[str] | None = None) -> int:
     print(f"Configuring and building {build_type} before training...")
     run([str(ROOT / f"build_{build_type}.sh"), *string_list(config, "cmake_arguments")])
 
+    strip_comments = bool(config["strip_comments"])
     for corpus_root in ("training_data0", "curriculum", "training_data2"):
         print(f"Normalizing {corpus_root} with training_postprocessor.py...")
         run([sys.executable, str(ROOT / "training_postprocessor.py"), "--dir", corpus_root])
+        inspection_dir = Path("/tmp/rllm") / corpus_root
+        print(f"Writing abstracted inspection corpus to {inspection_dir}...")
+        inspection_arguments = [
+            sys.executable, str(ROOT / "training_postprocessor.py"),
+            "--dir", corpus_root,
+            "--output-dir", str(inspection_dir),
+            "--replace-output-dir",
+            "--abstract-symbols",
+        ]
+        if strip_comments:
+            inspection_arguments.append("--strip-comments")
+        run(inspection_arguments)
 
     sources = string_list(config, "sources")
     training_arguments = string_list(config, "training_arguments")
-    strip_comments = bool(config["strip_comments"])
     previous_dir = previous_model_directory(num_layers)
     runtime_header = build_dir / "generated/tokenizer_map.hpp"
 

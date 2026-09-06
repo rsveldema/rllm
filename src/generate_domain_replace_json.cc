@@ -65,9 +65,15 @@ namespace
         append_enum_pair(pairs, "TokenID::UNKNOWN_TOKEN_ID", static_cast<size_t>(rllm::TokenID::UNKNOWN_TOKEN_ID));
 
         append_enum_pair(pairs, "MultiTokenPredictionIndex::START", static_cast<size_t>(rllm::MultiTokenPredictionIndex::START));
-        append_enum_pair(pairs, "MultiTokenPredictionIndex::ONE", static_cast<size_t>(rllm::MultiTokenPredictionIndex::ONE));
-        append_enum_pair(pairs, "MultiTokenPredictionIndex::TWO", static_cast<size_t>(rllm::MultiTokenPredictionIndex::TWO));
+        if (static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX) > 1)
+        {
+            append_enum_pair(pairs, "MultiTokenPredictionIndex::ONE", 1);
+        }
         if (static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX) > 2)
+        {
+            append_enum_pair(pairs, "MultiTokenPredictionIndex::TWO", 2);
+        }
+        if (static_cast<size_t>(rllm::MultiTokenPredictionIndex::MAX) > 3)
         {
             append_enum_pair(pairs, "MultiTokenPredictionIndex::THREE", 3);
             append_enum_pair(pairs, "MultiTokenPredictionIndex::FOUR", 4);

@@ -11,6 +11,8 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <LayerPrimitives.hpp>
+#include <DefaultMCP.hpp>
+#include <IMCP.hpp>
 
 namespace rllm
 {
@@ -27,10 +29,28 @@ namespace rllm
 
     TokenID language_token(SourceLanguage language);
     std::optional<SourceLanguage> parse_source_language(std::string_view name);
+    struct IdentifierScopeState
+    {
+        std::vector<std::map<std::string, std::string>> scopes{1};
+        std::map<std::string, std::string> pending_parameters;
+        std::vector<size_t> indentation_levels{0};
+        std::vector<bool> class_scopes{false};
+        std::vector<bool> function_scopes{false};
+        bool pending_class_scope = false;
+        bool pending_function_scope = false;
+    };
+    /** Convert raw source to the identifier/string/MCP representation used by
+     * language-aware tokenization. Already-normalized markers are preserved. */
+    std::string abstract_source_for_model(
+        std::string_view text, SourceLanguage language, IMCP& mcp,
+        IdentifierScopeState* identifier_scopes = nullptr);
+    /** Resolve generated identifier and string placeholders through MCP. */
+    std::string resolve_model_placeholders(std::string_view text, IMCP& mcp);
     struct CommentLexState
     {
         size_t block_depth = 0;
         bool line_comment_on_last_line = false;
+        IdentifierScopeState identifier_scopes;
     };
     void set_tokenization_log_file(const std::string& filename);
 
@@ -100,6 +120,7 @@ namespace rllm
                 };
 
         Corpus(const std::vector<std::string>& filters);
+        Corpus(const std::vector<std::string>& filters, IMCP& mcp);
         void load_files_from_dir(
             const std::string& train_corpus_dir,
             size_t source_index = 0,
@@ -113,6 +134,7 @@ namespace rllm
             const std::string& text,
             SourceLanguage language,
             CommentLexState& state) const;
+        IMCP& mcp() const { return m_mcp; }
         Token get_token_from_id(TokenID id) const;
         std::optional<std::string> get_line(const CpuInputLine& line) const;
 
@@ -218,6 +240,8 @@ namespace rllm
         std::vector<double> m_source_weights;
         const std::vector<std::string>& m_filters;
         mutable size_t m_tokenization_errors = 0;
+        DefaultMCP m_default_mcp;
+        IMCP& m_mcp;
     };
 
 } // namespace rllm

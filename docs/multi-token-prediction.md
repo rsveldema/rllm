@@ -1,6 +1,9 @@
 # Multi-Token Prediction Targets
 
-Training uses all `MultiTokenPredictionIndex` output heads for each example.
+Training currently uses one `MultiTokenPredictionIndex` output head for each
+example, predicting only the immediate next token. The `ONE` and `TWO` enum
+names remain reserved for checkpoint and tooling compatibility but are outside
+the allocated range.
 For a token sequence `[t0, t1, ..., tN-1]`, the input context length is
 `max(1, N - MultiTokenPredictionIndex::MAX)`.
 
