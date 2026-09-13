@@ -314,6 +314,37 @@ namespace rllm
                 other.m_cpu[source_pos], other.string_table_value[other_index]));
         }
 
+        template <typename UniformRandomBitGenerator>
+        void permute_string_table(UniformRandomBitGenerator& rng)
+        {
+            const size_t value_count = string_table_value.size();
+            if (value_count < 2)
+                return;
+
+            std::vector<size_t> old_to_new(value_count);
+            std::vector<size_t> old_order(value_count);
+            for (size_t i = 0; i < value_count; ++i)
+                old_order[i] = i;
+            std::shuffle(old_order.begin(), old_order.end(), rng);
+
+            std::vector<std::string> permuted_values(value_count);
+            for (size_t new_index = 0; new_index < value_count; ++new_index)
+            {
+                const size_t old_index = old_order[new_index];
+                assert(old_index < value_count);
+                old_to_new[old_index] = new_index;
+                permuted_values[new_index] = std::move(string_table_value[old_index]);
+            }
+            for (size_t& index : string_table_index)
+            {
+                if (index == NO_STRING_TABLE_INDEX)
+                    continue;
+                assert(index < old_to_new.size());
+                index = old_to_new[index];
+            }
+            string_table_value = std::move(permuted_values);
+        }
+
         const TokenID& back() const
         {
             return m_cpu.back();
@@ -634,6 +665,12 @@ namespace rllm
     struct OutputToken
     {
         TokenID token_id;
+        float activation;
+    };
+
+    struct OutputStringTableIndex
+    {
+        PositionIndex index;
         float activation;
     };
 

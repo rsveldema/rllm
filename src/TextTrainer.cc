@@ -1790,7 +1790,9 @@ namespace rllm
                 for (size_t offset = 0; offset < count; ++offset)
                 {
                     const auto& window = training_windows[indices[start + offset]];
-                    batch.push_back({window.line, false, window.context_length});
+                    CpuInputLine line = window.line;
+                    line.permute_string_table(rng);
+                    batch.push_back({std::move(line), false, window.context_length});
                 }
                 total_windows_trained += batch.size();
 

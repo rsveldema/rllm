@@ -161,6 +161,7 @@ namespace rllm
 
         // Returns the top-k tokens by raw logit value.
         std::vector<OutputToken> get_top_k_by_logit(size_t k) const;
+        std::vector<OutputStringTableIndex> get_top_k_string_table_indices_by_logit(size_t k) const;
 
     friend class TextTrainer;
       private:

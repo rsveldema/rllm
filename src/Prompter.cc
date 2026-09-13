@@ -137,6 +137,37 @@ namespace rllm
         return text;
     }
 
+    static std::string render_prompt_text(
+        const CpuInputLine& tokens,
+        const Corpus& corpus,
+        SourceLanguage language)
+    {
+        std::string text;
+        for (const auto pos : enum_iterator1D<PositionIndex>(tokens.size()))
+        {
+            const TokenID token = tokens[pos];
+            const std::string token_text = corpus.get_token_from_id(token);
+            const TokenStringCategory category = token_string_category(token);
+            const size_t string_table_index = tokens.get_string_table_index(pos);
+            if (category != TokenStringCategory::None &&
+                string_table_index != NO_STRING_TABLE_INDEX &&
+                string_table_index < tokens.string_table_value.size())
+            {
+                const size_t marker_end = token_text.size() > 0 && token_text.back() == '>'
+                    ? token_text.size() - 1
+                    : token_text.size();
+                text += token_text.substr(0, marker_end);
+                text += ": ";
+                text += tokens.get_string_table_value(string_table_index);
+                if (marker_end != token_text.size())
+                    text += '>';
+            }
+            else
+                text += token_text;
+        }
+        return render_prompt_text(std::move(text), language);
+    }
+
     static void process_command(const std::string& _command, Prompter::PromptOptions& options, TextTrainer& nn)
     {
         const auto command = _command.empty() ? "/help" : _command;
@@ -436,10 +467,35 @@ namespace rllm
                     stop = true;
                     break;
                 }
+                std::string predicted_string_value;
+                const TokenStringCategory string_category = token_string_category(entry.token_id);
+                switch (string_category)
+                {
+                    case TokenStringCategory::None: break;
+                    default:
+                    {
+                        const auto predicted_indices =
+                            nn.get_output_layer(head).get_top_k_string_table_indices_by_logit(1);
+                        if (!predicted_indices.empty())
+                        {
+                            const size_t predicted_index = static_cast<size_t>(predicted_indices.front().index);
+                            if (predicted_index < token_id_list.string_table_value.size())
+                                predicted_string_value = token_id_list.string_table_value[predicted_index];
+                        }
+                        break;
+                    }
+                }
                 if (output_token == "\n")  output_token = "\\n";
                 if (output_token == "\t")  output_token = "\\t";
-                std::println("Predicted next token (head {}): {}", static_cast<int>(head), output_token);
-                token_id_list.push_back(entry.token_id);
+                if (!predicted_string_value.empty())
+                    std::println(
+                        "Predicted next token (head {}): {}: {}",
+                        static_cast<int>(head),
+                        output_token,
+                        predicted_string_value);
+                else
+                    std::println("Predicted next token (head {}): {}", static_cast<int>(head), output_token);
+                token_id_list.push_back(entry.token_id, predicted_string_value);
                 ++total_tokens_generated;
                 appended_token = true;
             }
@@ -454,7 +510,7 @@ namespace rllm
             std::println("Input contains unknown tokens. Please try again.");
             return;
         }
-        std::println("Full answer string: {}", render_prompt_text(*full_answer_string_opt, options.language));
+        std::println("Full answer string: {}", render_prompt_text(token_id_list, corpus, options.language));
     }
 
 } // namespace rllm

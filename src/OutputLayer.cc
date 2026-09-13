@@ -1205,6 +1205,32 @@ namespace rllm
         return top_k;
     }
 
+    std::vector<OutputStringTableIndex> OutputLayer::get_top_k_string_table_indices_by_logit(size_t k) const
+    {
+        assert(k != 0);
+
+        std::vector<OutputStringTableIndex> top_k;
+        for (const auto i : enum_iterator1D<PositionIndex>())
+        {
+            const float logit = m_string_table_index_inputs_cpu[i];
+            if (top_k.size() < k)
+            {
+                top_k.push_back({i, logit});
+                std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
+                    return a.activation > b.activation;
+                });
+            }
+            else if (logit >= top_k.back().activation)
+            {
+                top_k.back() = {i, logit};
+                std::sort(top_k.begin(), top_k.end(), [](const auto& a, const auto& b) {
+                    return a.activation > b.activation;
+                });
+            }
+        }
+        return top_k;
+    }
+
 
     // Compute softmax deltas (with label smoothing) for backprop and return the
     // cross-entropy loss -log(softmax[target]).
