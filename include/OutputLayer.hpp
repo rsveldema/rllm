@@ -13,6 +13,7 @@ namespace rllm
     struct OutputLayerGradientAccumulator
     {
         fixed_size_matrix<float, TokenID, EmbeddingDimension> dW_lm_head;
+        fixed_size_matrix<float, PositionIndex, EmbeddingDimension> dW_string_table_index_head;
         bool touched = false;
 
         void reset(VulkanQueue& queue);
@@ -23,17 +24,23 @@ namespace rllm
         fixed_size_matrix<float, BatchIndex, EmbeddingDimension> h_last;
         fixed_size_matrix<float, BatchIndex, TokenID> logits;
         fixed_size_matrix<float, BatchIndex, TokenID> delta;
+        fixed_size_matrix<float, BatchIndex, PositionIndex> string_table_index_logits;
+        fixed_size_matrix<float, BatchIndex, PositionIndex> string_table_index_delta;
         fixed_size_matrix<float, BatchIndex, EmbeddingDimension> dh_last;
         fixed_size_matrix<float, BatchIndex, TempStorage> softmax_temp;
         fixed_size_vector<int, BatchIndex> expected_tokens;
+        fixed_size_vector<int, BatchIndex> expected_string_table_indices;
         fixed_size_vector<int, BatchIndex> active_examples;
+        fixed_size_vector<int, BatchIndex> string_table_index_active_examples;
         fixed_size_vector<float, BatchIndex> losses;
         fixed_size_vector<int, BatchIndex> row_indices;
 
         BatchedOutputWorkspace()
         {
             expected_tokens.set_size(BatchIndex::MAX);
+            expected_string_table_indices.set_size(BatchIndex::MAX);
             active_examples.set_size(BatchIndex::MAX);
+            string_table_index_active_examples.set_size(BatchIndex::MAX);
             losses.set_size(BatchIndex::MAX);
             row_indices.set_size(BatchIndex::MAX);
         }
@@ -86,6 +93,7 @@ namespace rllm
 
         void backward_accumulate(
             const fixed_size_vector<float, TokenID>& delta,
+            const fixed_size_vector<float, PositionIndex>& string_table_index_delta,
             const fixed_size_vector<float, EmbeddingDimension>& h_last,
             fixed_size_vector<float, EmbeddingDimension>& dh_last,
             OutputLayerGradientAccumulator& accumulator
@@ -98,6 +106,7 @@ namespace rllm
         );
         void backward_batched_accumulate(
             const fixed_size_matrix<float, BatchIndex, TokenID>& delta,
+            const fixed_size_matrix<float, BatchIndex, PositionIndex>& string_table_index_delta,
             const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
             BatchIndex batch_size,
             fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
@@ -110,6 +119,14 @@ namespace rllm
             VulkanQueue& queue,
             float loss_gradient_scale = 1.0f
         );
+        void compute_batched_delta(
+            const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
+            BatchIndex batch_size,
+            BatchedOutputWorkspace& workspace,
+            VulkanQueue& queue,
+            const fixed_size_vector<int, BatchIndex>& expected_string_table_indices,
+            float loss_gradient_scale = 1.0f
+        );
 
         void apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
 
@@ -117,10 +134,22 @@ namespace rllm
         // and returns the cross-entropy loss -log(softmax[target]).
         float compute_score(Score& score, const TokenID expected_output_token);
         float compute_score(
+            Score& score,
+            const TokenID expected_output_token,
+            size_t expected_string_table_index
+        );
+        float compute_score(
             const fixed_size_vector<float, TokenID>& inputs,
             const cpu_fixed_vector<float, TokenID>& inputs_cpu,
             Score& score,
             const TokenID expected_output_token
+        );
+        float compute_score(
+            const fixed_size_vector<float, TokenID>& inputs,
+            const cpu_fixed_vector<float, TokenID>& inputs_cpu,
+            Score& score,
+            const TokenID expected_output_token,
+            size_t expected_string_table_index
         );
 
         void load(const nlohmann::json& j);
@@ -141,11 +170,16 @@ namespace rllm
         fixed_size_vector<float, TokenID> m_inputs;
         // CPU-side copy of m_inputs, updated after each forward pass.
         cpu_fixed_vector<float, TokenID> m_inputs_cpu;
+        fixed_size_vector<float, PositionIndex> m_string_table_index_inputs;
+        cpu_fixed_vector<float, PositionIndex> m_string_table_index_inputs_cpu;
 
         // LM head weight matrix [vocab × D_MODEL] (out × in), row-major.
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> W_lm_head;
         fixed_size_matrix<float, TokenID, EmbeddingDimension> V_lm_head; // Adam first moment
         fixed_size_matrix<float, TokenID, EmbeddingDimension> S_lm_head; // Adam second moment
+        fixed_size_matrix<float16, PositionIndex, EmbeddingDimension> W_string_table_index_head;
+        fixed_size_matrix<float, PositionIndex, EmbeddingDimension> V_string_table_index_head;
+        fixed_size_matrix<float, PositionIndex, EmbeddingDimension> S_string_table_index_head;
     };
 
 } // namespace rllm

@@ -57,16 +57,39 @@ namespace rllm
 
     using Token = std::string;
 
-    // Number of simultaneously distinguishable identifier aliases in each
-    // source-abstraction category before its overflow representation is used.
-    enum class IdentifierCategoryCount : size_t
+    enum class TokenStringCategory : uint8_t
     {
-        LOCALS = 16,
-        PARAMETERS = 16,
-        FIELDS = 1,
-        LOOP_VARIABLES = 8,
-        GLOBALS = 16
+        None,
+        Local,
+        Parameter,
+        Field,
+        Loop,
+        Global,
+        String
     };
+
+    static constexpr size_t NO_STRING_TABLE_INDEX = static_cast<size_t>(-1);
+
+    static inline TokenStringCategory token_string_category(TokenID token)
+    {
+        const auto it = tokenizer_map.find(token);
+        if (it == tokenizer_map.end() || it->second.str == nullptr)
+            return TokenStringCategory::None;
+        const std::string_view text = it->second.str;
+        if (text == "<FIELD>")
+            return TokenStringCategory::Field;
+        if (text == "<STRING>")
+            return TokenStringCategory::String;
+        if (text == "<LOCAL>")
+            return TokenStringCategory::Local;
+        if (text == "<PARAM>")
+            return TokenStringCategory::Parameter;
+        if (text == "<GLOBAL>")
+            return TokenStringCategory::Global;
+        if (text == "<LOOP>")
+            return TokenStringCategory::Loop;
+        return TokenStringCategory::None;
+    }
 
     // Dimensionality of each token's learned embedding vector.
     // The first intermediate layer is tiled across multiple attention heads,
@@ -255,18 +278,40 @@ namespace rllm
         {
             assert(static_cast<size_t>(length) <= m_cpu.size());
             result.m_cpu.assign(m_cpu.begin(), m_cpu.begin() + static_cast<size_t>(length));
+            result.string_table_index.assign(
+                string_table_index.begin(), string_table_index.begin() + static_cast<size_t>(length));
+            result.string_table_value = string_table_value;
         }
 
-        void push_back(TokenID t)
+        void push_back(TokenID t, std::string_view string_value = {})
         {
             assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
             m_cpu.push_back(t);
+            string_table_index.push_back(intern_string_value(t, string_value));
         }
 
-        void push_front(TokenID t)
+        void push_front(TokenID t, std::string_view string_value = {})
         {
             assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
             m_cpu.insert(m_cpu.begin(), t);
+            string_table_index.insert(string_table_index.begin(), intern_string_value(t, string_value));
+        }
+
+        void push_back_from(const CpuInputLine& other, PositionIndex pos)
+        {
+            assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
+            const size_t source_pos = static_cast<size_t>(pos);
+            assert(source_pos < other.m_cpu.size());
+            m_cpu.push_back(other.m_cpu[source_pos]);
+            const size_t other_index = other.string_table_index[source_pos];
+            if (other_index == NO_STRING_TABLE_INDEX)
+            {
+                string_table_index.push_back(NO_STRING_TABLE_INDEX);
+                return;
+            }
+            assert(other_index < other.string_table_value.size());
+            string_table_index.push_back(intern_string_value(
+                other.m_cpu[source_pos], other.string_table_value[other_index]));
         }
 
         const TokenID& back() const
@@ -277,6 +322,7 @@ namespace rllm
         void pop_back()
         {
             m_cpu.pop_back();
+            string_table_index.pop_back();
         }
 
         const TokenID& get(PositionIndex pos) const
@@ -297,6 +343,8 @@ namespace rllm
         void clear()
         {
             m_cpu.clear();
+            string_table_index.clear();
+            string_table_value.clear();
         }
 
         bool empty() const
@@ -325,10 +373,54 @@ namespace rllm
                     value >>= 8;
                 }
             }
+            for (const size_t index : string_table_index)
+            {
+                uint64_t value = index + 1ull;
+                for (int byte = 0; byte < 8; ++byte)
+                {
+                    hash ^= (value & 0xffull);
+                    hash *= FNV_PRIME;
+                    value >>= 8;
+                }
+            }
+            for (const auto& value : string_table_value)
+                for (const unsigned char ch : value)
+                {
+                    hash ^= static_cast<uint64_t>(ch);
+                    hash *= FNV_PRIME;
+                }
             return hash;
         }
 
+        size_t get_string_table_index(PositionIndex pos) const
+        {
+            const size_t index = static_cast<size_t>(pos);
+            assert(index < string_table_index.size());
+            return string_table_index[index];
+        }
+
+        std::string_view get_string_table_value(size_t index) const
+        {
+            assert(index < string_table_value.size());
+            return string_table_value[index];
+        }
+
         std::vector<TokenID> m_cpu;
+        std::vector<size_t> string_table_index;
+        std::vector<std::string> string_table_value;
+
+      private:
+        size_t intern_string_value(TokenID token, std::string_view value)
+        {
+            if (value.empty())
+                return NO_STRING_TABLE_INDEX;
+            (void) token;
+            const auto existing = std::ranges::find(string_table_value, value);
+            if (existing != string_table_value.end())
+                return static_cast<size_t>(existing - string_table_value.begin());
+            string_table_value.emplace_back(value);
+            return string_table_value.size() - 1;
+        }
     };
 
     class GpuInputLine : public fixed_size_vector<TokenID, PositionIndex>
@@ -407,7 +499,7 @@ namespace rllm
                 for (const auto pos : enum_iterator1D<PositionIndex>(example.size()))
                 {
                     assert(static_cast<size_t>(m_tokens.size()) < static_cast<size_t>(PositionIndex::MAX));
-                    m_tokens.push_back(example[pos]);
+                    m_tokens.push_back_from(example, pos);
                     m_local_position.push_back(pos);
                     m_row_batch.push_back(static_cast<BatchIndex>(batch));
                 }
@@ -519,6 +611,7 @@ namespace rllm
         Score()
         {
             values.set_size(TokenID::MAX);
+            string_table_index_values.set_size(PositionIndex::MAX);
             temp_values.set_size(TempStorage::MAX);
             temp_values_cpu.set_size(TempStorage::MAX);
         }
@@ -526,10 +619,14 @@ namespace rllm
         void reset(VulkanQueue& queue)
         {
             values.zero(queue);
+            string_table_index_values.zero(queue);
             temp_values.zero(queue);
+            string_table_index_prediction_active = false;
         }
 
         fixed_size_vector<float, TokenID> values;
+        fixed_size_vector<float, PositionIndex> string_table_index_values;
+        bool string_table_index_prediction_active = false;
         fixed_size_vector<float, TempStorage> temp_values; // for use in softmax computation, to avoid modifying the original logits
         cpu_fixed_vector<float, TempStorage> temp_values_cpu;
     };

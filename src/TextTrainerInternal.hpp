@@ -30,6 +30,7 @@ namespace rllm
     struct BackwardPropWorkspace
     {
         fixed_size_vector<float, TokenID> output_layer_delta;
+        fixed_size_vector<float, PositionIndex> output_string_table_index_delta;
         fixed_size_vector<float, EmbeddingDimension> h_last_vec;
         fixed_size_vector<float, EmbeddingDimension> dh_last;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dh;
@@ -40,6 +41,7 @@ namespace rllm
             : dh(seq_len), din(seq_len), transformer_block(seq_len)
         {
             output_layer_delta.set_size(TokenID::MAX);
+            output_string_table_index_delta.set_size(PositionIndex::MAX);
             h_last_vec.set_size(EmbeddingDimension::MAX);
             dh_last.set_size(EmbeddingDimension::MAX);
         }
@@ -50,6 +52,7 @@ namespace rllm
             din.set_rows(seq_len);
             transformer_block.reset(queue, seq_len);
             output_layer_delta.zero(queue);
+            output_string_table_index_delta.zero(queue);
             h_last_vec.zero(queue);
             dh_last.zero(queue);
         }

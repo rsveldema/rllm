@@ -42,15 +42,11 @@ PYTHON_EXTENSIONS = {".py"}
 TEXT_EXTENSIONS = {".md", ".txt"}
 CODE_EXTENSIONS = C_EXTENSIONS | PYTHON_EXTENSIONS | {".rs", ".java", ".sh"}
 
-LOOP_TOKENS = tuple(f"<LOOP_{index}>" for index in range(8))
-LOOP_OVERFLOW_TOKEN = "<LOOP_OVERFLOW>"
-LOCAL_TOKENS = tuple(f"<LOCAL_{index}>" for index in range(16))
-PARAM_TOKENS = tuple(f"<PARAM_{index}>" for index in range(16))
-GLOBAL_TOKENS = tuple(f"<GLOBAL_{index}>" for index in range(16))
-LOCAL_OVERFLOW_TOKEN = "<LOCAL_OVERFLOW>"
-PARAM_OVERFLOW_TOKEN = "<PARAM_OVERFLOW>"
-GLOBAL_OVERFLOW_TOKEN = "<GLOBAL_OVERFLOW>"
-FIELD_ACCESS_TOKEN = "<FIELD_ACCESS_IDENT>"
+LOOP_TOKEN = "<LOOP>"
+LOCAL_TOKEN = "<LOCAL>"
+PARAM_TOKEN = "<PARAM>"
+GLOBAL_TOKEN = "<GLOBAL>"
+FIELD_ACCESS_TOKEN = "<FIELD>"
 LEGACY_IDENTIFIER_TOKEN = "<IDENTIFIER>"
 STRING_TOKEN = "<STRING>"
 MCP_START_TOKEN = "<MCP>"
@@ -149,15 +145,12 @@ def _assigned_identifier_token(
 		for scope in reversed(scopes):
 			if word in scope:
 				return scope[word]
-	tokens, overflow = {
-			"loop": (LOOP_TOKENS, LOOP_OVERFLOW_TOKEN),
-			"local": (LOCAL_TOKENS, LOCAL_OVERFLOW_TOKEN),
-			"param": (PARAM_TOKENS, PARAM_OVERFLOW_TOKEN),
-		"global": (GLOBAL_TOKENS, GLOBAL_OVERFLOW_TOKEN),
+	token = {
+		"loop": LOOP_TOKEN,
+		"local": LOCAL_TOKEN,
+		"param": PARAM_TOKEN,
+		"global": GLOBAL_TOKEN,
 	}[category]
-	used = {token for scope in scopes for token in scope.values()}
-	used.update(pending_parameters.values())
-	token = next((candidate for candidate in tokens if candidate not in used), overflow)
 	if category == "global":
 		scopes[0][word] = token
 	elif category == "param":
@@ -208,8 +201,7 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 					pending_class_scope = False
 					pending_function_scope = False
 		control_token = next(
-			(token for token in (*LOOP_TOKENS, LOOP_OVERFLOW_TOKEN, *LOCAL_TOKENS, LOCAL_OVERFLOW_TOKEN,
-			 *PARAM_TOKENS, PARAM_OVERFLOW_TOKEN, *GLOBAL_TOKENS, GLOBAL_OVERFLOW_TOKEN,
+			(token for token in (LOOP_TOKEN, LOCAL_TOKEN, PARAM_TOKEN, GLOBAL_TOKEN,
 			 FIELD_ACCESS_TOKEN, STRING_TOKEN, MCP_START_TOKEN, MCP_END_TOKEN)
 			 if text.startswith(token, i)),
 			None,
@@ -219,7 +211,7 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 			i += len(control_token)
 			continue
 		if text.startswith(LEGACY_IDENTIFIER_TOKEN, i):
-			out.append(GLOBAL_OVERFLOW_TOKEN)
+			out.append(GLOBAL_TOKEN)
 			i += len(LEGACY_IDENTIFIER_TOKEN)
 			continue
 		if text.startswith("//", i):

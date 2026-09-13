@@ -155,13 +155,19 @@ TEST(PredictorTest, Placeholder)
     SUCCEED();
 }
 
-TEST(LayerPrimitivesTest, IdentifierCategoryCountsMatchTokenizerVocabulary)
+TEST(LayerPrimitivesTest, CpuInputLineCarriesStringTableMetadata)
 {
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::LOCALS), 16u);
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::PARAMETERS), 16u);
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::FIELDS), 1u);
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::LOOP_VARIABLES), 8u);
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::GLOBALS), 16u);
+    CpuInputLine line;
+    line.push_back(TokenID::TOK_0);
+    line.push_back(TokenID::STRING, "\"hello\"");
+    EXPECT_EQ(line.get_string_table_index(PositionIndex::START), NO_STRING_TABLE_INDEX);
+    EXPECT_EQ(line.get_string_table_index(static_cast<PositionIndex>(1)), 0u);
+    EXPECT_EQ(line.get_string_table_value(0), "\"hello\"");
+
+    CpuInputLine prefix;
+    line.sub_array(prefix, static_cast<PositionIndex>(2));
+    EXPECT_EQ(prefix.get_string_table_index(static_cast<PositionIndex>(1)), 0u);
+    EXPECT_EQ(prefix.get_string_table_value(0), "\"hello\"");
 }
 
 TEST(CorpusTest, PromptAbstractionMatchesTrainingRepresentation)
@@ -169,16 +175,16 @@ TEST(CorpusTest, PromptAbstractionMatchesTrainingRepresentation)
     DefaultMCP mcp;
     EXPECT_EQ(
         abstract_source_for_model(R"(auto result = std::println("hello", name);)", SourceLanguage::Cpp, mcp),
-        "auto <LOCAL_0> = <MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>, <GLOBAL_1>);");
+        "auto <LOCAL> = <MCP><GLOBAL>::<FIELD></MCP>(<STRING>, <GLOBAL>);");
     EXPECT_EQ(
         abstract_source_for_model(R"(value = requests.get("url"))", SourceLanguage::Python, mcp),
-        "<LOCAL_0> = <MCP><GLOBAL_0>.<FIELD_ACCESS_IDENT></MCP>(<STRING>)");
+        "<LOCAL> = <MCP><GLOBAL>.<FIELD></MCP>(<STRING>)");
     EXPECT_EQ(
         abstract_source_for_model(R"(System.out.println("hello");)", SourceLanguage::Java, mcp),
-        "<MCP><GLOBAL_0>.<FIELD_ACCESS_IDENT>.<FIELD_ACCESS_IDENT></MCP>(<STRING>);");
+        "<MCP><GLOBAL>.<FIELD>.<FIELD></MCP>(<STRING>);");
     EXPECT_EQ(
         abstract_source_for_model(R"(std::fs::read_to_string("file"))", SourceLanguage::Rust, mcp),
-        "<MCP><GLOBAL_0>::<GLOBAL_1>::<GLOBAL_2></MCP>(<STRING>)");
+        "<MCP><GLOBAL>::<GLOBAL>::<GLOBAL></MCP>(<STRING>)");
 }
 
 TEST(CorpusTest, FieldAccessUsesDedicatedIdentifierToken)
@@ -188,14 +194,14 @@ TEST(CorpusTest, FieldAccessUsesDedicatedIdentifierToken)
         abstract_source_for_model(
             "auto value = object.field; auto other = pointer->member;",
             SourceLanguage::Cpp, mcp),
-        "auto <LOCAL_0> = <MCP><GLOBAL_0>.<FIELD_ACCESS_IDENT></MCP>; "
-        "auto <LOCAL_1> = <MCP><GLOBAL_1>-><FIELD_ACCESS_IDENT></MCP>;");
+        "auto <LOCAL> = <MCP><GLOBAL>.<FIELD></MCP>; "
+        "auto <LOCAL> = <MCP><GLOBAL>-><FIELD></MCP>;");
 }
 
 TEST(CorpusTest, PromptAbstractionPreservesExistingControlTokens)
 {
     DefaultMCP mcp;
-    const std::string normalized = "<MCP><GLOBAL_0>::<GLOBAL_1></MCP>(<STRING>)";
+    const std::string normalized = "<MCP><GLOBAL>::<GLOBAL></MCP>(<STRING>)";
     EXPECT_EQ(abstract_source_for_model(normalized, SourceLanguage::Cpp, mcp), normalized);
 }
 
@@ -208,7 +214,13 @@ TEST(CorpusTest, LanguageAwareTokenizerAbstractsRawSource)
     const auto rendered = corpus.get_line(tokens);
     ASSERT_TRUE(rendered.has_value());
     EXPECT_EQ(*rendered,
-        "auto <LOCAL_0>=<MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>,<GLOBAL_1>);");
+        "auto <LOCAL>=<MCP><GLOBAL>::<FIELD></MCP>(<STRING>,<GLOBAL>);");
+    ASSERT_EQ(tokens.string_table_value.size(), 5u);
+    EXPECT_EQ(tokens.string_table_value[0], "result");
+    EXPECT_EQ(tokens.string_table_value[1], "std");
+    EXPECT_EQ(tokens.string_table_value[2], "println");
+    EXPECT_EQ(tokens.string_table_value[3], "\"hello\"");
+    EXPECT_EQ(tokens.string_table_value[4], "name");
 }
 
 TEST(CorpusTest, IdentifierCategoriesTrackKnownVariableScope)
@@ -220,9 +232,9 @@ TEST(CorpusTest, IdentifierCategoriesTrackKnownVariableScope)
         "for (int index = 0; index < count; ++index) local = external; }",
         SourceLanguage::Cpp, mcp, &scopes);
     EXPECT_EQ(abstracted,
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>, <GLOBAL_1> <PARAM_1>) "
-        "{ auto <LOCAL_0> = <PARAM_0>; for (int <LOOP_0> = 0; "
-        "<LOOP_0> < <PARAM_0>; ++<LOOP_0>) <LOCAL_0> = <GLOBAL_2>; }");
+        "void <MCP><GLOBAL></MCP>(int <PARAM>, <GLOBAL> <PARAM>) "
+        "{ auto <LOCAL> = <PARAM>; for (int <LOOP> = 0; "
+        "<LOOP> < <PARAM>; ++<LOOP>) <LOCAL> = <GLOBAL>; }");
 }
 
 TEST(CorpusTest, CppScopeManagementReusesIdentifierSlots)
@@ -234,8 +246,8 @@ TEST(CorpusTest, CppScopeManagementReusesIdentifierSlots)
             "{ auto first = 1; { auto second = 2; } auto third = 3; } "
             "{ auto fourth = 4; }",
             SourceLanguage::Cpp, mcp, &scopes),
-        "{ auto <LOCAL_0> = 1; { auto <LOCAL_1> = 2; } auto <LOCAL_1> = 3; } "
-        "{ auto <LOCAL_0> = 4; }");
+        "{ auto <LOCAL> = 1; { auto <LOCAL> = 2; } auto <LOCAL> = 3; } "
+        "{ auto <LOCAL> = 4; }");
 }
 
 TEST(CorpusTest, ParameterSlotsRestartAtZeroForEachFunction)
@@ -247,9 +259,9 @@ TEST(CorpusTest, ParameterSlotsRestartAtZeroForEachFunction)
         "void declared(int stale); void first(int alpha) { } "
             "void second(int beta) { }",
             SourceLanguage::Cpp, mcp, &scopes),
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>); "
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>) { } "
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>) { }");
+        "void <MCP><GLOBAL></MCP>(int <PARAM>); "
+        "void <MCP><GLOBAL></MCP>(int <PARAM>) { } "
+        "void <MCP><GLOBAL></MCP>(int <PARAM>) { }");
 }
 
 TEST(CorpusTest, GlobalSlotsRestartForFreeFunctionsButNotMethods)
@@ -260,16 +272,16 @@ TEST(CorpusTest, GlobalSlotsRestartForFreeFunctionsButNotMethods)
         abstract_source_for_model(
             "void first() { } void second() { }",
             SourceLanguage::Cpp, mcp, &scopes),
-        "void <MCP><GLOBAL_0></MCP>() { } "
-        "void <MCP><GLOBAL_0></MCP>() { }");
+        "void <MCP><GLOBAL></MCP>() { } "
+        "void <MCP><GLOBAL></MCP>() { }");
 
     IdentifierScopeState class_scopes;
     EXPECT_EQ(
         abstract_source_for_model(
             "class Widget { void first() { } void second() { } };",
             SourceLanguage::Cpp, mcp, &class_scopes),
-        "class <GLOBAL_0> { void <MCP><GLOBAL_1></MCP>() { } "
-        "void <MCP><GLOBAL_2></MCP>() { } };");
+        "class <GLOBAL> { void <MCP><GLOBAL></MCP>() { } "
+        "void <MCP><GLOBAL></MCP>() { } };");
 }
 
 TEST(CorpusTest, PythonScopeManagementReusesIdentifierSlotsAfterDedent)
@@ -284,12 +296,12 @@ TEST(CorpusTest, PythonScopeManagementReusesIdentifierSlotsAfterDedent)
     };
 
     tokenize("def work():");
-    EXPECT_EQ(tokenize("    first = 1"), "<LOCAL_0>=1");
+    EXPECT_EQ(tokenize("    first = 1"), "<LOCAL>=1");
     tokenize("    if True:");
-    EXPECT_EQ(tokenize("        second = 2"), "<LOCAL_1>=2");
-    EXPECT_EQ(tokenize("    third = 3"), "<LOCAL_1>=3");
+    EXPECT_EQ(tokenize("        second = 2"), "<LOCAL>=2");
+    EXPECT_EQ(tokenize("    third = 3"), "<LOCAL>=3");
     tokenize("def other():");
-    EXPECT_EQ(tokenize("    fourth = 4"), "<LOCAL_0>=4");
+    EXPECT_EQ(tokenize("    fourth = 4"), "<LOCAL>=4");
 }
 
 TEST(CorpusTest, JavaScopeManagementReusesIdentifierSlots)
@@ -301,8 +313,8 @@ TEST(CorpusTest, JavaScopeManagementReusesIdentifierSlots)
             "{ int first = 1; { int second = 2; } int third = 3; } "
             "{ int fourth = 4; }",
             SourceLanguage::Java, mcp, &scopes),
-        "{ int <LOCAL_0> = 1; { int <LOCAL_1> = 2; } int <LOCAL_1> = 3; } "
-        "{ int <LOCAL_0> = 4; }");
+        "{ int <LOCAL> = 1; { int <LOCAL> = 2; } int <LOCAL> = 3; } "
+        "{ int <LOCAL> = 4; }");
 }
 
 TEST(CorpusTest, RustScopeManagementReusesIdentifierSlots)
@@ -314,8 +326,8 @@ TEST(CorpusTest, RustScopeManagementReusesIdentifierSlots)
             "{ let first = 1; { let second = 2; } let third = 3; } "
             "{ let fourth = 4; }",
             SourceLanguage::Rust, mcp, &scopes),
-        "{ let <LOCAL_0> = 1; { let <LOCAL_1> = 2; } let <LOCAL_1> = 3; } "
-        "{ let <LOCAL_0> = 4; }");
+        "{ let <LOCAL> = 1; { let <LOCAL> = 2; } let <LOCAL> = 3; } "
+        "{ let <LOCAL> = 4; }");
 }
 
 TEST(CorpusTest, LanguageAwareTokenizerRecordsConcreteValuesWithMCP)
@@ -340,8 +352,8 @@ TEST(CorpusTest, LanguageAwareTokenizerRecordsConcreteValuesWithMCP)
         std::string map_identifier(const MCPContext&) override { return "resolved_name"; }
         std::string map_string(const MCPContext&) override { return "\"resolved text\""; }
         std::string map_mcp(const MCPContext& context) override {
-            EXPECT_EQ(context.placeholder(), "<MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>");
-            EXPECT_EQ(context.before(), "<LOCAL_0> = ");
+            EXPECT_EQ(context.placeholder(), "<MCP><GLOBAL>::<FIELD></MCP>");
+            EXPECT_EQ(context.before(), "<LOCAL> = ");
             EXPECT_EQ(context.after(), "(<STRING>)");
             return "resolved::call";
         }
@@ -358,7 +370,7 @@ TEST(CorpusTest, LanguageAwareTokenizerRecordsConcreteValuesWithMCP)
     EXPECT_EQ(mcp.mcp_expressions, (std::vector<std::string>{"std::println"}));
     EXPECT_EQ(
         resolve_model_placeholders(
-            "<LOCAL_0> = <MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>)", mcp),
+            "<LOCAL> = <MCP><GLOBAL>::<FIELD></MCP>(<STRING>)", mcp),
         "resolved_name = resolved::call(\"resolved text\")");
 }
 
@@ -368,7 +380,7 @@ TEST(CorpusTest, DefaultMCPMapsUnknownValuesToQuestionMarks)
     const SourceContext context{"name", 0, 4};
     mcp.record_seen_identifier(context, "name");
     EXPECT_EQ(mcp.identifiers().at(context), "name");
-    EXPECT_EQ(resolve_model_placeholders("<LOCAL_0> = <STRING>", mcp), "??? = ???");
+    EXPECT_EQ(resolve_model_placeholders("<LOCAL> = <STRING>", mcp), "??? = ???");
 }
 
 TEST(LogFormattingTest, EscapesNewlinesAndTabs)

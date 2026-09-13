@@ -36,6 +36,7 @@ namespace rllm
         std::vector<size_t> indentation_levels{0};
         std::vector<bool> class_scopes{false};
         std::vector<bool> function_scopes{false};
+        std::vector<std::string> pending_string_table_values;
         bool pending_class_scope = false;
         bool pending_function_scope = false;
     };

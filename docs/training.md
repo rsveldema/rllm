@@ -98,16 +98,21 @@ a different corpus or weighting.
 During language-aware tokenization, program sources are abstracted in memory so
 the model learns language structure rather than project or library vocabulary.
 The source files retain ordinary source spelling. Language keywords and
-punctuation are retained. Loop variables use `<LOOP_0>` through `<LOOP_7>`,
-then `<LOOP_OVERFLOW>`. Local variables use `<LOCAL_0>` through `<LOCAL_15>`,
-parameters use `<PARAM_0>` through `<PARAM_15>`, and function, type, member,
-namespace, library, or unknown-scope names use `<GLOBAL_0>` through
-`<GLOBAL_15>`. Each category has an `_OVERFLOW` token. String and
+punctuation are retained. Loop variables use `<LOOP>`, local variables use
+`<LOCAL>`, parameters use `<PARAM>`, field/member accesses use `<FIELD>`,
+and function, type, namespace, library, or unknown-scope names use `<GLOBAL>`.
+The concrete spelling for each identifier or string token is carried in the
+per-line `string_table_index`/`string_table_value` metadata. String and
 character contents become `<STRING>`. Syntactic function-call targets and
 qualified accesses such as C++ `namespace::member` are enclosed in `<MCP>` and
 `</MCP>`; the concrete names inside are abstracted as well. These markers define
 the boundary where library support is expected to be supplied by MCP. Comments
 remain prose and are not identifier-normalized.
+When a target token is `<LOCAL>` and the language-model head predicts a
+different token, the output layer also trains a string-table-index head for that
+same position. This auxiliary loss teaches which entry in `string_table_value`
+the local-variable token should resolve to without expanding the tokenizer
+vocabulary back into numbered identifier tokens.
 
 The launcher also writes a persistent inspection mirror to
 `/tmp/rllm/training_data0`, `/tmp/rllm/curriculum`, and

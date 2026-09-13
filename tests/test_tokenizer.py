@@ -101,11 +101,7 @@ def test_invalid_token_is_reserved_even_when_absent_from_training_text():
 
 
 @pytest.mark.parametrize("token", [
-    "<MCP>", "</MCP>", "<LOOP_0>", "<LOOP_7>", "<LOOP_OVERFLOW>",
-    "<LOCAL_0>", "<LOCAL_15>",
-    "<LOCAL_OVERFLOW>", "<PARAM_0>", "<PARAM_15>", "<PARAM_OVERFLOW>",
-    "<GLOBAL_0>", "<GLOBAL_15>", "<GLOBAL_OVERFLOW>",
-    "<FIELD_ACCESS_IDENT>", "<STRING>",
+    "<MCP>", "</MCP>", "<LOOP>", "<LOCAL>", "<PARAM>", "<GLOBAL>", "<FIELD>", "<STRING>",
 ])
 def test_source_abstraction_tokens_are_reserved(token):
     tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")

@@ -32,6 +32,16 @@ namespace rllm
             return line[static_cast<PositionIndex>(input_length + static_cast<int>(head))];
         }
 
+        int local_string_table_index_for_head(
+            const CpuInputLine& line, int input_length, MultiTokenPredictionIndex head)
+        {
+            const auto target_position = static_cast<PositionIndex>(input_length + static_cast<int>(head));
+            if (token_string_category(line[target_position]) != TokenStringCategory::Local)
+                return -1;
+            const size_t index = line.get_string_table_index(target_position);
+            return index == NO_STRING_TABLE_INDEX ? -1 : static_cast<int>(index);
+        }
+
         void gather_indexed_hidden(
             // OFFLOAD_PARAMETERS(h, rows, gathered, count)
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
@@ -91,6 +101,7 @@ namespace rllm
     {
         const auto started = std::chrono::steady_clock::now();
         std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> expected_by_head;
+        std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> expected_string_table_index_by_head;
         std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> active_by_head;
         std::vector<MultiTokenPredictionIndex> head_order;
         for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>())
@@ -107,6 +118,8 @@ namespace rllm
         for (const auto head : head_order)
         {
             auto& expected = expected_by_head[static_cast<size_t>(head)];
+            auto& expected_string_table_index =
+                expected_string_table_index_by_head[static_cast<size_t>(head)];
             auto& active_flags = active_by_head[static_cast<size_t>(head)];
             for (size_t active = 0; active < active_indices.size(); ++active)
             {
@@ -115,6 +128,7 @@ namespace rllm
                 if (!used)
                 {
                     expected.push_back(0);
+                    expected_string_table_index.push_back(-1);
                     continue;
                 }
                 const auto& line = batch[active_indices[active]].line;
@@ -123,6 +137,8 @@ namespace rllm
                     ? static_cast<int>(*item.context_length)
                     : batch_input_len(static_cast<int>(line.size()));
                 expected.push_back(static_cast<int>(target_for_head(line, input_length, head)));
+                expected_string_table_index.push_back(
+                    local_string_table_index_for_head(line, input_length, head));
             }
         }
 
@@ -132,12 +148,17 @@ namespace rllm
                 continue;
             m_output_layers[head].forward_batched(m_batched_output_workspace->h_last, batch_size, m_batched_output_workspace->logits, queue);
             m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected_by_head[static_cast<size_t>(head)]);
+            m_batched_output_workspace->expected_string_table_indices.copy_from_cpu(
+                queue, expected_string_table_index_by_head[static_cast<size_t>(head)]);
             m_batched_output_workspace->active_examples.copy_from_cpu(queue, active_by_head[static_cast<size_t>(head)]);
             m_output_layers[head].compute_batched_delta(
                 m_batched_output_workspace->logits, batch_size, *m_batched_output_workspace, queue,
+                m_batched_output_workspace->expected_string_table_indices,
                 loss_gradient_scale);
             m_output_layers[head].backward_batched_accumulate(
-                m_batched_output_workspace->delta, m_batched_output_workspace->h_last, batch_size,
+                m_batched_output_workspace->delta,
+                m_batched_output_workspace->string_table_index_delta,
+                m_batched_output_workspace->h_last, batch_size,
                 m_batched_output_workspace->dh_last, m_gradient_accumulation_workspace->output_layers[head]);
             if (head == MultiTokenPredictionIndex::START)
             {
@@ -157,7 +178,7 @@ namespace rllm
         BatchTrainingTiming& timing)
     {
         const auto started = std::chrono::steady_clock::now();
-        struct Prediction { int row; size_t active; MultiTokenPredictionIndex head; TokenID target; };
+        struct Prediction { int row; size_t active; MultiTokenPredictionIndex head; TokenID target; int string_table_index; };
         std::vector<Prediction> predictions;
         for (size_t active = 0; active < active_indices.size(); ++active)
         {
@@ -171,7 +192,8 @@ namespace rllm
                     const int target = local + 1 + static_cast<int>(head);
                     if (target < static_cast<int>(item.line.size()))
                         predictions.push_back({begin + local, active, head,
-                            item.line[static_cast<PositionIndex>(target)]});
+                            item.line[static_cast<PositionIndex>(target)],
+                            local_string_table_index_for_head(item.line, local + 1, head)});
                 }
         }
         assert(!predictions.empty());
@@ -188,11 +210,12 @@ namespace rllm
             for (size_t i = 0; i < predictions.size() && selected.size() < static_cast<size_t>(BatchIndex::MAX); ++i)
                 if (predictions[i].head == head)
                     selected.push_back(i);
-            cpu_fixed_vector<int, BatchIndex> rows, expected, active_flags;
+            cpu_fixed_vector<int, BatchIndex> rows, expected, expected_string_table_index, active_flags;
             for (const size_t i : selected)
             {
                 rows.push_back(predictions[i].row);
                 expected.push_back(static_cast<int>(predictions[i].target));
+                expected_string_table_index.push_back(predictions[i].string_table_index);
                 active_flags.push_back(1);
             }
             const auto count = static_cast<BatchIndex>(selected.size());
@@ -200,12 +223,16 @@ namespace rllm
             gather_indexed_hidden(m_forward_workspace->h, m_batched_output_workspace->row_indices,
                 m_batched_output_workspace->h_last, static_cast<int>(count));
             m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected);
+            m_batched_output_workspace->expected_string_table_indices.copy_from_cpu(
+                queue, expected_string_table_index);
             m_batched_output_workspace->active_examples.copy_from_cpu(queue, active_flags);
             m_batched_output_workspace->dh_last.zero(queue);
             m_output_layers[head].forward_batched(m_batched_output_workspace->h_last, count, m_batched_output_workspace->logits, queue);
             m_output_layers[head].compute_batched_delta(m_batched_output_workspace->logits, count,
-                *m_batched_output_workspace, queue, scale);
+                *m_batched_output_workspace, queue,
+                m_batched_output_workspace->expected_string_table_indices, scale);
             m_output_layers[head].backward_batched_accumulate(m_batched_output_workspace->delta,
+                m_batched_output_workspace->string_table_index_delta,
                 m_batched_output_workspace->h_last, count, m_batched_output_workspace->dh_last,
                 m_gradient_accumulation_workspace->output_layers[head]);
             add_indexed_hidden_gradient(m_batched_output_workspace->dh_last,

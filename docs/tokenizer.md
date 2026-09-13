@@ -20,23 +20,19 @@ as fallbacks for all other incomplete text. Corpus-derived BPE pieces are
 deliberately excluded so concrete identifiers and literal vocabulary cannot
 become learned tokens.
 
-`<MCP>`, `</MCP>`, eight indexed loop slots, 16 indexed local slots, 16 indexed
-parameter slots, 16 indexed global slots, an overflow token for each category,
-`<FIELD_ACCESS_IDENT>`, and `<STRING>` are reserved atomic tokens. Identifiers
-following `.`, `->`, or C/C++ `::` use `<FIELD_ACCESS_IDENT>`; the base
-expression retains its normal scoped identifier category. Rust `::` paths keep
-indexed global identifiers because they describe module paths rather than C++
-member or namespace access.
+`<MCP>`, `</MCP>`, `<LOOP>`, `<LOCAL>`, `<PARAM>`, `<GLOBAL>`, `<FIELD>`, and
+`<STRING>` are reserved atomic tokens. Identifiers following `.`, `->`, or
+C/C++ `::` use `<FIELD>`; the base expression retains its normal scoped
+identifier category. Rust `::` paths keep global identifiers because they
+describe module paths rather than C++ member or namespace access.
 The training postprocessor uses them to remove concrete program vocabulary and
 mark calls or qualified library accesses as MCP-provided operations.
 Identifier bindings are held in a stack of lexical scope maps. Parameters enter
 the function-body scope, while loop and local declarations enter the current
 scope. Leaving a brace-delimited scope, or dedenting Python source, discards its
-bindings so the lowest free indexed token can be reused by a later declaration.
-Parameter indices therefore restart at `<PARAM_0>` for every function.
-At each free function, global aliases also restart at `<GLOBAL_0>`. Class and
-struct methods retain their enclosing type's global alias table so member
-declarations remain distinct within that type.
+bindings. Concrete spellings are stored beside the token stream in
+`string_table_value`, and every string-bearing token position stores a
+`string_table_index` entry pointing at its spelling.
 
 Language-aware tokenization always has an `IMCP`. Whenever raw source spelling
 is replaced by `<IDENTIFIER>` or `<STRING>`, the tokenizer calls

@@ -31,6 +31,7 @@ namespace rllm
     void prepare_optimizer_gradient_clip(fixed_size_vector<float, TempStorage>& values);
     void finalize_optimizer_gradient_clip(fixed_size_vector<float, TempStorage>& values);
     void accumulate_optimizer_gradient_norm(const fixed_size_matrix<float, TokenID, EmbeddingDimension>& gradient, fixed_size_vector<float, TempStorage>& values);
+    void accumulate_optimizer_gradient_norm(const fixed_size_matrix<float, PositionIndex, EmbeddingDimension>& gradient, fixed_size_vector<float, TempStorage>& values);
     void accumulate_optimizer_gradient_norm(const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient, fixed_size_vector<float, TempStorage>& values);
     void accumulate_optimizer_gradient_norm(const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& gradient, fixed_size_vector<float, TempStorage>& values);
     void accumulate_optimizer_gradient_norm(const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient, fixed_size_vector<float, TempStorage>& values);

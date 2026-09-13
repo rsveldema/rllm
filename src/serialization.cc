@@ -122,22 +122,48 @@ namespace rllm
                     w_lm_head_cpu.set(t, d, static_cast<float16>(w_j.at(i++).template get<float>()));
             W_lm_head.copy_from_cpu(queue, w_lm_head_cpu);
         }
+        if (j.contains("W_string_table_index_head"))
+        {
+            cpu_fixed_matrix<float16, PositionIndex, EmbeddingDimension> w_string_table_index_head_cpu;
+            const auto& w_j = j.at("W_string_table_index_head");
+            size_t i = 0;
+            for (const auto t : enum_iterator1D<PositionIndex>())
+                for (const auto d : enum_iterator1D<EmbeddingDimension>())
+                    w_string_table_index_head_cpu.set(t, d, static_cast<float16>(w_j.at(i++).template get<float>()));
+            W_string_table_index_head.copy_from_cpu(queue, w_string_table_index_head_cpu);
+        }
+        else
+            W_string_table_index_head.zero(queue);
         V_lm_head.zero(queue);
         S_lm_head.zero(queue);
+        V_string_table_index_head.zero(queue);
+        S_string_table_index_head.zero(queue);
     }
 
     nlohmann::json OutputLayer::save() const
     {
         cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> w_lm_head_cpu;
+        cpu_fixed_matrix<float16, PositionIndex, EmbeddingDimension> w_string_table_index_head_cpu;
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         W_lm_head.copy_to_cpu(queue, w_lm_head_cpu);
+        W_string_table_index_head.copy_to_cpu(queue, w_string_table_index_head_cpu);
 
         auto w_j = nlohmann::json::array();
         w_j.get_ref<nlohmann::json::array_t&>().reserve(W_lm_head.ROWS * W_lm_head.COLS);
         for (const auto t : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 w_j.push_back(static_cast<float>(w_lm_head_cpu.get(t, d)));
-        return {{"W_lm_head", std::move(w_j)}};
+        auto w_string_table_index_j = nlohmann::json::array();
+        w_string_table_index_j.get_ref<nlohmann::json::array_t&>().reserve(
+            W_string_table_index_head.ROWS * W_string_table_index_head.COLS);
+        for (const auto t : enum_iterator1D<PositionIndex>())
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
+                w_string_table_index_j.push_back(static_cast<float>(
+                    w_string_table_index_head_cpu.get(t, d)));
+        return {
+            {"W_lm_head", std::move(w_j)},
+            {"W_string_table_index_head", std::move(w_string_table_index_j)}
+        };
     }
 
 
@@ -556,10 +582,14 @@ namespace rllm
         }
 
         pull_matrix("output_layers.W_lm_head", st, W_lm_head);
+        pull_matrix("output_layers.W_string_table_index_head", st, W_string_table_index_head);
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_inputs.zero(queue);
+        m_string_table_index_inputs.zero(queue);
         V_lm_head.zero(queue);
         S_lm_head.zero(queue);
+        V_string_table_index_head.zero(queue);
+        S_string_table_index_head.zero(queue);
     }
 
     void OutputLayer::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
@@ -569,6 +599,7 @@ namespace rllm
         std::vector<uint8_t> storage;
 
         push_matrix(st, "output_layers.W_lm_head", W_lm_head, storage);
+        push_matrix(st, "output_layers.W_string_table_index_head", W_string_table_index_head, storage);
         st.storage = std::move(storage);
 
         if (!safetensors::save_to_file(st, filename, warn, err))
@@ -622,9 +653,16 @@ namespace rllm
         {
             const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
             push_matrix(st, out_key, m_output_layers[oi].W_lm_head, storage);
+            const auto out_index_key =
+                "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_string_table_index_head";
+            push_matrix(st, out_index_key, m_output_layers[oi].W_string_table_index_head, storage);
             const auto training_prefix = "training.output_layers." + std::to_string(static_cast<size_t>(oi)) + ".";
             push_matrix(st, training_prefix + "V_lm_head", m_output_layers[oi].V_lm_head, storage);
             push_matrix(st, training_prefix + "S_lm_head", m_output_layers[oi].S_lm_head, storage);
+            push_matrix(st, training_prefix + "V_string_table_index_head",
+                m_output_layers[oi].V_string_table_index_head, storage);
+            push_matrix(st, training_prefix + "S_string_table_index_head",
+                m_output_layers[oi].S_string_table_index_head, storage);
         }
 
         // Tokenizer metadata for validation on load.
@@ -960,25 +998,28 @@ namespace rllm
             {
                 const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
                 pull_matrix(out_key, st, m_output_layers[oi].W_lm_head);
+                const auto out_index_key =
+                    "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_string_table_index_head";
+                pull_matrix(out_index_key, st, m_output_layers[oi].W_string_table_index_head);
                 auto& queue = rllm::vulkan_runtime::get_queue(0);
                 m_output_layers[oi].m_inputs.zero(queue);
+                m_output_layers[oi].m_string_table_index_inputs.zero(queue);
                 if (load_optimizer_tensors)
                 {
                     const auto tpfx = "training.output_layers." + std::to_string(static_cast<size_t>(oi)) + ".";
                     pull_matrix(tpfx + "V_lm_head", st, m_output_layers[oi].V_lm_head);
                     pull_matrix(tpfx + "S_lm_head", st, m_output_layers[oi].S_lm_head);
+                    pull_matrix(tpfx + "V_string_table_index_head", st, m_output_layers[oi].V_string_table_index_head);
+                    pull_matrix(tpfx + "S_string_table_index_head", st, m_output_layers[oi].S_string_table_index_head);
                 }
                 else
                 {
                     m_output_layers[oi].V_lm_head.zero(queue);
                     m_output_layers[oi].S_lm_head.zero(queue);
+                    m_output_layers[oi].V_string_table_index_head.zero(queue);
+                    m_output_layers[oi].S_string_table_index_head.zero(queue);
                 }
             }
-        }
-        else if (st.tensors.count("output_layers.W_lm_head"))
-        {
-            for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
-                m_output_layers[oi].load_from_safetensors(filename);
         }
 
         return true;

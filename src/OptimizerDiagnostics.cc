@@ -70,6 +70,20 @@ namespace rllm
 
     void accumulate_optimizer_gradient_norm(
         // OFFLOAD_PARAMETERS(gradient, values)
+        const fixed_size_matrix<float, PositionIndex, EmbeddingDimension>& gradient,
+        fixed_size_vector<float, TempStorage>& values
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>();
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, values))
+        atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (gradient[r, c] * gradient[r, c]));
+        ENDFOR
+    }
+
+    void accumulate_optimizer_gradient_norm(
+        // OFFLOAD_PARAMETERS(gradient, values)
         const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient,
         fixed_size_vector<float, TempStorage>& values
         // END_OFFLOAD_PARAMETERS

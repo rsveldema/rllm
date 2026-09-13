@@ -75,6 +75,21 @@ namespace rllm
         return TokenID::INVALID;
     }
 
+    static int local_string_table_index_for_head(
+        const CpuInputLine& line, int input_len, MultiTokenPredictionIndex head)
+    {
+        const int target_index = input_len + static_cast<int>(head);
+        assert(target_index < static_cast<int>(line.size()));
+        const auto target_position = static_cast<PositionIndex>(target_index);
+        if (token_string_category(line[target_position]) != TokenStringCategory::Local)
+            return -1;
+        const size_t string_table_index = line.get_string_table_index(target_position);
+        if (string_table_index == NO_STRING_TABLE_INDEX)
+            return -1;
+        assert(string_table_index < static_cast<size_t>(PositionIndex::MAX));
+        return static_cast<int>(string_table_index);
+    }
+
     static void scatter_dh_last_to_row(
         // OFFLOAD_PARAMETERS(dh_last, dh, last_pos)
         const fixed_size_vector<float, EmbeddingDimension>& dh_last,
@@ -847,10 +862,23 @@ namespace rllm
                     ws.output_layer_delta.device_buffer().copy_from(queue, scores[oi].values.device_buffer(), bytes);
             }
             {
+                ws.output_string_table_index_delta.set_size(scores[oi].string_table_index_values.size());
+                const auto bytes = static_cast<VkDeviceSize>(
+                    static_cast<size_t>(scores[oi].string_table_index_values.size()) * sizeof(float));
+                if (bytes > 0)
+                    ws.output_string_table_index_delta.device_buffer().copy_from(
+                        queue, scores[oi].string_table_index_values.device_buffer(), bytes);
+            }
+            {
                 const auto phase = std::format("output head {} backward delta", static_cast<size_t>(oi));
                 check_token_vector_nan_finding_mode(queue, ws.output_layer_delta, 10.0f, "output delta", phase.c_str());
             }
-            m_output_layers[oi].backward_accumulate(ws.output_layer_delta, ws.h_last_vec, ws.dh_last, m_gradient_accumulation_workspace->output_layers[oi]);
+            m_output_layers[oi].backward_accumulate(
+                ws.output_layer_delta,
+                ws.output_string_table_index_delta,
+                ws.h_last_vec,
+                ws.dh_last,
+                m_gradient_accumulation_workspace->output_layers[oi]);
             {
                 const auto phase = std::format("after output head {} backward", static_cast<size_t>(oi));
                 check_hidden_vector_nan_finding_mode(queue, ws.dh_last, phase.c_str());
@@ -1039,10 +1067,13 @@ namespace rllm
                 queue.wait("baseline validation hidden-state gather");
 
             std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> expected_by_head;
+            std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> expected_string_table_index_by_head;
             std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> active_by_head;
             for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>())
             {
                 auto& expected = expected_by_head[static_cast<size_t>(head)];
+                auto& expected_string_table_index =
+                    expected_string_table_index_by_head[static_cast<size_t>(head)];
                 auto& active = active_by_head[static_cast<size_t>(head)];
                 bool any_active = false;
                 for (size_t batch = 0; batch < window_indices.size(); ++batch)
@@ -1051,8 +1082,11 @@ namespace rllm
                     active.push_back(used ? 1 : 0);
                     any_active |= used;
                     const auto& window = evaluation_windows[window_indices[batch]];
+                    const int context_length = static_cast<int>(window.context_length);
                     expected.push_back(used ? static_cast<int>(mtp_target_for_head(
-                        window.line, static_cast<int>(window.context_length), head)) : 0);
+                        window.line, context_length, head)) : 0);
+                    expected_string_table_index.push_back(
+                        used ? local_string_table_index_for_head(window.line, context_length, head) : -1);
                 }
                 if (!any_active)
                     continue;
@@ -1068,10 +1102,13 @@ namespace rllm
                     queue.wait(label.c_str());
                 }
                 m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected);
+                m_batched_output_workspace->expected_string_table_indices.copy_from_cpu(
+                    queue, expected_string_table_index);
                 m_batched_output_workspace->active_examples.copy_from_cpu(queue, active);
                 m_output_layers[head].compute_batched_delta(
                     m_batched_output_workspace->logits, batch_size,
-                    *m_batched_output_workspace, queue);
+                    *m_batched_output_workspace, queue,
+                    m_batched_output_workspace->expected_string_table_indices);
                 if (diagnose_first_batch)
                 {
                     const auto label = std::format(
@@ -2110,8 +2147,10 @@ namespace rllm
         for (const auto _k : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
         {
             Score& s = m_training_scores[_k];
+            const auto _target_position = static_cast<PositionIndex>(_input_len + static_cast<int>(_k));
             const auto _target = mtp_target_for_head(train_output, _input_len, _k);
-            const float _k_loss = m_output_layers[_k].compute_score(s, _target);
+            const float _k_loss = m_output_layers[_k].compute_score(
+                s, _target, train_output.get_string_table_index(_target_position));
             if (std::isnan(_k_loss))
             {
                 LOG_ERROR("loss became NaN!");

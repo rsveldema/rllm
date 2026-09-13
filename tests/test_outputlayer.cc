@@ -90,7 +90,6 @@ TEST(OutputLayerBatchTest, BatchedDeltaAndLossStayOnDevice)
     }
 }
 
-
 namespace
 {
     std::vector<rllm::TokenID> first_n_tokens(size_t count)
@@ -192,6 +191,59 @@ namespace
         return -(logits[expected_index] - max_val - std::log(sum_exp));
     }
 } // namespace
+
+TEST(OutputLayerBatchTest, MispredictedLocalAddsStringTableIndexLoss)
+{
+    using namespace rllm;
+    auto& queue = vulkan_runtime::get_queue(0);
+    OutputLayer layer;
+    layer.load(zero_output_layer_weights_json());
+    BatchedOutputWorkspace workspace;
+
+    cpu_fixed_matrix<float, BatchIndex, TokenID> logits_cpu;
+    logits_cpu.zero();
+    logits_cpu[BatchIndex::START, TokenID::START] = 2.0f;
+    logits_cpu[BatchIndex::START, TokenID::LOCAL] = -1.0f;
+    workspace.logits.copy_from_cpu(queue, logits_cpu);
+
+    cpu_fixed_matrix<float, BatchIndex, EmbeddingDimension> h_cpu;
+    h_cpu.zero();
+    workspace.h_last.copy_from_cpu(queue, h_cpu);
+
+    cpu_fixed_vector<int, BatchIndex> expected;
+    expected.push_back(static_cast<int>(TokenID::LOCAL));
+    workspace.expected_tokens.copy_from_cpu(queue, expected);
+    cpu_fixed_vector<int, BatchIndex> expected_string_table_index;
+    expected_string_table_index.push_back(0);
+    workspace.expected_string_table_indices.copy_from_cpu(queue, expected_string_table_index);
+    cpu_fixed_vector<int, BatchIndex> active;
+    active.push_back(1);
+    workspace.active_examples.copy_from_cpu(queue, active);
+
+    layer.compute_batched_delta(
+        workspace.logits, static_cast<BatchIndex>(1), workspace, queue,
+        workspace.expected_string_table_indices);
+
+    cpu_fixed_vector<float, BatchIndex> losses_cpu;
+    losses_cpu.set_size(static_cast<BatchIndex>(1));
+    workspace.losses.copy_to_cpu(queue, losses_cpu);
+
+    std::vector<float> expected_deltas;
+    std::vector<float> logits(static_cast<size_t>(TokenID::MAX), 0.0f);
+    logits[static_cast<size_t>(TokenID::START)] = 2.0f;
+    logits[static_cast<size_t>(TokenID::LOCAL)] = -1.0f;
+    const float token_loss = reference_compute_score(logits, expected_deltas, TokenID::LOCAL);
+    EXPECT_NEAR(losses_cpu[BatchIndex::START],
+        token_loss + std::log(static_cast<float>(PositionIndex::MAX)), 1e-4f);
+
+    cpu_fixed_matrix<float, BatchIndex, PositionIndex> index_delta;
+    workspace.string_table_index_delta.copy_to_cpu(queue, index_delta);
+    const float uniform_probability = 1.0f / static_cast<float>(PositionIndex::MAX);
+    EXPECT_NEAR((index_delta[BatchIndex::START, PositionIndex::START]),
+        1.0f - uniform_probability, 1e-5f);
+    EXPECT_NEAR((index_delta[BatchIndex::START, static_cast<PositionIndex>(1)]),
+        -uniform_probability, 1e-5f);
+}
 
 TEST(OutputLayerForwardFromHiddenTest, PublicForwardMatchesImplementationHelper)
 {
@@ -330,6 +382,65 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
         EXPECT_NEAR(cpu_values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
 
+TEST(OutputLayerScoreTest, MispredictedLocalPredictsStringTableIndex)
+{
+    auto weights = zero_output_layer_weights_json();
+    weight_at(weights, rllm::TokenID::START, rllm::EmbeddingDimension::START) = 2.0f;
+    weight_at(weights, rllm::TokenID::LOCAL, rllm::EmbeddingDimension::START) = -1.0f;
+
+    rllm::OutputLayer layer;
+    layer.load(weights);
+
+    rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
+    h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
+    h_last_cpu.zero();
+    h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
+    layer.forward_from_hidden(h_last, test_queue());
+
+    rllm::Score score;
+    const float loss = layer.compute_score(score, rllm::TokenID::LOCAL, 0);
+
+    std::vector<float> expected_deltas;
+    const auto logits = logits_from_output_layer(layer);
+    const float token_loss = reference_compute_score(logits, expected_deltas, rllm::TokenID::LOCAL);
+    EXPECT_NEAR(loss, token_loss + std::log(static_cast<float>(rllm::PositionIndex::MAX)), 1e-4f);
+    EXPECT_TRUE(score.string_table_index_prediction_active);
+
+    rllm::cpu_fixed_vector<float, rllm::PositionIndex> index_delta;
+    score.string_table_index_values.copy_to_cpu(test_queue(), index_delta);
+    const float uniform_probability = 1.0f / static_cast<float>(rllm::PositionIndex::MAX);
+    EXPECT_NEAR(index_delta[rllm::PositionIndex::START], 1.0f - uniform_probability, 1e-5f);
+    EXPECT_NEAR(index_delta[static_cast<rllm::PositionIndex>(1)], -uniform_probability, 1e-5f);
+}
+
+TEST(OutputLayerScoreTest, CorrectLocalDoesNotPredictStringTableIndex)
+{
+    auto weights = zero_output_layer_weights_json();
+    weight_at(weights, rllm::TokenID::LOCAL, rllm::EmbeddingDimension::START) = 2.0f;
+
+    rllm::OutputLayer layer;
+    layer.load(weights);
+
+    rllm::cpu_fixed_vector<float, rllm::EmbeddingDimension> h_last_cpu;
+    h_last_cpu.set_size(rllm::EmbeddingDimension::MAX);
+    h_last_cpu.zero();
+    h_last_cpu[rllm::EmbeddingDimension::START] = 1.0f;
+    rllm::fixed_size_vector<float, rllm::EmbeddingDimension> h_last;
+    h_last.copy_from_cpu(test_queue(), h_last_cpu);
+    layer.forward_from_hidden(h_last, test_queue());
+
+    rllm::Score score;
+    layer.compute_score(score, rllm::TokenID::LOCAL, 0);
+    EXPECT_FALSE(score.string_table_index_prediction_active);
+
+    rllm::cpu_fixed_vector<float, rllm::PositionIndex> index_delta;
+    score.string_table_index_values.copy_to_cpu(test_queue(), index_delta);
+    for (const auto index : rllm::enum_iterator1D<rllm::PositionIndex>())
+        EXPECT_FLOAT_EQ(index_delta[index], 0.0f);
+}
+
 TEST(OutputLayerScoreTest, AllNegativeLogitsMatchReference)
 {
     const ScopedNanFindingMode disable_nan_finding_mode(false);
@@ -456,7 +567,7 @@ TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
         (void)loss;
         dh_last.zero(test_queue());
         accumulator.reset(test_queue());
-        layer.backward_accumulate(score.values, h_last, dh_last, accumulator);
+        layer.backward_accumulate(score.values, score.string_table_index_values, h_last, dh_last, accumulator);
         layer.apply_accumulated_update(accumulator, 0.0003f, 0.1f, 0.001f);
     }
 

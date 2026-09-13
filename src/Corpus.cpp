@@ -47,11 +47,11 @@ namespace rllm
 
     namespace
     {
-        constexpr std::string_view loop_overflow_token = "<LOOP_OVERFLOW>";
-        constexpr std::string_view local_overflow_token = "<LOCAL_OVERFLOW>";
-        constexpr std::string_view param_overflow_token = "<PARAM_OVERFLOW>";
-        constexpr std::string_view global_overflow_token = "<GLOBAL_OVERFLOW>";
-        constexpr std::string_view field_access_token = "<FIELD_ACCESS_IDENT>";
+        constexpr std::string_view loop_token = "<LOOP>";
+        constexpr std::string_view local_token = "<LOCAL>";
+        constexpr std::string_view param_token = "<PARAM>";
+        constexpr std::string_view global_token = "<GLOBAL>";
+        constexpr std::string_view field_access_token = "<FIELD>";
         constexpr std::string_view legacy_identifier_token = "<IDENTIFIER>";
         constexpr std::string_view string_token = "<STRING>";
         constexpr std::string_view mcp_start_token = "<MCP>";
@@ -186,81 +186,80 @@ namespace rllm
             std::string_view category,
             IdentifierScopeState& state)
         {
+            const auto category_marker = [&]() -> std::string {
+                if (category == "loop")
+                    return std::string{loop_token};
+                if (category == "local")
+                    return std::string{local_token};
+                if (category == "param")
+                    return std::string{param_token};
+                return std::string{global_token};
+            };
+            const auto marker_from_assignment = [](const std::string& assignment) -> std::string {
+                const auto stored_category = std::string_view{assignment}.substr(0, assignment.find(':'));
+                if (stored_category == "loop")
+                    return std::string{loop_token};
+                if (stored_category == "local")
+                    return std::string{local_token};
+                if (stored_category == "param")
+                    return std::string{param_token};
+                return std::string{global_token};
+            };
             const std::string name{word};
             if (category == "param")
             {
                 if (const auto pending = state.pending_parameters.find(name);
                     pending != state.pending_parameters.end())
-                    return pending->second;
+                    return marker_from_assignment(pending->second);
             }
             else if (category == "local" || category == "loop")
             {
                 if (const auto existing = state.scopes.back().find(name);
                     existing != state.scopes.back().end())
-                    return existing->second;
+                    return marker_from_assignment(existing->second);
             }
             else
             {
                 if (const auto pending = state.pending_parameters.find(name);
                     pending != state.pending_parameters.end())
-                    return pending->second;
+                    return marker_from_assignment(pending->second);
                 for (auto scope = state.scopes.rbegin(); scope != state.scopes.rend(); ++scope)
                     if (const auto existing = scope->find(name); existing != scope->end())
-                        return existing->second;
+                        return marker_from_assignment(existing->second);
             }
 
-            const std::string prefix = "<" + std::string{category == "loop" ? "LOOP_" :
-                category == "local" ? "LOCAL_" :
-                category == "param" ? "PARAM_" : "GLOBAL_"};
-            const size_t capacity = category == "loop"
-                ? static_cast<size_t>(IdentifierCategoryCount::LOOP_VARIABLES)
-                : category == "local"
-                    ? static_cast<size_t>(IdentifierCategoryCount::LOCALS)
-                    : category == "param"
-                        ? static_cast<size_t>(IdentifierCategoryCount::PARAMETERS)
-                        : static_cast<size_t>(IdentifierCategoryCount::GLOBALS);
-            std::vector<bool> used(capacity, false);
+            size_t next_index = 0;
             const auto mark_used = [&](const auto& assignments) {
                 for (const auto& [_, token] : assignments)
                 {
-                    if (!token.starts_with(prefix) || token.ends_with("OVERFLOW>"))
+                    const auto colon = token.find(':');
+                    if (colon == std::string::npos || token.substr(0, colon) != category)
                         continue;
-                    const auto digits = std::string_view{token}.substr(
-                        prefix.size(), token.size() - prefix.size() - 1);
-                    const size_t index = static_cast<size_t>(std::stoul(std::string{digits}));
-                    if (index < used.size())
-                        used[index] = true;
+                    next_index = std::max(next_index, static_cast<size_t>(
+                        std::stoul(token.substr(colon + 1)) + 1));
                 }
             };
             for (const auto& scope : state.scopes)
                 mark_used(scope);
             mark_used(state.pending_parameters);
-            const auto overflow = category == "loop" ? loop_overflow_token :
-                category == "local" ? local_overflow_token :
-                category == "param" ? param_overflow_token : global_overflow_token;
-            const auto available = std::ranges::find(used, false);
-            const std::string token = available != used.end()
-                ? prefix + std::to_string(static_cast<size_t>(available - used.begin())) + ">"
-                : std::string{overflow};
+            const std::string token = std::string{category} + ":" + std::to_string(next_index);
             if (category == "global")
                 state.scopes.front().emplace(name, token);
             else if (category == "param")
                 state.pending_parameters.emplace(name, token);
             else
                 state.scopes.back().emplace(name, token);
-            return token;
+            return category_marker();
         }
 
         size_t identifier_marker_length(std::string_view text, size_t position)
         {
             if (text.substr(position).starts_with(field_access_token))
                 return field_access_token.size();
-            for (const auto prefix : {"<LOOP_", "<LOCAL_", "<PARAM_", "<GLOBAL_"})
+            for (const auto marker : {loop_token, local_token, param_token, global_token})
             {
-                if (!text.substr(position).starts_with(prefix))
-                    continue;
-                const size_t end = text.find('>', position + std::string_view{prefix}.size());
-                return end == std::string_view::npos ? 0 : end + 1 - position;
+                if (text.substr(position).starts_with(marker))
+                    return marker.size();
             }
             return 0;
         }
@@ -300,7 +299,7 @@ namespace rllm
             }
             if (text.substr(i).starts_with(legacy_identifier_token))
             {
-                out += global_overflow_token;
+                out += global_token;
                 i += legacy_identifier_token.size();
                 continue;
             }
@@ -349,6 +348,7 @@ namespace rllm
                             mcp.record_seen_mcp(context, context.value());
                             out += mcp_start_token;
                             out += string_token;
+                            scopes.pending_string_table_values.emplace_back(context.value());
                             out += mcp_end_token;
                             i = end + 1;
                         }
@@ -370,6 +370,7 @@ namespace rllm
                 const SourceContext context{text, literal_start, i - literal_start};
                 mcp.record_seen_string(context, context.value());
                 out += string_token;
+                scopes.pending_string_table_values.emplace_back(context.value());
                 continue;
             }
             if (identifier_start(text[i]))
@@ -422,8 +423,19 @@ namespace rllm
                                   (text.substr(separator_end - 2, 2) == "::" &&
                                    (language == SourceLanguage::Cpp ||
                                     language == SourceLanguage::C))));
-                            out += field_access ? field_access_token : assigned_identifier_token(
-                                text.substr(position, end - position), "global", scopes);
+                            if (field_access)
+                            {
+                                out += field_access_token;
+                                scopes.pending_string_table_values.emplace_back(
+                                    text.substr(position, end - position));
+                            }
+                            else
+                            {
+                                out += assigned_identifier_token(
+                                    text.substr(position, end - position), "global", scopes);
+                                scopes.pending_string_table_values.emplace_back(
+                                    text.substr(position, end - position));
+                            }
                             position = end;
                         }
                         else
@@ -463,6 +475,7 @@ namespace rllm
                     mcp.record_seen_mcp(context, word);
                     out += mcp_start_token;
                     out += assigned_identifier_token(word, "global", scopes);
+                    scopes.pending_string_table_values.emplace_back(word);
                     out += mcp_end_token;
                     expect_library_name = false;
                 }
@@ -471,6 +484,7 @@ namespace rllm
                     mcp.record_seen_identifier(SourceContext{text, i, first_end - i}, word);
                     out += assigned_identifier_token(
                         word, identifier_category_token(text, i, first_end), scopes);
+                    scopes.pending_string_table_values.emplace_back(word);
                 }
                 i = first_end;
                 continue;
@@ -599,7 +613,7 @@ namespace rllm
                 for (size_t position = start; position < end; ++position)
                 {
                     if constexpr (std::is_same_v<Sequence, CpuInputLine>)
-                        window.push_back(sequence[static_cast<PositionIndex>(position)]);
+                        window.push_back_from(sequence, static_cast<PositionIndex>(position));
                     else
                         window.push_back(sequence[position]);
                 }
@@ -1006,8 +1020,59 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                 result.push_back(tokens[position]);
         };
         const auto append_source_text = [&](std::string_view part) {
-            append_raw_text(abstract_source_for_model(
-                part, language, m_mcp, &state.identifier_scopes));
+            const size_t value_begin = state.identifier_scopes.pending_string_table_values.size();
+            const auto abstracted = abstract_source_for_model(
+                part, language, m_mcp, &state.identifier_scopes);
+            size_t value_index = value_begin;
+            size_t ix = 0;
+            while (ix < abstracted.size())
+            {
+                bool matched_token = false;
+                for (const auto& token_id_and_string : tokenizer_map)
+                {
+                    const auto& token_id = token_id_and_string.first;
+                    const auto& token_info = token_id_and_string.second;
+                    const auto token_len = std::strlen(token_info.str);
+
+                    if (abstracted.compare(ix, token_len, token_info.str) == 0)
+                    {
+                        if (token_info.end_of_word)
+                        {
+                            const size_t next_ix = ix + token_len;
+                            if (next_ix < abstracted.size())
+                            {
+                                const auto next_char = abstracted[next_ix];
+                                if (std::isalnum((unsigned char) next_char) || next_char == '_')
+                                    continue;
+                            }
+                        }
+                        if (token_string_category(token_id) == TokenStringCategory::None)
+                            result.push_back(token_id);
+                        else
+                        {
+                            assert(value_index < state.identifier_scopes.pending_string_table_values.size());
+                            result.push_back(
+                                token_id, state.identifier_scopes.pending_string_table_values[value_index++]);
+                        }
+                        ix += token_len;
+                        matched_token = true;
+                        break;
+                    }
+                }
+                if (!matched_token)
+                {
+                    const auto ch = abstracted[ix];
+                    if (!isspace(ch))
+                    {
+                        LOG_ERROR("ERROR: No token matched for character '{}', skipping it", ch);
+                        ++m_tokenization_errors;
+                    }
+                    ++ix;
+                }
+            }
+            state.identifier_scopes.pending_string_table_values.erase(
+                state.identifier_scopes.pending_string_table_values.begin() + static_cast<std::ptrdiff_t>(value_begin),
+                state.identifier_scopes.pending_string_table_values.end());
         };
 
         const bool slash_comments = language == SourceLanguage::Cpp ||
