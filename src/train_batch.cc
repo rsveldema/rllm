@@ -130,6 +130,18 @@ namespace rllm
         {
             if (std::none_of(valid_heads.begin(), valid_heads.end(), [head](auto count) { return head < count; }))
                 continue;
+            m_batched_output_workspace->expected_strings.clear();
+            m_batched_output_workspace->string_table_sizes.clear();
+            for (size_t active = 0; active < active_indices.size(); ++active)
+            {
+                const auto& item = batch[active_indices[active]];
+                const size_t input_length = item.context_length.has_value()
+                    ? static_cast<size_t>(*item.context_length)
+                    : static_cast<size_t>(batch_input_len(static_cast<int>(item.line.size())));
+                m_batched_output_workspace->expected_strings.push_back(head < valid_heads[active]
+                    ? item.line.string_index(input_length + static_cast<size_t>(head)) : NO_STRING_INDEX);
+                m_batched_output_workspace->string_table_sizes.push_back(item.line.string_table->values.size());
+            }
             m_output_layers[head].forward_batched(m_batched_output_workspace->h_last, batch_size, m_batched_output_workspace->logits, queue);
             m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected_by_head[static_cast<size_t>(head)]);
             m_batched_output_workspace->active_examples.copy_from_cpu(queue, active_by_head[static_cast<size_t>(head)]);
@@ -157,7 +169,7 @@ namespace rllm
         BatchTrainingTiming& timing)
     {
         const auto started = std::chrono::steady_clock::now();
-        struct Prediction { int row; size_t active; MultiTokenPredictionIndex head; TokenID target; };
+        struct Prediction { int row; size_t active; MultiTokenPredictionIndex head; TokenID target; StringIndex string_index; size_t table_size; };
         std::vector<Prediction> predictions;
         for (size_t active = 0; active < active_indices.size(); ++active)
         {
@@ -171,7 +183,8 @@ namespace rllm
                     const int target = local + 1 + static_cast<int>(head);
                     if (target < static_cast<int>(item.line.size()))
                         predictions.push_back({begin + local, active, head,
-                            item.line[static_cast<PositionIndex>(target)]});
+                            item.line[static_cast<PositionIndex>(target)], item.line.string_index(static_cast<size_t>(target)),
+                            item.line.string_table->values.size()});
                 }
         }
         assert(!predictions.empty());
@@ -189,8 +202,12 @@ namespace rllm
                 if (predictions[i].head == head)
                     selected.push_back(i);
             cpu_fixed_vector<int, BatchIndex> rows, expected, active_flags;
+            m_batched_output_workspace->expected_strings.clear();
+            m_batched_output_workspace->string_table_sizes.clear();
             for (const size_t i : selected)
             {
+                m_batched_output_workspace->expected_strings.push_back(predictions[i].string_index);
+                m_batched_output_workspace->string_table_sizes.push_back(predictions[i].table_size);
                 rows.push_back(predictions[i].row);
                 expected.push_back(static_cast<int>(predictions[i].target));
                 active_flags.push_back(1);

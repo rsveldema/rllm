@@ -7,6 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <map>
+#include <optional>
 #include <print>
 #include <string>
 #include <utility>
@@ -57,15 +60,26 @@ namespace rllm
 
     using Token = std::string;
 
-    // Number of simultaneously distinguishable identifier aliases in each
-    // source-abstraction category before its overflow representation is used.
-    enum class IdentifierCategoryCount : size_t
+    using StringIndex = size_t;
+    inline constexpr StringIndex NO_STRING_INDEX = static_cast<StringIndex>(-1);
+
+    inline bool token_has_value(TokenID token)
     {
-        LOCALS = 16,
-        PARAMETERS = 16,
-        FIELDS = 1,
-        LOOP_VARIABLES = 8,
-        GLOBALS = 16
+        return token == TokenID::IDENTIFIER || token == TokenID::STRING || token == TokenID::INTEGER;
+    }
+
+    /** Per-source intern table. Indices are independent of the token vocabulary. */
+    struct StringTable
+    {
+        std::vector<std::string> values;
+        std::map<std::string, StringIndex> indices;
+
+        StringIndex intern(std::string_view value)
+        {
+            auto [it, inserted] = indices.emplace(value, values.size());
+            if (inserted) values.emplace_back(value);
+            return it->second;
+        }
     };
 
     // Dimensionality of each token's learned embedding vector.
@@ -251,22 +265,42 @@ namespace rllm
     {
         public:
 
+        std::shared_ptr<StringTable> string_table = std::make_shared<StringTable>();
+        std::vector<StringIndex> string_indices;
+
+        StringIndex string_index(size_t pos) const { return string_indices.at(pos); }
+        StringIndex string_index(PositionIndex pos) const { return string_index(static_cast<size_t>(pos)); }
+        void append_from(const CpuInputLine& source, size_t pos)
+        {
+            const auto index = source.string_index(pos);
+            // Preserve the source table and its indices, including entries outside a window.
+            if (empty()) string_table = source.string_table;
+            if (index != NO_STRING_INDEX && string_table != source.string_table)
+                push_back(source.get(pos), string_table->intern(source.string_table->values.at(index)));
+            else
+                push_back(source.get(pos), index);
+        }
+
         void sub_array(CpuInputLine& result, PositionIndex length) const
         {
             assert(static_cast<size_t>(length) <= m_cpu.size());
             result.m_cpu.assign(m_cpu.begin(), m_cpu.begin() + static_cast<size_t>(length));
+            result.string_indices.assign(string_indices.begin(), string_indices.begin() + static_cast<size_t>(length));
+            result.string_table = string_table;
         }
 
-        void push_back(TokenID t)
+        void push_back(TokenID t, StringIndex index = NO_STRING_INDEX)
         {
             assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
             m_cpu.push_back(t);
+            string_indices.push_back(index);
         }
 
         void push_front(TokenID t)
         {
             assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
             m_cpu.insert(m_cpu.begin(), t);
+            string_indices.insert(string_indices.begin(), NO_STRING_INDEX);
         }
 
         const TokenID& back() const
@@ -277,6 +311,7 @@ namespace rllm
         void pop_back()
         {
             m_cpu.pop_back();
+            string_indices.pop_back();
         }
 
         const TokenID& get(PositionIndex pos) const
@@ -297,6 +332,7 @@ namespace rllm
         void clear()
         {
             m_cpu.clear();
+            string_indices.clear();
         }
 
         bool empty() const
@@ -325,6 +361,11 @@ namespace rllm
                     value >>= 8;
                 }
             }
+            for (const auto index : string_indices)
+            {
+                hash ^= index;
+                hash *= FNV_PRIME;
+            }
             return hash;
         }
 
@@ -336,6 +377,7 @@ namespace rllm
       public:
         using Base = fixed_size_vector<TokenID, PositionIndex>;
 
+        fixed_size_vector<int, PositionIndex> value_indices;
         GpuInputLine() = default;
 
         GpuInputLine(const CpuInputLine& other) = delete;
@@ -362,6 +404,10 @@ namespace rllm
         {
             auto* self = const_cast<GpuInputLine*>(this);
             self->m_upload_staging.clear();
+            self->m_index_staging.clear();
+            for (const auto index : cpu.string_indices)
+                self->m_index_staging.push_back(index == NO_STRING_INDEX ? 0 : static_cast<int>(index + 1));
+            self->value_indices.copy_from_cpu(queue, self->m_index_staging);
             for (const auto token : cpu.m_cpu)
                 self->m_upload_staging.push_back(token);
             self->Base::copy_from_cpu(queue, self->m_upload_staging);
@@ -370,6 +416,7 @@ namespace rllm
 
       private:
         cpu_fixed_vector<TokenID, PositionIndex> m_upload_staging;
+        cpu_fixed_vector<int, PositionIndex> m_index_staging;
     };
 
     /** CPU description of a ragged micro-batch packed into one row axis.
@@ -393,6 +440,7 @@ namespace rllm
             assert(examples.size() <= static_cast<size_t>(BatchIndex::MAX));
             m_tokens.clear();
             m_row_begin.clear();
+            m_string_tables.clear();
             m_row_end.clear();
             m_last_row.clear();
             m_local_position.clear();
@@ -401,13 +449,14 @@ namespace rllm
             for (size_t batch = 0; batch < examples.size(); ++batch)
             {
                 const auto& example = examples[batch];
+                m_string_tables.push_back(example.string_table);
                 assert(!example.empty());
                 const auto begin = m_tokens.size();
                 m_row_begin.push_back(begin);
                 for (const auto pos : enum_iterator1D<PositionIndex>(example.size()))
                 {
                     assert(static_cast<size_t>(m_tokens.size()) < static_cast<size_t>(PositionIndex::MAX));
-                    m_tokens.push_back(example[pos]);
+                    m_tokens.push_back(example[pos], example.string_index(pos));
                     m_local_position.push_back(pos);
                     m_row_batch.push_back(static_cast<BatchIndex>(batch));
                 }
@@ -419,6 +468,8 @@ namespace rllm
         BatchIndex batch_size() const { return m_row_begin.size(); }
         PositionIndex packed_rows() const { return m_tokens.size(); }
         const CpuInputLine& tokens() const { return m_tokens; }
+        const StringTable& string_table(BatchIndex batch) const
+        { return *m_string_tables.at(static_cast<size_t>(batch)); }
         PositionIndex row_begin(BatchIndex batch) const { return m_row_begin[batch]; }
         PositionIndex row_end(BatchIndex batch) const { return m_row_end[batch]; }
         PositionIndex last_row(BatchIndex batch) const { return m_last_row[batch]; }
@@ -436,6 +487,7 @@ namespace rllm
 
       private:
         CpuInputLine m_tokens;
+        std::vector<std::shared_ptr<StringTable>> m_string_tables;
         cpu_fixed_vector<PositionIndex, BatchIndex> m_row_begin;
         cpu_fixed_vector<PositionIndex, BatchIndex> m_row_end;
         cpu_fixed_vector<PositionIndex, BatchIndex> m_last_row;
@@ -538,6 +590,7 @@ namespace rllm
     {
         TokenID token_id;
         float activation;
+        StringIndex string_index = NO_STRING_INDEX;
     };
 
 } // namespace rllm

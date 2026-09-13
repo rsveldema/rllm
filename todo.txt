@@ -24,3 +24,25 @@ AL_SYSCALL_ERROR_P (ret) ? INTERNAL_SYSCALL_ERRNO (ret) : 0;
 #11 0x00007ffff780a798 in __libc_start_main_impl (main=0x401dc0 <main>, argc=14, argv=0x7fffffffcf48, 
     init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7fffffffcf38)
     at ../csu/libc-start.c:360
+
+
+===
+if the token IDs mismatch, the loss should be high. If the strings behind them mismatch, the loss can be lower. The goal is to train structure before syntax/semantics
+
+
+
+
+
+
+
+
+note that note that we do not need to do string comparisons. The stringtable should track indices into a global string table that lives CPU side only.
+
+
+
+
+
+
+
+
+no need to create compatibiliuty code for checkpoints

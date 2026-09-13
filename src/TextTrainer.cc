@@ -391,6 +391,7 @@ namespace rllm
 
         for (const auto ix : enum_iterator1D<MultiTokenPredictionIndex>())
         {
+            m_output_layers[ix].set_string_table_size(m_last_input.string_table->values.size());
             m_output_layers[ix].forward_from_hidden(ws.h_last, queue);
             queue.wait("TextTrainer output layer forward");
         }
@@ -680,6 +681,7 @@ namespace rllm
             {
                 m_output_layers[oi].V_lm_head.zero(queue);
                 m_output_layers[oi].S_lm_head.zero(queue);
+                m_output_layers[oi].m_string_head.reset_optimizer();
             }
             m_optimizer_step = 0;
             LOG_INFO("Reset loaded Adam moments and optimizer bias-correction step");
@@ -1045,12 +1047,17 @@ namespace rllm
                 auto& expected = expected_by_head[static_cast<size_t>(head)];
                 auto& active = active_by_head[static_cast<size_t>(head)];
                 bool any_active = false;
+                m_batched_output_workspace->expected_strings.clear();
+                m_batched_output_workspace->string_table_sizes.clear();
                 for (size_t batch = 0; batch < window_indices.size(); ++batch)
                 {
                     const bool used = head < valid_heads[batch];
                     active.push_back(used ? 1 : 0);
                     any_active |= used;
                     const auto& window = evaluation_windows[window_indices[batch]];
+                    m_batched_output_workspace->expected_strings.push_back(used ? window.line.string_index(
+                        static_cast<size_t>(window.context_length) + static_cast<size_t>(head)) : NO_STRING_INDEX);
+                    m_batched_output_workspace->string_table_sizes.push_back(window.line.string_table->values.size());
                     expected.push_back(used ? static_cast<int>(mtp_target_for_head(
                         window.line, static_cast<int>(window.context_length), head)) : 0);
                 }
@@ -1160,7 +1167,9 @@ namespace rllm
                 window.line.sub_array(get_last_input(), window.context_length);
                 propagate_forward();
                 score.reset(queue);
-                const float loss = m_output_layers[candidate.head].compute_score(score, candidate.expected);
+                const float loss = m_output_layers[candidate.head].compute_score(score, candidate.expected,
+                    window.line.string_index(static_cast<size_t>(window.context_length) + static_cast<size_t>(candidate.head)),
+                    window.line.string_table->values.size());
                 const auto top = m_output_layers[candidate.head].get_top_k_by_logit(1).front();
                 const float max_logit = score.temp_values_cpu[TempStorage::START];
                 const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
@@ -2111,7 +2120,9 @@ namespace rllm
         {
             Score& s = m_training_scores[_k];
             const auto _target = mtp_target_for_head(train_output, _input_len, _k);
-            const float _k_loss = m_output_layers[_k].compute_score(s, _target);
+            const float _k_loss = m_output_layers[_k].compute_score(s, _target,
+                train_output.string_index(static_cast<size_t>(_input_len) + static_cast<size_t>(_k)),
+                train_output.string_table->values.size());
             if (std::isnan(_k_loss))
             {
                 LOG_ERROR("loss became NaN!");

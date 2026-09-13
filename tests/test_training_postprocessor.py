@@ -50,8 +50,8 @@ def test_inspection_copy_materializes_runtime_abstraction(tmp_path):
 
     assert postprocessor.process_file(source_file, abstract_symbols=True)
     assert source_file.read_text(encoding="utf-8") == (
-        "auto <LOCAL_0> = "
-        "<MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>, <GLOBAL_1>);\n"
+        "auto <IDENTIFIER> = "
+        "<MCP><IDENTIFIER>::<IDENTIFIER></MCP>(<STRING>, <IDENTIFIER>);\n"
     )
 
 
@@ -90,16 +90,16 @@ def test_abstracts_identifiers_strings_calls_and_cpp_namespace_access():
     source = 'auto result = std::println("hello {}", user_name);\nhelper(result);\n'
 
     assert postprocessor.abstract_code_symbols(source) == (
-        "auto <LOCAL_0> = <MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>, <GLOBAL_1>);\n"
-        "<MCP><GLOBAL_2></MCP>(<LOCAL_0>);\n"
+        "auto <IDENTIFIER> = <MCP><IDENTIFIER>::<IDENTIFIER></MCP>(<STRING>, <IDENTIFIER>);\n"
+        "<MCP><IDENTIFIER></MCP>(<IDENTIFIER>);\n"
     )
 
 
-def test_field_access_uses_a_dedicated_identifier_token():
+def test_field_access_uses_the_shared_identifier_token():
     source = "auto value = object.field; auto other = pointer->member;\n"
     assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "auto <LOCAL_0> = <MCP><GLOBAL_0>.<FIELD_ACCESS_IDENT></MCP>; "
-        "auto <LOCAL_1> = <MCP><GLOBAL_1>-><FIELD_ACCESS_IDENT></MCP>;\n"
+        "auto <IDENTIFIER> = <MCP><IDENTIFIER>.<IDENTIFIER></MCP>; "
+        "auto <IDENTIFIER> = <MCP><IDENTIFIER>-><IDENTIFIER></MCP>;\n"
     )
 
 
@@ -107,12 +107,12 @@ def test_abstraction_preserves_keywords_comments_and_punctuation():
     source = "for (int index = 0; index < count; ++index) { // useful prose\nreturn index;\n}\n"
 
     assert postprocessor.abstract_code_symbols(source) == (
-        "for (int <LOOP_0> = 0; <LOOP_0> < <GLOBAL_0>; ++<LOOP_0>) { // useful prose\n"
-        "return <LOOP_0>;\n}\n"
+        "for (int <IDENTIFIER> = <INTEGER>; <IDENTIFIER> < <IDENTIFIER>; ++<IDENTIFIER>) { // useful prose\n"
+        "return <IDENTIFIER>;\n}\n"
     )
 
 
-def test_identifier_categories_cover_parameters_locals_loops_and_unknowns():
+def test_identifiers_share_a_token_across_syntax_roles():
     source = (
         "void sort(int count, Widget value) {\n"
         "auto local = count;\n"
@@ -120,65 +120,23 @@ def test_identifier_categories_cover_parameters_locals_loops_and_unknowns():
         "}\n"
     )
     assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>, "
-        "<GLOBAL_1> <PARAM_1>) {\n"
-        "auto <LOCAL_0> = <PARAM_0>;\n"
-        "for (int <LOOP_0> = 0; <LOOP_0> < <PARAM_0>; "
-        "++<LOOP_0>) <LOCAL_0> = <GLOBAL_2>;\n"
+        "void <MCP><IDENTIFIER></MCP>(int <IDENTIFIER>, "
+        "<IDENTIFIER> <IDENTIFIER>) {\n"
+        "auto <IDENTIFIER> = <IDENTIFIER>;\n"
+        "for (int <IDENTIFIER> = <INTEGER>; <IDENTIFIER> < <IDENTIFIER>; "
+        "++<IDENTIFIER>) <IDENTIFIER> = <IDENTIFIER>;\n"
         "}\n"
     )
 
 
-def test_identifier_category_slots_overflow_at_configured_capacities():
-    scopes: list[dict[str, str]] = [{}]
-    pending: dict[str, str] = {}
-    local_tokens = [postprocessor._assigned_identifier_token(
-        f"local{index}", "local", scopes, pending) for index in range(17)]
-    param_tokens = [postprocessor._assigned_identifier_token(
-        f"param{index}", "param", scopes, pending) for index in range(17)]
-    global_tokens = [postprocessor._assigned_identifier_token(
-        f"global{index}", "global", scopes, pending) for index in range(17)]
-    loop_tokens = [postprocessor._assigned_identifier_token(
-        f"loop{index}", "loop", scopes, pending) for index in range(9)]
-
-    assert local_tokens[-2:] == ["<LOCAL_15>", "<LOCAL_OVERFLOW>"]
-    assert param_tokens[-2:] == ["<PARAM_15>", "<PARAM_OVERFLOW>"]
-    assert global_tokens[-2:] == ["<GLOBAL_15>", "<GLOBAL_OVERFLOW>"]
-    assert loop_tokens[-2:] == ["<LOOP_7>", "<LOOP_OVERFLOW>"]
+def test_identifier_tokens_do_not_depend_on_category_or_count():
+    source = ";".join(f"name{index}" for index in range(100))
+    assert postprocessor.abstract_code_symbols(source) == ";".join(["<IDENTIFIER>"] * 100)
 
 
-def test_identifier_slots_are_reused_after_scope_exit():
-    source = "{ auto first = 1; { auto second = 2; } auto third = 3; } { auto fourth = 4; }"
-    assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "{ auto <LOCAL_0> = 1; { auto <LOCAL_1> = 2; } auto <LOCAL_1> = 3; } "
-        "{ auto <LOCAL_0> = 4; }"
-    )
-
-
-def test_parameter_slots_restart_at_zero_for_each_function():
-    source = (
-        "void declared(int stale); void first(int alpha) { } "
-        "void second(int beta) { }"
-    )
-    assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>); "
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>) { } "
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>) { }"
-    )
-
-
-def test_global_slots_restart_for_free_functions_but_not_methods():
-    assert postprocessor.abstract_code_symbols(
-        "void first() { } void second() { }", ".cpp"
-    ) == (
-        "void <MCP><GLOBAL_0></MCP>() { } "
-        "void <MCP><GLOBAL_0></MCP>() { }"
-    )
-    assert postprocessor.abstract_code_symbols(
-        "class Widget { void first() { } void second() { } };", ".cpp"
-    ) == (
-        "class <GLOBAL_0> { void <MCP><GLOBAL_1></MCP>() { } "
-        "void <MCP><GLOBAL_2></MCP>() { } };"
+def test_integer_spelling_is_abstracted_but_floats_are_preserved():
+    assert postprocessor.abstract_code_symbols("123 0xff 0b10 1'000 42ULL 1.25 2e-3") == (
+        "<INTEGER> <INTEGER> <INTEGER> <INTEGER> <INTEGER> 1.25 2e-3"
     )
 
 
@@ -189,14 +147,14 @@ def test_abstraction_is_idempotent_and_marks_includes_as_mcp():
     assert once == (
         "#include <MCP><STRING></MCP>\n"
         "#include <MCP><STRING></MCP>\n"
-        "<MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>);\n"
+        "<MCP><IDENTIFIER>::<IDENTIFIER></MCP>(<STRING>);\n"
     )
     assert postprocessor.abstract_code_symbols(once) == once
 
 
 def test_imported_library_name_is_an_mcp_access():
     assert postprocessor.abstract_code_symbols("import requests\n", ".py") == (
-        "import <MCP><GLOBAL_0></MCP>\n"
+        "import <MCP><IDENTIFIER></MCP>\n"
     )
 
 
@@ -225,5 +183,5 @@ def test_python_java_and_rust_files_keep_source_spelling(tmp_path):
 
 def test_only_the_active_languages_keywords_are_preserved():
     assert postprocessor.abstract_code_symbols("fn = value;\n", ".java") == (
-        "<LOCAL_0> = <GLOBAL_0>;\n"
+        "<IDENTIFIER> = <IDENTIFIER>;\n"
     )

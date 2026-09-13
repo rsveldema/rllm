@@ -20,23 +20,65 @@ as fallbacks for all other incomplete text. Corpus-derived BPE pieces are
 deliberately excluded so concrete identifiers and literal vocabulary cannot
 become learned tokens.
 
-`<MCP>`, `</MCP>`, eight indexed loop slots, 16 indexed local slots, 16 indexed
-parameter slots, 16 indexed global slots, an overflow token for each category,
-`<FIELD_ACCESS_IDENT>`, and `<STRING>` are reserved atomic tokens. Identifiers
-following `.`, `->`, or C/C++ `::` use `<FIELD_ACCESS_IDENT>`; the base
-expression retains its normal scoped identifier category. Rust `::` paths keep
-indexed global identifiers because they describe module paths rather than C++
-member or namespace access.
-The training postprocessor uses them to remove concrete program vocabulary and
-mark calls or qualified library accesses as MCP-provided operations.
-Identifier bindings are held in a stack of lexical scope maps. Parameters enter
-the function-body scope, while loop and local declarations enter the current
-scope. Leaving a brace-delimited scope, or dedenting Python source, discards its
-bindings so the lowest free indexed token can be reused by a later declaration.
-Parameter indices therefore restart at `<PARAM_0>` for every function.
-At each free function, global aliases also restart at `<GLOBAL_0>`. Class and
-struct methods retain their enclosing type's global alias table so member
-declarations remain distinct within that type.
+`<MCP>`, `</MCP>`, `<IDENTIFIER>`, `<STRING>`, and `<INTEGER>` are
+reserved atomic tokens. All identifiers, including member names, share
+`TokenID::IDENTIFIER`. There are no numbered identifier tokens, category
+capacities, or overflow tokens. Integer literals retain their source spelling
+(including radix, separators, and suffixes); quoted literals retain their quotes
+and escapes. Floating-point literals continue to use the ordinary tokenizer.
+
+Language-aware tokenization attaches a separate string-table index to every
+concrete identifier, string literal, and integer literal. `CommentLexState`
+owns the source-local intern table and shares it with the returned `CpuInputLine`.
+Reuse the state across source lines; use a fresh state for a different source.
+Repeated spellings reuse the same index, regardless of lexical scope. Table
+indices describe spelling, not symbol binding. Normalized placeholders without
+a concrete value have `NO_STRING_INDEX` and receive no value supervision.
+
+`CpuInputLine::string_index(position)` reads an occurrence's index;
+`string_table->values[index]` reads its spelling. Prefixes, file sequences, and
+training windows retain the source table and its indices. Packed batches retain
+each example's local index for embedding (`PackedBatchInput::string_table(batch)`
+provides its table), with targets and table sizes supplied
+separately per example. Input embeddings include a fixed sinusoidal encoding of
+the table index so otherwise identical token types can represent different values.
+`Corpus::get_line(line, true)` resolves available table values; the default
+continues to render the abstract token representation.
+
+Each MTP output head has an independent learned categorical `StringIndexHead`.
+It projects the shared hidden state to table-index logits, with learned rows
+allocated as tables grow. Its vocabulary is independent of `TokenID::MAX`.
+Generation returns the selected index in `OutputToken::string_index` and appends
+it alongside the token type. The prompt's supplied table defines the available
+values: this output selects a table entry and cannot invent a new spelling.
+
+Training minimizes the following loss (value-loss weight is currently 1):
+
+```
+loss = cross_entropy(token_type_logits, expected_type)
+if argmax(token_type_logits) == expected_type and expected_type carries a value:
+    loss += cross_entropy(table_index_logits, expected_index)
+```
+
+The condition applies to identifiers, strings, and integers, and only when the
+expected index is known. A wrong index adds a penalty to a minimized loss; this
+corresponds to subtracting from a correctness score. Cross-entropy supplies a
+usable gradient, unlike subtracting a constant for an exact mismatch. Even a
+correct argmax receives a confidence-dependent loss. The type-match condition
+is a discrete gate; no derivative is taken through it. Until the type matches,
+only token-type prediction is trained. Scalar, batched, all-position, validation,
+and MTP paths use the same gate. Index gradients reach both the index projection
+and the shared transformer hidden state. Existing loss-derived validation
+statistics also include this gated value term; their perplexity and probability
+labels therefore no longer describe token-type probabilities alone.
+
+The initial index head runs on the CPU and transfers hidden states/gradients
+for GPU training. Memory and computation grow with the largest supplied table
+(number of entries times embedding width), and it adds synchronization overhead.
+Weights and Adam moments are saved in JSON or dedicated safetensors tensors.
+JSON model loads reset optimizer state, as with the token head; safetensors
+training checkpoints restore index-head Adam moments.
+Tables themselves belong to input sources and are rebuilt during tokenization.
 
 Language-aware tokenization always has an `IMCP`. Whenever raw source spelling
 is replaced by `<IDENTIFIER>` or `<STRING>`, the tokenizer calls

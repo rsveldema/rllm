@@ -110,6 +110,12 @@ namespace rllm
 
     void OutputLayer::load(const nlohmann::json& j)
     {
+        m_string_head = StringIndexHead{static_cast<size_t>(EmbeddingDimension::MAX)};
+        if (j.contains("string_index_head")) m_string_head.load(j.at("string_index_head"));
+        m_string_head.reset_optimizer();
+        m_table_size = 0;
+        m_hidden.clear();
+        m_string_delta.clear();
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_inputs.zero(queue);
         if (j.contains("W_lm_head"))
@@ -137,7 +143,7 @@ namespace rllm
         for (const auto t : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 w_j.push_back(static_cast<float>(w_lm_head_cpu.get(t, d)));
-        return {{"W_lm_head", std::move(w_j)}};
+        return {{"W_lm_head", std::move(w_j)}, {"string_index_head", m_string_head.save()}};
     }
 
 
@@ -343,6 +349,54 @@ namespace rllm
             st.metadata.insert("version", "2");
             st.metadata.insert("creator", "rllm");
             return st;
+        }
+
+        void push_string_head(safetensors::safetensors_t& st, const std::string& prefix,
+                              const StringIndexHead& head, std::vector<uint8_t>& storage)
+        {
+            if (head.entries() == 0) return;
+            const auto push = [&](const char* suffix, const std::vector<float>& values) {
+                safetensors::tensor_t tensor;
+                tensor.dtype = safetensors::dtype::kFLOAT32;
+                tensor.shape = {head.entries(), head.dimensions()};
+                tensor.data_offsets[0] = storage.size();
+                const auto bytes = values.size() * sizeof(float);
+                storage.resize(storage.size() + bytes);
+                if (bytes) std::memcpy(storage.data() + tensor.data_offsets[0], values.data(), bytes);
+                tensor.data_offsets[1] = storage.size();
+                st.tensors.insert(prefix + suffix, tensor);
+            };
+            push("weights", head.weights());
+            push("first", head.first_moment());
+            push("second", head.second_moment());
+        }
+
+        void pull_string_head(const safetensors::safetensors_t& st, const std::string& prefix,
+                              StringIndexHead& head, bool optimizer = true)
+        {
+            if (!st.tensors.count(prefix + "weights"))
+            {
+                head = StringIndexHead{head.dimensions()};
+                return;
+            }
+            const auto pull = [&](const char* suffix) {
+                safetensors::tensor_t tensor;
+                if (!st.tensors.at(prefix + suffix, &tensor) ||
+                    tensor.dtype != safetensors::dtype::kFLOAT32 || tensor.shape.size() != 2 ||
+                    tensor.shape[1] != head.dimensions())
+                    std::abort();
+                const size_t bytes = tensor.shape[0] * tensor.shape[1] * sizeof(float);
+                if (tensor.data_offsets[1] - tensor.data_offsets[0] != bytes)
+                    std::abort();
+                std::vector<float> values(bytes / sizeof(float));
+                const auto* base = st.storage.empty() ? st.databuffer_addr : st.storage.data();
+                if (bytes) std::memcpy(values.data(), base + tensor.data_offsets[0], bytes);
+                return values;
+            };
+            auto weights = pull("weights");
+            auto first = optimizer ? pull("first") : std::vector<float>(weights.size());
+            auto second = optimizer ? pull("second") : std::vector<float>(weights.size());
+            head.load_state(std::move(weights), std::move(first), std::move(second));
         }
 
         template <typename T, typename X, typename Y>
@@ -556,6 +610,7 @@ namespace rllm
         }
 
         pull_matrix("output_layers.W_lm_head", st, W_lm_head);
+        pull_string_head(st, "output_layers.string_index.", m_string_head);
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_inputs.zero(queue);
         V_lm_head.zero(queue);
@@ -569,6 +624,7 @@ namespace rllm
         std::vector<uint8_t> storage;
 
         push_matrix(st, "output_layers.W_lm_head", W_lm_head, storage);
+        push_string_head(st, "output_layers.string_index.", m_string_head, storage);
         st.storage = std::move(storage);
 
         if (!safetensors::save_to_file(st, filename, warn, err))
@@ -622,6 +678,8 @@ namespace rllm
         {
             const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
             push_matrix(st, out_key, m_output_layers[oi].W_lm_head, storage);
+            push_string_head(st, "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".string_index.",
+                m_output_layers[oi].m_string_head, storage);
             const auto training_prefix = "training.output_layers." + std::to_string(static_cast<size_t>(oi)) + ".";
             push_matrix(st, training_prefix + "V_lm_head", m_output_layers[oi].V_lm_head, storage);
             push_matrix(st, training_prefix + "S_lm_head", m_output_layers[oi].S_lm_head, storage);
@@ -960,6 +1018,8 @@ namespace rllm
             {
                 const auto out_key = "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_lm_head";
                 pull_matrix(out_key, st, m_output_layers[oi].W_lm_head);
+                pull_string_head(st, "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".string_index.",
+                    m_output_layers[oi].m_string_head, load_optimizer_tensors);
                 auto& queue = rllm::vulkan_runtime::get_queue(0);
                 m_output_layers[oi].m_inputs.zero(queue);
                 if (load_optimizer_tensors)

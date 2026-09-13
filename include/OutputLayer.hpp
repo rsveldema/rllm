@@ -2,6 +2,7 @@
 
 #include <LayerPrimitives.hpp>
 #include <WeightInitialization.hpp>
+#include <StringIndexHead.hpp>
 #include <safetensors.hh>
 
 #include <nlohmann/json_fwd.hpp>
@@ -13,6 +14,7 @@ namespace rllm
     struct OutputLayerGradientAccumulator
     {
         fixed_size_matrix<float, TokenID, EmbeddingDimension> dW_lm_head;
+        std::vector<float> string_gradient;
         bool touched = false;
 
         void reset(VulkanQueue& queue);
@@ -20,6 +22,8 @@ namespace rllm
 
     struct BatchedOutputWorkspace
     {
+        std::vector<StringIndex> expected_strings;
+        std::vector<size_t> string_table_sizes;
         fixed_size_matrix<float, BatchIndex, EmbeddingDimension> h_last;
         fixed_size_matrix<float, BatchIndex, TokenID> logits;
         fixed_size_matrix<float, BatchIndex, TokenID> delta;
@@ -115,7 +119,9 @@ namespace rllm
 
         // Computes softmax deltas (with label smoothing) into score for backprop,
         // and returns the cross-entropy loss -log(softmax[target]).
-        float compute_score(Score& score, const TokenID expected_output_token);
+        float compute_score(Score& score, const TokenID expected_output_token,
+                            StringIndex expected_string = NO_STRING_INDEX, size_t table_size = 0);
+        void set_string_table_size(size_t count) { m_table_size = count; m_string_head.reserve_entries(count); }
         float compute_score(
             const fixed_size_vector<float, TokenID>& inputs,
             const cpu_fixed_vector<float, TokenID>& inputs_cpu,
@@ -136,6 +142,11 @@ namespace rllm
     friend class TextTrainer;
       private:
         void check_nan_finding_mode(const char* phase);
+        StringIndexHead m_string_head{static_cast<size_t>(EmbeddingDimension::MAX)};
+        size_t m_table_size = 0;
+        std::vector<float> m_hidden, m_string_delta;
+        std::vector<std::vector<float>> m_batch_hidden, m_batch_string_delta;
+
 
         // Vocabulary logits computed by forward_from_hidden().
         fixed_size_vector<float, TokenID> m_inputs;

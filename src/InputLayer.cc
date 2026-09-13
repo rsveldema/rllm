@@ -164,8 +164,9 @@ namespace rllm
     }
 
     static void fill_embeddings(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(tokens, embeddings, h)
+        // OFFLOAD_PARAMETERS(tokens, value_indices, embeddings, h)
         const GpuInputLine& tokens,
+        const fixed_size_vector<int, PositionIndex>& value_indices,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
         // END_OFFLOAD_PARAMETERS
@@ -173,15 +174,27 @@ namespace rllm
     {
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(tokens.size());
 
-        OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, embeddings, h))
+        OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, value_indices, embeddings, h))
         const int tok = static_cast<int>(tokens[pos]);
         h[pos, di] = static_cast<float>(embeddings[tok, di]);
+        if (value_indices[pos] > 0)
+        {
+            const float index = value_indices[pos];
+            const float dimension = static_cast<float>(di);
+            const float width = static_cast<float>(EmbeddingDimension::MAX);
+            const float exponent = (dimension / width);
+            const float frequency = pow(10000.0f, exponent);
+            const float phase = (index / frequency);
+            const float encoding = (0.1f * sin(phase));
+            h[pos, di] += encoding;
+        }
         ENDFOR
     }
 
     static void fill_packed_embeddings(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(tokens, embeddings, h, packed_rows)
+        // OFFLOAD_PARAMETERS(tokens, value_indices, embeddings, h, packed_rows)
         const GpuInputLine& tokens,
+        const fixed_size_vector<int, PositionIndex>& value_indices,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
         PositionIndex packed_rows
@@ -189,9 +202,20 @@ namespace rllm
     )
     {
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(packed_rows);
-        OFFLOAD_PARFOR_2D_PARAM(queue, row, di, grid, (tokens, embeddings, h, packed_rows))
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, di, grid, (tokens, value_indices, embeddings, h, packed_rows))
         const int tok = static_cast<int>(tokens[row]);
         h[row, di] = static_cast<float>(embeddings[tok, di]);
+        if (value_indices[row] > 0)
+        {
+            const float index = value_indices[row];
+            const float dimension = static_cast<float>(di);
+            const float width = static_cast<float>(EmbeddingDimension::MAX);
+            const float exponent = (dimension / width);
+            const float frequency = pow(10000.0f, exponent);
+            const float phase = (index / frequency);
+            const float encoding = (0.1f * sin(phase));
+            h[row, di] += encoding;
+        }
         ENDFOR
     }
 
@@ -238,7 +262,7 @@ namespace rllm
         gpu_input.sync_to_device(queue, input);
 
         check_nan_finding_mode_embeddings("forward:start");
-        fill_embeddings(queue, gpu_input, m_embeddings, h);
+        fill_embeddings(queue, gpu_input, gpu_input.value_indices, m_embeddings, h);
         check_nan_finding_mode_matrix(h, static_cast<PositionIndex>(input.size()), "hidden state", "forward:end");
     }
 
@@ -252,7 +276,7 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         gpu_input.sync_to_device(queue, input);
         check_nan_finding_mode_embeddings("batched-forward:start");
-        fill_packed_embeddings(queue, gpu_input.tokens, m_embeddings, h, input.packed_rows());
+        fill_packed_embeddings(queue, gpu_input.tokens, gpu_input.tokens.value_indices, m_embeddings, h, input.packed_rows());
         check_nan_finding_mode_matrix(h, input.packed_rows(), "batched hidden state", "batched-forward:end");
     }
 

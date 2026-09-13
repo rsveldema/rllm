@@ -98,12 +98,12 @@ a different corpus or weighting.
 During language-aware tokenization, program sources are abstracted in memory so
 the model learns language structure rather than project or library vocabulary.
 The source files retain ordinary source spelling. Language keywords and
-punctuation are retained. Loop variables use `<LOOP_0>` through `<LOOP_7>`,
-then `<LOOP_OVERFLOW>`. Local variables use `<LOCAL_0>` through `<LOCAL_15>`,
-parameters use `<PARAM_0>` through `<PARAM_15>`, and function, type, member,
-namespace, library, or unknown-scope names use `<GLOBAL_0>` through
-`<GLOBAL_15>`. Each category has an `_OVERFLOW` token. String and
-character contents become `<STRING>`. Syntactic function-call targets and
+punctuation are retained. Identifiers share `<IDENTIFIER>`; quoted literals use
+`<STRING>` and integers use `<INTEGER>`. Each occurrence carries a separate
+source-local string-table index, which is predicted by a learned output head.
+Once the predicted token type matches, the loss also supervises its table index.
+See [tokenizer and value prediction](tokenizer.md) for the loss, table lifetime,
+and checkpoint format. Syntactic function-call targets and
 qualified accesses such as C++ `namespace::member` are enclosed in `<MCP>` and
 `</MCP>`; the concrete names inside are abstracted as well. These markers define
 the boundary where library support is expected to be supplied by MCP. Comments
@@ -112,7 +112,7 @@ remain prose and are not identifier-normalized.
 The launcher also writes a persistent inspection mirror to
 `/tmp/rllm/training_data0`, `/tmp/rllm/curriculum`, and
 `/tmp/rllm/training_data2`. These copies materialize the in-memory abstraction
-so placement of identifier-category tokens, `<STRING>`, and `<MCP>...</MCP>` can be reviewed
+so placement of `<IDENTIFIER>`, `<STRING>`, `<INTEGER>`, and `<MCP>...</MCP>` can be reviewed
 without rewriting repository sources. Each training launch refreshes them.
 
 `./train.py config-6.json` stores artifacts in the configured model directory.

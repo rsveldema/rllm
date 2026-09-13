@@ -158,21 +158,34 @@ TEST(SerializationTest, InputLayerSafetensorsRoundTrip)
 
 TEST(SerializationTest, OutputLayerSafetensorsRoundTrip)
 {
-    rllm::OutputLayer layer;
-    const std::string sf_file = (std::filesystem::temp_directory_path() / "output_layer.safetensors").string();
-    std::string warn, err;
-    layer.save_to_safetensors(sf_file, &warn, &err);
-    EXPECT_TRUE(err.empty()) << "Safetensors save error: " << (err.empty() ? "none" : err);
+    for (const size_t count : {0u, 3u})
+    {
+        rllm::OutputLayer layer;
+        layer.set_string_table_size(count);
+        if (count)
+        {
+            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            rllm::OutputLayerGradientAccumulator gradient;
+            gradient.reset(queue);
+            gradient.string_gradient.assign(count * static_cast<size_t>(rllm::EmbeddingDimension::MAX), .1f);
+            gradient.touched = true;
+            layer.apply_accumulated_update(gradient, .01f, .1f, .001f);
+        }
+        const std::string sf_file = (std::filesystem::temp_directory_path() / "output_layer.safetensors").string();
+        std::string warn, err;
+        layer.save_to_safetensors(sf_file, &warn, &err);
+        EXPECT_TRUE(err.empty()) << "Safetensors save error: " << (err.empty() ? "none" : err);
 
-    rllm::OutputLayer loaded;
-    std::string load_err;
-    loaded.load_from_safetensors(sf_file, &load_err);
-    EXPECT_TRUE(load_err.empty()) << "Safetensors load error: " << (load_err.empty() ? "none" : load_err);
+        rllm::OutputLayer loaded;
+        std::string load_err;
+        loaded.load_from_safetensors(sf_file, &load_err);
+        EXPECT_TRUE(load_err.empty()) << "Safetensors load error: " << (load_err.empty() ? "none" : load_err);
 
-    // Compare via JSON serialization to avoid private member access.
-    if (layer.save().dump() != loaded.save().dump()) ADD_FAILURE() << "json mismatch";
+        // Compare via JSON serialization to avoid private member access.
+        if (layer.save().dump() != loaded.save().dump()) ADD_FAILURE() << "json mismatch";
 
-    std::filesystem::remove(sf_file);
+        std::filesystem::remove(sf_file);
+    }
 }
 
 // ---------------------------------------------------------------------------

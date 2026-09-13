@@ -465,3 +465,82 @@ TEST(OutputLayerScoreTest, RepeatedUpdatesReduceLoss)
 
     EXPECT_LT(final_loss, initial_loss);
 }
+
+TEST(OutputLayerScoreTest, StringIndexLossIsGatedByCorrectValueTokenType)
+{
+    using namespace rllm;
+    auto& queue = test_queue();
+    for (const auto type : {TokenID::IDENTIFIER, TokenID::STRING, TokenID::INTEGER})
+    {
+        OutputLayer layer;
+        auto weights = zero_output_layer_weights_json();
+        weights["W_lm_head"][static_cast<size_t>(type) * static_cast<size_t>(EmbeddingDimension::MAX)] = 2.f;
+        layer.load(weights);
+        layer.set_string_table_size(2);
+        cpu_fixed_vector<float, EmbeddingDimension> cpu_hidden;
+        cpu_hidden.set_size(EmbeddingDimension::MAX);
+        cpu_hidden.zero();
+        cpu_hidden[EmbeddingDimension::START] = 1.f;
+        fixed_size_vector<float, EmbeddingDimension> hidden;
+        hidden.copy_from_cpu(queue, cpu_hidden);
+        layer.forward_from_hidden(hidden, queue);
+        Score score;
+        const float type_loss = layer.compute_score(score, type);
+        const float joint_loss = layer.compute_score(score, type, 1, 2);
+        EXPECT_GT(joint_loss, type_loss);
+        const auto other_type = type == TokenID::INTEGER ? TokenID::STRING : TokenID::INTEGER;
+        const float wrong_type_loss = layer.compute_score(score, other_type);
+        EXPECT_FLOAT_EQ(layer.compute_score(score, other_type, 1, 2), wrong_type_loss);
+        EXPECT_FLOAT_EQ(layer.compute_score(score, type, NO_STRING_INDEX, 2), type_loss);
+
+        // Scalar and batched paths must use the same loss and index gradient.
+        const float scalar_loss = layer.compute_score(score, type, 1, 2);
+        OutputLayerGradientAccumulator scalar_gradient;
+        scalar_gradient.reset(queue);
+        fixed_size_vector<float, EmbeddingDimension> scalar_dh;
+        scalar_dh.set_size(EmbeddingDimension::MAX);
+        scalar_dh.zero(queue);
+        layer.backward_accumulate(score.values, hidden, scalar_dh, scalar_gradient);
+        ASSERT_FALSE(scalar_gradient.string_gradient.empty());
+        cpu_fixed_matrix<float, BatchIndex, EmbeddingDimension> batch_hidden;
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            batch_hidden.set(BatchIndex::START, d, cpu_hidden[d]);
+        BatchedOutputWorkspace workspace;
+        workspace.h_last.copy_from_cpu(queue, batch_hidden);
+        cpu_fixed_vector<int, BatchIndex> targets, active;
+        targets.push_back(static_cast<int>(type)); active.push_back(1);
+        workspace.expected_tokens.copy_from_cpu(queue, targets);
+        workspace.active_examples.copy_from_cpu(queue, active);
+        workspace.expected_strings = {1}; workspace.string_table_sizes = {2};
+        const auto count = static_cast<BatchIndex>(1);
+        layer.forward_batched(workspace.h_last, count, workspace.logits, queue);
+        layer.compute_batched_delta(workspace.logits, count, workspace, queue);
+        cpu_fixed_vector<float, BatchIndex> losses;
+        workspace.losses.copy_to_cpu(queue, losses);
+        EXPECT_NEAR(losses[BatchIndex::START], scalar_loss, 1e-5f);
+        OutputLayerGradientAccumulator batch_gradient;
+        batch_gradient.reset(queue);
+        workspace.dh_last.zero(queue);
+        layer.backward_batched_accumulate(workspace.delta, workspace.h_last, count, workspace.dh_last, batch_gradient);
+        ASSERT_EQ(batch_gradient.string_gradient.size(), scalar_gradient.string_gradient.size());
+        for (size_t i = 0; i < batch_gradient.string_gradient.size(); ++i)
+            EXPECT_NEAR(batch_gradient.string_gradient[i], scalar_gradient.string_gradient[i], 1e-6f);
+        cpu_fixed_vector<float, EmbeddingDimension> scalar_cpu_dh;
+        scalar_dh.copy_to_cpu(queue, scalar_cpu_dh);
+        StringIndexHead reference_head{static_cast<size_t>(EmbeddingDimension::MAX)};
+        reference_head.reserve_entries(2);
+        std::vector<float> reference_hidden(static_cast<size_t>(EmbeddingDimension::MAX));
+        reference_hidden[0] = 1.f;
+        std::vector<float> reference_delta, reference_gradient, reference_dh(reference_hidden.size());
+        reference_head.loss(reference_hidden, 2, 1, reference_delta);
+        reference_head.backward(reference_hidden, reference_delta, reference_dh, reference_gradient);
+        // Token weights are zero outside dimension zero; the shared trainer
+        // must receive the negative mathematical derivative from the value head.
+        EXPECT_NEAR(scalar_cpu_dh[static_cast<EmbeddingDimension>(1)], -reference_dh[1], 1e-6f);
+        cpu_fixed_matrix<float, BatchIndex, EmbeddingDimension> batch_cpu_dh;
+        workspace.dh_last.copy_to_cpu(queue, batch_cpu_dh);
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            EXPECT_NEAR(scalar_cpu_dh[d], batch_cpu_dh.get(BatchIndex::START, d), 1e-5f);
+        EXPECT_NE(layer.get_top_k_by_logit(1).front().string_index, NO_STRING_INDEX);
+    }
+}

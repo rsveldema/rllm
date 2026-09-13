@@ -155,47 +155,38 @@ TEST(PredictorTest, Placeholder)
     SUCCEED();
 }
 
-TEST(LayerPrimitivesTest, IdentifierCategoryCountsMatchTokenizerVocabulary)
-{
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::LOCALS), 16u);
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::PARAMETERS), 16u);
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::FIELDS), 1u);
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::LOOP_VARIABLES), 8u);
-    EXPECT_EQ(static_cast<size_t>(IdentifierCategoryCount::GLOBALS), 16u);
-}
-
 TEST(CorpusTest, PromptAbstractionMatchesTrainingRepresentation)
 {
     DefaultMCP mcp;
     EXPECT_EQ(
         abstract_source_for_model(R"(auto result = std::println("hello", name);)", SourceLanguage::Cpp, mcp),
-        "auto <LOCAL_0> = <MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>, <GLOBAL_1>);");
+        "auto <IDENTIFIER> = <MCP><IDENTIFIER>::<IDENTIFIER></MCP>(<STRING>, <IDENTIFIER>);");
     EXPECT_EQ(
         abstract_source_for_model(R"(value = requests.get("url"))", SourceLanguage::Python, mcp),
-        "<LOCAL_0> = <MCP><GLOBAL_0>.<FIELD_ACCESS_IDENT></MCP>(<STRING>)");
+        "<IDENTIFIER> = <MCP><IDENTIFIER>.<IDENTIFIER></MCP>(<STRING>)");
     EXPECT_EQ(
         abstract_source_for_model(R"(System.out.println("hello");)", SourceLanguage::Java, mcp),
-        "<MCP><GLOBAL_0>.<FIELD_ACCESS_IDENT>.<FIELD_ACCESS_IDENT></MCP>(<STRING>);");
+        "<MCP><IDENTIFIER>.<IDENTIFIER>.<IDENTIFIER></MCP>(<STRING>);");
     EXPECT_EQ(
         abstract_source_for_model(R"(std::fs::read_to_string("file"))", SourceLanguage::Rust, mcp),
-        "<MCP><GLOBAL_0>::<GLOBAL_1>::<GLOBAL_2></MCP>(<STRING>)");
+        "<MCP><IDENTIFIER>::<IDENTIFIER>::<IDENTIFIER></MCP>(<STRING>)");
 }
 
-TEST(CorpusTest, FieldAccessUsesDedicatedIdentifierToken)
+TEST(CorpusTest, FieldAccessUsesSharedIdentifierToken)
 {
     DefaultMCP mcp;
     EXPECT_EQ(
         abstract_source_for_model(
             "auto value = object.field; auto other = pointer->member;",
             SourceLanguage::Cpp, mcp),
-        "auto <LOCAL_0> = <MCP><GLOBAL_0>.<FIELD_ACCESS_IDENT></MCP>; "
-        "auto <LOCAL_1> = <MCP><GLOBAL_1>-><FIELD_ACCESS_IDENT></MCP>;");
+        "auto <IDENTIFIER> = <MCP><IDENTIFIER>.<IDENTIFIER></MCP>; "
+        "auto <IDENTIFIER> = <MCP><IDENTIFIER>-><IDENTIFIER></MCP>;");
 }
 
 TEST(CorpusTest, PromptAbstractionPreservesExistingControlTokens)
 {
     DefaultMCP mcp;
-    const std::string normalized = "<MCP><GLOBAL_0>::<GLOBAL_1></MCP>(<STRING>)";
+    const std::string normalized = "<MCP><IDENTIFIER>::<IDENTIFIER></MCP>(<STRING>)";
     EXPECT_EQ(abstract_source_for_model(normalized, SourceLanguage::Cpp, mcp), normalized);
 }
 
@@ -208,114 +199,7 @@ TEST(CorpusTest, LanguageAwareTokenizerAbstractsRawSource)
     const auto rendered = corpus.get_line(tokens);
     ASSERT_TRUE(rendered.has_value());
     EXPECT_EQ(*rendered,
-        "auto <LOCAL_0>=<MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>,<GLOBAL_1>);");
-}
-
-TEST(CorpusTest, IdentifierCategoriesTrackKnownVariableScope)
-{
-    DefaultMCP mcp;
-    IdentifierScopeState scopes;
-    const auto abstracted = abstract_source_for_model(
-        "void sort(int count, Widget value) { auto local = count; "
-        "for (int index = 0; index < count; ++index) local = external; }",
-        SourceLanguage::Cpp, mcp, &scopes);
-    EXPECT_EQ(abstracted,
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>, <GLOBAL_1> <PARAM_1>) "
-        "{ auto <LOCAL_0> = <PARAM_0>; for (int <LOOP_0> = 0; "
-        "<LOOP_0> < <PARAM_0>; ++<LOOP_0>) <LOCAL_0> = <GLOBAL_2>; }");
-}
-
-TEST(CorpusTest, CppScopeManagementReusesIdentifierSlots)
-{
-    DefaultMCP mcp;
-    IdentifierScopeState scopes;
-    EXPECT_EQ(
-        abstract_source_for_model(
-            "{ auto first = 1; { auto second = 2; } auto third = 3; } "
-            "{ auto fourth = 4; }",
-            SourceLanguage::Cpp, mcp, &scopes),
-        "{ auto <LOCAL_0> = 1; { auto <LOCAL_1> = 2; } auto <LOCAL_1> = 3; } "
-        "{ auto <LOCAL_0> = 4; }");
-}
-
-TEST(CorpusTest, ParameterSlotsRestartAtZeroForEachFunction)
-{
-    DefaultMCP mcp;
-    IdentifierScopeState scopes;
-    EXPECT_EQ(
-        abstract_source_for_model(
-        "void declared(int stale); void first(int alpha) { } "
-            "void second(int beta) { }",
-            SourceLanguage::Cpp, mcp, &scopes),
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>); "
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>) { } "
-        "void <MCP><GLOBAL_0></MCP>(int <PARAM_0>) { }");
-}
-
-TEST(CorpusTest, GlobalSlotsRestartForFreeFunctionsButNotMethods)
-{
-    DefaultMCP mcp;
-    IdentifierScopeState scopes;
-    EXPECT_EQ(
-        abstract_source_for_model(
-            "void first() { } void second() { }",
-            SourceLanguage::Cpp, mcp, &scopes),
-        "void <MCP><GLOBAL_0></MCP>() { } "
-        "void <MCP><GLOBAL_0></MCP>() { }");
-
-    IdentifierScopeState class_scopes;
-    EXPECT_EQ(
-        abstract_source_for_model(
-            "class Widget { void first() { } void second() { } };",
-            SourceLanguage::Cpp, mcp, &class_scopes),
-        "class <GLOBAL_0> { void <MCP><GLOBAL_1></MCP>() { } "
-        "void <MCP><GLOBAL_2></MCP>() { } };");
-}
-
-TEST(CorpusTest, PythonScopeManagementReusesIdentifierSlotsAfterDedent)
-{
-    Corpus corpus{{}};
-    CommentLexState state;
-    const auto tokenize = [&](const std::string& line) {
-        const auto rendered = corpus.get_line(
-            corpus.get_token_ids(line, SourceLanguage::Python, state));
-        EXPECT_TRUE(rendered.has_value());
-        return rendered.value_or("");
-    };
-
-    tokenize("def work():");
-    EXPECT_EQ(tokenize("    first = 1"), "<LOCAL_0>=1");
-    tokenize("    if True:");
-    EXPECT_EQ(tokenize("        second = 2"), "<LOCAL_1>=2");
-    EXPECT_EQ(tokenize("    third = 3"), "<LOCAL_1>=3");
-    tokenize("def other():");
-    EXPECT_EQ(tokenize("    fourth = 4"), "<LOCAL_0>=4");
-}
-
-TEST(CorpusTest, JavaScopeManagementReusesIdentifierSlots)
-{
-    DefaultMCP mcp;
-    IdentifierScopeState scopes;
-    EXPECT_EQ(
-        abstract_source_for_model(
-            "{ int first = 1; { int second = 2; } int third = 3; } "
-            "{ int fourth = 4; }",
-            SourceLanguage::Java, mcp, &scopes),
-        "{ int <LOCAL_0> = 1; { int <LOCAL_1> = 2; } int <LOCAL_1> = 3; } "
-        "{ int <LOCAL_0> = 4; }");
-}
-
-TEST(CorpusTest, RustScopeManagementReusesIdentifierSlots)
-{
-    DefaultMCP mcp;
-    IdentifierScopeState scopes;
-    EXPECT_EQ(
-        abstract_source_for_model(
-            "{ let first = 1; { let second = 2; } let third = 3; } "
-            "{ let fourth = 4; }",
-            SourceLanguage::Rust, mcp, &scopes),
-        "{ let <LOCAL_0> = 1; { let <LOCAL_1> = 2; } let <LOCAL_1> = 3; } "
-        "{ let <LOCAL_0> = 4; }");
+        "auto <IDENTIFIER>=<MCP><IDENTIFIER>::<IDENTIFIER></MCP>(<STRING>,<IDENTIFIER>);");
 }
 
 TEST(CorpusTest, LanguageAwareTokenizerRecordsConcreteValuesWithMCP)
@@ -340,8 +224,8 @@ TEST(CorpusTest, LanguageAwareTokenizerRecordsConcreteValuesWithMCP)
         std::string map_identifier(const MCPContext&) override { return "resolved_name"; }
         std::string map_string(const MCPContext&) override { return "\"resolved text\""; }
         std::string map_mcp(const MCPContext& context) override {
-            EXPECT_EQ(context.placeholder(), "<MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>");
-            EXPECT_EQ(context.before(), "<LOCAL_0> = ");
+            EXPECT_EQ(context.placeholder(), "<MCP><IDENTIFIER>::<IDENTIFIER></MCP>");
+            EXPECT_EQ(context.before(), "<IDENTIFIER> = ");
             EXPECT_EQ(context.after(), "(<STRING>)");
             return "resolved::call";
         }
@@ -358,7 +242,7 @@ TEST(CorpusTest, LanguageAwareTokenizerRecordsConcreteValuesWithMCP)
     EXPECT_EQ(mcp.mcp_expressions, (std::vector<std::string>{"std::println"}));
     EXPECT_EQ(
         resolve_model_placeholders(
-            "<LOCAL_0> = <MCP><GLOBAL_0>::<FIELD_ACCESS_IDENT></MCP>(<STRING>)", mcp),
+            "<IDENTIFIER> = <MCP><IDENTIFIER>::<IDENTIFIER></MCP>(<STRING>)", mcp),
         "resolved_name = resolved::call(\"resolved text\")");
 }
 
@@ -368,7 +252,7 @@ TEST(CorpusTest, DefaultMCPMapsUnknownValuesToQuestionMarks)
     const SourceContext context{"name", 0, 4};
     mcp.record_seen_identifier(context, "name");
     EXPECT_EQ(mcp.identifiers().at(context), "name");
-    EXPECT_EQ(resolve_model_placeholders("<LOCAL_0> = <STRING>", mcp), "??? = ???");
+    EXPECT_EQ(resolve_model_placeholders("<IDENTIFIER> = <STRING>", mcp), "??? = ???");
 }
 
 TEST(LogFormattingTest, EscapesNewlinesAndTabs)
@@ -1730,4 +1614,115 @@ TEST(TransformerBlockTest, RmsNormBackwardMatchesCpuReference)
     constexpr float tol = 1e-4f;
     EXPECT_LT(max_diff, tol)
         << "rms_norm_backward vs reference: max_diff=" << max_diff;
+}
+
+TEST(CorpusTest, ValueTokensCarryInternedTableIndices)
+{
+    const std::vector<std::string> filters;
+    Corpus corpus{filters};
+    CommentLexState state;
+    const auto line = corpus.get_token_ids(R"(alpha = beta + alpha + 123 + 0xff + "text";)", SourceLanguage::Cpp, state);
+    std::vector<TokenID> types;
+    std::vector<StringIndex> indices;
+    for (const auto pos : enum_iterator1D<PositionIndex>(line.size()))
+        if (token_has_value(line[pos]))
+        {
+            types.push_back(line[pos]);
+            indices.push_back(line.string_index(pos));
+        }
+    EXPECT_EQ(types, (std::vector<TokenID>{TokenID::IDENTIFIER, TokenID::IDENTIFIER, TokenID::IDENTIFIER,
+        TokenID::INTEGER, TokenID::INTEGER, TokenID::STRING}));
+    EXPECT_EQ(indices, (std::vector<StringIndex>{0, 1, 0, 2, 3, 4}));
+    EXPECT_EQ(line.string_table->values, (std::vector<std::string>{"alpha", "beta", "123", "0xff", "\"text\""}));
+    const auto next = corpus.get_token_ids("beta = 123;", SourceLanguage::Cpp, state);
+    EXPECT_EQ(next.string_index(0u), 1u);
+    EXPECT_EQ(next.string_index(2u), 2u);
+    EXPECT_EQ(corpus.get_line(next, true), "beta=123;");
+}
+
+TEST(CorpusTest, ValueTablesHaveNoIdentifierCategoryOverflow)
+{
+    const std::vector<std::string> filters;
+    Corpus corpus{filters};
+    CommentLexState state;
+    std::string source;
+    for (size_t i = 0; i < 100; ++i) source += "name" + std::to_string(i) + ";";
+    const auto line = corpus.get_token_ids(source, SourceLanguage::Cpp, state);
+    ASSERT_EQ(line.string_table->values.size(), 100u);
+    for (size_t i = 0; i < 100; ++i)
+    {
+        EXPECT_EQ(line.get(2 * i), TokenID::IDENTIFIER);
+        EXPECT_EQ(line.string_index(2 * i), i);
+    }
+}
+
+TEST(CorpusTest, WindowsAndPackedBatchesPreserveValueIndices)
+{
+    CpuInputLine line;
+    line.string_table->intern("unused");
+    const auto index = line.string_table->intern("value");
+    line.push_back(TokenID::IDENTIFIER, index);
+    line.push_back(TokenID::TOK_1);
+    line.push_back(TokenID::IDENTIFIER, index);
+    auto windows = make_line_windows({line}, 2, 1);
+    ASSERT_EQ(windows.size(), 2u);
+    EXPECT_EQ(windows[1].line.string_table, line.string_table);
+    EXPECT_EQ(windows[1].line.string_index(1u), index);
+    FileTokenSequence file;
+    file.string_table = line.string_table;
+    for (size_t i = 0; i < 3; ++i) file.push_back(line.get(i), line.string_index(i));
+    auto file_windows = make_file_windows({file}, 2, 1);
+    EXPECT_EQ(file_windows[1].line.string_index(1u), index);
+    CpuInputLine prefix;
+    line.sub_array(prefix, static_cast<PositionIndex>(1));
+    EXPECT_EQ(prefix.string_index(0u), index);
+    PackedBatchInput packed{{prefix, prefix}};
+    EXPECT_EQ(packed.tokens().string_index(0u), index);
+    EXPECT_EQ(packed.tokens().string_index(1u), index);
+}
+
+TEST(StringIndexHeadTest, LearnsIndexAndPropagatesHiddenGradient)
+{
+    StringIndexHead head{2};
+    head.reserve_entries(3);
+    const std::vector<float> hidden{1.f, -.5f};
+    std::vector<float> delta;
+    const float before = head.loss(hidden, 3, 2, delta);
+    std::vector<float> gradient, dh(2);
+    head.backward(hidden, delta, dh, gradient);
+    EXPECT_GT(std::abs(dh[0]) + std::abs(dh[1]), 0.f);
+    for (size_t step = 1; step <= 100; ++step)
+    {
+        gradient.clear(); dh.assign(2, 0);
+        head.loss(hidden, 3, 2, delta);
+        head.backward(hidden, delta, dh, gradient);
+        head.update(gradient, .05f, 1 - std::pow(.9f, step), 1 - std::pow(.999f, step));
+    }
+    EXPECT_LT(head.loss(hidden, 3, 2, delta), before * .1f);
+    EXPECT_EQ(head.predict(hidden, 3), 2u);
+    StringIndexHead restored{2};
+    restored.load(head.save());
+    EXPECT_EQ(restored.logits(hidden, 3), head.logits(hidden, 3));
+    const auto old_logits = head.logits(hidden, 3);
+    head.reserve_entries(100);
+    EXPECT_EQ(old_logits, head.logits(hidden, 3));
+}
+
+TEST(StringIndexHeadTest, GradientMatchesFiniteDifference)
+{
+    StringIndexHead head{2};
+    head.reserve_entries(3);
+    std::vector<float> hidden{.3f, -.7f}, delta, gradient, dh(2);
+    head.loss(hidden, 3, 1, delta);
+    head.backward(hidden, delta, dh, gradient);
+    constexpr float epsilon = .001f;
+    for (size_t d = 0; d < hidden.size(); ++d)
+    {
+        hidden[d] += epsilon;
+        const float plus = head.loss(hidden, 3, 1, delta);
+        hidden[d] -= 2 * epsilon;
+        const float minus = head.loss(hidden, 3, 1, delta);
+        hidden[d] += epsilon;
+        EXPECT_NEAR(dh[d], (plus - minus) / (2 * epsilon), .0001f);
+    }
 }

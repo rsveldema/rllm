@@ -47,12 +47,8 @@ namespace rllm
 
     namespace
     {
-        constexpr std::string_view loop_overflow_token = "<LOOP_OVERFLOW>";
-        constexpr std::string_view local_overflow_token = "<LOCAL_OVERFLOW>";
-        constexpr std::string_view param_overflow_token = "<PARAM_OVERFLOW>";
-        constexpr std::string_view global_overflow_token = "<GLOBAL_OVERFLOW>";
-        constexpr std::string_view field_access_token = "<FIELD_ACCESS_IDENT>";
-        constexpr std::string_view legacy_identifier_token = "<IDENTIFIER>";
+        constexpr std::string_view identifier_token = "<IDENTIFIER>";
+        constexpr std::string_view integer_token = "<INTEGER>";
         constexpr std::string_view string_token = "<STRING>";
         constexpr std::string_view mcp_start_token = "<MCP>";
         constexpr std::string_view mcp_end_token = "</MCP>";
@@ -97,182 +93,16 @@ namespace rllm
             return position;
         }
 
-        bool is_function_declaration_name(
-            std::string_view text, size_t start, size_t end, SourceLanguage language)
-        {
-            const size_t next = next_non_space(text, end);
-            if (next >= text.size() || text[next] != '(')
-                return false;
-            const size_t line_start = text.rfind('\n', start) == std::string_view::npos
-                ? 0 : text.rfind('\n', start) + 1;
-            const auto prefix = text.substr(line_start, start - line_start);
-            if (language == SourceLanguage::Python)
-                return prefix.find("def ") != std::string_view::npos;
-            if (language == SourceLanguage::Rust)
-                return prefix.find("fn ") != std::string_view::npos;
-            if (language != SourceLanguage::Cpp && language != SourceLanguage::C &&
-                language != SourceLanguage::Java)
-                return false;
-            const size_t boundary = prefix.find_last_of(";{}");
-            const auto declaration = boundary == std::string_view::npos
-                ? prefix : prefix.substr(boundary + 1);
-            if (declaration.find('=') != std::string_view::npos ||
-                declaration.find("return ") != std::string_view::npos ||
-                declaration.find("throw ") != std::string_view::npos)
-                return false;
-            return std::ranges::any_of(declaration, identifier_start);
-        }
-
-        std::string_view identifier_category_token(
-            std::string_view text, size_t start, size_t end)
-        {
-            if (std::isupper(static_cast<unsigned char>(text[start])))
-                return "global";
-
-            const auto prefix = text.substr(0, start);
-            const auto suffix = text.substr(end);
-            size_t for_position = std::string_view::npos;
-            for (const auto spelling : {"for (", "for(", "for "})
-            {
-                const size_t candidate = prefix.rfind(spelling);
-                if (candidate != std::string_view::npos &&
-                    (for_position == std::string_view::npos || candidate > for_position))
-                    for_position = candidate;
-            }
-            const size_t last_close_paren = prefix.rfind(')');
-            if (for_position != std::string_view::npos &&
-                (last_close_paren == std::string_view::npos || last_close_paren < for_position) &&
-                prefix.substr(for_position).find(';') == std::string_view::npos)
-            {
-                const size_t next = next_non_space(text, end);
-                if (next < text.size() &&
-                    (text[next] == '=' || text[next] == ':' || text[next] == ';'))
-                    return "loop";
-                if (suffix.starts_with(" in "))
-                    return "loop";
-            }
-
-            const size_t open_paren = prefix.rfind('(');
-            if (open_paren != std::string_view::npos &&
-                (last_close_paren == std::string_view::npos || last_close_paren < open_paren))
-            {
-                const auto declaration = prefix.substr(0, open_paren);
-                const bool named_declaration = declaration.find("def ") != std::string_view::npos ||
-                    declaration.find("fn ") != std::string_view::npos;
-                size_t words = 0;
-                bool in_word = false;
-                for (const char ch : declaration)
-                {
-                    const bool word_char = identifier_continue(ch);
-                    if (word_char && !in_word)
-                        ++words;
-                    in_word = word_char;
-                }
-                const bool expression_prefix = declaration.find('=') != std::string_view::npos ||
-                    declaration.find('.') != std::string_view::npos ||
-                    declaration.find("::") != std::string_view::npos;
-                if (named_declaration || (words >= 2 && !expression_prefix))
-                    return "param";
-            }
-
-            const size_t next = next_non_space(text, end);
-            if (next < text.size() && text[next] == '=')
-                return "local";
-            return "global";
-        }
-
-        std::string assigned_identifier_token(
-            std::string_view word,
-            std::string_view category,
-            IdentifierScopeState& state)
-        {
-            const std::string name{word};
-            if (category == "param")
-            {
-                if (const auto pending = state.pending_parameters.find(name);
-                    pending != state.pending_parameters.end())
-                    return pending->second;
-            }
-            else if (category == "local" || category == "loop")
-            {
-                if (const auto existing = state.scopes.back().find(name);
-                    existing != state.scopes.back().end())
-                    return existing->second;
-            }
-            else
-            {
-                if (const auto pending = state.pending_parameters.find(name);
-                    pending != state.pending_parameters.end())
-                    return pending->second;
-                for (auto scope = state.scopes.rbegin(); scope != state.scopes.rend(); ++scope)
-                    if (const auto existing = scope->find(name); existing != scope->end())
-                        return existing->second;
-            }
-
-            const std::string prefix = "<" + std::string{category == "loop" ? "LOOP_" :
-                category == "local" ? "LOCAL_" :
-                category == "param" ? "PARAM_" : "GLOBAL_"};
-            const size_t capacity = category == "loop"
-                ? static_cast<size_t>(IdentifierCategoryCount::LOOP_VARIABLES)
-                : category == "local"
-                    ? static_cast<size_t>(IdentifierCategoryCount::LOCALS)
-                    : category == "param"
-                        ? static_cast<size_t>(IdentifierCategoryCount::PARAMETERS)
-                        : static_cast<size_t>(IdentifierCategoryCount::GLOBALS);
-            std::vector<bool> used(capacity, false);
-            const auto mark_used = [&](const auto& assignments) {
-                for (const auto& [_, token] : assignments)
-                {
-                    if (!token.starts_with(prefix) || token.ends_with("OVERFLOW>"))
-                        continue;
-                    const auto digits = std::string_view{token}.substr(
-                        prefix.size(), token.size() - prefix.size() - 1);
-                    const size_t index = static_cast<size_t>(std::stoul(std::string{digits}));
-                    if (index < used.size())
-                        used[index] = true;
-                }
-            };
-            for (const auto& scope : state.scopes)
-                mark_used(scope);
-            mark_used(state.pending_parameters);
-            const auto overflow = category == "loop" ? loop_overflow_token :
-                category == "local" ? local_overflow_token :
-                category == "param" ? param_overflow_token : global_overflow_token;
-            const auto available = std::ranges::find(used, false);
-            const std::string token = available != used.end()
-                ? prefix + std::to_string(static_cast<size_t>(available - used.begin())) + ">"
-                : std::string{overflow};
-            if (category == "global")
-                state.scopes.front().emplace(name, token);
-            else if (category == "param")
-                state.pending_parameters.emplace(name, token);
-            else
-                state.scopes.back().emplace(name, token);
-            return token;
-        }
-
         size_t identifier_marker_length(std::string_view text, size_t position)
         {
-            if (text.substr(position).starts_with(field_access_token))
-                return field_access_token.size();
-            for (const auto prefix : {"<LOOP_", "<LOCAL_", "<PARAM_", "<GLOBAL_"})
-            {
-                if (!text.substr(position).starts_with(prefix))
-                    continue;
-                const size_t end = text.find('>', position + std::string_view{prefix}.size());
-                return end == std::string_view::npos ? 0 : end + 1 - position;
-            }
-            return 0;
+            return text.substr(position).starts_with(identifier_token) ? identifier_token.size() : 0;
         }
     }
 
     std::string abstract_source_for_model(
         std::string_view text, SourceLanguage language, IMCP& mcp,
-        IdentifierScopeState* identifier_scopes)
+        std::vector<std::string>* values)
     {
-        IdentifierScopeState local_identifier_scopes;
-        auto& scopes = identifier_scopes != nullptr
-            ? *identifier_scopes : local_identifier_scopes;
         std::string out;
         out.reserve(text.size());
         bool expect_library_name = false;
@@ -280,11 +110,12 @@ namespace rllm
         while (i < text.size())
         {
             bool matched_control = false;
-            for (const auto marker : {string_token, mcp_start_token, mcp_end_token})
+            for (const auto marker : {string_token, integer_token, mcp_start_token, mcp_end_token})
             {
                 if (text.substr(i).starts_with(marker))
                 {
                     out += marker;
+                    if (values && (marker == string_token || marker == integer_token)) values->emplace_back();
                     i += marker.size();
                     matched_control = true;
                     break;
@@ -295,16 +126,10 @@ namespace rllm
             if (const size_t marker_length = identifier_marker_length(text, i); marker_length > 0)
             {
                 out += text.substr(i, marker_length);
+                if (values) values->emplace_back();
                 i += marker_length;
                 continue;
             }
-            if (text.substr(i).starts_with(legacy_identifier_token))
-            {
-                out += global_overflow_token;
-                i += legacy_identifier_token.size();
-                continue;
-            }
-
             if (text.substr(i).starts_with("//"))
             {
                 out += text.substr(i);
@@ -346,6 +171,7 @@ namespace rllm
                         {
                             const SourceContext context{text, literal_start, end + 1 - literal_start};
                             mcp.record_seen_string(context, context.value());
+                            if (values) values->emplace_back(context.value());
                             mcp.record_seen_mcp(context, context.value());
                             out += mcp_start_token;
                             out += string_token;
@@ -369,7 +195,33 @@ namespace rllm
                 }
                 const SourceContext context{text, literal_start, i - literal_start};
                 mcp.record_seen_string(context, context.value());
+                if (values) values->emplace_back(context.value());
                 out += string_token;
+                continue;
+            }
+            if (std::isdigit(static_cast<unsigned char>(text[i])))
+            {
+                const size_t start = i;
+                const bool hex = text.substr(i).starts_with("0x") || text.substr(i).starts_with("0X");
+                bool floating = false;
+                while (i < text.size())
+                {
+                    const char ch = text[i];
+                    if (ch == '.' || (hex ? ch == 'p' || ch == 'P' : ch == 'e' || ch == 'E'))
+                        floating = true;
+                    if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '\'' || ch == '.')
+                        ++i;
+                    else if ((ch == '+' || ch == '-') && i > start &&
+                             (hex ? text[i-1] == 'p' || text[i-1] == 'P' : text[i-1] == 'e' || text[i-1] == 'E'))
+                        ++i;
+                    else break;
+                }
+                if (floating) out += text.substr(start, i - start);
+                else
+                {
+                    out += integer_token;
+                    if (values) values->emplace_back(text.substr(start, i - start));
+                }
                 continue;
             }
             if (identifier_start(text[i]))
@@ -397,8 +249,6 @@ namespace rllm
                 }
                 if (part_count > 1)
                 {
-                    if (is_function_declaration_name(text, i, chain_end, language))
-                        scopes.pending_function_scope = true;
                     mcp.record_seen_mcp(
                         SourceContext{text, i, chain_end - i}, text.substr(i, chain_end - i));
                     out += mcp_start_token;
@@ -411,19 +261,8 @@ namespace rllm
                             mcp.record_seen_identifier(
                                 SourceContext{text, position, end - position},
                                 text.substr(position, end - position));
-                            size_t separator_end = position;
-                            while (separator_end > i && std::isspace(
-                                static_cast<unsigned char>(text[separator_end - 1])))
-                                --separator_end;
-                            const bool field_access =
-                                (separator_end > i && text[separator_end - 1] == '.') ||
-                                (separator_end >= i + 2 &&
-                                 (text.substr(separator_end - 2, 2) == "->" ||
-                                  (text.substr(separator_end - 2, 2) == "::" &&
-                                   (language == SourceLanguage::Cpp ||
-                                    language == SourceLanguage::C))));
-                            out += field_access ? field_access_token : assigned_identifier_token(
-                                text.substr(position, end - position), "global", scopes);
+                            out += identifier_token;
+                            if (values) values->emplace_back(text.substr(position, end - position));
                             position = end;
                         }
                         else
@@ -440,61 +279,27 @@ namespace rllm
                 {
                     out += word;
                     expect_library_name = word == "import" || word == "from" || word == "use";
-                    if (word == "class" || word == "struct")
-                        scopes.pending_class_scope = true;
                 }
                 else if (expect_library_name ||
                          (next_non_space(text, first_end) < text.size() && text[next_non_space(text, first_end)] == '('))
                 {
-                    if (is_function_declaration_name(text, i, first_end, language))
-                    {
-                        const bool inside_class = std::ranges::any_of(scopes.class_scopes, [](bool value) {
-                            return value;
-                        });
-                        const bool inside_function = std::ranges::any_of(scopes.function_scopes, [](bool value) {
-                            return value;
-                        });
-                        if (!inside_class && !inside_function)
-                            scopes.scopes.front().clear();
-                        scopes.pending_function_scope = true;
-                    }
                     const SourceContext context{text, i, first_end - i};
                     mcp.record_seen_identifier(context, word);
+                    if (values) values->emplace_back(word);
                     mcp.record_seen_mcp(context, word);
                     out += mcp_start_token;
-                    out += assigned_identifier_token(word, "global", scopes);
+                    out += identifier_token;
                     out += mcp_end_token;
                     expect_library_name = false;
                 }
                 else
                 {
                     mcp.record_seen_identifier(SourceContext{text, i, first_end - i}, word);
-                    out += assigned_identifier_token(
-                        word, identifier_category_token(text, i, first_end), scopes);
+                    if (values) values->emplace_back(word);
+                    out += identifier_token;
                 }
                 i = first_end;
                 continue;
-            }
-            if (text[i] == '{')
-            {
-                scopes.scopes.emplace_back(std::move(scopes.pending_parameters));
-                scopes.pending_parameters.clear();
-                scopes.class_scopes.push_back(scopes.pending_class_scope);
-                scopes.function_scopes.push_back(scopes.pending_function_scope);
-                scopes.pending_class_scope = false;
-                scopes.pending_function_scope = false;
-            }
-            else if (text[i] == '}' && scopes.scopes.size() > 1)
-            {
-                scopes.scopes.pop_back();
-                scopes.class_scopes.pop_back();
-                scopes.function_scopes.pop_back();
-            }
-            else if (text[i] == ';')
-            {
-                scopes.pending_parameters.clear();
-                scopes.pending_class_scope = false;
-                scopes.pending_function_scope = false;
             }
             out += text[i++];
         }
@@ -599,9 +404,12 @@ namespace rllm
                 for (size_t position = start; position < end; ++position)
                 {
                     if constexpr (std::is_same_v<Sequence, CpuInputLine>)
-                        window.push_back(sequence[static_cast<PositionIndex>(position)]);
+                        window.append_from(sequence, position);
                     else
-                        window.push_back(sequence[position]);
+                    {
+                        window.string_table = sequence.string_table;
+                        window.push_back(sequence[position], sequence.string_index(position));
+                    }
                 }
                 windows.push_back({
                     .line = std::move(window),
@@ -871,7 +679,7 @@ namespace rllm
                 {
                     assert(input_line[i] >= TokenID::START);
                     assert(input_line[i] < TokenID::MAX);
-                    token_data.add(input_line[i]);
+                    token_data.add(input_line[i], input_line.string_index(i), input_line.string_table);
                 }
                 if (!comment_state.line_comment_on_last_line)
                     token_data.add(TokenID::TOK_NEWLINE);
@@ -963,51 +771,29 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         CommentLexState& state) const
     {
         CpuInputLine result;
+        result.string_table = state.string_table;
         state.line_comment_on_last_line = false;
-        if (language == SourceLanguage::Python)
-        {
-            size_t indentation_position = 0;
-            size_t indentation = 0;
-            while (indentation_position < text.size() &&
-                   (text[indentation_position] == ' ' || text[indentation_position] == '\t'))
-            {
-                indentation += text[indentation_position] == '\t' ? 4 : 1;
-                ++indentation_position;
-            }
-            const bool has_code = indentation_position < text.size() && text[indentation_position] != '#';
-            if (has_code)
-            {
-                while (state.identifier_scopes.indentation_levels.size() > 1 &&
-                       indentation < state.identifier_scopes.indentation_levels.back())
-                {
-                    state.identifier_scopes.indentation_levels.pop_back();
-                    state.identifier_scopes.scopes.pop_back();
-                    state.identifier_scopes.class_scopes.pop_back();
-                    state.identifier_scopes.function_scopes.pop_back();
-                }
-                if (indentation > state.identifier_scopes.indentation_levels.back())
-                {
-                    state.identifier_scopes.indentation_levels.push_back(indentation);
-                    state.identifier_scopes.scopes.emplace_back(
-                        std::move(state.identifier_scopes.pending_parameters));
-                    state.identifier_scopes.pending_parameters.clear();
-                    state.identifier_scopes.class_scopes.push_back(
-                        state.identifier_scopes.pending_class_scope);
-                    state.identifier_scopes.function_scopes.push_back(
-                        state.identifier_scopes.pending_function_scope);
-                    state.identifier_scopes.pending_class_scope = false;
-                    state.identifier_scopes.pending_function_scope = false;
-                }
-            }
-        }
         const auto append_raw_text = [&](std::string_view part) {
             const auto tokens = get_token_ids(std::string{part});
             for (const auto position : enum_iterator1D<PositionIndex>(tokens.size()))
                 result.push_back(tokens[position]);
         };
         const auto append_source_text = [&](std::string_view part) {
-            append_raw_text(abstract_source_for_model(
-                part, language, m_mcp, &state.identifier_scopes));
+            std::vector<std::string> values;
+            const auto tokens = get_token_ids(abstract_source_for_model(
+                part, language, m_mcp, &values));
+            size_t value_index = 0;
+            for (const auto pos : enum_iterator1D<PositionIndex>(tokens.size()))
+            {
+                const auto token = tokens[pos];
+                StringIndex index = NO_STRING_INDEX;
+                if (token_has_value(token))
+                {
+                    const auto& value = values.at(value_index++);
+                    if (!value.empty()) index = state.string_table->intern(value);
+                }
+                result.push_back(token, index);
+            }
         };
 
         const bool slash_comments = language == SourceLanguage::Cpp ||
@@ -1123,7 +909,7 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         return it->second.str;
     }
 
-    std::optional<std::string> Corpus::get_line(const CpuInputLine& line) const
+    std::optional<std::string> Corpus::get_line(const CpuInputLine& line, bool resolve_values) const
     {
         std::string result;
         for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
@@ -1141,7 +927,10 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
             }
 
             const auto& token_info = it->second;
-            result += get_token_from_id(token_id);
+            if (resolve_values && token_has_value(token_id) && line.string_index(i) != NO_STRING_INDEX)
+                result += line.string_table->values.at(line.string_index(i));
+            else
+                result += get_token_from_id(token_id);
             if (token_info.end_of_word)
             {
                 result += ' ';
@@ -1165,8 +954,11 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
             for (const auto i : enum_iterator1D<PositionIndex>(line.size()))
             {
                 key += std::to_string(static_cast<int>(line[i]));
+                key.push_back(':');
+                key += std::to_string(line.string_index(i));
                 key.push_back(',');
             }
+            key += "/" + std::to_string(line.string_table->values.size());
             return key;
         };
 

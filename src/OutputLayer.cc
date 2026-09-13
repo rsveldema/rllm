@@ -486,11 +486,14 @@ namespace rllm
     void OutputLayerGradientAccumulator::reset(VulkanQueue& queue)
     {
         dW_lm_head.zero(queue);
+        string_gradient.clear();
         touched = false;
     }
 
     void OutputLayer::set_random_weights(WeightInitializerType type)
     {
+        m_string_head = StringIndexHead{static_cast<size_t>(EmbeddingDimension::MAX)};
+        m_string_head.reserve_entries(m_table_size);
         const size_t d_model = static_cast<size_t>(EmbeddingDimension::MAX);
         const size_t vocab_size = static_cast<size_t>(TokenID::MAX);
         // The mixed profile reserves Xavier for transformer input projections;
@@ -530,6 +533,12 @@ namespace rllm
         output_layer_forward_from_hidden_impl(queue, h_last, W_lm_head, inputs);
         check_output_logits_nan_finding_mode(inputs, "forward:end");
         inputs.copy_to_cpu(queue, inputs_cpu);
+        cpu_fixed_vector<float, EmbeddingDimension> hidden;
+        h_last.copy_to_cpu(queue, hidden);
+        m_hidden.resize(static_cast<size_t>(EmbeddingDimension::MAX));
+        for (size_t d = 0; d < m_hidden.size(); ++d)
+            m_hidden[d] = hidden[static_cast<EmbeddingDimension>(d)];
+        m_string_delta.clear();
         check_nan_finding_mode("forward:end");
     }
 
@@ -543,6 +552,18 @@ namespace rllm
         check_nan_finding_mode("backward_accumulate:start");
         accumulate_output_layer_dh_last(delta, dh_last, W_lm_head);
         accumulate_output_layer_dW(delta, h_last, accumulator.dW_lm_head);
+        if (!m_string_delta.empty())
+        {
+            auto& queue = vulkan_runtime::get_queue(0);
+            cpu_fixed_vector<float, EmbeddingDimension> cpu_dh;
+            dh_last.copy_to_cpu(queue, cpu_dh);
+            std::vector<float> dh(m_hidden.size());
+            m_string_head.backward(m_hidden, m_string_delta, dh, accumulator.string_gradient);
+            for (size_t d = 0; d < dh.size(); ++d)
+                // The existing trainer propagates descent directions (target - probability).
+                cpu_dh[static_cast<EmbeddingDimension>(d)] -= dh[d];
+            dh_last.copy_from_cpu(queue, cpu_dh);
+        }
         accumulator.touched = true;
         check_nan_finding_mode("backward_accumulate:end");
     }
@@ -555,6 +576,13 @@ namespace rllm
     )
     {
         output_layer_forward_batched_impl(queue, h_last, W_lm_head, logits, static_cast<int>(batch_size));
+        cpu_fixed_matrix<float, BatchIndex, EmbeddingDimension> hidden;
+        h_last.copy_to_cpu(queue, hidden);
+        m_batch_hidden.assign(static_cast<size_t>(batch_size), std::vector<float>(static_cast<size_t>(EmbeddingDimension::MAX)));
+        m_batch_string_delta.assign(static_cast<size_t>(batch_size), {});
+        for (size_t b = 0; b < m_batch_hidden.size(); ++b)
+            for (size_t d = 0; d < m_batch_hidden[b].size(); ++d)
+                m_batch_hidden[b][d] = hidden.get(static_cast<BatchIndex>(b), static_cast<EmbeddingDimension>(d));
     }
 
     static void initialize_batched_softmax(
@@ -655,12 +683,39 @@ namespace rllm
         (void) queue;
         assert(loss_gradient_scale > 0.0f);
         const int count = static_cast<int>(batch_size);
+        m_batch_string_delta.assign(static_cast<size_t>(batch_size), {});
         initialize_batched_softmax(workspace.softmax_temp, workspace.losses, count);
         reduce_batched_logits_max(logits, workspace.softmax_temp, workspace.active_examples, count);
         compute_batched_exp_sum(logits, workspace.delta, workspace.softmax_temp, workspace.active_examples, count);
         finalize_batched_softmax_delta(logits, workspace.delta, workspace.softmax_temp,
             workspace.expected_tokens, workspace.active_examples, workspace.losses, count,
             loss_gradient_scale);
+        if (!workspace.expected_strings.empty())
+        {
+            cpu_fixed_matrix<float, BatchIndex, TokenID> cpu_logits;
+            cpu_fixed_vector<int, BatchIndex> expected, active;
+            cpu_fixed_vector<float, BatchIndex> losses;
+            logits.copy_to_cpu(queue, cpu_logits);
+            workspace.expected_tokens.copy_to_cpu(queue, expected);
+            workspace.active_examples.copy_to_cpu(queue, active);
+            workspace.losses.copy_to_cpu(queue, losses);
+            for (size_t b = 0; b < static_cast<size_t>(batch_size); ++b)
+            {
+                const auto batch = static_cast<BatchIndex>(b);
+                if (!active[batch] || workspace.expected_strings.at(b) == NO_STRING_INDEX) continue;
+                const auto target = static_cast<TokenID>(expected[batch]);
+                if (!token_has_value(target)) continue;
+                TokenID predicted = TokenID::START;
+                for (const auto token : enum_iterator1D<TokenID>())
+                    if (cpu_logits.get(batch, token) > cpu_logits.get(batch, predicted)) predicted = token;
+                if (predicted != target) continue;
+                const auto count = workspace.string_table_sizes.at(b);
+                m_string_head.reserve_entries(count);
+                losses[batch] += m_string_head.loss(m_batch_hidden[b], count,
+                    workspace.expected_strings[b], m_batch_string_delta[b], loss_gradient_scale);
+            }
+            workspace.losses.copy_from_cpu(queue, losses);
+        }
     }
 
     void OutputLayer::backward_batched_accumulate(
@@ -673,6 +728,22 @@ namespace rllm
     {
         accumulate_batched_output_layer_dh_last(delta, dh_last, W_lm_head, static_cast<int>(batch_size));
         accumulate_batched_output_layer_dW(delta, h_last, accumulator.dW_lm_head, static_cast<int>(batch_size));
+        if (std::ranges::any_of(m_batch_string_delta, [](const auto& delta) { return !delta.empty(); }))
+        {
+            auto& queue = vulkan_runtime::get_queue(0);
+            cpu_fixed_matrix<float, BatchIndex, EmbeddingDimension> cpu_dh;
+            dh_last.copy_to_cpu(queue, cpu_dh);
+            for (size_t b = 0; b < m_batch_string_delta.size(); ++b)
+            {
+                if (m_batch_string_delta[b].empty()) continue;
+                std::vector<float> dh(static_cast<size_t>(EmbeddingDimension::MAX));
+                m_string_head.backward(m_batch_hidden[b], m_batch_string_delta[b], dh, accumulator.string_gradient);
+                for (size_t d = 0; d < dh.size(); ++d)
+                    cpu_dh.set(static_cast<BatchIndex>(b), static_cast<EmbeddingDimension>(d),
+                        cpu_dh.get(static_cast<BatchIndex>(b), static_cast<EmbeddingDimension>(d)) - dh[d]);
+            }
+            dh_last.copy_from_cpu(queue, cpu_dh);
+        }
         accumulator.touched = true;
     }
 
@@ -687,6 +758,7 @@ namespace rllm
         finalize_optimizer_gradient_clip(diagnostics);
         update_output_layer_weights_from_gradient(accumulator.dW_lm_head, W_lm_head, V_lm_head, S_lm_head, learning_rate, bias_correction1, bias_correction2,
             diagnostics, optimizer_diagnostics_enabled() ? 1 : 0);
+        m_string_head.update(accumulator.string_gradient, learning_rate, bias_correction1, bias_correction2);
         check_nan_finding_mode("apply_accumulated_update:end");
     }
 
@@ -713,15 +785,34 @@ namespace rllm
                 });
             }
         }
+        if (m_table_size && !m_hidden.empty() &&
+            std::ranges::any_of(top_k, [](const auto& token) { return token_has_value(token.token_id); }))
+        {
+            const auto index = m_string_head.predict(m_hidden, m_table_size);
+            for (auto& token : top_k)
+                if (token_has_value(token.token_id)) token.string_index = index;
+        }
         return top_k;
     }
 
 
     // Compute softmax deltas (with label smoothing) for backprop and return the
     // cross-entropy loss -log(softmax[target]).
-    float OutputLayer::compute_score(Score& score, const TokenID expected_output_token)
+    float OutputLayer::compute_score(Score& score, const TokenID expected_output_token,
+                                     StringIndex expected_string, size_t table_size)
     {
-        return compute_score(m_inputs, m_inputs_cpu, score, expected_output_token);
+        float loss = compute_score(m_inputs, m_inputs_cpu, score, expected_output_token);
+        m_string_delta.clear();
+        TokenID predicted = TokenID::START;
+        for (const auto token : enum_iterator1D<TokenID>())
+            if (m_inputs_cpu[token] > m_inputs_cpu[predicted]) predicted = token;
+        if (token_has_value(expected_output_token) && expected_string != NO_STRING_INDEX &&
+            predicted == expected_output_token)
+        {
+            m_string_head.reserve_entries(table_size);
+            loss += m_string_head.loss(m_hidden, table_size, expected_string, m_string_delta);
+        }
+        return loss;
     }
 
     float OutputLayer::compute_score(

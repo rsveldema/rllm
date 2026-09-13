@@ -29,28 +29,20 @@ namespace rllm
 
     TokenID language_token(SourceLanguage language);
     std::optional<SourceLanguage> parse_source_language(std::string_view name);
-    struct IdentifierScopeState
-    {
-        std::vector<std::map<std::string, std::string>> scopes{1};
-        std::map<std::string, std::string> pending_parameters;
-        std::vector<size_t> indentation_levels{0};
-        std::vector<bool> class_scopes{false};
-        std::vector<bool> function_scopes{false};
-        bool pending_class_scope = false;
-        bool pending_function_scope = false;
-    };
     /** Convert raw source to the identifier/string/MCP representation used by
-     * language-aware tokenization. Already-normalized markers are preserved. */
+     * language-aware tokenization. Already-normalized markers are preserved.
+     * If values is supplied, append concrete spellings in placeholder order;
+     * an empty spelling denotes an already-normalized, unresolved marker. */
     std::string abstract_source_for_model(
         std::string_view text, SourceLanguage language, IMCP& mcp,
-        IdentifierScopeState* identifier_scopes = nullptr);
+        std::vector<std::string>* values = nullptr);
     /** Resolve generated identifier and string placeholders through MCP. */
     std::string resolve_model_placeholders(std::string_view text, IMCP& mcp);
     struct CommentLexState
     {
         size_t block_depth = 0;
         bool line_comment_on_last_line = false;
-        IdentifierScopeState identifier_scopes;
+        std::shared_ptr<StringTable> string_table = std::make_shared<StringTable>();
     };
     void set_tokenization_log_file(const std::string& filename);
 
@@ -62,7 +54,31 @@ namespace rllm
         bool starts_in_block_comment = false;
     };
 
-    using FileTokenSequence = std::vector<TokenID>;
+    /** Unbounded file sequence with occurrence metadata kept in lockstep. */
+    class FileTokenSequence
+    {
+      public:
+        FileTokenSequence() = default;
+        FileTokenSequence(std::initializer_list<TokenID> tokens)
+            : m_tokens(tokens), m_string_indices(tokens.size(), NO_STRING_INDEX) {}
+        FileTokenSequence(size_t count, TokenID token)
+            : m_tokens(count, token), m_string_indices(count, NO_STRING_INDEX) {}
+        std::shared_ptr<StringTable> string_table = std::make_shared<StringTable>();
+        size_t size() const { return m_tokens.size(); }
+        bool empty() const { return m_tokens.empty(); }
+        const TokenID& operator[](size_t pos) const { return m_tokens[pos]; }
+        auto begin() const { return m_tokens.begin(); }
+        auto end() const { return m_tokens.end(); }
+        StringIndex string_index(size_t pos) const { return m_string_indices.at(pos); }
+        void push_back(TokenID token, StringIndex index = NO_STRING_INDEX)
+        {
+            m_tokens.push_back(token);
+            m_string_indices.push_back(index);
+        }
+      private:
+        std::vector<TokenID> m_tokens;
+        std::vector<StringIndex> m_string_indices;
+    };
 
     /** Build bounded all-position training windows from corpus lines.
      * Windows never cross a line boundary. Consecutive windows overlap by one
@@ -136,7 +152,7 @@ namespace rllm
             CommentLexState& state) const;
         IMCP& mcp() const { return m_mcp; }
         Token get_token_from_id(TokenID id) const;
-        std::optional<std::string> get_line(const CpuInputLine& line) const;
+        std::optional<std::string> get_line(const CpuInputLine& line, bool resolve_values = false) const;
 
         std::vector<CpuInputLine> get_suitable_training_lines() const;
         std::vector<FileTokenSequence> get_file_token_sequences() const;
@@ -177,17 +193,21 @@ namespace rllm
                 : filename(std::move(filename)), m_source_index(source_index)
             {}
 
-            void add(TokenID id)
+            void add(TokenID id, StringIndex index = NO_STRING_INDEX,
+                     std::shared_ptr<StringTable> table = nullptr)
             {
-                m_tokens_in_file.push_back(id);
+                if (table) m_tokens_in_file.string_table = table;
+                m_tokens_in_file.push_back(id, index);
                 if (m_lines.empty())
                 {
                     m_lines.emplace_back();
-                    m_lines.back().push_back(id);
+                    m_lines.back().string_table = m_tokens_in_file.string_table;
+                    m_lines.back().push_back(id, index);
                     return;
                 }
 
-                m_lines.back().push_back(id);
+                m_lines.back().string_table = m_tokens_in_file.string_table;
+                m_lines.back().push_back(id, index);
                 if (id == TokenID::TOK_NEWLINE)
                 {
                     m_lines.emplace_back();
@@ -232,7 +252,7 @@ namespace rllm
           private:
             std::string filename;
             std::vector<CpuInputLine> m_lines; // positions of the token in the corpus
-            std::vector<TokenID> m_tokens_in_file; // the actual token IDs in the file, in order
+            FileTokenSequence m_tokens_in_file; // the actual token IDs in the file, in order
             size_t m_source_index;
         };
 

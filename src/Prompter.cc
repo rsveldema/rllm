@@ -336,7 +336,7 @@ namespace rllm
         CommentLexState comment_state;
         auto token_id_list = corpus.get_token_ids(line, options.language, comment_state);
         token_id_list.push_front(language_token(options.language));
-        const auto full_string_opt = corpus.get_line(token_id_list);
+        const auto full_string_opt = corpus.get_line(token_id_list, true);
         if (!full_string_opt.has_value())
         {
             std::println("Input contains unknown tokens. Please try again.");
@@ -439,7 +439,7 @@ namespace rllm
                 if (output_token == "\n")  output_token = "\\n";
                 if (output_token == "\t")  output_token = "\\t";
                 std::println("Predicted next token (head {}): {}", static_cast<int>(head), output_token);
-                token_id_list.push_back(entry.token_id);
+                token_id_list.push_back(entry.token_id, entry.string_index);
                 ++total_tokens_generated;
                 appended_token = true;
             }
@@ -448,7 +448,7 @@ namespace rllm
                 break;
         }
 
-        const auto full_answer_string_opt = corpus.get_line(token_id_list);
+        const auto full_answer_string_opt = corpus.get_line(token_id_list, true);
         if (!full_answer_string_opt.has_value())
         {
             std::println("Input contains unknown tokens. Please try again.");
