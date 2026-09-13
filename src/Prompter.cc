@@ -143,12 +143,25 @@ namespace rllm
         SourceLanguage language)
     {
         std::string text;
-        for (const auto pos : enum_iterator1D<PositionIndex>(tokens.size()))
+        for (size_t i = 0; i < static_cast<size_t>(tokens.size()); ++i)
         {
+            const auto pos = static_cast<PositionIndex>(i);
             const TokenID token = tokens[pos];
             const std::string token_text = corpus.get_token_from_id(token);
             const TokenStringCategory category = token_string_category(token);
-            const size_t string_table_index = tokens.get_string_table_index(pos);
+            size_t string_table_index = tokens.get_string_table_index(pos);
+            if (category != TokenStringCategory::None && i + 1 < static_cast<size_t>(tokens.size()))
+            {
+                const auto next_pos = static_cast<PositionIndex>(i + 1);
+                const size_t next_index = is_string_table_index_token(tokens[next_pos])
+                    ? tokens.get_string_table_index(next_pos)
+                    : NO_STRING_TABLE_INDEX;
+                if (next_index != NO_STRING_TABLE_INDEX)
+                {
+                    string_table_index = next_index;
+                    ++i;
+                }
+            }
             if (category != TokenStringCategory::None &&
                 string_table_index != NO_STRING_TABLE_INDEX &&
                 string_table_index < tokens.string_table_value.size())
@@ -468,23 +481,18 @@ namespace rllm
                     break;
                 }
                 std::string predicted_string_value;
-                const TokenStringCategory string_category = token_string_category(entry.token_id);
-                switch (string_category)
+                size_t predicted_string_table_index = NO_STRING_TABLE_INDEX;
+                if (is_string_table_index_token(entry.token_id))
                 {
-                    case TokenStringCategory::None: break;
-                    default:
-                    {
-                        const auto predicted_indices =
-                            nn.get_output_layer(head).get_top_k_string_table_indices_by_logit(1);
-                        if (!predicted_indices.empty())
-                        {
-                            const size_t predicted_index = static_cast<size_t>(predicted_indices.front().index);
-                            if (predicted_index < token_id_list.string_table_value.size())
-                                predicted_string_value = token_id_list.string_table_value[predicted_index];
-                        }
-                        break;
-                    }
+                    const auto predicted_indices =
+                        nn.get_output_layer(head).get_top_k_string_table_indices_by_logit(1);
+                    if (!predicted_indices.empty())
+                        predicted_string_table_index =
+                            static_cast<size_t>(predicted_indices.front().index);
                 }
+                if (predicted_string_table_index != NO_STRING_TABLE_INDEX &&
+                    predicted_string_table_index < token_id_list.string_table_value.size())
+                    predicted_string_value = token_id_list.string_table_value[predicted_string_table_index];
                 if (output_token == "\n")  output_token = "\\n";
                 if (output_token == "\t")  output_token = "\\t";
                 if (!predicted_string_value.empty())
@@ -495,7 +503,12 @@ namespace rllm
                         predicted_string_value);
                 else
                     std::println("Predicted next token (head {}): {}", static_cast<int>(head), output_token);
-                token_id_list.push_back(entry.token_id, predicted_string_value);
+                if (is_string_table_index_token(entry.token_id) &&
+                    predicted_string_table_index != NO_STRING_TABLE_INDEX &&
+                    predicted_string_table_index < token_id_list.string_table_value.size())
+                    token_id_list.push_back_string_table_index(predicted_string_table_index);
+                else
+                    token_id_list.push_back(entry.token_id, predicted_string_value);
                 ++total_tokens_generated;
                 appended_token = true;
             }

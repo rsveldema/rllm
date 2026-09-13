@@ -168,6 +168,10 @@ TEST(LayerPrimitivesTest, CpuInputLineCarriesStringTableMetadata)
     line.sub_array(prefix, static_cast<PositionIndex>(2));
     EXPECT_EQ(prefix.get_string_table_index(static_cast<PositionIndex>(1)), 0u);
     EXPECT_EQ(prefix.get_string_table_value(0), "\"hello\"");
+
+    line.push_back_string_table_index(0);
+    EXPECT_EQ(line.back(), TokenID::STRING_TABLE_INDEX);
+    EXPECT_EQ(line.get_string_table_index(static_cast<PositionIndex>(2)), 0u);
 }
 
 TEST(CorpusTest, PromptAbstractionMatchesTrainingRepresentation)
@@ -214,7 +218,7 @@ TEST(CorpusTest, LanguageAwareTokenizerAbstractsRawSource)
     const auto rendered = corpus.get_line(tokens);
     ASSERT_TRUE(rendered.has_value());
     EXPECT_EQ(*rendered,
-        "auto <LOCAL>=<MCP><GLOBAL>::<FIELD></MCP>(<STRING>,<GLOBAL>);");
+        "auto <LOCAL><STI_0>=<MCP><GLOBAL><STI_1>::<FIELD><STI_2></MCP>(<STRING><STI_3>,<GLOBAL><STI_4>);");
     ASSERT_EQ(tokens.string_table_value.size(), 5u);
     EXPECT_EQ(tokens.string_table_value[0], "result");
     EXPECT_EQ(tokens.string_table_value[1], "std");
@@ -296,12 +300,12 @@ TEST(CorpusTest, PythonScopeManagementReusesIdentifierSlotsAfterDedent)
     };
 
     tokenize("def work():");
-    EXPECT_EQ(tokenize("    first = 1"), "<LOCAL>=1");
+    EXPECT_EQ(tokenize("    first = 1"), "<LOCAL><STI_0>=1");
     tokenize("    if True:");
-    EXPECT_EQ(tokenize("        second = 2"), "<LOCAL>=2");
-    EXPECT_EQ(tokenize("    third = 3"), "<LOCAL>=3");
+    EXPECT_EQ(tokenize("        second = 2"), "<LOCAL><STI_0>=2");
+    EXPECT_EQ(tokenize("    third = 3"), "<LOCAL><STI_0>=3");
     tokenize("def other():");
-    EXPECT_EQ(tokenize("    fourth = 4"), "<LOCAL>=4");
+    EXPECT_EQ(tokenize("    fourth = 4"), "<LOCAL><STI_0>=4");
 }
 
 TEST(CorpusTest, JavaScopeManagementReusesIdentifierSlots)

@@ -91,6 +91,11 @@ namespace rllm
         return TokenStringCategory::None;
     }
 
+    static inline bool is_string_table_index_token(TokenID token)
+    {
+        return token == TokenID::STRING_TABLE_INDEX;
+    }
+
     // Dimensionality of each token's learned embedding vector.
     // The first intermediate layer is tiled across multiple attention heads,
     // so the embedding dimension must be divisible by the number of heads.
@@ -288,6 +293,14 @@ namespace rllm
             assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
             m_cpu.push_back(t);
             string_table_index.push_back(intern_string_value(t, string_value));
+        }
+
+        void push_back_string_table_index(size_t index)
+        {
+            assert(m_cpu.size() < static_cast<size_t>(PositionIndex::MAX));
+            assert(index < string_table_value.size());
+            m_cpu.push_back(TokenID::STRING_TABLE_INDEX);
+            string_table_index.push_back(index);
         }
 
         void push_front(TokenID t, std::string_view string_value = {})

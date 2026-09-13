@@ -50,8 +50,8 @@ def test_inspection_copy_materializes_runtime_abstraction(tmp_path):
 
     assert postprocessor.process_file(source_file, abstract_symbols=True)
     assert source_file.read_text(encoding="utf-8") == (
-        "auto <LOCAL> = "
-        "<MCP><GLOBAL>::<FIELD></MCP>(<STRING>, <GLOBAL>);\n"
+        "auto <LOCAL><STI_0> = "
+        "<MCP><GLOBAL><STI_1>::<FIELD><STI_2></MCP>(<STRING><STI_3>, <GLOBAL><STI_4>);\n"
     )
 
 
@@ -90,16 +90,16 @@ def test_abstracts_identifiers_strings_calls_and_cpp_namespace_access():
     source = 'auto result = std::println("hello {}", user_name);\nhelper(result);\n'
 
     assert postprocessor.abstract_code_symbols(source) == (
-        "auto <LOCAL> = <MCP><GLOBAL>::<FIELD></MCP>(<STRING>, <GLOBAL>);\n"
-        "<MCP><GLOBAL></MCP>(<LOCAL>);\n"
+        "auto <LOCAL><STI_0> = <MCP><GLOBAL><STI_1>::<FIELD><STI_2></MCP>(<STRING><STI_3>, <GLOBAL><STI_4>);\n"
+        "<MCP><GLOBAL><STI_5></MCP>(<LOCAL><STI_0>);\n"
     )
 
 
 def test_field_access_uses_a_dedicated_identifier_token():
     source = "auto value = object.field; auto other = pointer->member;\n"
     assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "auto <LOCAL> = <MCP><GLOBAL>.<FIELD></MCP>; "
-        "auto <LOCAL> = <MCP><GLOBAL>-><FIELD></MCP>;\n"
+        "auto <LOCAL><STI_0> = <MCP><GLOBAL><STI_1>.<FIELD><STI_2></MCP>; "
+        "auto <LOCAL><STI_3> = <MCP><GLOBAL><STI_4>-><FIELD><STI_5></MCP>;\n"
     )
 
 
@@ -107,8 +107,8 @@ def test_abstraction_preserves_keywords_comments_and_punctuation():
     source = "for (int index = 0; index < count; ++index) { // useful prose\nreturn index;\n}\n"
 
     assert postprocessor.abstract_code_symbols(source) == (
-        "for (int <LOOP> = 0; <LOOP> < <GLOBAL>; ++<LOOP>) { // useful prose\n"
-        "return <LOOP>;\n}\n"
+        "for (int <LOOP><STI_0> = 0; <LOOP><STI_0> < <GLOBAL><STI_1>; ++<LOOP><STI_0>) { // useful prose\n"
+        "return <LOOP><STI_0>;\n}\n"
     )
 
 
@@ -120,11 +120,11 @@ def test_identifier_categories_cover_parameters_locals_loops_and_unknowns():
         "}\n"
     )
     assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "void <MCP><GLOBAL></MCP>(int <PARAM>, "
-        "<GLOBAL> <PARAM>) {\n"
-        "auto <LOCAL> = <PARAM>;\n"
-        "for (int <LOOP> = 0; <LOOP> < <PARAM>; "
-        "++<LOOP>) <LOCAL> = <GLOBAL>;\n"
+        "void <MCP><GLOBAL><STI_0></MCP>(int <PARAM><STI_1>, "
+        "<GLOBAL><STI_2> <PARAM><STI_3>) {\n"
+        "auto <LOCAL><STI_4> = <PARAM><STI_1>;\n"
+        "for (int <LOOP><STI_5> = 0; <LOOP><STI_5> < <PARAM><STI_1>; "
+        "++<LOOP><STI_5>) <LOCAL><STI_4> = <GLOBAL><STI_6>;\n"
         "}\n"
     )
 
@@ -132,26 +132,28 @@ def test_identifier_categories_cover_parameters_locals_loops_and_unknowns():
 def test_identifier_categories_use_plain_tokens():
     scopes: list[dict[str, str]] = [{}]
     pending: dict[str, str] = {}
+    string_table = postprocessor.StringTable()
     local_tokens = [postprocessor._assigned_identifier_token(
-        f"local{index}", "local", scopes, pending) for index in range(17)]
+        f"local{index}", "local", scopes, pending, string_table) for index in range(17)]
     param_tokens = [postprocessor._assigned_identifier_token(
-        f"param{index}", "param", scopes, pending) for index in range(17)]
+        f"param{index}", "param", scopes, pending, string_table) for index in range(17)]
     global_tokens = [postprocessor._assigned_identifier_token(
-        f"global{index}", "global", scopes, pending) for index in range(17)]
+        f"global{index}", "global", scopes, pending, string_table) for index in range(17)]
     loop_tokens = [postprocessor._assigned_identifier_token(
-        f"loop{index}", "loop", scopes, pending) for index in range(9)]
+        f"loop{index}", "loop", scopes, pending, string_table) for index in range(9)]
 
-    assert set(local_tokens) == {"<LOCAL>"}
-    assert set(param_tokens) == {"<PARAM>"}
-    assert set(global_tokens) == {"<GLOBAL>"}
-    assert set(loop_tokens) == {"<LOOP>"}
+    assert {token.split("<STI_")[0] for token in local_tokens} == {"<LOCAL>"}
+    assert {token.split("<STI_")[0] for token in param_tokens} == {"<PARAM>"}
+    assert {token.split("<STI_")[0] for token in global_tokens} == {"<GLOBAL>"}
+    assert {token.split("<STI_")[0] for token in loop_tokens} == {"<LOOP>"}
+    assert len(set(local_tokens + param_tokens + global_tokens + loop_tokens)) == 60
 
 
 def test_identifier_slots_are_reused_after_scope_exit():
     source = "{ auto first = 1; { auto second = 2; } auto third = 3; } { auto fourth = 4; }"
     assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "{ auto <LOCAL> = 1; { auto <LOCAL> = 2; } auto <LOCAL> = 3; } "
-        "{ auto <LOCAL> = 4; }"
+        "{ auto <LOCAL><STI_0> = 1; { auto <LOCAL><STI_1> = 2; } auto <LOCAL><STI_2> = 3; } "
+        "{ auto <LOCAL><STI_3> = 4; }"
     )
 
 
@@ -161,9 +163,9 @@ def test_parameter_slots_restart_at_zero_for_each_function():
         "void second(int beta) { }"
     )
     assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "void <MCP><GLOBAL></MCP>(int <PARAM>); "
-        "void <MCP><GLOBAL></MCP>(int <PARAM>) { } "
-        "void <MCP><GLOBAL></MCP>(int <PARAM>) { }"
+        "void <MCP><GLOBAL><STI_0></MCP>(int <PARAM><STI_1>); "
+        "void <MCP><GLOBAL><STI_2></MCP>(int <PARAM><STI_3>) { } "
+        "void <MCP><GLOBAL><STI_4></MCP>(int <PARAM><STI_5>) { }"
     )
 
 
@@ -171,14 +173,14 @@ def test_global_slots_restart_for_free_functions_but_not_methods():
     assert postprocessor.abstract_code_symbols(
         "void first() { } void second() { }", ".cpp"
     ) == (
-        "void <MCP><GLOBAL></MCP>() { } "
-        "void <MCP><GLOBAL></MCP>() { }"
+        "void <MCP><GLOBAL><STI_0></MCP>() { } "
+        "void <MCP><GLOBAL><STI_1></MCP>() { }"
     )
     assert postprocessor.abstract_code_symbols(
         "class Widget { void first() { } void second() { } };", ".cpp"
     ) == (
-        "class <GLOBAL> { void <MCP><GLOBAL></MCP>() { } "
-        "void <MCP><GLOBAL></MCP>() { } };"
+        "class <GLOBAL><STI_0> { void <MCP><GLOBAL><STI_1></MCP>() { } "
+        "void <MCP><GLOBAL><STI_2></MCP>() { } };"
     )
 
 
@@ -187,16 +189,16 @@ def test_abstraction_is_idempotent_and_marks_includes_as_mcp():
     once = postprocessor.abstract_code_symbols(source)
 
     assert once == (
-        "#include <MCP><STRING></MCP>\n"
-        "#include <MCP><STRING></MCP>\n"
-        "<MCP><GLOBAL>::<FIELD></MCP>(<STRING>);\n"
+        "#include <MCP><STRING><STI_0></MCP>\n"
+        "#include <MCP><STRING><STI_1></MCP>\n"
+        "<MCP><GLOBAL><STI_2>::<FIELD><STI_3></MCP>(<STRING><STI_4>);\n"
     )
     assert postprocessor.abstract_code_symbols(once) == once
 
 
 def test_imported_library_name_is_an_mcp_access():
     assert postprocessor.abstract_code_symbols("import requests\n", ".py") == (
-        "import <MCP><GLOBAL></MCP>\n"
+        "import <MCP><GLOBAL><STI_0></MCP>\n"
     )
 
 
@@ -225,5 +227,5 @@ def test_python_java_and_rust_files_keep_source_spelling(tmp_path):
 
 def test_only_the_active_languages_keywords_are_preserved():
     assert postprocessor.abstract_code_symbols("fn = value;\n", ".java") == (
-        "<LOCAL> = <GLOBAL>;\n"
+        "<LOCAL><STI_0> = <GLOBAL><STI_1>;\n"
     )

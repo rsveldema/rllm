@@ -14,6 +14,8 @@ namespace rllm
     {
         fixed_size_matrix<float, TokenID, EmbeddingDimension> dW_lm_head;
         fixed_size_matrix<float, PositionIndex, EmbeddingDimension> dW_string_table_index_head;
+        PositionIndex string_table_index_count = PositionIndex::START;
+        bool string_table_index_gradients_initialized = false;
         bool touched = false;
 
         void reset(VulkanQueue& queue);
@@ -110,7 +112,8 @@ namespace rllm
             const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
             BatchIndex batch_size,
             fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
-            OutputLayerGradientAccumulator& accumulator
+            OutputLayerGradientAccumulator& accumulator,
+            PositionIndex string_table_index_count = PositionIndex::MAX
         );
         void compute_batched_delta(
             const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
@@ -125,7 +128,8 @@ namespace rllm
             BatchedOutputWorkspace& workspace,
             VulkanQueue& queue,
             const fixed_size_vector<int, BatchIndex>& expected_string_table_indices,
-            float loss_gradient_scale = 1.0f
+            float loss_gradient_scale = 1.0f,
+            PositionIndex string_table_index_count = PositionIndex::MAX
         );
 
         void apply_accumulated_update(OutputLayerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);

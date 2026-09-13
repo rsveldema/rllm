@@ -263,6 +263,7 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
         "<GLOBAL>",
         "<FIELD>",
         "<STRING>",
+        "<STI>",
     ]
 
     # The EOW suffix is metadata: generated runtime tables strip it from the
@@ -425,6 +426,7 @@ def generate_cpp_table_header(tokenizer_map) -> str:
             "<GLOBAL>": "GLOBAL",
             "<FIELD>": "FIELD",
             "<STRING>": "STRING",
+            "<STI>": "STRING_TABLE_INDEX",
         }
         if _token in language_aliases:
             cpp_table += f'    {language_aliases[_token]} = TOK_{idx},\n'

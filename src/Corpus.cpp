@@ -1053,6 +1053,11 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                             assert(value_index < state.identifier_scopes.pending_string_table_values.size());
                             result.push_back(
                                 token_id, state.identifier_scopes.pending_string_table_values[value_index++]);
+                            const auto marker_pos = static_cast<PositionIndex>(
+                                static_cast<size_t>(result.size()) - 1);
+                            const size_t string_index = result.get_string_table_index(marker_pos);
+                            assert(string_index != NO_STRING_TABLE_INDEX);
+                            result.push_back_string_table_index(string_index);
                         }
                         ix += token_len;
                         matched_token = true;
@@ -1206,7 +1211,15 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
             }
 
             const auto& token_info = it->second;
-            result += get_token_from_id(token_id);
+            if (is_string_table_index_token(token_id))
+            {
+                const size_t index = line.get_string_table_index(i);
+                if (index == NO_STRING_TABLE_INDEX)
+                    return std::nullopt;
+                result += "<STI_" + std::to_string(index) + ">";
+            }
+            else
+                result += get_token_from_id(token_id);
             if (token_info.end_of_word)
             {
                 result += ' ';

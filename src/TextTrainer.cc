@@ -75,19 +75,37 @@ namespace rllm
         return TokenID::INVALID;
     }
 
-    static int local_string_table_index_for_head(
+    static int string_table_index_for_head(
         const CpuInputLine& line, int input_len, MultiTokenPredictionIndex head)
     {
         const int target_index = input_len + static_cast<int>(head);
         assert(target_index < static_cast<int>(line.size()));
-        const auto target_position = static_cast<PositionIndex>(target_index);
-        if (token_string_category(line[target_position]) != TokenStringCategory::Local)
+        const auto pos = static_cast<PositionIndex>(target_index);
+        if (!is_string_table_index_token(line[pos]))
             return -1;
-        const size_t string_table_index = line.get_string_table_index(target_position);
-        if (string_table_index == NO_STRING_TABLE_INDEX)
+        const size_t index = line.get_string_table_index(pos);
+        if (index == NO_STRING_TABLE_INDEX)
             return -1;
-        assert(string_table_index < static_cast<size_t>(PositionIndex::MAX));
-        return static_cast<int>(string_table_index);
+        assert(index < static_cast<size_t>(PositionIndex::MAX));
+        return static_cast<int>(index);
+    }
+
+    static PositionIndex string_table_index_count_for_expected(
+        const cpu_fixed_vector<int, BatchIndex>& expected_string_table_indices)
+    {
+        size_t max_index = 0;
+        bool any_index = false;
+        for (const auto batch : enum_iterator1D<BatchIndex>(expected_string_table_indices.size()))
+        {
+            const int index = expected_string_table_indices[batch];
+            if (index < 0)
+                continue;
+            any_index = true;
+            max_index = std::max(max_index, static_cast<size_t>(index));
+        }
+        return any_index
+            ? static_cast<PositionIndex>(max_index + 1)
+            : PositionIndex::START;
     }
 
     static void scatter_dh_last_to_row(
@@ -1007,6 +1025,7 @@ namespace rllm
             size_t window_index;
             MultiTokenPredictionIndex head;
             TokenID expected;
+            int expected_string_table_index;
         };
         std::vector<WorstPrediction> worst_predictions;
         std::vector<WorstCandidate> worst_candidates;
@@ -1086,7 +1105,7 @@ namespace rllm
                     expected.push_back(used ? static_cast<int>(mtp_target_for_head(
                         window.line, context_length, head)) : 0);
                     expected_string_table_index.push_back(
-                        used ? local_string_table_index_for_head(window.line, context_length, head) : -1);
+                        used ? string_table_index_for_head(window.line, context_length, head) : -1);
                 }
                 if (!any_active)
                     continue;
@@ -1105,10 +1124,13 @@ namespace rllm
                 m_batched_output_workspace->expected_string_table_indices.copy_from_cpu(
                     queue, expected_string_table_index);
                 m_batched_output_workspace->active_examples.copy_from_cpu(queue, active);
+                const PositionIndex string_table_index_count =
+                    string_table_index_count_for_expected(expected_string_table_index);
                 m_output_layers[head].compute_batched_delta(
                     m_batched_output_workspace->logits, batch_size,
                     *m_batched_output_workspace, queue,
-                    m_batched_output_workspace->expected_string_table_indices);
+                    m_batched_output_workspace->expected_string_table_indices,
+                    1.0f, string_table_index_count);
                 if (diagnose_first_batch)
                 {
                     const auto label = std::format(
@@ -1140,7 +1162,8 @@ namespace rllm
                             .loss = loss,
                             .window_index = window_indices[batch],
                             .head = head,
-                            .expected = static_cast<TokenID>(expected[batch])
+                            .expected = static_cast<TokenID>(expected[batch]),
+                            .expected_string_table_index = expected_string_table_index[batch]
                         });
                         std::ranges::sort(worst_candidates, {}, &WorstCandidate::loss);
                         if (worst_candidates.size() > m_validation_worst_count)
@@ -1197,7 +1220,11 @@ namespace rllm
                 window.line.sub_array(get_last_input(), window.context_length);
                 propagate_forward();
                 score.reset(queue);
-                const float loss = m_output_layers[candidate.head].compute_score(score, candidate.expected);
+                const float loss = candidate.expected_string_table_index >= 0
+                    ? m_output_layers[candidate.head].compute_score(
+                        score, candidate.expected,
+                        static_cast<size_t>(candidate.expected_string_table_index))
+                    : m_output_layers[candidate.head].compute_score(score, candidate.expected);
                 const auto top = m_output_layers[candidate.head].get_top_k_by_logit(1).front();
                 const float max_logit = score.temp_values_cpu[TempStorage::START];
                 const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
@@ -2149,10 +2176,13 @@ namespace rllm
         for (const auto _k : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
         {
             Score& s = m_training_scores[_k];
-            const auto _target_position = static_cast<PositionIndex>(_input_len + static_cast<int>(_k));
             const auto _target = mtp_target_for_head(train_output, _input_len, _k);
-            const float _k_loss = m_output_layers[_k].compute_score(
-                s, _target, train_output.get_string_table_index(_target_position));
+            const int expected_string_table_index =
+                string_table_index_for_head(train_output, _input_len, _k);
+            const float _k_loss = expected_string_table_index >= 0
+                ? m_output_layers[_k].compute_score(
+                    s, _target, static_cast<size_t>(expected_string_table_index))
+                : m_output_layers[_k].compute_score(s, _target);
             if (std::isnan(_k_loss))
             {
                 LOG_ERROR("loss became NaN!");

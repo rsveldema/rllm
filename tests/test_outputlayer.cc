@@ -192,7 +192,7 @@ namespace
     }
 } // namespace
 
-TEST(OutputLayerBatchTest, MispredictedLocalAddsStringTableIndexLoss)
+TEST(OutputLayerBatchTest, StringTableIndexTokenAddsIndexLoss)
 {
     using namespace rllm;
     auto& queue = vulkan_runtime::get_queue(0);
@@ -203,7 +203,7 @@ TEST(OutputLayerBatchTest, MispredictedLocalAddsStringTableIndexLoss)
     cpu_fixed_matrix<float, BatchIndex, TokenID> logits_cpu;
     logits_cpu.zero();
     logits_cpu[BatchIndex::START, TokenID::START] = 2.0f;
-    logits_cpu[BatchIndex::START, TokenID::LOCAL] = -1.0f;
+    logits_cpu[BatchIndex::START, TokenID::STRING_TABLE_INDEX] = -1.0f;
     workspace.logits.copy_from_cpu(queue, logits_cpu);
 
     cpu_fixed_matrix<float, BatchIndex, EmbeddingDimension> h_cpu;
@@ -211,7 +211,7 @@ TEST(OutputLayerBatchTest, MispredictedLocalAddsStringTableIndexLoss)
     workspace.h_last.copy_from_cpu(queue, h_cpu);
 
     cpu_fixed_vector<int, BatchIndex> expected;
-    expected.push_back(static_cast<int>(TokenID::LOCAL));
+    expected.push_back(static_cast<int>(TokenID::STRING_TABLE_INDEX));
     workspace.expected_tokens.copy_from_cpu(queue, expected);
     cpu_fixed_vector<int, BatchIndex> expected_string_table_index;
     expected_string_table_index.push_back(0);
@@ -231,8 +231,8 @@ TEST(OutputLayerBatchTest, MispredictedLocalAddsStringTableIndexLoss)
     std::vector<float> expected_deltas;
     std::vector<float> logits(static_cast<size_t>(TokenID::MAX), 0.0f);
     logits[static_cast<size_t>(TokenID::START)] = 2.0f;
-    logits[static_cast<size_t>(TokenID::LOCAL)] = -1.0f;
-    const float token_loss = reference_compute_score(logits, expected_deltas, TokenID::LOCAL);
+    logits[static_cast<size_t>(TokenID::STRING_TABLE_INDEX)] = -1.0f;
+    const float token_loss = reference_compute_score(logits, expected_deltas, TokenID::STRING_TABLE_INDEX);
     EXPECT_NEAR(losses_cpu[BatchIndex::START],
         token_loss + std::log(static_cast<float>(PositionIndex::MAX)), 1e-4f);
 
@@ -382,11 +382,11 @@ TEST(OutputLayerScoreTest, NonUniformLogitsMatchReference)
         EXPECT_NEAR(cpu_values[tok], expected_deltas[static_cast<size_t>(tok)], 1e-5f);
 }
 
-TEST(OutputLayerScoreTest, MispredictedLocalPredictsStringTableIndex)
+TEST(OutputLayerScoreTest, StringTableIndexTokenPredictsPayload)
 {
     auto weights = zero_output_layer_weights_json();
     weight_at(weights, rllm::TokenID::START, rllm::EmbeddingDimension::START) = 2.0f;
-    weight_at(weights, rllm::TokenID::LOCAL, rllm::EmbeddingDimension::START) = -1.0f;
+    weight_at(weights, rllm::TokenID::STRING_TABLE_INDEX, rllm::EmbeddingDimension::START) = -1.0f;
 
     rllm::OutputLayer layer;
     layer.load(weights);
@@ -400,11 +400,11 @@ TEST(OutputLayerScoreTest, MispredictedLocalPredictsStringTableIndex)
     layer.forward_from_hidden(h_last, test_queue());
 
     rllm::Score score;
-    const float loss = layer.compute_score(score, rllm::TokenID::LOCAL, 0);
+    const float loss = layer.compute_score(score, rllm::TokenID::STRING_TABLE_INDEX, 0);
 
     std::vector<float> expected_deltas;
     const auto logits = logits_from_output_layer(layer);
-    const float token_loss = reference_compute_score(logits, expected_deltas, rllm::TokenID::LOCAL);
+    const float token_loss = reference_compute_score(logits, expected_deltas, rllm::TokenID::STRING_TABLE_INDEX);
     EXPECT_NEAR(loss, token_loss + std::log(static_cast<float>(rllm::PositionIndex::MAX)), 1e-4f);
     EXPECT_TRUE(score.string_table_index_prediction_active);
 
@@ -415,7 +415,7 @@ TEST(OutputLayerScoreTest, MispredictedLocalPredictsStringTableIndex)
     EXPECT_NEAR(index_delta[static_cast<rllm::PositionIndex>(1)], -uniform_probability, 1e-5f);
 }
 
-TEST(OutputLayerScoreTest, CorrectLocalDoesNotPredictStringTableIndex)
+TEST(OutputLayerScoreTest, LocalTokenDoesNotPredictStringTableIndexPayload)
 {
     auto weights = zero_output_layer_weights_json();
     weight_at(weights, rllm::TokenID::LOCAL, rllm::EmbeddingDimension::START) = 2.0f;

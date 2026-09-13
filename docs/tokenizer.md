@@ -20,8 +20,8 @@ as fallbacks for all other incomplete text. Corpus-derived BPE pieces are
 deliberately excluded so concrete identifiers and literal vocabulary cannot
 become learned tokens.
 
-`<MCP>`, `</MCP>`, `<LOOP>`, `<LOCAL>`, `<PARAM>`, `<GLOBAL>`, `<FIELD>`, and
-`<STRING>` are reserved atomic tokens. Identifiers following `.`, `->`, or
+`<MCP>`, `</MCP>`, `<LOOP>`, `<LOCAL>`, `<PARAM>`, `<GLOBAL>`, `<FIELD>`,
+`<STRING>`, and `<STI>` are reserved atomic tokens. Identifiers following `.`, `->`, or
 C/C++ `::` use `<FIELD>`; the base expression retains its normal scoped
 identifier category. Rust `::` paths keep global identifiers because they
 describe module paths rather than C++ member or namespace access.
@@ -31,8 +31,11 @@ Identifier bindings are held in a stack of lexical scope maps. Parameters enter
 the function-body scope, while loop and local declarations enter the current
 scope. Leaving a brace-delimited scope, or dedenting Python source, discards its
 bindings. Concrete spellings are stored beside the token stream in
-`string_table_value`, and every string-bearing token position stores a
-`string_table_index` entry pointing at its spelling.
+`string_table_value`. Every string-bearing category token is followed by an
+explicit `<STI>` token whose `string_table_index` metadata points at the
+spelling. Human-facing inspection output renders that virtual pair as
+`<LOCAL><STI_0>`, `<FIELD><STI_1>`, and so on, but each `n` is metadata rather
+than a separate vocabulary entry.
 
 Language-aware tokenization always has an `IMCP`. Whenever raw source spelling
 is replaced by `<IDENTIFIER>` or `<STRING>`, the tokenizer calls

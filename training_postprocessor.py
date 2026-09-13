@@ -49,6 +49,7 @@ GLOBAL_TOKEN = "<GLOBAL>"
 FIELD_ACCESS_TOKEN = "<FIELD>"
 LEGACY_IDENTIFIER_TOKEN = "<IDENTIFIER>"
 STRING_TOKEN = "<STRING>"
+STRING_TABLE_INDEX_RE = re.compile(r"<STI_\d+>")
 MCP_START_TOKEN = "<MCP>"
 MCP_END_TOKEN = "</MCP>"
 
@@ -73,6 +74,16 @@ _KEYWORDS_BY_SUFFIX = {
 	".java": set(JAVA_KEYWORDS),
 	".sh": set(SHELL_KEYWORDS),
 }
+
+
+class StringTable:
+	def __init__(self) -> None:
+		self._indices: dict[str, int] = {}
+
+	def marker(self, value: str) -> str:
+		if value not in self._indices:
+			self._indices[value] = len(self._indices)
+		return f"<STI_{self._indices[value]}>"
 
 
 def _next_non_whitespace(text: str, position: int) -> str:
@@ -134,6 +145,7 @@ def _assigned_identifier_token(
 	category: str,
 	scopes: list[dict[str, str]],
 	pending_parameters: dict[str, str],
+	string_table: StringTable,
 ) -> str:
 	if category == "param" and word in pending_parameters:
 		return pending_parameters[word]
@@ -151,13 +163,14 @@ def _assigned_identifier_token(
 		"param": PARAM_TOKEN,
 		"global": GLOBAL_TOKEN,
 	}[category]
+	token_with_index = token + string_table.marker(word)
 	if category == "global":
-		scopes[0][word] = token
+		scopes[0][word] = token_with_index
 	elif category == "param":
-		pending_parameters[word] = token
+		pending_parameters[word] = token_with_index
 	else:
-		scopes[-1][word] = token
-	return token
+		scopes[-1][word] = token_with_index
+	return token_with_index
 
 
 def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
@@ -171,6 +184,7 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 	out: list[str] = []
 	identifier_scopes: list[dict[str, str]] = [{}]
 	pending_parameters: dict[str, str] = {}
+	string_table = StringTable()
 	indentation_levels = [0]
 	class_scopes = [False]
 	function_scopes = [False]
@@ -210,6 +224,11 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 			out.append(control_token)
 			i += len(control_token)
 			continue
+		string_table_index = STRING_TABLE_INDEX_RE.match(text, i)
+		if string_table_index is not None:
+			out.append(string_table_index.group())
+			i = string_table_index.end()
+			continue
 		if text.startswith(LEGACY_IDENTIFIER_TOKEN, i):
 			out.append(GLOBAL_TOKEN)
 			i += len(LEGACY_IDENTIFIER_TOKEN)
@@ -238,12 +257,12 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 					if i < len(text) and text[i] == "<" and not text.startswith(MCP_START_TOKEN, i):
 						end = text.find(">", i + 1)
 						if end >= 0:
-							out.extend((MCP_START_TOKEN, STRING_TOKEN, MCP_END_TOKEN))
+							out.extend((MCP_START_TOKEN, STRING_TOKEN, string_table.marker(text[i:end + 1]), MCP_END_TOKEN))
 							i = end + 1
 					elif i < len(text) and text[i] == '"':
 						end = text.find('"', i + 1)
 						if end >= 0:
-							out.extend((MCP_START_TOKEN, STRING_TOKEN, MCP_END_TOKEN))
+							out.extend((MCP_START_TOKEN, STRING_TOKEN, string_table.marker(text[i:end + 1]), MCP_END_TOKEN))
 							i = end + 1
 				continue
 			end = text.find("\n", i)
@@ -264,7 +283,7 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 					end += 2
 				else:
 					end += 1
-			out.append(STRING_TOKEN)
+			out.append(STRING_TOKEN + string_table.marker(text[i:end]))
 			i = end
 			continue
 		qualified = _QUALIFIED_IDENTIFIER_RE.match(text, i)
@@ -278,9 +297,9 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 					suffix is None or suffix in C_EXTENSIONS
 				)
 				if prefix.endswith(".") or prefix.endswith("->") or cpp_scope_access:
-					return FIELD_ACCESS_TOKEN
+					return FIELD_ACCESS_TOKEN + string_table.marker(match.group())
 				return _assigned_identifier_token(
-					match.group(), "global", identifier_scopes, pending_parameters)
+					match.group(), "global", identifier_scopes, pending_parameters, string_table)
 			spelling = re.sub(
 				_IDENTIFIER_RE,
 				abstract_qualified_part,
@@ -300,7 +319,7 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 					pending_class_scope = True
 			elif expect_library_name:
 				out.extend((MCP_START_TOKEN, _assigned_identifier_token(
-					word, "global", identifier_scopes, pending_parameters), MCP_END_TOKEN))
+					word, "global", identifier_scopes, pending_parameters, string_table), MCP_END_TOKEN))
 				expect_library_name = False
 			elif _next_non_whitespace(text, identifier.end()) == "(":
 				if _is_function_declaration_name(text, i, identifier.end(), suffix):
@@ -308,11 +327,11 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 						identifier_scopes[0].clear()
 					pending_function_scope = True
 				out.extend((MCP_START_TOKEN, _assigned_identifier_token(
-					word, "global", identifier_scopes, pending_parameters), MCP_END_TOKEN))
+					word, "global", identifier_scopes, pending_parameters, string_table), MCP_END_TOKEN))
 			else:
 				category = _identifier_token(text, i, identifier.end(), newline_positions)
 				out.append(_assigned_identifier_token(
-					word, category, identifier_scopes, pending_parameters))
+					word, category, identifier_scopes, pending_parameters, string_table))
 			i = identifier.end()
 			continue
 		if text[i] == "{":

@@ -102,17 +102,20 @@ punctuation are retained. Loop variables use `<LOOP>`, local variables use
 `<LOCAL>`, parameters use `<PARAM>`, field/member accesses use `<FIELD>`,
 and function, type, namespace, library, or unknown-scope names use `<GLOBAL>`.
 The concrete spelling for each identifier or string token is carried in the
-per-line `string_table_index`/`string_table_value` metadata. String and
-character contents become `<STRING>`. Syntactic function-call targets and
+per-line `string_table_index`/`string_table_value` metadata. Each such token is
+followed by an explicit `<STI>` marker whose index payload selects the concrete
+entry in `string_table_value`; inspection output renders this as `<STI_n>`, but
+`n` is not part of the vocabulary. String and character contents become
+`<STRING>`. Syntactic function-call targets and
 qualified accesses such as C++ `namespace::member` are enclosed in `<MCP>` and
 `</MCP>`; the concrete names inside are abstracted as well. These markers define
 the boundary where library support is expected to be supplied by MCP. Comments
 remain prose and are not identifier-normalized.
-When a target token is `<LOCAL>` and the language-model head predicts a
-different token, the output layer also trains a string-table-index head for that
-same position. This auxiliary loss teaches which entry in `string_table_value`
-the local-variable token should resolve to without expanding the tokenizer
-vocabulary back into numbered identifier tokens.
+When the target token is the explicit `<STI>` marker, the language-model head
+trains the marker token and the string-table-index head trains the marker's
+integer payload. Training applies a per-sample permutation of `string_table_value`
+and all referenced indices so the model learns relative use of the sample-local
+table rather than memorizing concrete slot numbers.
 
 The launcher also writes a persistent inspection mirror to
 `/tmp/rllm/training_data0`, `/tmp/rllm/curriculum`, and
@@ -580,7 +583,7 @@ comments in the selected source corpora.
 
 Before the corpus is loaded, files in the selected training directory receive
 formatting normalization from `training_postprocessor.py`; it does not write
-identifier-category, `<STRING>`, or MCP markers into source files. Python files have every
+identifier-category, `<STRING>`, `<STI_n>`, or MCP markers into source files. Python files have every
 complete group of four leading spaces converted to a literal tab. The runtime
 tokenizer preserves each resulting tab as `TokenID::TOK_TAB`, allowing Python
 block indentation to participate in training instead of being discarded with

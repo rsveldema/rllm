@@ -101,11 +101,18 @@ def test_invalid_token_is_reserved_even_when_absent_from_training_text():
 
 
 @pytest.mark.parametrize("token", [
-    "<MCP>", "</MCP>", "<LOOP>", "<LOCAL>", "<PARAM>", "<GLOBAL>", "<FIELD>", "<STRING>",
+    "<MCP>", "</MCP>", "<LOOP>", "<LOCAL>", "<PARAM>", "<GLOBAL>", "<FIELD>", "<STRING>", "<STI>",
 ])
 def test_source_abstraction_tokens_are_reserved(token):
     tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
     assert token in tokenizer_map
+
+
+def test_string_table_indices_do_not_expand_the_vocabulary():
+    tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")
+    assert "<STI>" in tokenizer_map
+    assert "<STI_0>" not in tokenizer_map
+    assert "<STI_8192>" not in tokenizer_map
 
 
 @pytest.mark.parametrize("keyword", ["while", "for", "if", "switch", "return"])

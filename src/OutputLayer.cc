@@ -406,16 +406,18 @@ namespace rllm
     }
 
     static void output_layer_forward_batched_string_table_index_impl(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(h_last, W, logits, batch_size)
+        // OFFLOAD_PARAMETERS(h_last, W, logits, batch_size, index_count)
         const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
         const fixed_size_matrix<float16, PositionIndex, EmbeddingDimension>& W,
         fixed_size_matrix<float, BatchIndex, PositionIndex>& logits,
-        int batch_size
+        int batch_size,
+        PositionIndex index_count
         // END_OFFLOAD_PARAMETERS
     )
     {
-        const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(static_cast<BatchIndex>(batch_size));
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, v, grid, (h_last, W, logits, batch_size))
+        const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
+            static_cast<BatchIndex>(batch_size), index_count);
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, v, grid, (h_last, W, logits, batch_size, index_count))
         float sum = 0.f;
         for (const auto d : enum_iterator1D<EmbeddingDimension>())
             sum += (h_last[batch, d] * static_cast<float>(W[v, d]));
@@ -443,19 +445,20 @@ namespace rllm
     }
 
     static void accumulate_batched_output_layer_string_table_index_dh_last(
-        // OFFLOAD_PARAMETERS(delta, dh_last, W, batch_size)
+        // OFFLOAD_PARAMETERS(delta, dh_last, W, batch_size, index_count)
         const fixed_size_matrix<float, BatchIndex, PositionIndex>& delta,
         fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
         const fixed_size_matrix<float16, PositionIndex, EmbeddingDimension>& W,
-        int batch_size
+        int batch_size,
+        PositionIndex index_count
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(static_cast<BatchIndex>(batch_size));
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (delta, dh_last, W, batch_size))
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (delta, dh_last, W, batch_size, index_count))
         float sum = dh_last[batch, d];
-        for (const auto v : enum_iterator1D<PositionIndex>())
+        for (const auto v : enum_iterator1D<PositionIndex>(index_count))
             sum += (delta[batch, v] * W[v, d]);
         dh_last[batch, d] = sum;
         ENDFOR
@@ -481,17 +484,18 @@ namespace rllm
     }
 
     static void accumulate_batched_output_layer_string_table_index_dW(
-        // OFFLOAD_PARAMETERS(delta, h_last, dW, batch_size)
+        // OFFLOAD_PARAMETERS(delta, h_last, dW, batch_size, index_count)
         const fixed_size_matrix<float, BatchIndex, PositionIndex>& delta,
         const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
         fixed_size_matrix<float, PositionIndex, EmbeddingDimension>& dW,
-        int batch_size
+        int batch_size,
+        PositionIndex index_count
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, dW, batch_size))
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(index_count);
+        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, dW, batch_size, index_count))
         float grad = dW[v, d];
         for (const auto batch : enum_iterator1D<BatchIndex>(static_cast<BatchIndex>(batch_size)))
             grad += (delta[batch, v] * h_last[batch, d]);
@@ -569,6 +573,20 @@ namespace rllm
         ENDFOR
     }
 
+    static void zero_output_layer_string_table_index_dW_rows(
+        // OFFLOAD_PARAMETERS(dW, rows)
+        fixed_size_matrix<float, PositionIndex, EmbeddingDimension>& dW,
+        PositionIndex rows
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, rows))
+        dW[v, d] = 0.0f;
+        ENDFOR
+    }
+
     static void update_output_layer_weights_from_gradient(
         // OFFLOAD_PARAMETERS(dW, W, V, S, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics)
         const fixed_size_matrix<float, TokenID, EmbeddingDimension>& dW,
@@ -611,7 +629,7 @@ namespace rllm
     }
 
     static void update_output_layer_weights_from_gradient(
-        // OFFLOAD_PARAMETERS(dW, W, V, S, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics)
+        // OFFLOAD_PARAMETERS(dW, W, V, S, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics, rows)
         const fixed_size_matrix<float, PositionIndex, EmbeddingDimension>& dW,
         fixed_size_matrix<float16, PositionIndex, EmbeddingDimension>& W,
         fixed_size_matrix<float, PositionIndex, EmbeddingDimension>& V,
@@ -620,13 +638,14 @@ namespace rllm
         float bias_correction1,
         float bias_correction2,
         fixed_size_vector<float, TempStorage>& diagnostics,
-        int collect_diagnostics
+        int collect_diagnostics,
+        PositionIndex rows
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>();
-        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, W, V, S, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics))
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, W, V, S, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics, rows))
         const float raw_gradient = dW[v, d];
         const float scaled_gradient = (raw_gradient * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
         const float g = math::clamp(scaled_gradient, -OutputLayer::GRAD_CLIP, OutputLayer::GRAD_CLIP);
@@ -779,7 +798,14 @@ namespace rllm
     void OutputLayerGradientAccumulator::reset(VulkanQueue& queue)
     {
         dW_lm_head.zero(queue);
-        dW_string_table_index_head.zero(queue);
+        if (!string_table_index_gradients_initialized || string_table_index_count == PositionIndex::MAX)
+        {
+            dW_string_table_index_head.zero(queue);
+            string_table_index_gradients_initialized = true;
+        }
+        else if (string_table_index_count != PositionIndex::START)
+            zero_output_layer_string_table_index_dW_rows(dW_string_table_index_head, string_table_index_count);
+        string_table_index_count = PositionIndex::START;
         touched = false;
     }
 
@@ -854,6 +880,7 @@ namespace rllm
             string_table_index_delta, dh_last, W_string_table_index_head);
         accumulate_output_layer_string_table_index_dW(
             string_table_index_delta, h_last, accumulator.dW_string_table_index_head);
+        accumulator.string_table_index_count = PositionIndex::MAX;
         accumulator.touched = true;
         check_nan_finding_mode("backward_accumulate:end");
     }
@@ -926,24 +953,8 @@ namespace rllm
         ENDFOR
     }
 
-    static void initialize_batched_string_table_index_active_examples(
-        // OFFLOAD_PARAMETERS(string_table_index_active_examples, batch_size)
-        fixed_size_vector<int, BatchIndex>& string_table_index_active_examples,
-        int batch_size
-        // END_OFFLOAD_PARAMETERS
-    )
-    {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_1D_PARAM(queue, batch, enum_iterator1D<BatchIndex>(static_cast<BatchIndex>(batch_size)), (string_table_index_active_examples, batch_size))
-        string_table_index_active_examples[batch] = 0;
-        ENDFOR
-    }
-
     static void mark_batched_string_table_index_examples(
-        // OFFLOAD_PARAMETERS(logits, temp, expected_tokens, expected_string_table_indices, active_examples, string_table_index_active_examples, batch_size)
-        const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
-        const fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
-        const fixed_size_vector<int, BatchIndex>& expected_tokens,
+        // OFFLOAD_PARAMETERS(expected_string_table_indices, active_examples, string_table_index_active_examples, batch_size)
         const fixed_size_vector<int, BatchIndex>& expected_string_table_indices,
         const fixed_size_vector<int, BatchIndex>& active_examples,
         fixed_size_vector<int, BatchIndex>& string_table_index_active_examples,
@@ -952,22 +963,11 @@ namespace rllm
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, temp, expected_tokens, expected_string_table_indices, active_examples, string_table_index_active_examples, batch_size))
-        const int expected_index = expected_string_table_indices[batch];
-        const int expected_token = expected_tokens[batch];
-        const int is_active_example = active_examples[batch];
-        if (is_active_example == 0)
-        {
-        }
-        else if (expected_index == -1)
-        {
-        }
-        else if (static_cast<int>(token) == expected_token)
-        {
-        }
-        else if (logits[batch, token] == temp[batch, TempStorage::START])
-            string_table_index_active_examples[batch] = 1;
+        OFFLOAD_PARFOR_1D_PARAM(queue, batch, enum_iterator1D<BatchIndex>(static_cast<BatchIndex>(batch_size)), (expected_string_table_indices, active_examples, string_table_index_active_examples, batch_size))
+        string_table_index_active_examples[batch] = 0;
+        if (active_examples[batch] != 0)
+            if (expected_string_table_indices[batch] != -1)
+                string_table_index_active_examples[batch] = 1;
         ENDFOR
     }
 
@@ -986,35 +986,39 @@ namespace rllm
     }
 
     static void reduce_batched_index_logits_max(
-        // OFFLOAD_PARAMETERS(logits, temp, active_examples, batch_size)
+        // OFFLOAD_PARAMETERS(logits, temp, active_examples, batch_size, index_count)
         const fixed_size_matrix<float, BatchIndex, PositionIndex>& logits,
         fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
         const fixed_size_vector<int, BatchIndex>& active_examples,
-        int batch_size
+        int batch_size,
+        PositionIndex index_count
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(static_cast<BatchIndex>(batch_size));
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, temp, active_examples, batch_size))
+        const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
+            static_cast<BatchIndex>(batch_size), index_count);
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, temp, active_examples, batch_size, index_count))
         if (active_examples[batch] != 0)
             atomicMax(temp[batch, TempStorage::START], logits[batch, index]);
         ENDFOR
     }
 
     static void compute_batched_index_exp_sum(
-        // OFFLOAD_PARAMETERS(logits, delta, temp, active_examples, batch_size)
+        // OFFLOAD_PARAMETERS(logits, delta, temp, active_examples, batch_size, index_count)
         const fixed_size_matrix<float, BatchIndex, PositionIndex>& logits,
         fixed_size_matrix<float, BatchIndex, PositionIndex>& delta,
         fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
         const fixed_size_vector<int, BatchIndex>& active_examples,
-        int batch_size
+        int batch_size,
+        PositionIndex index_count
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(static_cast<BatchIndex>(batch_size));
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, active_examples, batch_size))
+        const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
+            static_cast<BatchIndex>(batch_size), index_count);
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, active_examples, batch_size, index_count))
         if (active_examples[batch] != 0)
         {
             const float value = exp((logits[batch, index] - temp[batch, TempStorage::START]));
@@ -1027,7 +1031,7 @@ namespace rllm
     }
 
     static void finalize_batched_index_softmax_delta(
-        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_string_table_indices, active_examples, losses, batch_size, loss_gradient_scale)
+        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_string_table_indices, active_examples, losses, batch_size, index_count, loss_gradient_scale)
         const fixed_size_matrix<float, BatchIndex, PositionIndex>& logits,
         fixed_size_matrix<float, BatchIndex, PositionIndex>& delta,
         const fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
@@ -1035,13 +1039,15 @@ namespace rllm
         const fixed_size_vector<int, BatchIndex>& active_examples,
         fixed_size_vector<float, BatchIndex>& losses,
         int batch_size,
+        PositionIndex index_count,
         float loss_gradient_scale
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(static_cast<BatchIndex>(batch_size));
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, expected_string_table_indices, active_examples, losses, batch_size, loss_gradient_scale))
+        const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
+            static_cast<BatchIndex>(batch_size), index_count);
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, expected_string_table_indices, active_examples, losses, batch_size, index_count, loss_gradient_scale))
         if (active_examples[batch] != 0)
         {
             const float sum_exp = temp[batch, static_cast<TempStorage>(1)];
@@ -1111,7 +1117,8 @@ namespace rllm
         BatchedOutputWorkspace& workspace,
         VulkanQueue& queue,
         const fixed_size_vector<int, BatchIndex>& expected_string_table_indices,
-        float loss_gradient_scale)
+        float loss_gradient_scale,
+        PositionIndex string_table_index_count)
     {
         (void) queue;
         assert(loss_gradient_scale > 0.0f);
@@ -1119,28 +1126,29 @@ namespace rllm
         initialize_batched_softmax(workspace.softmax_temp, workspace.losses, count);
         reduce_batched_logits_max(logits, workspace.softmax_temp, workspace.active_examples, count);
         compute_batched_exp_sum(logits, workspace.delta, workspace.softmax_temp, workspace.active_examples, count);
-        initialize_batched_string_table_index_active_examples(
-            workspace.string_table_index_active_examples, count);
-        mark_batched_string_table_index_examples(logits, workspace.softmax_temp,
-            workspace.expected_tokens, expected_string_table_indices, workspace.active_examples,
-            workspace.string_table_index_active_examples, count);
         finalize_batched_softmax_delta(logits, workspace.delta, workspace.softmax_temp,
             workspace.expected_tokens, workspace.active_examples, workspace.losses, count,
             loss_gradient_scale);
 
+        if (string_table_index_count == PositionIndex::START)
+            return;
+
+        mark_batched_string_table_index_examples(
+            expected_string_table_indices, workspace.active_examples,
+            workspace.string_table_index_active_examples, count);
         output_layer_forward_batched_string_table_index_impl(
             queue, workspace.h_last, W_string_table_index_head,
-            workspace.string_table_index_logits, count);
+            workspace.string_table_index_logits, count, string_table_index_count);
         initialize_batched_index_softmax_temp(workspace.softmax_temp, count);
         reduce_batched_index_logits_max(workspace.string_table_index_logits, workspace.softmax_temp,
-            workspace.string_table_index_active_examples, count);
+            workspace.string_table_index_active_examples, count, string_table_index_count);
         compute_batched_index_exp_sum(workspace.string_table_index_logits,
             workspace.string_table_index_delta, workspace.softmax_temp,
-            workspace.string_table_index_active_examples, count);
+            workspace.string_table_index_active_examples, count, string_table_index_count);
         finalize_batched_index_softmax_delta(workspace.string_table_index_logits,
             workspace.string_table_index_delta, workspace.softmax_temp,
             expected_string_table_indices, workspace.string_table_index_active_examples,
-            workspace.losses, count, loss_gradient_scale);
+            workspace.losses, count, string_table_index_count, loss_gradient_scale);
     }
 
     void OutputLayer::backward_batched_accumulate(
@@ -1149,15 +1157,23 @@ namespace rllm
         const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
         BatchIndex batch_size,
         fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& dh_last,
-        OutputLayerGradientAccumulator& accumulator
+        OutputLayerGradientAccumulator& accumulator,
+        PositionIndex string_table_index_count
     )
     {
         accumulate_batched_output_layer_dh_last(delta, dh_last, W_lm_head, static_cast<int>(batch_size));
         accumulate_batched_output_layer_dW(delta, h_last, accumulator.dW_lm_head, static_cast<int>(batch_size));
-        accumulate_batched_output_layer_string_table_index_dh_last(
-            string_table_index_delta, dh_last, W_string_table_index_head, static_cast<int>(batch_size));
-        accumulate_batched_output_layer_string_table_index_dW(
-            string_table_index_delta, h_last, accumulator.dW_string_table_index_head, static_cast<int>(batch_size));
+        if (string_table_index_count != PositionIndex::START)
+        {
+            accumulate_batched_output_layer_string_table_index_dh_last(
+                string_table_index_delta, dh_last, W_string_table_index_head,
+                static_cast<int>(batch_size), string_table_index_count);
+            accumulate_batched_output_layer_string_table_index_dW(
+                string_table_index_delta, h_last, accumulator.dW_string_table_index_head,
+                static_cast<int>(batch_size), string_table_index_count);
+            if (static_cast<size_t>(string_table_index_count) > static_cast<size_t>(accumulator.string_table_index_count))
+                accumulator.string_table_index_count = string_table_index_count;
+        }
         accumulator.touched = true;
     }
 
@@ -1169,13 +1185,17 @@ namespace rllm
         auto& diagnostics = optimizer_diagnostics_buffer();
         prepare_optimizer_gradient_clip(diagnostics);
         accumulate_optimizer_gradient_norm(accumulator.dW_lm_head, diagnostics);
-        accumulate_optimizer_gradient_norm(accumulator.dW_string_table_index_head, diagnostics);
+        if (accumulator.string_table_index_count != PositionIndex::START)
+            accumulate_optimizer_gradient_norm(accumulator.dW_string_table_index_head, accumulator.string_table_index_count, diagnostics);
         finalize_optimizer_gradient_clip(diagnostics);
         update_output_layer_weights_from_gradient(accumulator.dW_lm_head, W_lm_head, V_lm_head, S_lm_head, learning_rate, bias_correction1, bias_correction2,
             diagnostics, optimizer_diagnostics_enabled() ? 1 : 0);
-        update_output_layer_weights_from_gradient(accumulator.dW_string_table_index_head, W_string_table_index_head,
-            V_string_table_index_head, S_string_table_index_head, learning_rate, bias_correction1, bias_correction2,
-            diagnostics, optimizer_diagnostics_enabled() ? 1 : 0);
+        if (accumulator.string_table_index_count != PositionIndex::START)
+        {
+            update_output_layer_weights_from_gradient(accumulator.dW_string_table_index_head, W_string_table_index_head,
+                V_string_table_index_head, S_string_table_index_head, learning_rate, bias_correction1, bias_correction2,
+                diagnostics, optimizer_diagnostics_enabled() ? 1 : 0, accumulator.string_table_index_count);
+        }
         check_nan_finding_mode("apply_accumulated_update:end");
     }
 
@@ -1278,63 +1298,49 @@ namespace rllm
         const float expected_logit = inputs_cpu[expected_output_token];
         const float log_prob = expected_logit - max_val - std::log(sum_exp);
         float loss = -log_prob;
-        const TokenStringCategory expected_category = token_string_category(expected_output_token);
         score.string_table_index_prediction_active = false;
         score.string_table_index_values.zero(queue);
-        if (expected_category == TokenStringCategory::Local &&
+        if (is_string_table_index_token(expected_output_token) &&
             expected_string_table_index != NO_STRING_TABLE_INDEX)
         {
             assert(expected_string_table_index < static_cast<size_t>(PositionIndex::MAX));
-            TokenID predicted_token = TokenID::START;
-            float predicted_logit = inputs_cpu[predicted_token];
-            for (const auto token : enum_iterator1D<TokenID>())
+            score.string_table_index_prediction_active = true;
+            initialize_softmax_temp_values(score.temp_values);
+            reduce_index_logits_max_to_temp(m_string_table_index_inputs, score.temp_values);
+            compute_index_exp_and_accumulate_sum(
+                m_string_table_index_inputs, score.string_table_index_values, score.temp_values);
+            finalize_index_softmax_delta(
+                score.string_table_index_values, score.temp_values,
+                static_cast<PositionIndex>(expected_string_table_index));
+            score.temp_values.copy_to_cpu(queue, score.temp_values_cpu);
+            const float index_max_val = score.temp_values_cpu[TempStorage::START];
+            const float index_sum_exp = score.temp_values_cpu[TempStorage::ONE];
+            const auto expected_index = static_cast<PositionIndex>(expected_string_table_index);
+            const float expected_index_logit = m_string_table_index_inputs_cpu[expected_index];
+            const float index_log_prob = expected_index_logit - index_max_val - std::log(index_sum_exp);
+            const float index_loss = -index_log_prob;
+            const float max_reasonable_index_loss =
+                compute_max_reasonable_index_loss(index_max_val, expected_index_logit);
+            if (!std::isfinite(expected_index_logit) || !std::isfinite(index_max_val) ||
+                !std::isfinite(index_sum_exp) || !std::isfinite(index_log_prob) ||
+                index_sum_exp <= 0.0f || index_log_prob > 1e-4f ||
+                index_loss > max_reasonable_index_loss)
             {
-                if (inputs_cpu[token] > predicted_logit)
-                {
-                    predicted_token = token;
-                    predicted_logit = inputs_cpu[token];
-                }
+                std::fprintf(
+                    stderr,
+                    "compute_score invalid string-table-index softmax state: target=%zu expected_logit=%g "
+                    "max_val=%g sum_exp=%g log_prob=%g loss=%g max_reasonable_loss=%g\n",
+                    expected_string_table_index,
+                    static_cast<double>(expected_index_logit),
+                    static_cast<double>(index_max_val),
+                    static_cast<double>(index_sum_exp),
+                    static_cast<double>(index_log_prob),
+                    static_cast<double>(index_loss),
+                    static_cast<double>(max_reasonable_index_loss)
+                );
+                std::abort();
             }
-            if (predicted_token != expected_output_token)
-            {
-                score.string_table_index_prediction_active = true;
-                initialize_softmax_temp_values(score.temp_values);
-                reduce_index_logits_max_to_temp(m_string_table_index_inputs, score.temp_values);
-                compute_index_exp_and_accumulate_sum(
-                    m_string_table_index_inputs, score.string_table_index_values, score.temp_values);
-                finalize_index_softmax_delta(
-                    score.string_table_index_values, score.temp_values,
-                    static_cast<PositionIndex>(expected_string_table_index));
-                score.temp_values.copy_to_cpu(queue, score.temp_values_cpu);
-                const float index_max_val = score.temp_values_cpu[TempStorage::START];
-                const float index_sum_exp = score.temp_values_cpu[TempStorage::ONE];
-                const auto expected_index = static_cast<PositionIndex>(expected_string_table_index);
-                const float expected_index_logit = m_string_table_index_inputs_cpu[expected_index];
-                const float index_log_prob = expected_index_logit - index_max_val - std::log(index_sum_exp);
-                const float index_loss = -index_log_prob;
-                const float max_reasonable_index_loss =
-                    compute_max_reasonable_index_loss(index_max_val, expected_index_logit);
-                if (!std::isfinite(expected_index_logit) || !std::isfinite(index_max_val) ||
-                    !std::isfinite(index_sum_exp) || !std::isfinite(index_log_prob) ||
-                    index_sum_exp <= 0.0f || index_log_prob > 1e-4f ||
-                    index_loss > max_reasonable_index_loss)
-                {
-                    std::fprintf(
-                        stderr,
-                        "compute_score invalid string-table-index softmax state: target=%zu expected_logit=%g "
-                        "max_val=%g sum_exp=%g log_prob=%g loss=%g max_reasonable_loss=%g\n",
-                        expected_string_table_index,
-                        static_cast<double>(expected_index_logit),
-                        static_cast<double>(index_max_val),
-                        static_cast<double>(index_sum_exp),
-                        static_cast<double>(index_log_prob),
-                        static_cast<double>(index_loss),
-                        static_cast<double>(max_reasonable_index_loss)
-                    );
-                    std::abort();
-                }
-                loss += index_loss;
-            }
+            loss += index_loss;
         }
         const float max_reasonable_loss =
             compute_max_reasonable_loss(max_val, expected_logit) +
