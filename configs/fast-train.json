@@ -5,7 +5,7 @@
   "window_size": 96,
   "window_stride": 48,
   "learn_depth": 1,
-  "strip_comments": true,
+  "strip_comments": false,
   "sources": [
     "training_data0:0.05",
     "curriculum/grammar:0.15",

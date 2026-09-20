@@ -214,6 +214,14 @@ namespace rllm
         m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
     }
 
+    void InputLayer::set_embedding(TokenID token, const embedding_row_t& embedding)
+    {
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+            m_embeddings_cpu.set(token, d, embedding[static_cast<size_t>(d)]);
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        m_embeddings.copy_row_to_offload_buffer(queue, token, m_embeddings_cpu);
+    }
+
     // Fill h[T × D_MODEL] with token embeddings. Transformer blocks inject
     // positional information by applying RoPE to Q and K.
     void InputLayer::propagate_forward(

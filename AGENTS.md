@@ -2,7 +2,7 @@
 
 ## Repository expectations
 
-- Run '. .venv/bin/activate' first
+- Run '. ~/Projects/.venv/bin/activate' first
 - Document public utilities in 'docs/' when changing behaviour
 - Run 'build_debug.sh' to build with debugging enabled, 'build_release.sh' for an optimized version
 - Create tkernel files to transform the AST for optimizations

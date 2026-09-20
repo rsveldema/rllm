@@ -754,37 +754,41 @@ namespace rllm
     }
 
     [[maybe_unused]] static void finalize_softmax_delta(
-        // OFFLOAD_PARAMETERS(values, temp_values, expected_output_token)
+        // OFFLOAD_PARAMETERS(values, temp_values, expected_output_token, weight)
         fixed_size_vector<float, TokenID>& values,
         const fixed_size_vector<float, TempStorage>& temp_values,
-        TokenID expected_output_token
+        TokenID expected_output_token,
+        float weight
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token))
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token, weight))
         float sum_exp = temp_values[TempStorage::ONE];
         float delta = (OutputLayer::smooth - (values[i] / sum_exp));
         if (i == expected_output_token)
             delta += (1.0f - OutputLayer::LABEL_SMOOTHING);
+        delta *= weight;
         values[i] = delta;
         ENDFOR
     }
 
     [[maybe_unused]] static void finalize_index_softmax_delta(
-        // OFFLOAD_PARAMETERS(values, temp_values, expected_string_table_index)
+        // OFFLOAD_PARAMETERS(values, temp_values, expected_string_table_index, weight)
         fixed_size_vector<float, PositionIndex>& values,
         const fixed_size_vector<float, TempStorage>& temp_values,
-        PositionIndex expected_string_table_index
+        PositionIndex expected_string_table_index,
+        float weight
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(), (values, temp_values, expected_string_table_index))
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(), (values, temp_values, expected_string_table_index, weight))
         const float sum_exp = temp_values[TempStorage::ONE];
         float delta = -(values[i] / sum_exp);
         if (i == expected_string_table_index)
             delta += 1.0f;
+        delta *= weight;
         values[i] = delta;
         ENDFOR
     }
@@ -986,10 +990,11 @@ namespace rllm
     }
 
     static void reduce_batched_index_logits_max(
-        // OFFLOAD_PARAMETERS(logits, temp, active_examples, batch_size, index_count)
+        // OFFLOAD_PARAMETERS(logits, temp, active_examples, value_counts, batch_size, index_count)
         const fixed_size_matrix<float, BatchIndex, PositionIndex>& logits,
         fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
         const fixed_size_vector<int, BatchIndex>& active_examples,
+        const fixed_size_vector<int, BatchIndex>& value_counts,
         int batch_size,
         PositionIndex index_count
         // END_OFFLOAD_PARAMETERS
@@ -998,18 +1003,21 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
             static_cast<BatchIndex>(batch_size), index_count);
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, temp, active_examples, batch_size, index_count))
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, temp, active_examples, value_counts, batch_size, index_count))
         if (active_examples[batch] != 0)
-            atomicMax(temp[batch, TempStorage::START], logits[batch, index]);
+            if (index < value_counts[batch])
+                atomicMax(temp[batch, TempStorage::START], logits[batch, index]);
         ENDFOR
     }
 
     static void compute_batched_index_exp_sum(
-        // OFFLOAD_PARAMETERS(logits, delta, temp, active_examples, batch_size, index_count)
+        // OFFLOAD_PARAMETERS(logits, delta, temp, active_examples, value_counts, numeric_distance_costs, batch_size, index_count)
         const fixed_size_matrix<float, BatchIndex, PositionIndex>& logits,
         fixed_size_matrix<float, BatchIndex, PositionIndex>& delta,
         fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
         const fixed_size_vector<int, BatchIndex>& active_examples,
+        const fixed_size_vector<int, BatchIndex>& value_counts,
+        const fixed_size_matrix<float, BatchIndex, PositionIndex>& numeric_distance_costs,
         int batch_size,
         PositionIndex index_count
         // END_OFFLOAD_PARAMETERS
@@ -1018,76 +1026,129 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
             static_cast<BatchIndex>(batch_size), index_count);
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, active_examples, batch_size, index_count))
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, active_examples, value_counts, numeric_distance_costs, batch_size, index_count))
+        delta[batch, index] = 0.0f;
         if (active_examples[batch] != 0)
-        {
-            const float value = exp((logits[batch, index] - temp[batch, TempStorage::START]));
-            delta[batch, index] = value;
-            atomicAdd(temp[batch, static_cast<TempStorage>(1)], value);
-        }
-        else
-            delta[batch, index] = 0.0f;
+            if (index < value_counts[batch])
+            {
+                const float value = exp((logits[batch, index] - temp[batch, TempStorage::START]));
+                delta[batch, index] = value;
+                atomicAdd(temp[batch, static_cast<TempStorage>(1)], value);
+                float weighted_cost = numeric_distance_costs[batch, index];
+                weighted_cost *= value;
+                atomicAdd(temp[batch, static_cast<TempStorage>(2)], weighted_cost);
+            }
         ENDFOR
     }
 
     static void finalize_batched_index_softmax_delta(
-        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_string_table_indices, active_examples, losses, batch_size, index_count, loss_gradient_scale)
+        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_string_table_indices, active_examples, value_counts, numeric_distance_costs, losses, batch_size, index_count, loss_gradient_scale, reference_loss_weight, numeric_distance_loss_weight)
         const fixed_size_matrix<float, BatchIndex, PositionIndex>& logits,
         fixed_size_matrix<float, BatchIndex, PositionIndex>& delta,
         const fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
         const fixed_size_vector<int, BatchIndex>& expected_string_table_indices,
         const fixed_size_vector<int, BatchIndex>& active_examples,
+        const fixed_size_vector<int, BatchIndex>& value_counts,
+        const fixed_size_matrix<float, BatchIndex, PositionIndex>& numeric_distance_costs,
         fixed_size_vector<float, BatchIndex>& losses,
         int batch_size,
         PositionIndex index_count,
-        float loss_gradient_scale
+        float loss_gradient_scale,
+        float reference_loss_weight,
+        float numeric_distance_loss_weight
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
             static_cast<BatchIndex>(batch_size), index_count);
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, expected_string_table_indices, active_examples, losses, batch_size, index_count, loss_gradient_scale))
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, expected_string_table_indices, active_examples, value_counts, numeric_distance_costs, losses, batch_size, index_count, loss_gradient_scale, reference_loss_weight, numeric_distance_loss_weight))
         if (active_examples[batch] != 0)
+        if (index < value_counts[batch])
         {
             const float sum_exp = temp[batch, static_cast<TempStorage>(1)];
-            float value = -(delta[batch, index] / sum_exp);
+            float probability = delta[batch, index];
+            probability /= sum_exp;
+            float expected_numeric_cost = temp[batch, static_cast<TempStorage>(2)];
+            expected_numeric_cost /= sum_exp;
+            float value = -probability;
             if (static_cast<int>(index) == expected_string_table_indices[batch])
             {
                 value += 1.0f;
-                losses[batch] += -((logits[batch, index] - temp[batch, TempStorage::START]) - log(sum_exp));
+                float index_loss = temp[batch, TempStorage::START];
+                index_loss += log(sum_exp);
+                index_loss -= logits[batch, index];
+                index_loss *= reference_loss_weight;
+                losses[batch] += index_loss;
+                float numeric_loss = expected_numeric_cost;
+                numeric_loss *= numeric_distance_loss_weight;
+                losses[batch] += numeric_loss;
             }
-            delta[batch, index] = (value * loss_gradient_scale);
+            float weighted_scale = loss_gradient_scale;
+            weighted_scale *= reference_loss_weight;
+            value *= weighted_scale;
+            float candidate_cost = numeric_distance_costs[batch, index];
+            float numeric_value = expected_numeric_cost;
+            numeric_value -= candidate_cost;
+            numeric_value *= probability;
+            numeric_value *= numeric_distance_loss_weight;
+            numeric_value *= loss_gradient_scale;
+            value += numeric_value;
+            delta[batch, index] = value;
         }
         ENDFOR
     }
 
     static void finalize_batched_softmax_delta(
-        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_tokens, active_examples, losses, batch_size, loss_gradient_scale)
+        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_tokens, active_examples, losses, correct_token_probabilities, batch_size, loss_gradient_scale, category_loss_bonus, local_token, param_token, global_token, field_token, loop_token, class_name_token)
         const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
         fixed_size_matrix<float, BatchIndex, TokenID>& delta,
         const fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
         const fixed_size_vector<int, BatchIndex>& expected_tokens,
         const fixed_size_vector<int, BatchIndex>& active_examples,
         fixed_size_vector<float, BatchIndex>& losses,
+        fixed_size_vector<float, BatchIndex>& correct_token_probabilities,
         int batch_size,
-        float loss_gradient_scale
+        float loss_gradient_scale,
+        float category_loss_bonus,
+        int local_token, int param_token, int global_token,
+        int field_token, int loop_token, int class_name_token
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, delta, temp, expected_tokens, active_examples, losses, batch_size, loss_gradient_scale))
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, delta, temp, expected_tokens, active_examples, losses, correct_token_probabilities, batch_size, loss_gradient_scale, category_loss_bonus, local_token, param_token, global_token, field_token, loop_token, class_name_token))
         if (active_examples[batch] != 0)
         {
+            const int expected = expected_tokens[batch];
+            int category = 0;
+            if (expected == local_token) category = 1;
+            if (expected == param_token) category = 1;
+            if (expected == global_token) category = 1;
+            if (expected == field_token) category = 1;
+            if (expected == loop_token) category = 1;
+            if (expected == class_name_token) category = 1;
+            float weight = 1.0f;
+            if (category != 0) weight += category_loss_bonus;
             const float sum_exp = temp[batch, static_cast<TempStorage>(1)];
             float value = (OutputLayer::smooth - (delta[batch, token] / sum_exp));
             if (static_cast<int>(token) == expected_tokens[batch])
             {
+                float correct_probability = delta[batch, token];
+                correct_probability /= sum_exp;
+                correct_token_probabilities[batch] = correct_probability;
                 value += (1.0f - OutputLayer::LABEL_SMOOTHING);
-                losses[batch] = -((logits[batch, token] - temp[batch, TempStorage::START]) - log(sum_exp));
+                float token_loss = temp[batch, TempStorage::START];
+                token_loss += log(sum_exp);
+                token_loss -= logits[batch, token];
+                token_loss *= weight;
+                losses[batch] = token_loss;
             }
-            delta[batch, token] = (value * loss_gradient_scale);
+            float weighted_scale = loss_gradient_scale;
+            weighted_scale *= weight;
+            value *= weighted_scale;
+            delta[batch, token] = value;
         }
         ENDFOR
     }
@@ -1103,11 +1164,16 @@ namespace rllm
         assert(loss_gradient_scale > 0.0f);
         const int count = static_cast<int>(batch_size);
         initialize_batched_softmax(workspace.softmax_temp, workspace.losses, count);
+        workspace.correct_token_probabilities.zero(queue);
         reduce_batched_logits_max(logits, workspace.softmax_temp, workspace.active_examples, count);
         compute_batched_exp_sum(logits, workspace.delta, workspace.softmax_temp, workspace.active_examples, count);
         finalize_batched_softmax_delta(logits, workspace.delta, workspace.softmax_temp,
-            workspace.expected_tokens, workspace.active_examples, workspace.losses, count,
-            loss_gradient_scale);
+            workspace.expected_tokens, workspace.active_examples, workspace.losses,
+            workspace.correct_token_probabilities, count,
+            loss_gradient_scale, CATEGORY_LOSS_BONUS,
+            static_cast<int>(TokenID::LOCAL), static_cast<int>(TokenID::PARAM),
+            static_cast<int>(TokenID::GLOBAL), static_cast<int>(TokenID::FIELD),
+            static_cast<int>(TokenID::LOOP), static_cast<int>(TokenID::CLASS_NAME));
         workspace.string_table_index_delta.zero(queue);
     }
 
@@ -1124,11 +1190,16 @@ namespace rllm
         assert(loss_gradient_scale > 0.0f);
         const int count = static_cast<int>(batch_size);
         initialize_batched_softmax(workspace.softmax_temp, workspace.losses, count);
+        workspace.correct_token_probabilities.zero(queue);
         reduce_batched_logits_max(logits, workspace.softmax_temp, workspace.active_examples, count);
         compute_batched_exp_sum(logits, workspace.delta, workspace.softmax_temp, workspace.active_examples, count);
         finalize_batched_softmax_delta(logits, workspace.delta, workspace.softmax_temp,
-            workspace.expected_tokens, workspace.active_examples, workspace.losses, count,
-            loss_gradient_scale);
+            workspace.expected_tokens, workspace.active_examples, workspace.losses,
+            workspace.correct_token_probabilities, count,
+            loss_gradient_scale, CATEGORY_LOSS_BONUS,
+            static_cast<int>(TokenID::LOCAL), static_cast<int>(TokenID::PARAM),
+            static_cast<int>(TokenID::GLOBAL), static_cast<int>(TokenID::FIELD),
+            static_cast<int>(TokenID::LOOP), static_cast<int>(TokenID::CLASS_NAME));
 
         if (string_table_index_count == PositionIndex::START)
             return;
@@ -1141,14 +1212,18 @@ namespace rllm
             workspace.string_table_index_logits, count, string_table_index_count);
         initialize_batched_index_softmax_temp(workspace.softmax_temp, count);
         reduce_batched_index_logits_max(workspace.string_table_index_logits, workspace.softmax_temp,
-            workspace.string_table_index_active_examples, count, string_table_index_count);
+            workspace.string_table_index_active_examples, workspace.expected_value_counts,
+            count, string_table_index_count);
         compute_batched_index_exp_sum(workspace.string_table_index_logits,
             workspace.string_table_index_delta, workspace.softmax_temp,
-            workspace.string_table_index_active_examples, count, string_table_index_count);
+            workspace.string_table_index_active_examples, workspace.expected_value_counts,
+            workspace.numeric_distance_costs, count, string_table_index_count);
         finalize_batched_index_softmax_delta(workspace.string_table_index_logits,
             workspace.string_table_index_delta, workspace.softmax_temp,
             expected_string_table_indices, workspace.string_table_index_active_examples,
-            workspace.losses, count, string_table_index_count, loss_gradient_scale);
+            workspace.expected_value_counts, workspace.numeric_distance_costs,
+            workspace.losses, count, string_table_index_count, loss_gradient_scale,
+            REFERENCE_LOSS_WEIGHT, NUMERIC_DISTANCE_LOSS_WEIGHT);
     }
 
     void OutputLayer::backward_batched_accumulate(
@@ -1290,17 +1365,19 @@ namespace rllm
         check_output_logits_nan_finding_mode(inputs, "compute_score:start");
         reduce_logits_max_to_temp(inputs, score.temp_values);
         compute_exp_and_accumulate_sum(inputs, score.values, score.temp_values);
-        finalize_softmax_delta(score.values, score.temp_values, expected_output_token);
+        const float token_weight = is_identifier_category_token(expected_output_token)
+            ? 1.0f + CATEGORY_LOSS_BONUS : 1.0f;
+        finalize_softmax_delta(score.values, score.temp_values, expected_output_token, token_weight);
         score.temp_values.copy_to_cpu(queue, score.temp_values_cpu);
 
         const float max_val = score.temp_values_cpu[TempStorage::START];
         const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
         const float expected_logit = inputs_cpu[expected_output_token];
         const float log_prob = expected_logit - max_val - std::log(sum_exp);
-        float loss = -log_prob;
+        float loss = token_weight * -log_prob;
         score.string_table_index_prediction_active = false;
         score.string_table_index_values.zero(queue);
-        if (is_string_table_index_token(expected_output_token) &&
+        if (token_string_category(expected_output_token) != TokenStringCategory::None &&
             expected_string_table_index != NO_STRING_TABLE_INDEX)
         {
             assert(expected_string_table_index < static_cast<size_t>(PositionIndex::MAX));
@@ -1311,7 +1388,7 @@ namespace rllm
                 m_string_table_index_inputs, score.string_table_index_values, score.temp_values);
             finalize_index_softmax_delta(
                 score.string_table_index_values, score.temp_values,
-                static_cast<PositionIndex>(expected_string_table_index));
+                static_cast<PositionIndex>(expected_string_table_index), REFERENCE_LOSS_WEIGHT);
             score.temp_values.copy_to_cpu(queue, score.temp_values_cpu);
             const float index_max_val = score.temp_values_cpu[TempStorage::START];
             const float index_sum_exp = score.temp_values_cpu[TempStorage::ONE];
@@ -1340,12 +1417,12 @@ namespace rllm
                 );
                 std::abort();
             }
-            loss += index_loss;
+            loss += REFERENCE_LOSS_WEIGHT * index_loss;
         }
         const float max_reasonable_loss =
-            compute_max_reasonable_loss(max_val, expected_logit) +
+            token_weight * compute_max_reasonable_loss(max_val, expected_logit) +
             (score.string_table_index_prediction_active
-                ? compute_max_reasonable_index_loss(
+                ? REFERENCE_LOSS_WEIGHT * compute_max_reasonable_index_loss(
                     score.temp_values_cpu[TempStorage::START],
                     m_string_table_index_inputs_cpu[static_cast<PositionIndex>(expected_string_table_index)])
                 : 0.0f);

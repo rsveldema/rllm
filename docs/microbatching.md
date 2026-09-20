@@ -31,6 +31,11 @@ embedding Adam moments, global clipping, and weight update remain on the device.
 Embedding tensors are copied to the host only for explicit serialization or
 inspection.
 
+Transformer projection and weight-gradient matmuls use 16-by-16 tkernel tiles.
+Each workgroup loads operand tiles into shared memory and reuses them across its
+output tile; fused dual and triple gradient kernels share the common operand
+tile across all outputs.
+
 The progress log reports `iterations total` as the sum of the iterations used
 by all examples, `avg .../line` as that total divided by the batch size, and
 `rounds` as the number of batch-wide optimizer rounds. Consequently, the total

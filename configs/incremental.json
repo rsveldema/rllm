@@ -2,25 +2,27 @@
   "build_type": "release",
   "model_directory": "models-8-incremental",
   "layers": 8,
-  "window_size": 96,
-  "window_stride": 48,
+  "window_size": 128,
+  "window_stride": 64,
   "learn_depth": 1,
   "incremental_window": true,
   "incremental_stage_epochs": 4,
   "incremental_new_block_epochs": 2,
   "incremental_upgrade_output_scale": 0.1,
-  "strip_comments": true,
+  "strip_comments": false,
   "sources": [
     "training_data0:0.05",
     "curriculum/grammar:0.15",
     "curriculum/syntax:0.10",
     "curriculum/systems:0.10",
-    "curriculum/algos:0.10"
+    "curriculum/algos:0.10",
+    "training_data2:0.50"
   ],
   "cmake_arguments": [
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
     "-DRLLM_ENABLE_STATISTICS=OFF",
-    "-DRLLM_MAX_POSITION=256"
+    "-DRLLM_MAX_POSITION=8192",
+    "-DRLLM_MAX_ATTENTION_POSITION=128"
   ],
   "training_arguments": [
     "--epochs", "44",
@@ -34,7 +36,7 @@
     "--ffn-initializer", "xavier-uniform",
     "--embedding-initializer", "legacy-uniform",
     "--learning-rate-schedule", "lowering",
-    "--micro-batch-size", "256",
+    "--micro-batch-size", "64",
     "--max-validation-windows", "512",
     "--validation-worst-count", "20",
     "--vulkan-device", "R9700"

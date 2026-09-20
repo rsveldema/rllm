@@ -51,9 +51,12 @@ namespace rllm
         constexpr std::string_view local_token = "<LOCAL>";
         constexpr std::string_view param_token = "<PARAM>";
         constexpr std::string_view global_token = "<GLOBAL>";
+        constexpr std::string_view class_name_token = "<CLASS_NAME>";
         constexpr std::string_view field_access_token = "<FIELD>";
         constexpr std::string_view legacy_identifier_token = "<IDENTIFIER>";
         constexpr std::string_view string_token = "<STRING>";
+        constexpr std::string_view integer_token = "<INTEGER>";
+        constexpr std::string_view float_token = "<FLOAT>";
         constexpr std::string_view mcp_start_token = "<MCP>";
         constexpr std::string_view mcp_end_token = "</MCP>";
 
@@ -88,6 +91,48 @@ namespace rllm
             while (end < text.size() && identifier_continue(text[end]))
                 ++end;
             return end;
+        }
+
+        size_t numeric_literal_end(std::string_view text, size_t start)
+        {
+            size_t end = start;
+            bool seen_dot = false;
+            while (end < text.size())
+            {
+                const char ch = text[end];
+                if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '\'')
+                {
+                    ++end;
+                    continue;
+                }
+                if (ch == '.' && !seen_dot)
+                {
+                    seen_dot = true;
+                    ++end;
+                    continue;
+                }
+                if ((ch == '+' || ch == '-') && end > start &&
+                    (text[end - 1] == 'e' || text[end - 1] == 'E' ||
+                     text[end - 1] == 'p' || text[end - 1] == 'P'))
+                {
+                    ++end;
+                    continue;
+                }
+                break;
+            }
+            return end;
+        }
+
+        bool numeric_literal_is_float(std::string_view literal)
+        {
+            const bool hexadecimal = literal.starts_with("0x") || literal.starts_with("0X");
+            if (literal.find('.') != std::string_view::npos)
+                return true;
+            if (hexadecimal)
+                return literal.find_first_of("pP") != std::string_view::npos;
+            if (literal.find_first_of("eE") != std::string_view::npos)
+                return true;
+            return !literal.empty() && (literal.back() == 'f' || literal.back() == 'F');
         }
 
         size_t next_non_space(std::string_view text, size_t position)
@@ -193,6 +238,8 @@ namespace rllm
                     return std::string{local_token};
                 if (category == "param")
                     return std::string{param_token};
+                if (category == "class-name")
+                    return std::string{class_name_token};
                 return std::string{global_token};
             };
             const auto marker_from_assignment = [](const std::string& assignment) -> std::string {
@@ -203,6 +250,8 @@ namespace rllm
                     return std::string{local_token};
                 if (stored_category == "param")
                     return std::string{param_token};
+                if (stored_category == "class-name")
+                    return std::string{class_name_token};
                 return std::string{global_token};
             };
             const std::string name{word};
@@ -243,7 +292,7 @@ namespace rllm
                 mark_used(scope);
             mark_used(state.pending_parameters);
             const std::string token = std::string{category} + ":" + std::to_string(next_index);
-            if (category == "global")
+            if (category == "global" || category == "class-name")
                 state.scopes.front().emplace(name, token);
             else if (category == "param")
                 state.pending_parameters.emplace(name, token);
@@ -256,7 +305,7 @@ namespace rllm
         {
             if (text.substr(position).starts_with(field_access_token))
                 return field_access_token.size();
-            for (const auto marker : {loop_token, local_token, param_token, global_token})
+            for (const auto marker : {loop_token, local_token, param_token, global_token, class_name_token})
             {
                 if (text.substr(position).starts_with(marker))
                     return marker.size();
@@ -279,7 +328,7 @@ namespace rllm
         while (i < text.size())
         {
             bool matched_control = false;
-            for (const auto marker : {string_token, mcp_start_token, mcp_end_token})
+            for (const auto marker : {string_token, integer_token, float_token, mcp_start_token, mcp_end_token})
             {
                 if (text.substr(i).starts_with(marker))
                 {
@@ -373,6 +422,19 @@ namespace rllm
                 scopes.pending_string_table_values.emplace_back(context.value());
                 continue;
             }
+            if (std::isdigit(static_cast<unsigned char>(text[i])) ||
+                (text[i] == '.' && i + 1 < text.size() &&
+                 std::isdigit(static_cast<unsigned char>(text[i + 1]))))
+            {
+                const size_t end = numeric_literal_end(text, i);
+                const auto literal = text.substr(i, end - i);
+                const SourceContext context{text, i, end - i};
+                mcp.record_seen_string(context, literal);
+                out += numeric_literal_is_float(literal) ? float_token : integer_token;
+                scopes.pending_string_table_values.emplace_back(literal);
+                i = end;
+                continue;
+            }
             if (identifier_start(text[i]))
             {
                 const size_t first_end = identifier_end(text, i);
@@ -453,7 +515,17 @@ namespace rllm
                     out += word;
                     expect_library_name = word == "import" || word == "from" || word == "use";
                     if (word == "class" || word == "struct")
+                    {
                         scopes.pending_class_scope = true;
+                        scopes.expect_class_name = true;
+                    }
+                }
+                else if (scopes.expect_class_name)
+                {
+                    mcp.record_seen_identifier(SourceContext{text, i, first_end - i}, word);
+                    out += assigned_identifier_token(word, "class-name", scopes);
+                    scopes.pending_string_table_values.emplace_back(word);
+                    scopes.expect_class_name = false;
                 }
                 else if (expect_library_name ||
                          (next_non_space(text, first_end) < text.size() && text[next_non_space(text, first_end)] == '('))
@@ -508,6 +580,7 @@ namespace rllm
             {
                 scopes.pending_parameters.clear();
                 scopes.pending_class_scope = false;
+                scopes.expect_class_name = false;
                 scopes.pending_function_scope = false;
             }
             out += text[i++];
@@ -538,13 +611,16 @@ namespace rllm
             const auto identifier_marker = text.substr(position, identifier_length);
             const bool identifier = identifier_length > 0;
             const bool string = text.substr(position).starts_with(string_token);
-            if (!identifier && !string)
+            const bool integer = text.substr(position).starts_with(integer_token);
+            const bool floating = text.substr(position).starts_with(float_token);
+            if (!identifier && !string && !integer && !floating)
             {
                 result += text[position++];
                 continue;
             }
 
-            const auto marker = identifier ? identifier_marker : string_token;
+            const auto marker = identifier ? identifier_marker
+                : (string ? string_token : (integer ? integer_token : float_token));
             const MCPContext context{text, position, marker.size()};
             result += identifier ? mcp.map_identifier(context) : mcp.map_string(context);
             position += marker.size();
@@ -604,21 +680,33 @@ namespace rllm
                 ? (prediction_capacity / stride) * stride
                 : 1;
             const size_t block_advance = prediction_capacity >= stride ? block_span : stride;
+            std::vector<uint8_t> sequence_first_string_table_index;
+            if constexpr (std::is_same_v<Sequence, CpuInputLine>)
+                sequence_first_string_table_index = sequence.first_string_table_index_positions();
             for (size_t first_target = 1; first_target < sequence_size; )
             {
                 const size_t start = first_target - 1;
                 const size_t block_predictions = std::min(block_span, sequence_size - first_target);
                 const size_t end = first_target + block_predictions;
                 CpuInputLine window;
+                std::vector<uint8_t> first_string_table_index;
+                first_string_table_index.reserve(end - start);
                 for (size_t position = start; position < end; ++position)
                 {
                     if constexpr (std::is_same_v<Sequence, CpuInputLine>)
+                    {
                         window.push_back_from(sequence, static_cast<PositionIndex>(position));
+                        first_string_table_index.push_back(sequence_first_string_table_index[position]);
+                    }
                     else
+                    {
                         window.push_back(sequence[position]);
+                        first_string_table_index.push_back(0);
+                    }
                 }
                 windows.push_back({
                     .line = std::move(window),
+                    .first_string_table_index = std::move(first_string_table_index),
                     .context_length = static_cast<PositionIndex>(end - start - 1),
                     .source_index = sequence_index,
                     .starts_in_block_comment = in_comment_at[start]
@@ -1053,11 +1141,6 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                             assert(value_index < state.identifier_scopes.pending_string_table_values.size());
                             result.push_back(
                                 token_id, state.identifier_scopes.pending_string_table_values[value_index++]);
-                            const auto marker_pos = static_cast<PositionIndex>(
-                                static_cast<size_t>(result.size()) - 1);
-                            const size_t string_index = result.get_string_table_index(marker_pos);
-                            assert(string_index != NO_STRING_TABLE_INDEX);
-                            result.push_back_string_table_index(string_index);
                         }
                         ix += token_len;
                         matched_token = true;
@@ -1219,7 +1302,18 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                 result += "<STI_" + std::to_string(index) + ">";
             }
             else
+            {
                 result += get_token_from_id(token_id);
+                const size_t index = line.get_string_table_index(i);
+                if (token_string_category(token_id) != TokenStringCategory::None &&
+                    index != NO_STRING_TABLE_INDEX)
+                {
+                    const auto category = token_string_category(token_id);
+                    const auto prefix = category == TokenStringCategory::Integer ? "<ITI_"
+                        : (category == TokenStringCategory::Float ? "<FTI_" : "<STI_");
+                    result += prefix + std::to_string(index) + ">";
+                }
+            }
             if (token_info.end_of_word)
             {
                 result += ' ';

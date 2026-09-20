@@ -21,16 +21,19 @@ environment variables. Resume behavior is selected with the mutually exclusive
 directory, even when a best-validation checkpoint exists. With none of these,
 the launcher selects a compatible checkpoint automatically.
 
-`RLLM_MAX_POSITION` controls the compile-time context and workspace capacity
-(default `8192`). Because activation and attention workspaces are allocated per
-transformer layer, builds intended for shorter contexts should set this close
-to their actual maximum. The incremental configuration uses `256` for its
-96-token target, substantially reducing per-layer GPU memory without changing
-serialized weight shapes.
+`RLLM_MAX_POSITION` controls packed-row capacity, while
+`RLLM_MAX_ATTENTION_POSITION` controls the maximum length of each independently
+attended sequence. Attention workspaces have shape packed rows by local
+attention positions, so they do not allocate scores between unrelated windows.
+The model-8 configuration uses `8192` packed rows and `128` attention positions,
+and derives `RLLM_MAX_BATCH_SIZE` as `RLLM_MAX_POSITION /
+RLLM_MAX_ATTENTION_POSITION`, giving 64 batch slots. A 64-window micro-batch
+uses 8128 rows (`64 * 127`). These values change serialized tensor shapes;
+model-8 must start fresh after changing them.
 
 `--incremental-window` runs a fresh staged curriculum in the configured model
-directory. For the standard eight-layer, 96-token target it uses windows of 12,
-16, 24, 48, 72, and 96 tokens for layers 3 through 8 respectively. It adds one
+directory. For the standard eight-layer, 128-token target it uses windows of 12,
+16, 24, 48, 72, and 128 tokens for layers 3 through 8 respectively. It adds one
 layer and grows the window and proportional stride every
 `incremental_stage_epochs` epochs (default `4`).
 New blocks use Xavier-uniform weights while their residual output projections
@@ -101,21 +104,40 @@ The source files retain ordinary source spelling. Language keywords and
 punctuation are retained. Loop variables use `<LOOP>`, local variables use
 `<LOCAL>`, parameters use `<PARAM>`, field/member accesses use `<FIELD>`,
 and function, type, namespace, library, or unknown-scope names use `<GLOBAL>`.
-The concrete spelling for each identifier or string token is carried in the
-per-line `string_table_index`/`string_table_value` metadata. Each such token is
-followed by an explicit `<STI>` marker whose index payload selects the concrete
-entry in `string_table_value`; inspection output renders this as `<STI_n>`, but
-`n` is not part of the vocabulary. String and character contents become
-`<STRING>`. Syntactic function-call targets and
+The concrete spelling for each identifier or string token is carried directly
+on that token in the per-line `string_table_index`/`string_table_value`
+metadata. Inspection output appends `<STI_n>` to show this payload, but that
+annotation is not a second runtime token and `n` is not part of the vocabulary.
+String and character contents become
+`<STRING>`. Numeric constants become one atomic `<INTEGER>` or `<FLOAT>` token.
+Their exact source spelling, including radix, exponent, separators, and suffix,
+is stored in separate per-line integer and float constant tables. Inspection
+output renders attached string, integer, and float indices as `<STI_n>`,
+`<ITI_n>`, and `<FTI_n>` respectively; these suffixes are payload annotations,
+not additional runtime tokens. Exact value-index cross-entropy is supplemented
+for numeric tables by a signed-`log1p`, bounded Huber distance objective with
+weight `0.1`. This rewards nearby numeric predictions without allowing large
+literals to dominate; exact index loss remains weighted `0.3`. Unary `+` and `-` remain separate operator
+tokens. Syntactic function-call targets and
 qualified accesses such as C++ `namespace::member` are enclosed in `<MCP>` and
 `</MCP>`; the concrete names inside are abstracted as well. These markers define
 the boundary where library support is expected to be supplied by MCP. Comments
 remain prose and are not identifier-normalized.
-When the target token is the explicit `<STI>` marker, the language-model head
-trains the marker token and the string-table-index head trains the marker's
-integer payload. Training applies a per-sample permutation of `string_table_value`
+When the target is a category token with a string-table payload, the
+language-model head trains the category and the string-table-index head trains
+the attached integer payload. Training applies a per-sample permutation of `string_table_value`
 and all referenced indices so the model learns relative use of the sample-local
-table rather than memorizing concrete slot numbers.
+table rather than memorizing concrete slot numbers. Because a permuted slot
+number is unknowable before it has appeared in the causal context, training
+skips the string-table-index head loss for the first occurrence of a slot in a
+window; the category token itself is still trained.
+
+Window training uses token cross-entropy at weight `1.0`, adds a `0.2` bonus
+for identifier-category targets, and weights repeated-reference prediction at
+`0.3`. It also applies a `0.05` contextual consistency objective to repeated
+uses of the same sample-local identity. That objective pulls their final hidden
+states toward the first occurrence and is normalized by pair count and hidden
+width, keeping it auxiliary to next-token prediction.
 
 The launcher also writes a persistent inspection mirror to
 `/tmp/rllm/training_data0`, `/tmp/rllm/curriculum`, and
@@ -125,12 +147,14 @@ without rewriting repository sources. Each training launch refreshes them.
 
 `./train.py config-6.json` stores artifacts in the configured model directory.
 Unless `--latest`, `--fresh-start`, or `--resume-model` is supplied, it tries to resume from
-the matching model directory or—when starting a depth-increasing upgrade—the
-best checkpoint or final model in the deepest available `models-N/` below the
-target depth. Window size, stride, and learn depth are explicit JSON fields; the
-six-layer configuration uses 96, 48, and 3 respectively. Resume selection is
-non-destructive: numbered checkpoints and their sidecars remain available for
-later `--latest` or explicit-resume runs.
+the newest timed or cleaned checkpoint in the matching model directory, then
+falls back to `after_training.st` and `checkpoint-best-window.st`. When starting
+a depth-increasing upgrade, it uses the best checkpoint or final model in the
+deepest available `models-N/` below the target depth. Window size, stride, and
+learn depth are explicit JSON fields; the six-layer configuration uses 96, 48,
+and 3 respectively. Resume selection is non-destructive: numbered checkpoints
+and their sidecars remain available for later `--latest` or explicit-resume
+runs.
 
 Every saved model has a sibling `<model filename>.training.json` containing the
 training configuration. Resume both weights and settings with, for example,
@@ -195,7 +219,12 @@ epoch-complete checkpoints continue at the following epoch. Checkpoints written
 before the window-count metadata was introduced recover a non-batch-aligned
 cursor as the old end-of-epoch representation.
 
-Before auto-resuming, the launcher compares the checkpoint tokenizer vocabulary size with the generated runtime tokenizer. Incompatible automatic checkpoints are skipped and training starts from random weights. A model supplied through `--resume-model` must be compatible; if it is not, the launcher exits instead of silently ignoring the requested model.
+Before auto-resuming, the launcher compares the checkpoint tokenizer vocabulary
+size and tokenizer signature with the generated runtime tokenizer. Incompatible
+checkpoints in the configured model directory make the launcher exit instead of
+silently starting from random weights; use `--fresh-start` when that is
+deliberate. A model supplied through `--resume-model` must be compatible; if it
+is not, the launcher exits instead of silently ignoring the requested model.
 
 This matters after tokenizer changes, such as adding the `INVALID` token, because old checkpoints have weight matrices with the previous vocabulary size.
 
@@ -295,6 +324,24 @@ The defaults are `--weight-initializer xavier-input-projections`,
 `--ffn-initializer xavier-input-projections`, and `--embedding-initializer
 legacy-uniform`. Fresh-model runs log all three selected initializers in
 `train.log`; loading a model does not reinitialize its parameters.
+
+`--concept-embeddings <json>` augments fresh token-embedding initialization
+with a deterministic concept graph. The JSON contains a `concepts` string array
+and `relationships` entries of `[source, target, similarity]`, where similarity
+is in `[0, 1]`. Concepts are tokenized with the model tokenizer; related
+concepts receive shared vector components, and token rows used by multiple
+concepts receive their average. Other rows retain the ordinary initializer.
+The option is ignored when loading a checkpoint, so it cannot overwrite trained
+embeddings during resume. Entity facts inferred from code, such as `x is-a
+class`, are contextual and require a separate relation objective because
+identifier spellings are represented by sample-local string-table indices.
+Incremental-window mode removes this option before launching every stage and
+never generates or applies embedding prefills.
+Class declarations receive a dedicated `<CLASS_NAME>` marker: `class Widget`
+is two runtime tokens, `class` and `<CLASS_NAME>`, with `Widget` attached as the
+second token's string-table payload. Inspection renders this as `class
+<CLASS_NAME><STI_n>`, and references reuse the same category and sample-local
+identity.
 
 The `xavier-input-projections` weight/FFN profile applies Xavier initialization
 only to Q/K/V and FFN gate/up matrices. Attention output, FFN down, and the LM
@@ -573,13 +620,13 @@ The `build_type` field selects whether the launcher builds and runs
 from the same JSON file. For example, change the value following `--epochs` in
 `training_arguments` to alter the epoch count.
 
-The Python launcher removes comments by default. The default source mix omits
-the dedicated `curriculum/comments` corpus, and preprocessing creates temporary
-copies of the remaining corpora with C/C++ and Python comments removed. Text
-that merely resembles a comment inside a string literal is preserved. The
-source training directories remain unchanged and the temporary copies are
-removed when the launcher returns. Set `strip_comments` to `false` to preserve
-comments in the selected source corpora.
+The Python launcher preserves source comments by default. Set `strip_comments`
+to `true` in the JSON configuration, or pass `--strip-comments`, to preprocess
+temporary corpus copies with C/C++ and Python comments removed. Text that merely
+resembles a comment inside a string literal is preserved. The source training
+directories remain unchanged and the temporary copies are removed when the
+launcher returns. `--no-strip-comments` overrides a configuration that enables
+comment removal for a single run.
 
 Before the corpus is loaded, files in the selected training directory receive
 formatting normalization from `training_postprocessor.py`; it does not write

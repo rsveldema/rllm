@@ -4,6 +4,7 @@
 #include <WeightInitialization.hpp>
 #include <safetensors.hh>
 #include <fixed_size_levels_rows_cols_matrix.hpp>
+#include <fixed_size_matrix.hpp>
 #include <fixed_size_obj_vector.hpp>
 #include <fixed_size_triangular_matrix.hpp>
 #include <flexible_size_matrix.hpp>
@@ -17,6 +18,8 @@
 
 namespace rllm
 {
+    using AttentionMatrix = fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>;
+
     struct TransformerGradientAccumulator
     {
         fixed_size_matrix<float, EmbeddingDimension, FFDimension> dW_down;
@@ -43,7 +46,7 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_attn;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> Q, K, V;
         // Per-head softmax weight matrices; only the [H x T x T] block is live.
-        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> attn_w;
+        fixed_size_obj_vector<AttentionMatrix, HeadsIndex> attn_w;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_mid;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_ff;
@@ -124,8 +127,8 @@ namespace rllm
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
 
-        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> d_scores;
-        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex> d_raw;
+        fixed_size_obj_vector<AttentionMatrix, HeadsIndex> d_scores;
+        fixed_size_obj_vector<AttentionMatrix, HeadsIndex> d_raw;
 
         explicit BackwardWorkspace(PositionIndex seq)
             : d_h_mid(seq)
@@ -262,9 +265,9 @@ namespace rllm
 
         // Test helper: expose per-head softmax backward Jacobian application.
         static void softmax_attention_for_head_for_test(
-            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores,
-            fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw,
-            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w,
+            const AttentionMatrix& d_scores,
+            AttentionMatrix& d_raw,
+            const AttentionMatrix& attn_w,
             PositionIndex T)
         {
             softmax_attention_for_head(d_scores, d_raw, attn_w, T);
@@ -319,9 +322,9 @@ namespace rllm
 
         // Per-head softmax backward into d_raw.
         static void softmax_attention_for_head(
-            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores_h,
-            fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h,
-            const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
+            const AttentionMatrix& d_scores_h,
+            AttentionMatrix& d_raw_h,
+            const AttentionMatrix& attn_w_h,
             PositionIndex seq_len);
 
         // SwiGLU backward: computes d_gate_pre and d_up_pre from d_ffn_act.

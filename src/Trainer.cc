@@ -65,6 +65,7 @@ namespace rllm
         WeightInitializerType weight_initializer,
         FFNInitializerType ffn_initializer,
         EmbeddingInitializerType embedding_initializer,
+        const std::optional<std::string>& concept_embeddings_filename,
         size_t micro_batch_size,
         size_t num_epochs,
         std::optional<size_t> epoch_size,
@@ -172,6 +173,7 @@ namespace rllm
             {"weight_initializer", initializer_name(weight_initializer)},
             {"ffn_initializer", initializer_name(ffn_initializer)},
             {"embedding_initializer", initializer_name(embedding_initializer)},
+            {"concept_embeddings", concept_embeddings_filename ? nlohmann::json(*concept_embeddings_filename) : nlohmann::json(nullptr)},
             {"micro_batch_size", micro_batch_size},
             {"epochs", num_epochs},
             {"checkpoint_interval_seconds", checkpointing_interval ? nlohmann::json(checkpointing_interval->count()) : nlohmann::json(nullptr)},
@@ -210,6 +212,7 @@ namespace rllm
         nn->set_weight_initializer(weight_initializer);
         nn->set_ffn_initializer(ffn_initializer);
         nn->set_embedding_initializer(embedding_initializer);
+        nn->set_concept_embeddings_filename(concept_embeddings_filename);
         nn->set_micro_batch_size(micro_batch_size);
         nn->set_max_validation_windows(max_validation_windows);
         nn->set_validation_worst_count(validation_worst_count);

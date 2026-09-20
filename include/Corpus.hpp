@@ -38,6 +38,7 @@ namespace rllm
         std::vector<bool> function_scopes{false};
         std::vector<std::string> pending_string_table_values;
         bool pending_class_scope = false;
+        bool expect_class_name = false;
         bool pending_function_scope = false;
     };
     /** Convert raw source to the identifier/string/MCP representation used by
@@ -58,6 +59,7 @@ namespace rllm
     struct WindowExample
     {
         CpuInputLine line;
+        std::vector<uint8_t> first_string_table_index;
         PositionIndex context_length;
         size_t source_index = 0;
         bool starts_in_block_comment = false;

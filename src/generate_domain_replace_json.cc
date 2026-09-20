@@ -51,6 +51,9 @@ namespace
         append_enum_pair(pairs, "EmbeddingDimension::START", static_cast<size_t>(rllm::EmbeddingDimension::START));
         append_enum_pair(pairs, "EmbeddingDimension::MAX", static_cast<size_t>(rllm::EmbeddingDimension::MAX));
 
+        append_enum_pair(pairs, "AttentionPositionIndex::START", static_cast<size_t>(AttentionPositionIndex::START));
+        append_enum_pair(pairs, "AttentionPositionIndex::MAX", static_cast<size_t>(AttentionPositionIndex::MAX));
+
         append_enum_pair(pairs, "PositionIndex::START", static_cast<size_t>(PositionIndex::START));
         append_enum_pair(pairs, "PositionIndex::MAX", static_cast<size_t>(PositionIndex::MAX));
         append_enum_pair(pairs, "PositionIndex::UNKNOWN_POSITION_INDEX", static_cast<size_t>(PositionIndex::UNKNOWN_POSITION_INDEX));
@@ -90,6 +93,7 @@ namespace
         pairs.emplace_back("static_cast<TempStorage>", "(int)");
         pairs.emplace_back("static_cast<EmbeddingDimension>", "(int)");
         pairs.emplace_back("static_cast<PositionIndex>", "(int)");
+        pairs.emplace_back("static_cast<AttentionPositionIndex>", "(int)");
         pairs.emplace_back("static_cast<HeadsIndex>", "(int)");
         pairs.emplace_back("static_cast<BatchIndex>", "(int)");
         pairs.emplace_back("static_cast<TokenID>", "(int)");
@@ -99,6 +103,7 @@ namespace
         pairs.emplace_back("static_cast<rllm::TempStorage>", "(int)");
         pairs.emplace_back("static_cast<rllm::EmbeddingDimension>", "(int)");
         pairs.emplace_back("static_cast<PositionIndex>", "(int)");
+        pairs.emplace_back("static_cast<AttentionPositionIndex>", "(int)");
         pairs.emplace_back("static_cast<rllm::HeadsIndex>", "(int)");
         pairs.emplace_back("static_cast<rllm::BatchIndex>", "(int)");
         pairs.emplace_back("static_cast<rllm::TokenID>", "(int)");

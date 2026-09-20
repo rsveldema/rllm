@@ -39,6 +39,7 @@ namespace rllm
             WeightInitializerType weight_initializer,
             FFNInitializerType ffn_initializer,
             EmbeddingInitializerType embedding_initializer,
+            const std::optional<std::string>& concept_embeddings_filename,
             size_t micro_batch_size,
             size_t num_epochs,
             std::optional<size_t> epoch_size,

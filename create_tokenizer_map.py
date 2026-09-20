@@ -261,8 +261,11 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
         "<LOCAL>",
         "<PARAM>",
         "<GLOBAL>",
+        "<CLASS_NAME>",
         "<FIELD>",
         "<STRING>",
+        "<INTEGER>",
+        "<FLOAT>",
         "<STI>",
     ]
 
@@ -424,8 +427,11 @@ def generate_cpp_table_header(tokenizer_map) -> str:
             "<LOCAL>": "LOCAL",
             "<PARAM>": "PARAM",
             "<GLOBAL>": "GLOBAL",
+            "<CLASS_NAME>": "CLASS_NAME",
             "<FIELD>": "FIELD",
             "<STRING>": "STRING",
+            "<INTEGER>": "INTEGER",
+            "<FLOAT>": "FLOAT",
             "<STI>": "STRING_TABLE_INDEX",
         }
         if _token in language_aliases:

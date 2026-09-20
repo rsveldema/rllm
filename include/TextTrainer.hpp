@@ -145,6 +145,7 @@ namespace rllm
         void set_weight_initializer(WeightInitializerType type) { m_weight_initializer = type; }
         void set_ffn_initializer(FFNInitializerType type) { m_ffn_initializer = type; }
         void set_embedding_initializer(EmbeddingInitializerType type) { m_embedding_initializer = type; }
+        void set_concept_embeddings_filename(std::optional<std::string> filename) { m_concept_embeddings_filename = std::move(filename); }
         void set_training_parameters_json(std::string json) { m_training_parameters_json = std::move(json); }
         void set_training_progress_filename(std::string filename) { m_training_progress_filename = std::move(filename); }
 
@@ -291,6 +292,7 @@ namespace rllm
         WeightInitializerType m_weight_initializer = WeightInitializerType::XavierInputProjections;
         FFNInitializerType m_ffn_initializer = FFNInitializerType::XavierInputProjections;
         EmbeddingInitializerType m_embedding_initializer = EmbeddingInitializerType::LegacyUniform;
+        std::optional<std::string> m_concept_embeddings_filename;
         std::string m_training_parameters_json;
         std::string m_training_progress_filename = "train.json";
 
@@ -303,6 +305,7 @@ namespace rllm
         struct BatchTrainingItem
         {
             CpuInputLine line;
+            std::vector<uint8_t> first_string_table_index;
             bool finished = false;
             std::optional<PositionIndex> context_length;
         };

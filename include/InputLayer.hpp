@@ -85,6 +85,7 @@ namespace rllm
             OptimizerDiagnosticMetrics* diagnostics = nullptr);
 
         void set_random_embeddings(EmbeddingInitializerType type = EmbeddingInitializerType::LegacyUniform);
+        void set_embedding(TokenID token, const embedding_row_t& embedding);
 
         // Returns the learned embedding for a single token.
         void get_embedding(TokenID tok, embedding_row_t& out) const;

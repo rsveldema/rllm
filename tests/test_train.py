@@ -5,6 +5,76 @@ from pathlib import Path
 import pytest
 
 import train
+import generate_embedding_prefill
+
+
+def valid_config() -> dict[str, object]:
+    return {
+        "build_type": "release",
+        "model_directory": "models-test",
+        "layers": 3,
+        "window_size": 12,
+        "window_stride": 6,
+        "learn_depth": 1,
+        "sources": [],
+        "cmake_arguments": [],
+        "training_arguments": [],
+    }
+
+
+def test_comment_removal_defaults_to_disabled(tmp_path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps(valid_config()))
+
+    config = train.load_config(config_file)
+
+    assert config["strip_comments"] is False
+
+
+def test_embedding_prefill_generator_adds_only_exact_token_declarations(tmp_path):
+    base = tmp_path / "base.json"
+    token_map = tmp_path / "token-map.json"
+    source = tmp_path / "source"
+    source.mkdir()
+    base.write_text(json.dumps({
+        "concepts": ["class", "class-name", "struct"],
+        "relationships": [["class", "struct", 0.5]],
+    }))
+    token_map.write_text(json.dumps({"Widget": 1, "class": 2, "struct": 3}))
+    (source / "sample.cpp").write_text(
+        "class Widget {}; struct FragmentedName {}; // class CommentOnly {}\nclass X {};"
+    )
+
+    result = generate_embedding_prefill.generate(base, token_map, [source])
+
+    assert "Widget" in result["concepts"]
+    assert "FragmentedName" not in result["concepts"]
+    assert "CommentOnly" not in result["concepts"]
+    assert "X" not in result["concepts"]
+    assert ["Widget", "class-name", 0.9] in result["relationships"]
+    assert {
+        "subject": "FragmentedName", "relation": "is-a",
+        "object": "class-name", "exact_token": False,
+    } in result["discovered_facts"]
+
+
+def test_incremental_training_removes_concept_embedding_prefill():
+    arguments = (
+        "--epochs", "4", "--concept-embeddings", "concepts.json",
+        "--micro-batch-size", "64",
+    )
+
+    assert train.remove_embedding_prefill(arguments) == (
+        "--epochs", "4", "--micro-batch-size", "64",
+    )
+
+
+def test_comment_removal_launcher_override_can_enable_or_disable():
+    enabled = train.parse_launcher_arguments(["config.json", "--strip-comments"])
+    disabled = train.parse_launcher_arguments(["config.json", "--no-strip-comments"])
+
+    assert enabled.strip_comments is True
+    assert disabled.strip_comments is False
 
 
 def test_latest_selects_newest_numbered_checkpoint_not_best(tmp_path, monkeypatch):
@@ -22,6 +92,25 @@ def test_latest_selects_newest_numbered_checkpoint_not_best(tmp_path, monkeypatc
     selected = train.select_resume_model(
         tmp_path, None, Path("runtime.hpp"),
         fresh_start=False, latest=True, resume_model=None,
+    )
+
+    assert selected == newer
+
+
+def test_default_resume_selects_newest_numbered_checkpoint_before_best(tmp_path, monkeypatch):
+    older = tmp_path / "checkpoint-100.st"
+    newer = tmp_path / "checkpoint-200.st"
+    best = tmp_path / "checkpoint-best-window.st"
+    for checkpoint in (older, newer, best):
+        checkpoint.touch()
+    os.utime(older, (1, 1))
+    os.utime(newer, (2, 2))
+    os.utime(best, (3, 3))
+    monkeypatch.setattr(train, "compatible_model", lambda *args, **kwargs: True)
+
+    selected = train.select_resume_model(
+        tmp_path, None, Path("runtime.hpp"),
+        fresh_start=False, latest=False, resume_model=None,
     )
 
     assert selected == newer
@@ -55,6 +144,24 @@ def test_learning_rate_launcher_options_are_independent_of_resume_mode():
     assert options.latest
     assert options.restart_learning_rate_schedule
     assert options.skip_warmup
+
+
+def test_compatible_model_rejects_tokenizer_signature_mismatch(tmp_path):
+    runtime_header = tmp_path / "tokenizer_map.hpp"
+    runtime_source = tmp_path / "tokenizer_map.cc"
+    runtime_header.write_text("enum class TokenID { TOK_0 = 0, MAX = 1 };\n")
+    runtime_source.write_text(
+        'std::map<TokenID, TokenInfo> tokenizer_map = {\n'
+        '    {TokenID::TOK_0, {"abc", true}},\n'
+        '};\n'
+    )
+    checkpoint = tmp_path / "model.json"
+    checkpoint.write_text(json.dumps({
+        "tokenizer_vocab_size": 1,
+        "tokenizer_signature": 1234,
+    }))
+
+    assert not train.compatible_model(checkpoint, runtime_header)
 
 
 def test_incremental_window_accepts_latest():
@@ -311,7 +418,7 @@ def test_clean_preserves_newer_existing_stable_checkpoint(tmp_path):
     assert not numbered_sidecar.exists()
 
 
-def test_selecting_best_preserves_numbered_checkpoints_and_sidecars(tmp_path, monkeypatch):
+def test_selecting_default_checkpoint_preserves_numbered_checkpoints_and_sidecars(tmp_path, monkeypatch):
     checkpoint = tmp_path / "checkpoint-100.st"
     sidecar = tmp_path / "checkpoint-100.st.training.json"
     best = tmp_path / "checkpoint-best-window.st"
@@ -324,6 +431,18 @@ def test_selecting_best_preserves_numbered_checkpoints_and_sidecars(tmp_path, mo
         fresh_start=False, latest=False, resume_model=None,
     )
 
-    assert selected == best
+    assert selected == checkpoint
     assert checkpoint.exists()
     assert sidecar.exists()
+
+
+def test_default_resume_rejects_incompatible_same_directory_checkpoints(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint-100.st"
+    checkpoint.touch()
+    monkeypatch.setattr(train, "compatible_model", lambda *args, **kwargs: False)
+
+    with pytest.raises(RuntimeError, match="none are compatible"):
+        train.select_resume_model(
+            tmp_path, None, Path("runtime.hpp"),
+            fresh_start=False, latest=False, resume_model=None,
+        )

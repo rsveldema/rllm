@@ -66,7 +66,7 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_cpu, second_cpu, packed_cpu;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_q, second_q, packed_q;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_attn, second_attn, packed_attn;
-    cpu_fixed_triangular_matrix<float, PositionIndex, PositionIndex> first_weights, packed_weights;
+    cpu_fixed_matrix<float, PositionIndex, AttentionPositionIndex> first_weights, packed_weights;
     first_h.copy_to_cpu(queue, first_cpu);
     second_h.copy_to_cpu(queue, second_cpu);
     packed_h.copy_to_cpu(queue, packed_cpu);
@@ -93,8 +93,8 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
     }
     EXPECT_LT(max_q_difference, 1e-4f);
     EXPECT_NEAR(
-        (packed_weights[static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)]),
-        (first_weights[static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)]),
+        (packed_weights[static_cast<PositionIndex>(0), static_cast<AttentionPositionIndex>(0)]),
+        (first_weights[static_cast<PositionIndex>(0), static_cast<AttentionPositionIndex>(0)]),
         1e-4f
     );
     EXPECT_LT(max_attention_difference, 1e-4f);

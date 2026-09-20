@@ -780,7 +780,7 @@ namespace rllm
     void TransformerBlock::compute_attention_scores_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi)
     {
         // OFFLOAD_PARAMETERS(attn_w_h, Q, K, active_seq_len, hStart)
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h = ws.attn_w[hi];
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h = ws.attn_w[hi];
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q = ws.Q;
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K = ws.K;
         const PositionIndex active_seq_len = seq_len;
@@ -823,7 +823,7 @@ namespace rllm
         const auto softmax_grid = enum_iterator1D<PositionIndex>(seq_len);
 
         // OFFLOAD_PARAMETERS(attn_w_h)
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h = ws.attn_w[hi];
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h = ws.attn_w[hi];
         // END_OFFLOAD_PARAMETERS
 
         auto& queue = rllm::vulkan_runtime::get_queue(0);
@@ -849,7 +849,7 @@ namespace rllm
 
     inline void compute_attention_values_for_head(
         // OFFLOAD_PARAMETERS(attn_w_h, V, attn_concat, active_seq_len, hStart)
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& attn_concat,
         int active_seq_len,
@@ -895,68 +895,76 @@ namespace rllm
     }
 
     static void compute_batched_attention_scores_for_head(
-        // OFFLOAD_PARAMETERS(attn_w_h, Q, K, row_batch, packed_rows, hStart)
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
+        // OFFLOAD_PARAMETERS(attn_w_h, Q, K, row_batch, row_begin, local_position, packed_rows, hStart)
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K,
         const fixed_size_vector<int, PositionIndex>& row_batch,
+        const fixed_size_vector<int, BatchIndex>& row_begin,
+        const fixed_size_vector<int, PositionIndex>& local_position,
         PositionIndex packed_rows,
         int hStart
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, packed_rows, (attn_w_h, Q, K, row_batch, packed_rows, hStart))
+        const auto grid = enum_iterator2D<PositionIndex, AttentionPositionIndex>(packed_rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, local_j, grid, (attn_w_h, Q, K, row_batch, row_begin, local_position, packed_rows, hStart))
         {
             float dot = 0.f;
-            if (row_batch[i] == row_batch[j])
+            if (static_cast<int>(local_j) <= local_position[i])
             {
+                const int batch_index = row_batch[i];
+                const int begin = row_begin[batch_index];
+                int j = begin;
+                j += static_cast<int>(local_j);
                 for (const auto d_head : enum_iterator1D<HeadDimension>())
                 {
                     const int d = (hStart + int(d_head));
                     dot += (Q[i, d] * K[j, d]);
                 }
             }
-            attn_w_h[i, j] = (dot * (1.0f / sqrt(float(HeadDimension::MAX))));
+            attn_w_h[i, local_j] = (dot * (1.0f / sqrt(float(HeadDimension::MAX))));
         }
         ENDFOR
     }
 
     static void apply_batched_causal_softmax_for_head(
-        // OFFLOAD_PARAMETERS(attn_w_h, row_batch, row_begin, packed_rows)
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
-        const fixed_size_vector<int, PositionIndex>& row_batch,
-        const fixed_size_vector<int, BatchIndex>& row_begin,
+        // OFFLOAD_PARAMETERS(attn_w_h, local_position, packed_rows)
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
+        const fixed_size_vector<int, PositionIndex>& local_position,
         PositionIndex packed_rows
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(packed_rows), (attn_w_h, row_batch, row_begin))
-        const int begin = row_begin[row_batch[i]];
-        const int after_begin = (begin + 1);
-        float max_val = attn_w_h[i, begin];
-        for (const auto j : enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(after_begin), inc(i)))
+        OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(packed_rows), (attn_w_h, local_position))
+        const int local_i = local_position[i];
+        int local_count = local_i;
+        local_count += 1;
+        float max_val = attn_w_h[i, AttentionPositionIndex::START];
+        for (int j = 1; j < local_count; ++j)
             max_val = math::max(max_val, attn_w_h[i, j]);
         float sum_exp = 0.f;
-        for (const auto j : enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(begin), inc(i)))
+        for (int j = 0; j < local_count; ++j)
         {
             attn_w_h[i, j] = static_cast<float>(std::exp((attn_w_h[i, j] - max_val)));
             sum_exp += attn_w_h[i, j];
         }
         const float inv = (1.0f / sum_exp);
-        for (const auto j : enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(begin), inc(i)))
+        for (int j = 0; j < local_count; ++j)
             attn_w_h[i, j] *= inv;
         ENDFOR
     }
 
     static void compute_batched_attention_values_for_head(
-        // OFFLOAD_PARAMETERS(attn_w_h, V, attn_concat, row_batch, row_begin, packed_rows, hStart)
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
+        // OFFLOAD_PARAMETERS(attn_w_h, V, attn_concat, row_batch, row_begin, local_position, packed_rows, hStart)
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& attn_concat,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_begin,
+        const fixed_size_vector<int, PositionIndex>& local_position,
         PositionIndex packed_rows,
         int hStart
         // END_OFFLOAD_PARAMETERS
@@ -964,13 +972,20 @@ namespace rllm
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(packed_rows);
-        OFFLOAD_PARFOR_2D_PARAM(queue, i, d_head, grid, (attn_w_h, V, attn_concat, row_batch, row_begin, packed_rows, hStart))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, d_head, grid, (attn_w_h, V, attn_concat, row_batch, row_begin, local_position, packed_rows, hStart))
         {
             const int d = (hStart + int(d_head));
             float sum = 0.f;
-            const int begin = row_begin[row_batch[i]];
-            for (const auto j : enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(begin), inc(i)))
-                sum += (attn_w_h[i, j] * V[j, d]);
+            const int batch_index = row_batch[i];
+            const int begin = row_begin[batch_index];
+            int local_count = local_position[i];
+            local_count += 1;
+            for (int local_j = 0; local_j < local_count; ++local_j)
+            {
+                int j = begin;
+                j += local_j;
+                sum += (attn_w_h[i, local_j] * V[j, d]);
+            }
             attn_concat[i, d] = sum;
         }
         ENDFOR
@@ -982,9 +997,12 @@ namespace rllm
         for (const auto hi : enum_iterator1D<HeadsIndex>())
         {
             const int hStart = static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX);
-            compute_batched_attention_scores_for_head(ws.attn_w[hi], ws.Q, ws.K, batch.row_batch, packed_rows, hStart);
-            apply_batched_causal_softmax_for_head(ws.attn_w[hi], batch.row_batch, batch.row_begin, packed_rows);
-            compute_batched_attention_values_for_head(ws.attn_w[hi], ws.V, ws.attn_concat, batch.row_batch, batch.row_begin, packed_rows, hStart);
+            compute_batched_attention_scores_for_head(ws.attn_w[hi], ws.Q, ws.K,
+                batch.row_batch, batch.row_begin, batch.local_position, packed_rows, hStart);
+            apply_batched_causal_softmax_for_head(
+                ws.attn_w[hi], batch.local_position, packed_rows);
+            compute_batched_attention_values_for_head(ws.attn_w[hi], ws.V, ws.attn_concat,
+                batch.row_batch, batch.row_begin, batch.local_position, packed_rows, hStart);
         }
     }
 
@@ -1066,7 +1084,7 @@ namespace rllm
     inline void accumulate_attention_dv_for_head(
         // OFFLOAD_PARAMETERS(d_V, attn_w_h, d_attn_concat, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_V,
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat,
         PositionIndex seq_len,
         int hStart
@@ -1087,12 +1105,13 @@ namespace rllm
     }
 
     static void accumulate_batched_attention_dv_for_head(
-        // OFFLOAD_PARAMETERS(d_V, attn_w_h, d_attn_concat, row_batch, row_end, seq_len, hStart)
+        // OFFLOAD_PARAMETERS(d_V, attn_w_h, d_attn_concat, row_batch, row_end, local_position, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_V,
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_end,
+        const fixed_size_vector<int, PositionIndex>& local_position,
         PositionIndex seq_len,
         int hStart
         // END_OFFLOAD_PARAMETERS
@@ -1100,12 +1119,14 @@ namespace rllm
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
-        OFFLOAD_PARFOR_2D_PARAM(queue, j, d_head, grid, (d_V, attn_w_h, d_attn_concat, row_batch, row_end, seq_len, hStart))
+        OFFLOAD_PARFOR_2D_PARAM(queue, j, d_head, grid, (d_V, attn_w_h, d_attn_concat, row_batch, row_end, local_position, seq_len, hStart))
         const int d = (hStart + int(d_head));
-        const int end = row_end[row_batch[j]];
+        const int batch_index = row_batch[j];
+        const int end = row_end[batch_index];
+        const int local_j = local_position[j];
         float sum_v = 0.f;
         for (const auto i : enum_iterator1D<PositionIndex>(j, static_cast<PositionIndex>(end)))
-            sum_v += (attn_w_h[i, j] * d_attn_concat[i, d]);
+            sum_v += (attn_w_h[i, local_j] * d_attn_concat[i, d]);
         d_V[j, d] = math::clamp(sum_v, -10000.0f, 10000.0f);
         ENDFOR
     }
@@ -1113,7 +1134,7 @@ namespace rllm
     void TransformerBlock::backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
     {
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_V = ws.d_V;
-        const fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex>& attn_w = fwd.attn_w;
+        const fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& attn_w = fwd.attn_w;
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws.d_attn_concat;
         const PositionIndex seq_len = fwd.seq_len;
 
@@ -1122,7 +1143,9 @@ namespace rllm
         {
             const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
             if (fwd.packed_batch)
-                accumulate_batched_attention_dv_for_head(d_V, attn_w[hi], d_attn_concat, fwd.packed_batch->row_batch, fwd.packed_batch->row_end, seq_len, hStart);
+                accumulate_batched_attention_dv_for_head(d_V, attn_w[hi], d_attn_concat,
+                    fwd.packed_batch->row_batch, fwd.packed_batch->row_end,
+                    fwd.packed_batch->local_position, seq_len, hStart);
             else
                 accumulate_attention_dv_for_head(d_V, attn_w[hi], d_attn_concat, seq_len, hStart);
         }
@@ -1130,7 +1153,7 @@ namespace rllm
 
     inline void compute_attention_dscores_for_head(
         // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, seq_len, hStart)
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores_h,
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_scores_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
         PositionIndex seq_len,
@@ -1153,34 +1176,41 @@ namespace rllm
     }
 
     static void compute_batched_attention_dscores_for_head(
-        // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, row_batch, seq_len, hStart)
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores_h,
+        // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, row_batch, row_begin, local_position, seq_len, hStart)
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_scores_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
         const fixed_size_vector<int, PositionIndex>& row_batch,
+        const fixed_size_vector<int, BatchIndex>& row_begin,
+        const fixed_size_vector<int, PositionIndex>& local_position,
         PositionIndex seq_len,
         int hStart
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (d_scores_h, d_attn_concat, V, row_batch, seq_len, hStart))
+        const auto grid = enum_iterator2D<PositionIndex, AttentionPositionIndex>(seq_len);
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, local_j, grid, (d_scores_h, d_attn_concat, V, row_batch, row_begin, local_position, seq_len, hStart))
         float dot = 0.f;
-        if (row_batch[i] == row_batch[j])
+        if (static_cast<int>(local_j) <= local_position[i])
         {
+            const int batch_index = row_batch[i];
+            const int begin = row_begin[batch_index];
+            int j = begin;
+            j += static_cast<int>(local_j);
             for (const auto d_head : enum_iterator1D<HeadDimension>())
             {
                 const int d = (hStart + int(d_head));
                 dot += (d_attn_concat[i, d] * V[j, d]);
             }
         }
-        d_scores_h[i, j] = math::clamp(dot, -10000.0f, 10000.0f);
+        d_scores_h[i, local_j] = math::clamp(dot, -10000.0f, 10000.0f);
         ENDFOR
     }
 
     void TransformerBlock::backward_compute_attention_dscores_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
     {
-        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex>& d_scores = ws.d_scores;
+        fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& d_scores = ws.d_scores;
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws.d_attn_concat;
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V = fwd.V;
         const PositionIndex seq_len = fwd.seq_len;
@@ -1191,7 +1221,9 @@ namespace rllm
         {
             const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
             if (fwd.packed_batch)
-                compute_batched_attention_dscores_for_head(d_scores[hi], d_attn_concat, V, fwd.packed_batch->row_batch, seq_len, hStart);
+                compute_batched_attention_dscores_for_head(d_scores[hi], d_attn_concat, V,
+                    fwd.packed_batch->row_batch, fwd.packed_batch->row_begin,
+                    fwd.packed_batch->local_position, seq_len, hStart);
             else
                 compute_attention_dscores_for_head(d_scores[hi], d_attn_concat, V, seq_len, hStart);
         }
@@ -1199,9 +1231,9 @@ namespace rllm
 
     void TransformerBlock::softmax_attention_for_head(
         // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, attn_w_h, seq_len)
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores_h,
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h,
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_scores_h,
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
         PositionIndex seq_len
         // END_OFFLOAD_PARAMETERS
     )
@@ -1221,43 +1253,46 @@ namespace rllm
     }
 
     static void batched_softmax_attention_for_head(
-        // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, attn_w_h, row_batch, row_begin, seq_len)
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_scores_h,
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h,
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& attn_w_h,
-        const fixed_size_vector<int, PositionIndex>& row_batch,
-        const fixed_size_vector<int, BatchIndex>& row_begin,
+        // OFFLOAD_PARAMETERS(d_scores_h, d_raw_h, attn_w_h, local_position, seq_len)
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_scores_h,
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
+        const fixed_size_vector<int, PositionIndex>& local_position,
         PositionIndex seq_len
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (d_scores_h, d_raw_h, attn_w_h, row_batch, row_begin, seq_len))
-        if (row_batch[i] == row_batch[j])
+        const auto grid = enum_iterator2D<PositionIndex, AttentionPositionIndex>(seq_len);
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, local_j, grid, (d_scores_h, d_raw_h, attn_w_h, local_position, seq_len))
+        if (static_cast<int>(local_j) <= local_position[i])
         {
-            const int begin = row_begin[row_batch[i]];
             float row_dot = 0.f;
-            for (const auto k : enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(begin), inc(i)))
+            int local_count = local_position[i];
+            local_count += 1;
+            for (int k = 0; k < local_count; ++k)
                 row_dot += (d_scores_h[i, k] * attn_w_h[i, k]);
-            const float raw = (attn_w_h[i, j] * (d_scores_h[i, j] - row_dot));
-            d_raw_h[i, j] = math::clamp(raw, -10000.0f, 10000.0f);
+            const float raw = (attn_w_h[i, local_j] * (d_scores_h[i, local_j] - row_dot));
+            d_raw_h[i, local_j] = math::clamp(raw, -10000.0f, 10000.0f);
         }
         else
-            d_raw_h[i, j] = 0.f;
+            d_raw_h[i, local_j] = 0.f;
         ENDFOR
     }
 
     void TransformerBlock::backward_softmax_attention_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
     {
-        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex>& d_scores = ws.d_scores;
-        fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex>& d_raw = ws.d_raw;
+        fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& d_scores = ws.d_scores;
+        fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& d_raw = ws.d_raw;
         const PositionIndex seq_len = fwd.seq_len;
-        const fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex>& attn_w = fwd.attn_w;
+        const fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& attn_w = fwd.attn_w;
 
         for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
         {
             if (fwd.packed_batch)
-                batched_softmax_attention_for_head(d_scores[hi], d_raw[hi], attn_w[hi], fwd.packed_batch->row_batch, fwd.packed_batch->row_begin, seq_len);
+                batched_softmax_attention_for_head(
+                    d_scores[hi], d_raw[hi], attn_w[hi],
+                    fwd.packed_batch->local_position, seq_len);
             else
                 softmax_attention_for_head(d_scores[hi], d_raw[hi], attn_w[hi], seq_len);
         }
@@ -1271,12 +1306,13 @@ namespace rllm
     }
 
     static void accumulate_batched_attention_dq_for_head(
-        // OFFLOAD_PARAMETERS(d_Q, d_raw_h, K, row_batch, row_begin, seq_len, hStart)
+        // OFFLOAD_PARAMETERS(d_Q, d_raw_h, K, row_batch, row_begin, local_position, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_Q,
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_begin,
+        const fixed_size_vector<int, PositionIndex>& local_position,
         PositionIndex seq_len,
         int hStart
         // END_OFFLOAD_PARAMETERS
@@ -1284,24 +1320,32 @@ namespace rllm
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
-        OFFLOAD_PARFOR_2D_PARAM(queue, i, d_head, grid, (d_Q, d_raw_h, K, row_batch, row_begin, seq_len, hStart))
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, d_head, grid, (d_Q, d_raw_h, K, row_batch, row_begin, local_position, seq_len, hStart))
         const int d = (hStart + int(d_head));
         const float head_scale = (1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX))));
         float sum_q = 0.f;
-        const int begin = row_begin[row_batch[i]];
-        for (const auto j : enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(begin), inc(i)))
-            sum_q += ((d_raw_h[i, j] * head_scale) * K[j, d]);
+        const int batch_index = row_batch[i];
+        const int begin = row_begin[batch_index];
+        int local_count = local_position[i];
+        local_count += 1;
+        for (int local_j = 0; local_j < local_count; ++local_j)
+        {
+            int j = begin;
+            j += local_j;
+            sum_q += ((d_raw_h[i, local_j] * head_scale) * K[j, d]);
+        }
         d_Q[i, d] = math::clamp(sum_q, -10000.0f, 10000.0f);
         ENDFOR
     }
 
     static void accumulate_batched_attention_dk_for_head(
-        // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, row_batch, row_end, seq_len, hStart)
+        // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, row_batch, row_end, local_position, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_K,
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_end,
+        const fixed_size_vector<int, PositionIndex>& local_position,
         PositionIndex seq_len,
         int hStart
         // END_OFFLOAD_PARAMETERS
@@ -1309,12 +1353,14 @@ namespace rllm
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(seq_len);
-        OFFLOAD_PARFOR_2D_PARAM(queue, j, d_head, grid, (d_K, d_raw_h, Q, row_batch, row_end, seq_len, hStart))
+        OFFLOAD_PARFOR_2D_PARAM(queue, j, d_head, grid, (d_K, d_raw_h, Q, row_batch, row_end, local_position, seq_len, hStart))
         const int d = (hStart + int(d_head));
         float sum_k = 0.f;
-        const int end = row_end[row_batch[j]];
+        const int batch_index = row_batch[j];
+        const int end = row_end[batch_index];
+        const int local_j = local_position[j];
         for (const auto i : enum_iterator1D<PositionIndex>(j, static_cast<PositionIndex>(end)))
-            sum_k += ((d_raw_h[i, j] * (1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX))))) * Q[i, d]);
+            sum_k += ((d_raw_h[i, local_j] * (1.0f / std::sqrt(static_cast<float>(static_cast<size_t>(HeadDimension::MAX))))) * Q[i, d]);
         d_K[j, d] = math::clamp(sum_k, -10000.0f, 10000.0f);
         ENDFOR
     }
@@ -1325,7 +1371,7 @@ namespace rllm
     {
         // OFFLOAD_PARAMETERS(d_Q, d_raw_h, K, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_Q = ws.d_Q;
-        fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h = ws.d_raw[hi];
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h = ws.d_raw[hi];
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K = fwd.K;
         const PositionIndex seq_len = fwd.seq_len;
         const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
@@ -1338,7 +1384,9 @@ namespace rllm
 
         if (fwd.packed_batch)
         {
-            accumulate_batched_attention_dq_for_head(d_Q, d_raw_h, K, fwd.packed_batch->row_batch, fwd.packed_batch->row_begin, seq_len, hStart);
+            accumulate_batched_attention_dq_for_head(d_Q, d_raw_h, K,
+                fwd.packed_batch->row_batch, fwd.packed_batch->row_begin,
+                fwd.packed_batch->local_position, seq_len, hStart);
         }
         else
         {
@@ -1357,7 +1405,7 @@ namespace rllm
     {
         // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_K = ws.d_K;
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& d_raw_h = ws.d_raw[hi];
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h = ws.d_raw[hi];
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
         PositionIndex seq_len = fwd.seq_len;
         const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
@@ -1368,7 +1416,9 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         if (fwd.packed_batch)
         {
-            accumulate_batched_attention_dk_for_head(d_K, d_raw_h, Q, fwd.packed_batch->row_batch, fwd.packed_batch->row_end, seq_len, hStart);
+            accumulate_batched_attention_dk_for_head(d_K, d_raw_h, Q,
+                fwd.packed_batch->row_batch, fwd.packed_batch->row_end,
+                fwd.packed_batch->local_position, seq_len, hStart);
         }
         else
         {

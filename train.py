@@ -8,10 +8,12 @@ The selected JSON file is the sole source of build and training options.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -59,7 +61,8 @@ def load_config(path: Path) -> dict[str, object]:
         positive_integer(config, name)
     for name in ("sources", "cmake_arguments", "training_arguments"):
         string_list(config, name)
-    if not isinstance(config.get("strip_comments"), bool):
+    config.setdefault("strip_comments", False)
+    if not isinstance(config["strip_comments"], bool):
         raise ValueError("Config field 'strip_comments' must be a boolean.")
     if config.get("build_type") not in ("debug", "release"):
         raise ValueError("Config field 'build_type' must be 'debug' or 'release'.")
@@ -96,14 +99,118 @@ def output(command: list[str]) -> str:
     return run(command, capture=True).stdout.strip()
 
 
+def prepare_embedding_prefill(
+    training_arguments: tuple[str, ...], sources: tuple[str, ...],
+    model_dir: Path, token_map: Path,
+) -> tuple[str, ...]:
+    arguments = list(training_arguments)
+    positions = [i for i, value in enumerate(arguments) if value == "--concept-embeddings"]
+    if not positions:
+        return training_arguments
+    if len(positions) != 1 or positions[0] + 1 >= len(arguments):
+        raise ValueError("--concept-embeddings must occur once with a JSON filename")
+    position = positions[0]
+    generated = model_dir / "generated-concept-embeddings.json"
+    command = [
+        sys.executable, str(ROOT / "generate_embedding_prefill.py"),
+        "--base", arguments[position + 1],
+        "--token-map", str(token_map),
+        "--output", str(generated),
+    ]
+    for source in sources:
+        source_path, _ = split_source(source)
+        command.extend(("--source", source_path))
+    print(f"Generating embedding prefill graph at {generated}...")
+    run(command)
+    arguments[position + 1] = str(generated)
+    return tuple(arguments)
+
+
+def remove_embedding_prefill(training_arguments: tuple[str, ...]) -> tuple[str, ...]:
+    arguments = list(training_arguments)
+    positions = [i for i, value in enumerate(arguments) if value == "--concept-embeddings"]
+    if not positions:
+        return training_arguments
+    if len(positions) != 1 or positions[0] + 1 >= len(arguments):
+        raise ValueError("--concept-embeddings must occur once with a JSON filename")
+    position = positions[0]
+    del arguments[position:position + 2]
+    return tuple(arguments)
+
+
+def checkpoint_tokenizer_metadata(candidate: Path) -> dict[str, str]:
+    try:
+        if candidate.suffix in {".st", ".safetensors"}:
+            import struct
+            with candidate.open("rb") as file:
+                header_len = struct.unpack("<Q", file.read(8))[0]
+                header = json.loads(file.read(header_len))
+            metadata = header.get("__metadata__", {})
+            return metadata if isinstance(metadata, dict) else {}
+        if candidate.suffix == ".json":
+            with candidate.open(encoding="utf-8") as file:
+                header = json.load(file)
+            if not isinstance(header, dict):
+                return {}
+            return {
+                key: str(header[key])
+                for key in ("tokenizer_vocab_size", "tokenizer_signature")
+                if key in header
+            }
+    except Exception as exc:
+        return {"ERROR": str(exc)}
+    return {}
+
+
+def _runtime_tokenizer_signature(tokenizer_source: Path) -> int:
+    text = tokenizer_source.read_text(encoding="utf-8")
+    entries: list[tuple[int, str, bool]] = []
+    pattern = re.compile(
+        r'TokenID::TOK_(\d+),\s*\{\s*("(?:(?:\\.)|[^"\\])*")\s*,\s*(true|false)\s*\}'
+    )
+    for match in pattern.finditer(text):
+        token_id = int(match.group(1))
+        token_text = ast.literal_eval(match.group(2))
+        end_of_word = match.group(3) == "true"
+        entries.append((token_id, token_text, end_of_word))
+    if not entries:
+        raise ValueError(f"Could not find tokenizer entries in {tokenizer_source}")
+
+    mask = (1 << 64) - 1
+    signature = 1469598103934665603
+    for token_id, token_text, end_of_word in sorted(entries):
+        signature ^= token_id
+        signature = (signature * 1099511628211) & mask
+        for byte in token_text.encode("utf-8"):
+            signature ^= byte
+            signature = (signature * 1099511628211) & mask
+        signature ^= 1 if end_of_word else 0
+        signature = (signature * 1099511628211) & mask
+    return signature
+
+
+def runtime_tokenizer_metadata(runtime_header: Path) -> dict[str, str]:
+    text = runtime_header.read_text(encoding="utf-8")
+    match = re.search(r"\bMAX\s*=\s*(\d+)", text)
+    if not match:
+        raise ValueError(f"Could not find TokenID::MAX in {runtime_header}")
+    source = runtime_header.with_suffix(".cc")
+    metadata = {"tokenizer_vocab_size": match.group(1)}
+    if source.is_file():
+        metadata["tokenizer_signature"] = str(_runtime_tokenizer_signature(source))
+    return metadata
+
+
 def compatible_model(candidate: Path, runtime_header: Path, *, required: bool = False) -> bool:
-    runtime_vocab = output([sys.executable, str(ROOT / "runtime_vocab_size.py"), str(runtime_header)])
-    model_vocab = output([sys.executable, str(ROOT / "model_vocab_size.py"), str(candidate)])
-    if model_vocab.startswith("ERROR:"):
-        print(f"Cannot inspect resume model '{candidate}': {model_vocab.removeprefix('ERROR:')}", file=sys.stderr)
+    runtime_metadata = runtime_tokenizer_metadata(runtime_header)
+    model_metadata = checkpoint_tokenizer_metadata(candidate)
+    if "ERROR" in model_metadata:
+        print(f"Cannot inspect resume model '{candidate}': {model_metadata['ERROR']}", file=sys.stderr)
         if required:
             raise RuntimeError("explicit resume model could not be inspected")
         return False
+    runtime_vocab = runtime_metadata.get("tokenizer_vocab_size", "")
+    model_vocab = model_metadata.get("tokenizer_vocab_size", "")
     if model_vocab and model_vocab != runtime_vocab:
         print(
             f"Skipping incompatible resume model '{candidate}' "
@@ -112,6 +219,17 @@ def compatible_model(candidate: Path, runtime_header: Path, *, required: bool = 
         )
         if required:
             raise RuntimeError("explicit resume model has an incompatible vocabulary")
+        return False
+    runtime_signature = runtime_metadata.get("tokenizer_signature", "")
+    model_signature = model_metadata.get("tokenizer_signature", "")
+    if model_signature and runtime_signature and model_signature != runtime_signature:
+        print(
+            f"Skipping incompatible resume model '{candidate}' "
+            f"(model tokenizer signature={model_signature}, runtime tokenizer signature={runtime_signature}).",
+            file=sys.stderr,
+        )
+        if required:
+            raise RuntimeError("explicit resume model has an incompatible tokenizer signature")
         return False
     return True
 
@@ -237,21 +355,33 @@ def select_resume_model(
             return candidate
         raise FileNotFoundError(f"No latest checkpoint found in '{model_dir}'.")
 
-    best = model_dir / "checkpoint-best-window.st"
-    if best.is_file() and compatible_model(best, runtime_header):
-        print(f"Resuming from {best}")
-        return best
+    same_dir_candidates: list[Path] = []
+    latest_timed = max(
+        model_dir.glob("checkpoint-[0-9]*.st"),
+        key=lambda path: path.stat().st_mtime,
+        default=None,
+    )
+    if latest_timed is not None:
+        same_dir_candidates.append(latest_timed)
+    cleaned_latest = model_dir / "checkpoint-latest.st"
+    if cleaned_latest.is_file():
+        same_dir_candidates.append(cleaned_latest)
+    for name in ("after_training.st", "checkpoint-best-window.st"):
+        candidate = model_dir / name
+        if candidate.is_file():
+            same_dir_candidates.append(candidate)
 
-    final = model_dir / "after_training.st"
-    if final.is_file() and compatible_model(final, runtime_header):
-        print(f"Resuming from {final}")
-        return final
-
-    checkpoints = list(model_dir.glob("checkpoint-*.st"))
-    latest = max(checkpoints, key=lambda path: path.stat().st_mtime, default=None)
-    if latest is not None and compatible_model(latest, runtime_header):
-        print(f"Resuming from {latest}")
-        return latest
+    saw_incompatible_same_dir_candidate = False
+    for candidate in dict.fromkeys(same_dir_candidates):
+        if compatible_model(candidate, runtime_header):
+            print(f"Resuming from {candidate}")
+            return candidate
+        saw_incompatible_same_dir_candidate = True
+    if saw_incompatible_same_dir_candidate:
+        raise RuntimeError(
+            f"Found checkpoints in '{model_dir}', but none are compatible with the current tokenizer. "
+            "Use --fresh-start to deliberately start from random weights."
+        )
 
     if previous_dir is not None:
         for name in ("checkpoint-best-window.st", "after_training.st"):
@@ -551,7 +681,7 @@ def parse_launcher_arguments(arguments: list[str]) -> argparse.Namespace:
     resume.add_argument(
         "--latest",
         action="store_true",
-        help="resume from the newest numbered or cleaned latest checkpoint instead of the best checkpoint",
+        help="clean intermediate checkpoints, then resume from the newest numbered or cleaned latest checkpoint",
     )
     resume.add_argument(
         "--lowest-loss",
@@ -582,6 +712,12 @@ def parse_launcher_arguments(arguments: list[str]) -> argparse.Namespace:
         "--incremental-window",
         action="store_true",
         help="grow training from 3 layers and a small window to the configured target in staged runs",
+    )
+    parser.add_argument(
+        "--strip-comments",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="remove source comments during preprocessing (disabled by default)",
     )
     options = parser.parse_args(arguments)
     if options.incremental_window and any((
@@ -643,7 +779,11 @@ def main(arguments: list[str] | None = None) -> int:
     print(f"Configuring and building {build_type} before training...")
     run([str(ROOT / f"build_{build_type}.sh"), *string_list(config, "cmake_arguments")])
 
-    strip_comments = bool(config["strip_comments"])
+    strip_comments = (
+        bool(config["strip_comments"])
+        if options.strip_comments is None
+        else options.strip_comments
+    )
     for corpus_root in ("training_data0", "curriculum", "training_data2"):
         print(f"Normalizing {corpus_root} with training_postprocessor.py...")
         run([sys.executable, str(ROOT / "training_postprocessor.py"), "--dir", corpus_root])
@@ -661,7 +801,22 @@ def main(arguments: list[str] | None = None) -> int:
         run(inspection_arguments)
 
     sources = string_list(config, "sources")
-    training_arguments = string_list(config, "training_arguments")
+    try:
+        configured_training_arguments = string_list(config, "training_arguments")
+        if incremental_mode:
+            training_arguments = remove_embedding_prefill(configured_training_arguments)
+            if training_arguments != configured_training_arguments:
+                print(
+                    "WARNING: ignoring --concept-embeddings in incremental training mode.",
+                    file=sys.stderr,
+                )
+        else:
+            training_arguments = prepare_embedding_prefill(
+                configured_training_arguments, sources, model_dir,
+                build_dir / "generated/token_map.json")
+    except (OSError, subprocess.CalledProcessError, ValueError) as error:
+        print(f"Cannot generate embedding prefill graph: {error}", file=sys.stderr)
+        return 1
     previous_dir = previous_model_directory(num_layers)
     runtime_header = build_dir / "generated/tokenizer_map.hpp"
 

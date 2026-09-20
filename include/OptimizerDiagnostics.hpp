@@ -8,6 +8,7 @@
 #include <fixed_size_vector.hpp>
 #include <fixed_size_obj_vector.hpp>
 #include <fixed_size_triangular_matrix.hpp>
+#include <fixed_size_matrix.hpp>
 #include <LayerPrimitives.hpp>
 
 namespace rllm
@@ -49,7 +50,7 @@ namespace rllm
         PositionIndex rows,
         std::string_view label);
     void log_attention_matrix_gradient_diagnostics(
-        const fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex>& gradients,
+        const fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& gradients,
         PositionIndex rows,
         std::string_view label,
         bool log_per_head = false);

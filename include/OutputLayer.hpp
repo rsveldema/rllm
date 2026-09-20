@@ -28,23 +28,30 @@ namespace rllm
         fixed_size_matrix<float, BatchIndex, TokenID> delta;
         fixed_size_matrix<float, BatchIndex, PositionIndex> string_table_index_logits;
         fixed_size_matrix<float, BatchIndex, PositionIndex> string_table_index_delta;
+        fixed_size_matrix<float, BatchIndex, PositionIndex> numeric_distance_costs;
         fixed_size_matrix<float, BatchIndex, EmbeddingDimension> dh_last;
         fixed_size_matrix<float, BatchIndex, TempStorage> softmax_temp;
         fixed_size_vector<int, BatchIndex> expected_tokens;
         fixed_size_vector<int, BatchIndex> expected_string_table_indices;
+        fixed_size_vector<int, BatchIndex> expected_value_counts;
         fixed_size_vector<int, BatchIndex> active_examples;
         fixed_size_vector<int, BatchIndex> string_table_index_active_examples;
         fixed_size_vector<float, BatchIndex> losses;
+        fixed_size_vector<float, BatchIndex> correct_token_probabilities;
         fixed_size_vector<int, BatchIndex> row_indices;
+        fixed_size_vector<int, BatchIndex> paired_row_indices;
 
         BatchedOutputWorkspace()
         {
             expected_tokens.set_size(BatchIndex::MAX);
             expected_string_table_indices.set_size(BatchIndex::MAX);
+            expected_value_counts.set_size(BatchIndex::MAX);
             active_examples.set_size(BatchIndex::MAX);
             string_table_index_active_examples.set_size(BatchIndex::MAX);
             losses.set_size(BatchIndex::MAX);
+            correct_token_probabilities.set_size(BatchIndex::MAX);
             row_indices.set_size(BatchIndex::MAX);
+            paired_row_indices.set_size(BatchIndex::MAX);
         }
     };
 
@@ -63,6 +70,10 @@ namespace rllm
     class OutputLayer
     {
       public:
+        static constexpr float CATEGORY_LOSS_BONUS = 0.2f;
+        static constexpr float REFERENCE_LOSS_WEIGHT = 0.3f;
+        static constexpr float NUMERIC_DISTANCE_LOSS_WEIGHT = 0.1f;
+        static constexpr float ENTITY_CONSISTENCY_WEIGHT = 0.05f;
         static constexpr float ADAM_BETA1 = 0.9f;
         static constexpr float ADAM_BETA2 = 0.999f;
         static constexpr float ADAM_EPSILON = 1e-8f;

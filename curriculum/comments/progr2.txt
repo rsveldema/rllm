@@ -1,0 +1,53 @@
+GeeksforGeekshttps://www.
+geeksforgeeks.
+orgLocal and Global Variables - GeeksforGeeksLocal and Global Variables.
+Last Updated : 11 Jul, 2026.
+Local and global variables differ mainly in where they can be accessed and how long they exist.
+Choosing the appropriate type helps organize coplease give 100 linux of english text for teaching a LLM centered around programmingHere are 100 lines of highly structured, simple English text centered entirely around programming concepts like classes, methods, fields, parameters, and variables.
+To help a small LLM learn structured relationships and conditional logic efficiently, each line strictly follows a Subject  Object  Condition framework, using clear language accessible to a 10-year-old reader.
+Variables, Local Variables, & Temporary StatesThe variable stores the player score if the point count increases.
+The local variable keeps the loop index while the counter stays under ten.
+The temporary variable holds the swapped number until the sorting task finishes.
+The field saves the user name when the text box changes.
+The parameter passes the window width if the user resizes the application.
+The local variable saves the current time when the clock ticks.
+The temporary string caches the raw input before the cleaning function runs.
+The global variable tracks the game volume if the settings menu opens.
+The boolean field locks the screen state when the application pauses.
+The float variable updates the car speed if the player presses forward.
+The private field conceals the secret token unless the login succeeds.
+The temporary buffer holds the incoming network bytes until the file closes.
+The character variable prints the keyboard symbol when the key goes down.
+The local counter tracks the total loops if the process restarts.
+Classes, Structs, & ObjectsThe class creates a blue vehicle blueprint if the designer uses code.
+The object occupies system memory space when the keyword new runs.
+The struct models a tiny 2D point if you draw a shape.
+The base class shares its public fields when a child class inherits it.
+The child class overrides the standard draw action if the system requests graphics.
+The abstract class blocks object creation because its internal structure is empty.
+The static class provides basic math tools without needing an individual instance.
+The instance handles the click event when the button detects a finger.
+The pointer references the object address if the memory allocation works.
+The derived class extends the parent structure when you add new features.
+The data structure organizes the file items if the list gets long.
+The component updates the UI layout when the orientation shifts.
+Methods, Functions, & ParametersThe method changes the engine state when the key turns.
+The function returns a true value if the email address contains a symbol.
+The parameter receives a string message when the error logger activates.
+The constructor populates the default fields when the object arrives in memory.
+The destructor erases the temporary array when the function scope exits.
+The helper function filters the dirty words if a user types a comment.
+The getter method exports the private field value when the dashboard updates.
+The setter method validates the input number before the field saves it.
+The recursive function calls itself again if the countdown is above zero.
+The virtual method alters its output sequence if a child class alters it.
+The main function executes the first instruction line when the program boots.
+The void method triggers a speaker beep when the processing task finishes.
+The parameter delivers the coordinate array if the map needs a pin.
+The lambda method checks the item price when the shopping cart loads.
+Logic, Loops, & ConditionsThe conditional statement executes the nested code block if the password matches.
+The while loop repeats the print command until the data stream stops.
+The switch statement matches the correct case folder if the option code fits.
+The code block skips the remaining logic lines if the break keyword runs.
+The boolean check grants file access when the account token is valid.
+The comp

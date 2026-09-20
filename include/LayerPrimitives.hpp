@@ -33,6 +33,13 @@ namespace rllm
 #ifndef RLLM_MAX_POSITION
 #define RLLM_MAX_POSITION 8192
 #endif
+
+#ifndef RLLM_MAX_ATTENTION_POSITION
+#define RLLM_MAX_ATTENTION_POSITION 256
+#endif
+#ifndef RLLM_MAX_BATCH_SIZE
+#define RLLM_MAX_BATCH_SIZE (RLLM_MAX_POSITION / RLLM_MAX_ATTENTION_POSITION)
+#endif
 #ifndef RLLM_MTP_HEAD_COUNT
 #define RLLM_MTP_HEAD_COUNT 1
 #endif
@@ -65,7 +72,10 @@ namespace rllm
         Field,
         Loop,
         Global,
-        String
+        ClassName,
+        String,
+        Integer,
+        Float
     };
 
     static constexpr size_t NO_STRING_TABLE_INDEX = static_cast<size_t>(-1);
@@ -80,12 +90,18 @@ namespace rllm
             return TokenStringCategory::Field;
         if (text == "<STRING>")
             return TokenStringCategory::String;
+        if (text == "<INTEGER>")
+            return TokenStringCategory::Integer;
+        if (text == "<FLOAT>")
+            return TokenStringCategory::Float;
         if (text == "<LOCAL>")
             return TokenStringCategory::Local;
         if (text == "<PARAM>")
             return TokenStringCategory::Parameter;
         if (text == "<GLOBAL>")
             return TokenStringCategory::Global;
+        if (text == "<CLASS_NAME>")
+            return TokenStringCategory::ClassName;
         if (text == "<LOOP>")
             return TokenStringCategory::Loop;
         return TokenStringCategory::None;
@@ -94,6 +110,15 @@ namespace rllm
     static inline bool is_string_table_index_token(TokenID token)
     {
         return token == TokenID::STRING_TABLE_INDEX;
+    }
+
+    static inline bool is_identifier_category_token(TokenID token)
+    {
+        const auto category = token_string_category(token);
+        return category != TokenStringCategory::None &&
+            category != TokenStringCategory::String &&
+            category != TokenStringCategory::Integer &&
+            category != TokenStringCategory::Float;
     }
 
     // Dimensionality of each token's learned embedding vector.
@@ -114,6 +139,14 @@ namespace rllm
         UNKNOWN_POSITION_INDEX = static_cast<size_t>(-1)
     };
 
+    // Local key position within one independently attended sequence. Packed
+    // batches share PositionIndex rows but never allocate cross-window scores.
+    enum class AttentionPositionIndex : size_t
+    {
+        START = 0,
+        MAX = RLLM_MAX_ATTENTION_POSITION
+    };
+
     // Index of an attention head (0..HeadsIndex::MAX-1).
     // this is used to partition the embedding dimension into multiple heads,
     // each of which has its own attention mechanism.
@@ -127,7 +160,7 @@ namespace rllm
     enum class BatchIndex : size_t
     {
         START = 0,
-        MAX = 1024
+        MAX = RLLM_MAX_BATCH_SIZE
     };
 
     // we are predicting N next tokens in parallel,
@@ -286,6 +319,8 @@ namespace rllm
             result.string_table_index.assign(
                 string_table_index.begin(), string_table_index.begin() + static_cast<size_t>(length));
             result.string_table_value = string_table_value;
+            result.integer_constant_value = integer_constant_value;
+            result.float_constant_value = float_constant_value;
         }
 
         void push_back(TokenID t, std::string_view string_value = {})
@@ -322,15 +357,23 @@ namespace rllm
                 string_table_index.push_back(NO_STRING_TABLE_INDEX);
                 return;
             }
-            assert(other_index < other.string_table_value.size());
             string_table_index.push_back(intern_string_value(
-                other.m_cpu[source_pos], other.string_table_value[other_index]));
+                other.m_cpu[source_pos], other.get_value_for_token(other.m_cpu[source_pos], other_index)));
         }
 
         template <typename UniformRandomBitGenerator>
         void permute_string_table(UniformRandomBitGenerator& rng)
         {
-            const size_t value_count = string_table_value.size();
+            permute_value_table(string_table_value, TokenStringCategory::None, rng);
+            permute_value_table(integer_constant_value, TokenStringCategory::Integer, rng);
+            permute_value_table(float_constant_value, TokenStringCategory::Float, rng);
+        }
+
+        template <typename UniformRandomBitGenerator>
+        void permute_value_table(std::vector<std::string>& values,
+            TokenStringCategory selected_category, UniformRandomBitGenerator& rng)
+        {
+            const size_t value_count = values.size();
             if (value_count < 2)
                 return;
 
@@ -346,16 +389,23 @@ namespace rllm
                 const size_t old_index = old_order[new_index];
                 assert(old_index < value_count);
                 old_to_new[old_index] = new_index;
-                permuted_values[new_index] = std::move(string_table_value[old_index]);
+                permuted_values[new_index] = std::move(values[old_index]);
             }
-            for (size_t& index : string_table_index)
+            for (size_t pos = 0; pos < string_table_index.size(); ++pos)
             {
+                size_t& index = string_table_index[pos];
                 if (index == NO_STRING_TABLE_INDEX)
+                    continue;
+                const auto category = token_string_category(m_cpu[pos]);
+                const bool selected = selected_category == TokenStringCategory::None
+                    ? category != TokenStringCategory::Integer && category != TokenStringCategory::Float
+                    : category == selected_category;
+                if (!selected)
                     continue;
                 assert(index < old_to_new.size());
                 index = old_to_new[index];
             }
-            string_table_value = std::move(permuted_values);
+            values = std::move(permuted_values);
         }
 
         const TokenID& back() const
@@ -389,6 +439,8 @@ namespace rllm
             m_cpu.clear();
             string_table_index.clear();
             string_table_value.clear();
+            integer_constant_value.clear();
+            float_constant_value.clear();
         }
 
         bool empty() const
@@ -433,6 +485,18 @@ namespace rllm
                     hash ^= static_cast<uint64_t>(ch);
                     hash *= FNV_PRIME;
                 }
+            for (const auto& value : integer_constant_value)
+                for (const unsigned char ch : value)
+                {
+                    hash ^= static_cast<uint64_t>(ch);
+                    hash *= FNV_PRIME;
+                }
+            for (const auto& value : float_constant_value)
+                for (const unsigned char ch : value)
+                {
+                    hash ^= static_cast<uint64_t>(ch);
+                    hash *= FNV_PRIME;
+                }
             return hash;
         }
 
@@ -449,21 +513,69 @@ namespace rllm
             return string_table_value[index];
         }
 
+        const std::vector<std::string>& value_table_for_token(TokenID token) const
+        {
+            const auto category = token_string_category(token);
+            if (category == TokenStringCategory::Integer)
+                return integer_constant_value;
+            if (category == TokenStringCategory::Float)
+                return float_constant_value;
+            return string_table_value;
+        }
+
+        std::string_view get_value_for_token(TokenID token, size_t index) const
+        {
+            const auto& values = value_table_for_token(token);
+            assert(index < values.size());
+            return values[index];
+        }
+
+        size_t value_count_for_token(TokenID token) const
+        {
+            return value_table_for_token(token).size();
+        }
+
+        std::vector<uint8_t> first_string_table_index_positions() const
+        {
+            std::vector<uint8_t> result(m_cpu.size(), 0);
+            std::vector<uint8_t> seen_strings(string_table_value.size(), 0);
+            std::vector<uint8_t> seen_integers(integer_constant_value.size(), 0);
+            std::vector<uint8_t> seen_floats(float_constant_value.size(), 0);
+            for (size_t pos = 0; pos < m_cpu.size(); ++pos)
+            {
+                const size_t index = string_table_index[pos];
+                if (index == NO_STRING_TABLE_INDEX)
+                    continue;
+                const auto category = token_string_category(m_cpu[pos]);
+                auto& seen = category == TokenStringCategory::Integer ? seen_integers
+                    : (category == TokenStringCategory::Float ? seen_floats : seen_strings);
+                assert(index < seen.size());
+                if (seen[index] == 0)
+                    result[pos] = 1;
+                seen[index] = 1;
+            }
+            return result;
+        }
+
         std::vector<TokenID> m_cpu;
         std::vector<size_t> string_table_index;
         std::vector<std::string> string_table_value;
+        std::vector<std::string> integer_constant_value;
+        std::vector<std::string> float_constant_value;
 
       private:
         size_t intern_string_value(TokenID token, std::string_view value)
         {
             if (value.empty())
                 return NO_STRING_TABLE_INDEX;
-            (void) token;
-            const auto existing = std::ranges::find(string_table_value, value);
-            if (existing != string_table_value.end())
-                return static_cast<size_t>(existing - string_table_value.begin());
-            string_table_value.emplace_back(value);
-            return string_table_value.size() - 1;
+            const auto category = token_string_category(token);
+            auto& values = category == TokenStringCategory::Integer ? integer_constant_value
+                : (category == TokenStringCategory::Float ? float_constant_value : string_table_value);
+            const auto existing = std::ranges::find(values, value);
+            if (existing != values.end())
+                return static_cast<size_t>(existing - values.begin());
+            values.emplace_back(value);
+            return values.size() - 1;
         }
     };
 

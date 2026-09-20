@@ -188,14 +188,15 @@ namespace rllm
 
     static void accumulate_attention_matrix_gradient_stats(
         // OFFLOAD_PARAMETERS(gradient, rows, values)
-        const fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>& gradient,
+        const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& gradient,
         PositionIndex rows,
         fixed_size_vector<float, TempStorage>& values
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, r, c, rows, (gradient, rows, values))
+        const auto grid = enum_iterator2D<PositionIndex, AttentionPositionIndex>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, rows, values))
         const float value = gradient[r, c];
         atomicMax(values[TempStorage::OPTIMIZER_GRADIENT_MAX], abs(value));
         atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (value * value));
@@ -263,7 +264,7 @@ namespace rllm
     }
 
     void log_attention_matrix_gradient_diagnostics(
-        const fixed_size_obj_vector<fixed_size_triangular_matrix<float, PositionIndex, PositionIndex>, HeadsIndex>& gradients,
+        const fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& gradients,
         PositionIndex rows,
         std::string_view label,
         bool log_per_head)

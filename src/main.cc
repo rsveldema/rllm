@@ -70,6 +70,7 @@ struct CommandLineParser
     rllm::WeightInitializerType weight_initializer = rllm::WeightInitializerType::XavierInputProjections;
     rllm::FFNInitializerType ffn_initializer = rllm::FFNInitializerType::XavierInputProjections;
     rllm::EmbeddingInitializerType embedding_initializer = rllm::EmbeddingInitializerType::LegacyUniform;
+    std::optional<std::string> concept_embeddings_filename;
     size_t micro_batch_size = 1;
     std::optional<size_t> epoch_size;
     size_t max_validation_windows = 4096;
@@ -406,6 +407,12 @@ struct CommandLineParser
                      std::exit(1);
                  }
              }},
+        {.options = {"--concept-embeddings"},
+         .description = "Initialize fresh token embeddings from a concept-similarity JSON file",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             concept_embeddings_filename = args[0];
+         }},
         {.options = {"--learning-rate-schedule"},
          .description = "Learning-rate schedule: constant, lowering, or simulated_annealing (default: lowering)",
          .required_args = 1,
@@ -676,7 +683,7 @@ struct CommandLineParser
                  if (m.starts_with("window:"))
                  {
                      const int n = std::atoi(m.c_str() + 7);
-                     const int max_window = static_cast<int>(rllm::PositionIndex::MAX);
+                     const int max_window = static_cast<int>(rllm::AttentionPositionIndex::MAX);
                      if (n < 4 || n > max_window)
                      {
                          std::println("window:<N> requires N in [4, {}], got '{}'", max_window, m);
@@ -688,7 +695,7 @@ struct CommandLineParser
                  else if (m == "reverse_window" || m.starts_with("reverse_window:"))
                  {
                      const int n = m == "reverse_window" ? window_size : std::atoi(m.c_str() + 15);
-                     const int max_window = static_cast<int>(rllm::PositionIndex::MAX);
+                     const int max_window = static_cast<int>(rllm::AttentionPositionIndex::MAX);
                      if (n < 4 || n > max_window)
                      {
                          std::println("reverse_window:<N> requires N in [4, {}], got '{}'", max_window, m);
@@ -845,6 +852,7 @@ int main(int argc, char* argv[])
             parser.weight_initializer,
             parser.ffn_initializer,
             parser.embedding_initializer,
+            parser.concept_embeddings_filename,
             parser.micro_batch_size,
             parser.num_epochs,
             parser.epoch_size,

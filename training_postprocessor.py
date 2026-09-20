@@ -46,14 +46,28 @@ LOOP_TOKEN = "<LOOP>"
 LOCAL_TOKEN = "<LOCAL>"
 PARAM_TOKEN = "<PARAM>"
 GLOBAL_TOKEN = "<GLOBAL>"
+CLASS_NAME_TOKEN = "<CLASS_NAME>"
 FIELD_ACCESS_TOKEN = "<FIELD>"
 LEGACY_IDENTIFIER_TOKEN = "<IDENTIFIER>"
 STRING_TOKEN = "<STRING>"
-STRING_TABLE_INDEX_RE = re.compile(r"<STI_\d+>")
+INTEGER_TOKEN = "<INTEGER>"
+FLOAT_TOKEN = "<FLOAT>"
+VALUE_TABLE_INDEX_RE = re.compile(r"<(?:STI|ITI|FTI)_\d+>")
 MCP_START_TOKEN = "<MCP>"
 MCP_END_TOKEN = "</MCP>"
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
+_NUMBER_RE = re.compile(r"""
+	(?:
+		0[xX][0-9A-Fa-f][0-9A-Fa-f_']*(?:\.[0-9A-Fa-f_']*)?(?:[pP][+-]?[0-9][0-9_']*)?
+	  | 0[bB][01][01_']*
+	  | 0[oO][0-7][0-7_']*
+	  | (?:[0-9][0-9_']*\.[0-9_']*|\.[0-9][0-9_']*)(?:[eE][+-]?[0-9][0-9_']*)?
+	  | [0-9][0-9_']*[eE][+-]?[0-9][0-9_']*
+	  | [0-9][0-9_']*
+	)
+	(?:[A-Za-z_][A-Za-z_0-9]*)?
+""", re.VERBOSE)
 _QUALIFIED_IDENTIFIER_RE = re.compile(
 	r"[A-Za-z_][A-Za-z_0-9]*(?:\s*(?:::|->|\.)\s*[A-Za-z_][A-Za-z_0-9]*)+"
 )
@@ -77,13 +91,14 @@ _KEYWORDS_BY_SUFFIX = {
 
 
 class StringTable:
-	def __init__(self) -> None:
+	def __init__(self, marker_name: str = "STI") -> None:
 		self._indices: dict[str, int] = {}
+		self._marker_name = marker_name
 
 	def marker(self, value: str) -> str:
 		if value not in self._indices:
 			self._indices[value] = len(self._indices)
-		return f"<STI_{self._indices[value]}>"
+		return f"<{self._marker_name}_{self._indices[value]}>"
 
 
 def _next_non_whitespace(text: str, position: int) -> str:
@@ -151,7 +166,7 @@ def _assigned_identifier_token(
 		return pending_parameters[word]
 	if category in {"local", "loop"} and word in scopes[-1]:
 		return scopes[-1][word]
-	if category == "global":
+	if category in {"global", "class-name"}:
 		if word in pending_parameters:
 			return pending_parameters[word]
 		for scope in reversed(scopes):
@@ -162,9 +177,10 @@ def _assigned_identifier_token(
 		"local": LOCAL_TOKEN,
 		"param": PARAM_TOKEN,
 		"global": GLOBAL_TOKEN,
+		"class-name": CLASS_NAME_TOKEN,
 	}[category]
 	token_with_index = token + string_table.marker(word)
-	if category == "global":
+	if category in {"global", "class-name"}:
 		scopes[0][word] = token_with_index
 	elif category == "param":
 		pending_parameters[word] = token_with_index
@@ -185,10 +201,13 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 	identifier_scopes: list[dict[str, str]] = [{}]
 	pending_parameters: dict[str, str] = {}
 	string_table = StringTable()
+	integer_table = StringTable("ITI")
+	float_table = StringTable("FTI")
 	indentation_levels = [0]
 	class_scopes = [False]
 	function_scopes = [False]
 	pending_class_scope = False
+	expect_class_name = False
 	pending_function_scope = False
 	newline_positions = [position for position, char in enumerate(text) if char == "\n"]
 	i = 0
@@ -215,8 +234,8 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 					pending_class_scope = False
 					pending_function_scope = False
 		control_token = next(
-			(token for token in (LOOP_TOKEN, LOCAL_TOKEN, PARAM_TOKEN, GLOBAL_TOKEN,
-			 FIELD_ACCESS_TOKEN, STRING_TOKEN, MCP_START_TOKEN, MCP_END_TOKEN)
+			(token for token in (LOOP_TOKEN, LOCAL_TOKEN, PARAM_TOKEN, GLOBAL_TOKEN, CLASS_NAME_TOKEN,
+			 FIELD_ACCESS_TOKEN, STRING_TOKEN, INTEGER_TOKEN, FLOAT_TOKEN, MCP_START_TOKEN, MCP_END_TOKEN)
 			 if text.startswith(token, i)),
 			None,
 		)
@@ -224,7 +243,7 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 			out.append(control_token)
 			i += len(control_token)
 			continue
-		string_table_index = STRING_TABLE_INDEX_RE.match(text, i)
+		string_table_index = VALUE_TABLE_INDEX_RE.match(text, i)
 		if string_table_index is not None:
 			out.append(string_table_index.group())
 			i = string_table_index.end()
@@ -286,6 +305,14 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 			out.append(STRING_TOKEN + string_table.marker(text[i:end]))
 			i = end
 			continue
+		number = _NUMBER_RE.match(text, i)
+		if number is not None:
+			literal = number.group()
+			is_float = any(ch in literal for ch in ".eEpP") or literal.rstrip("0123456789_").lower().endswith("f")
+			value_table = float_table if is_float else integer_table
+			out.append((FLOAT_TOKEN if is_float else INTEGER_TOKEN) + value_table.marker(literal))
+			i = number.end()
+			continue
 		qualified = _QUALIFIED_IDENTIFIER_RE.match(text, i)
 		if qualified:
 			qualified_text = qualified.group()
@@ -317,6 +344,11 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 				expect_library_name = word in {"import", "from", "use"}
 				if word in {"class", "struct"}:
 					pending_class_scope = True
+					expect_class_name = True
+			elif expect_class_name:
+				out.append(_assigned_identifier_token(
+					word, "class-name", identifier_scopes, pending_parameters, string_table))
+				expect_class_name = False
 			elif expect_library_name:
 				out.extend((MCP_START_TOKEN, _assigned_identifier_token(
 					word, "global", identifier_scopes, pending_parameters, string_table), MCP_END_TOKEN))
@@ -348,6 +380,7 @@ def abstract_code_symbols(text: str, suffix: str | None = None) -> str:
 		elif text[i] == ";":
 			pending_parameters = {}
 			pending_class_scope = False
+			expect_class_name = False
 			pending_function_scope = False
 		out.append(text[i])
 		i += 1

@@ -329,6 +329,8 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "limit<TempStorage::MAX>(")
     out = out.replace("enum_iterator1D<PositionIndex>(",
                       "limit<PositionIndex::MAX>(")
+    out = out.replace("enum_iterator1D<AttentionPositionIndex>(",
+                      "limit<AttentionPositionIndex::MAX>(")
     out = out.replace("enum_iterator1D<EmbeddingDimension>(",
                       "limit<EmbeddingDimension::MAX>(")
     out = out.replace("enum_iterator1D<HeadsIndex>(",
@@ -343,6 +345,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "cpu_fixed_vector<TokenID, PositionIndex>")
     out = out.replace("InputLine",
                       "fixed_size_vector<TokenID, PositionIndex>")
+    out = out.replace("AttentionPositionIndex::START", "0")
     out = out.replace("PositionIndex::START", "0")
     out = out.replace("EmbeddingDimension::START", "0")
     out = out.replace("HeadsIndex::START", "0")
@@ -355,6 +358,7 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace(", HeadsIndex", ", HeadsIndex::MAX")
     out = out.replace(", BatchIndex", ", BatchIndex::MAX")
     out = out.replace(", PositionIndex", ", PositionIndex::MAX")
+    out = out.replace(", AttentionPositionIndex", ", AttentionPositionIndex::MAX")
     out = out.replace(", EmbeddingDimension", ", EmbeddingDimension::MAX")
     out = out.replace(", FFDimension", ", FFDimension::MAX")
     out = out.replace(", HeadDimension", ", HeadDimension::MAX")
@@ -371,17 +375,19 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
         out = re.sub(r"\bHeadsIndex\b", "HeadsIndex::MAX", out)
         out = re.sub(r"\bBatchIndex\b", "BatchIndex::MAX", out)
         out = re.sub(r"\bPositionIndex\b", "PositionIndex::MAX", out)
+        out = re.sub(r"\bAttentionPositionIndex\b", "AttentionPositionIndex::MAX", out)
         out = re.sub(r"\bEmbeddingDimension\b", "EmbeddingDimension::MAX", out)
 
     # enum as a loose parameter type:
     out = out.replace(" PositionIndex ", " int ")
+    out = out.replace(" AttentionPositionIndex ", " int ")
     out = out.replace("EmbeddingDimension ", " int ")
 
     # Replace bare obsolete enum-type names used as loose parameter types with int.
     # Use negative lookbehind (?<!<) to exclude matches inside <...> template args,
     # and negative lookahead (?!::) to avoid corrupting already-suffixed types like PositionIndex::MAX.
     for _obsolete_type in (
-        "TokenID", "PositionIndex", "EmbeddingDimension", "HeadsIndex", "BatchIndex",
+        "TokenID", "PositionIndex", "AttentionPositionIndex", "EmbeddingDimension", "HeadsIndex", "BatchIndex",
         "TempStorage", "FFDimension", "HeadDimension",
         "RmsNormPartialSumIndex", "MultiTokenPredictionIndex", "ConflictIndex"
     ):

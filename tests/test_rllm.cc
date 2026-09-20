@@ -174,6 +174,26 @@ TEST(LayerPrimitivesTest, CpuInputLineCarriesStringTableMetadata)
     EXPECT_EQ(line.get_string_table_index(static_cast<PositionIndex>(2)), 0u);
 }
 
+TEST(LayerPrimitivesTest, CpuInputLinePrecomputesFirstStringTableIndices)
+{
+    CpuInputLine line;
+    line.push_back(TokenID::STRING, "\"hello\"");
+    line.push_back_string_table_index(0);
+    line.push_back(TokenID::STRING, "\"world\"");
+    line.push_back_string_table_index(1);
+    line.push_back(TokenID::STRING, "\"hello\"");
+    line.push_back_string_table_index(0);
+
+    const auto is_first = line.first_string_table_index_positions();
+    ASSERT_EQ(is_first.size(), static_cast<size_t>(line.size()));
+    EXPECT_EQ(is_first[0], 1);
+    EXPECT_EQ(is_first[1], 0);
+    EXPECT_EQ(is_first[2], 1);
+    EXPECT_EQ(is_first[3], 0);
+    EXPECT_EQ(is_first[4], 0);
+    EXPECT_EQ(is_first[5], 0);
+}
+
 TEST(CorpusTest, PromptAbstractionMatchesTrainingRepresentation)
 {
     DefaultMCP mcp;
@@ -237,7 +257,7 @@ TEST(CorpusTest, IdentifierCategoriesTrackKnownVariableScope)
         SourceLanguage::Cpp, mcp, &scopes);
     EXPECT_EQ(abstracted,
         "void <MCP><GLOBAL></MCP>(int <PARAM>, <GLOBAL> <PARAM>) "
-        "{ auto <LOCAL> = <PARAM>; for (int <LOOP> = 0; "
+        "{ auto <LOCAL> = <PARAM>; for (int <LOOP> = <INTEGER>; "
         "<LOOP> < <PARAM>; ++<LOOP>) <LOCAL> = <GLOBAL>; }");
 }
 
@@ -250,8 +270,8 @@ TEST(CorpusTest, CppScopeManagementReusesIdentifierSlots)
             "{ auto first = 1; { auto second = 2; } auto third = 3; } "
             "{ auto fourth = 4; }",
             SourceLanguage::Cpp, mcp, &scopes),
-        "{ auto <LOCAL> = 1; { auto <LOCAL> = 2; } auto <LOCAL> = 3; } "
-        "{ auto <LOCAL> = 4; }");
+        "{ auto <LOCAL> = <INTEGER>; { auto <LOCAL> = <INTEGER>; } auto <LOCAL> = <INTEGER>; } "
+        "{ auto <LOCAL> = <INTEGER>; }");
 }
 
 TEST(CorpusTest, ParameterSlotsRestartAtZeroForEachFunction)
@@ -284,8 +304,19 @@ TEST(CorpusTest, GlobalSlotsRestartForFreeFunctionsButNotMethods)
         abstract_source_for_model(
             "class Widget { void first() { } void second() { } };",
             SourceLanguage::Cpp, mcp, &class_scopes),
-        "class <GLOBAL> { void <MCP><GLOBAL></MCP>() { } "
+        "class <CLASS_NAME> { void <MCP><GLOBAL></MCP>() { } "
         "void <MCP><GLOBAL></MCP>() { } };");
+}
+
+TEST(CorpusTest, ClassDeclarationsAndReferencesUseClassNameSlots)
+{
+    DefaultMCP mcp;
+    IdentifierScopeState scopes;
+    EXPECT_EQ(
+        abstract_source_for_model(
+            "class Widget {}; Widget value;",
+            SourceLanguage::Cpp, mcp, &scopes),
+        "class <CLASS_NAME> {}; <CLASS_NAME> <GLOBAL>;");
 }
 
 TEST(CorpusTest, PythonScopeManagementReusesIdentifierSlotsAfterDedent)
@@ -300,12 +331,12 @@ TEST(CorpusTest, PythonScopeManagementReusesIdentifierSlotsAfterDedent)
     };
 
     tokenize("def work():");
-    EXPECT_EQ(tokenize("    first = 1"), "<LOCAL><STI_0>=1");
+    EXPECT_EQ(tokenize("    first = 1"), "<LOCAL><STI_0>=<INTEGER><ITI_0>");
     tokenize("    if True:");
-    EXPECT_EQ(tokenize("        second = 2"), "<LOCAL><STI_0>=2");
-    EXPECT_EQ(tokenize("    third = 3"), "<LOCAL><STI_0>=3");
+    EXPECT_EQ(tokenize("        second = 2"), "<LOCAL><STI_0>=<INTEGER><ITI_0>");
+    EXPECT_EQ(tokenize("    third = 3"), "<LOCAL><STI_0>=<INTEGER><ITI_0>");
     tokenize("def other():");
-    EXPECT_EQ(tokenize("    fourth = 4"), "<LOCAL><STI_0>=4");
+    EXPECT_EQ(tokenize("    fourth = 4"), "<LOCAL><STI_0>=<INTEGER><ITI_0>");
 }
 
 TEST(CorpusTest, JavaScopeManagementReusesIdentifierSlots)
@@ -317,8 +348,8 @@ TEST(CorpusTest, JavaScopeManagementReusesIdentifierSlots)
             "{ int first = 1; { int second = 2; } int third = 3; } "
             "{ int fourth = 4; }",
             SourceLanguage::Java, mcp, &scopes),
-        "{ int <LOCAL> = 1; { int <LOCAL> = 2; } int <LOCAL> = 3; } "
-        "{ int <LOCAL> = 4; }");
+        "{ int <LOCAL> = <INTEGER>; { int <LOCAL> = <INTEGER>; } int <LOCAL> = <INTEGER>; } "
+        "{ int <LOCAL> = <INTEGER>; }");
 }
 
 TEST(CorpusTest, RustScopeManagementReusesIdentifierSlots)
@@ -330,8 +361,28 @@ TEST(CorpusTest, RustScopeManagementReusesIdentifierSlots)
             "{ let first = 1; { let second = 2; } let third = 3; } "
             "{ let fourth = 4; }",
             SourceLanguage::Rust, mcp, &scopes),
-        "{ let <LOCAL> = 1; { let <LOCAL> = 2; } let <LOCAL> = 3; } "
-        "{ let <LOCAL> = 4; }");
+        "{ let <LOCAL> = <INTEGER>; { let <LOCAL> = <INTEGER>; } let <LOCAL> = <INTEGER>; } "
+        "{ let <LOCAL> = <INTEGER>; }");
+}
+
+TEST(CorpusTest, NumericConstantsUseAtomicTypedTokensAndPayloads)
+{
+    Corpus corpus{{}};
+    CommentLexState state;
+    const auto line = corpus.get_token_ids(
+        "auto a = 13245; auto b = 3.14; auto c = 0xffu; auto d = 6.02e23; auto e = 0x1.fp3;",
+        SourceLanguage::Cpp, state);
+    const auto rendered = corpus.get_line(line);
+    ASSERT_TRUE(rendered.has_value());
+    EXPECT_EQ(*rendered,
+        "auto <LOCAL><STI_0>=<INTEGER><ITI_0>;auto <LOCAL><STI_1>=<FLOAT><FTI_0>;"
+        "auto <LOCAL><STI_2>=<INTEGER><ITI_1>;auto <LOCAL><STI_3>=<FLOAT><FTI_1>;"
+        "auto <LOCAL><STI_4>=<FLOAT><FTI_2>;");
+    ASSERT_EQ(line.integer_constant_value.size(), 2u);
+    EXPECT_EQ(line.integer_constant_value[0], "13245");
+    EXPECT_EQ(line.integer_constant_value[1], "0xffu");
+    ASSERT_EQ(line.float_constant_value.size(), 3u);
+    EXPECT_EQ(line.float_constant_value[0], "3.14");
 }
 
 TEST(CorpusTest, LanguageAwareTokenizerRecordsConcreteValuesWithMCP)
@@ -1147,49 +1198,49 @@ TEST(TransformerBlockTest, SoftmaxAttentionForHeadMatchesJacobian)
     using namespace rllm;
 
     const auto T = static_cast<PositionIndex>(4);
-    cpu_fixed_triangular_matrix<float, PositionIndex, PositionIndex> cpu_d_scores;
-    cpu_fixed_triangular_matrix<float, PositionIndex, PositionIndex> cpu_attn_w;
-    cpu_fixed_triangular_matrix<float, PositionIndex, PositionIndex> cpu_d_raw;
+    cpu_fixed_matrix<float, PositionIndex, AttentionPositionIndex> cpu_d_scores;
+    cpu_fixed_matrix<float, PositionIndex, AttentionPositionIndex> cpu_attn_w;
+    cpu_fixed_matrix<float, PositionIndex, AttentionPositionIndex> cpu_d_raw;
 
     for (int i = 0; i < 4; ++i)
         for (int j = 0; j <= i; ++j)
         {
-            cpu_d_scores.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), 0.0f);
-            cpu_attn_w.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), 0.0f);
-            cpu_d_raw.set(static_cast<PositionIndex>(i), static_cast<PositionIndex>(j), -7.0f);
+            cpu_d_scores.set(static_cast<PositionIndex>(i), static_cast<AttentionPositionIndex>(j), 0.0f);
+            cpu_attn_w.set(static_cast<PositionIndex>(i), static_cast<AttentionPositionIndex>(j), 0.0f);
+            cpu_d_raw.set(static_cast<PositionIndex>(i), static_cast<AttentionPositionIndex>(j), -7.0f);
         }
 
     // Row 0 (single active element)
-    cpu_attn_w.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 1.0f);
-    cpu_d_scores.set(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0), 3.0f);
+    cpu_attn_w.set(static_cast<PositionIndex>(0), static_cast<AttentionPositionIndex>(0), 1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(0), static_cast<AttentionPositionIndex>(0), 3.0f);
 
     // Row 1: active j in [0,1], p sums to 1
-    cpu_attn_w.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 0.2f);
-    cpu_attn_w.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), 0.8f);
-    cpu_d_scores.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0), 1.0f);
-    cpu_d_scores.set(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1), -2.0f);
+    cpu_attn_w.set(static_cast<PositionIndex>(1), static_cast<AttentionPositionIndex>(0), 0.2f);
+    cpu_attn_w.set(static_cast<PositionIndex>(1), static_cast<AttentionPositionIndex>(1), 0.8f);
+    cpu_d_scores.set(static_cast<PositionIndex>(1), static_cast<AttentionPositionIndex>(0), 1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(1), static_cast<AttentionPositionIndex>(1), -2.0f);
 
     // Row 2: active j in [0,2], p sums to 1
-    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 0.1f);
-    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), 0.3f);
-    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.6f);
-    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0), 2.0f);
-    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1), -1.0f);
-    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2), 0.5f);
+    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(0), 0.1f);
+    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(1), 0.3f);
+    cpu_attn_w.set(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(2), 0.6f);
+    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(0), 2.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(1), -1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(2), 0.5f);
 
     // Row 3: active j in [0,3], p sums to 1
-    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), 0.25f);
-    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.25f);
-    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 0.25f);
-    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 0.25f);
-    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0), -1.0f);
-    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1), 0.0f);
-    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2), 1.0f);
-    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3), 2.0f);
+    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(0), 0.25f);
+    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(1), 0.25f);
+    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(2), 0.25f);
+    cpu_attn_w.set(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(3), 0.25f);
+    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(0), -1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(1), 0.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(2), 1.0f);
+    cpu_d_scores.set(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(3), 2.0f);
 
-    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_scores;
-    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> attn_w;
-    fixed_size_triangular_matrix<float, PositionIndex, PositionIndex> d_raw;
+    AttentionMatrix d_scores;
+    AttentionMatrix attn_w;
+    AttentionMatrix d_raw;
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         d_scores.copy_from_cpu(queue, cpu_d_scores);
@@ -1205,25 +1256,25 @@ TEST(TransformerBlockTest, SoftmaxAttentionForHeadMatchesJacobian)
 
     // Expected updates per row: p_j * (dp_j - dot), where dot = sum_k dp_k * p_k.
     // Row 0: dot=3, update=[0]
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(0), static_cast<PositionIndex>(0)), 0.0f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(0), static_cast<AttentionPositionIndex>(0)), 0.0f, 1e-6f);
 
     // Row 1: dot = 1*0.2 + (-2)*0.8 = -1.4
     // updates: j0=0.2*(1+1.4)=0.48, j1=0.8*(-2+1.4)=-0.48
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(0)), 0.48f, 1e-6f);
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(1), static_cast<PositionIndex>(1)), -0.48f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(1), static_cast<AttentionPositionIndex>(0)), 0.48f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(1), static_cast<AttentionPositionIndex>(1)), -0.48f, 1e-6f);
 
     // Row 2: dot = 2*0.1 + (-1)*0.3 + 0.5*0.6 = 0.2
     // updates: [0.18, -0.36, 0.18]
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(0)), 0.18f, 1e-6f);
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(1)), -0.36f, 1e-6f);
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<PositionIndex>(2)), 0.18f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(0)), 0.18f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(1)), -0.36f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(2), static_cast<AttentionPositionIndex>(2)), 0.18f, 1e-6f);
 
     // Row 3: dot = (-1 + 0 + 1 + 2) * 0.25 = 0.5
     // updates: [-0.375, -0.125, 0.125, 0.375]
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(0)), -0.375f, 1e-6f);
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(1)), -0.125f, 1e-6f);
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(2)), 0.125f, 1e-6f);
-    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<PositionIndex>(3)), 0.375f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(0)), -0.375f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(1)), -0.125f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(2)), 0.125f, 1e-6f);
+    EXPECT_NEAR(cpu_d_raw.get(static_cast<PositionIndex>(3), static_cast<AttentionPositionIndex>(3)), 0.375f, 1e-6f);
 }
 
 // ---------------------------------------------------------------------------

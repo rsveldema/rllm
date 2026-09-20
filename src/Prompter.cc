@@ -164,14 +164,14 @@ namespace rllm
             }
             if (category != TokenStringCategory::None &&
                 string_table_index != NO_STRING_TABLE_INDEX &&
-                string_table_index < tokens.string_table_value.size())
+                string_table_index < tokens.value_count_for_token(token))
             {
                 const size_t marker_end = token_text.size() > 0 && token_text.back() == '>'
                     ? token_text.size() - 1
                     : token_text.size();
                 text += token_text.substr(0, marker_end);
                 text += ": ";
-                text += tokens.get_string_table_value(string_table_index);
+                text += tokens.get_value_for_token(token, string_table_index);
                 if (marker_end != token_text.size())
                     text += '>';
             }
@@ -482,7 +482,7 @@ namespace rllm
                 }
                 std::string predicted_string_value;
                 size_t predicted_string_table_index = NO_STRING_TABLE_INDEX;
-                if (is_string_table_index_token(entry.token_id))
+                if (token_string_category(entry.token_id) != TokenStringCategory::None)
                 {
                     const auto predicted_indices =
                         nn.get_output_layer(head).get_top_k_string_table_indices_by_logit(1);
@@ -491,8 +491,9 @@ namespace rllm
                             static_cast<size_t>(predicted_indices.front().index);
                 }
                 if (predicted_string_table_index != NO_STRING_TABLE_INDEX &&
-                    predicted_string_table_index < token_id_list.string_table_value.size())
-                    predicted_string_value = token_id_list.string_table_value[predicted_string_table_index];
+                    predicted_string_table_index < token_id_list.value_count_for_token(entry.token_id))
+                    predicted_string_value = token_id_list.get_value_for_token(
+                        entry.token_id, predicted_string_table_index);
                 if (output_token == "\n")  output_token = "\\n";
                 if (output_token == "\t")  output_token = "\\t";
                 if (!predicted_string_value.empty())
@@ -503,10 +504,12 @@ namespace rllm
                         predicted_string_value);
                 else
                     std::println("Predicted next token (head {}): {}", static_cast<int>(head), output_token);
-                if (is_string_table_index_token(entry.token_id) &&
+                if (token_string_category(entry.token_id) != TokenStringCategory::None &&
                     predicted_string_table_index != NO_STRING_TABLE_INDEX &&
-                    predicted_string_table_index < token_id_list.string_table_value.size())
-                    token_id_list.push_back_string_table_index(predicted_string_table_index);
+                    predicted_string_table_index < token_id_list.value_count_for_token(entry.token_id))
+                    token_id_list.push_back(
+                        entry.token_id,
+                        token_id_list.get_value_for_token(entry.token_id, predicted_string_table_index));
                 else
                     token_id_list.push_back(entry.token_id, predicted_string_value);
                 ++total_tokens_generated;

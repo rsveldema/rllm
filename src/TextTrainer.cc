@@ -4,6 +4,7 @@
 #include "TextTrainerInternal.hpp"
 #include <RuntimeConfig.hpp>
 #include <LogFormatting.hpp>
+#include <NumericLoss.hpp>
 #include <TokenIDFormatter.hpp>
 #include <algorithm>
 #include <cassert>
@@ -23,6 +24,7 @@
 #include <parallel.hpp>
 #include <random>
 #include <sstream>
+#include <unordered_map>
 #include <rllm_vulkan_runtime.hpp>
 #include <set>
 #include <vecmath.hpp>
@@ -31,6 +33,34 @@
 
 namespace rllm
 {
+    namespace
+    {
+        uint64_t concept_seed(std::string_view value, uint64_t seed)
+        {
+            uint64_t hash = 1469598103934665603ULL ^ seed;
+            for (const unsigned char ch : value)
+            {
+                hash ^= ch;
+                hash *= 1099511628211ULL;
+            }
+            return hash;
+        }
+
+        std::vector<float> concept_feature(std::string_view name, uint64_t seed)
+        {
+            std::vector<float> result(static_cast<size_t>(EmbeddingDimension::MAX));
+            uint64_t state = concept_seed(name, seed);
+            for (float& value : result)
+            {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                value = (state * 2685821657736338717ULL) & 1ULL ? 1.0f : -1.0f;
+            }
+            return result;
+        }
+    }
+
     const char* training_method_to_string(TrainingMethod method)
     {
         switch (method)
@@ -76,36 +106,58 @@ namespace rllm
     }
 
     static int string_table_index_for_head(
-        const CpuInputLine& line, int input_len, MultiTokenPredictionIndex head)
+        const CpuInputLine& line,
+        const std::vector<uint8_t>& first_string_table_index,
+        int input_len,
+        MultiTokenPredictionIndex head)
     {
         const int target_index = input_len + static_cast<int>(head);
         assert(target_index < static_cast<int>(line.size()));
         const auto pos = static_cast<PositionIndex>(target_index);
-        if (!is_string_table_index_token(line[pos]))
-            return -1;
         const size_t index = line.get_string_table_index(pos);
         if (index == NO_STRING_TABLE_INDEX)
+            return -1;
+        assert(static_cast<size_t>(target_index) < first_string_table_index.size());
+        const auto category = token_string_category(line[pos]);
+        if (category != TokenStringCategory::Integer && category != TokenStringCategory::Float &&
+            first_string_table_index[static_cast<size_t>(target_index)] != 0)
             return -1;
         assert(index < static_cast<size_t>(PositionIndex::MAX));
         return static_cast<int>(index);
     }
 
     static PositionIndex string_table_index_count_for_expected(
-        const cpu_fixed_vector<int, BatchIndex>& expected_string_table_indices)
+        const cpu_fixed_vector<int, BatchIndex>& expected_value_counts)
     {
-        size_t max_index = 0;
-        bool any_index = false;
-        for (const auto batch : enum_iterator1D<BatchIndex>(expected_string_table_indices.size()))
-        {
-            const int index = expected_string_table_indices[batch];
-            if (index < 0)
-                continue;
-            any_index = true;
-            max_index = std::max(max_index, static_cast<size_t>(index));
-        }
-        return any_index
-            ? static_cast<PositionIndex>(max_index + 1)
-            : PositionIndex::START;
+        int max_count = 0;
+        for (const auto batch : enum_iterator1D<BatchIndex>(expected_value_counts.size()))
+            max_count = std::max(max_count, expected_value_counts[batch]);
+        return static_cast<PositionIndex>(max_count);
+    }
+
+    static int value_count_for_head(const CpuInputLine& line, int input_len,
+        MultiTokenPredictionIndex head, int expected_index)
+    {
+        if (expected_index < 0)
+            return 0;
+        const auto pos = static_cast<PositionIndex>(input_len + static_cast<int>(head));
+        return static_cast<int>(line.value_count_for_token(line[pos]));
+    }
+
+    static void set_numeric_distance_costs(const CpuInputLine& line, PositionIndex target_pos,
+        BatchIndex batch, cpu_fixed_matrix<float, BatchIndex, PositionIndex>& costs)
+    {
+        const TokenID token = line[target_pos];
+        const auto category = token_string_category(token);
+        if (category != TokenStringCategory::Integer && category != TokenStringCategory::Float)
+            return;
+        const size_t expected_index = line.get_string_table_index(target_pos);
+        if (expected_index == NO_STRING_TABLE_INDEX)
+            return;
+        const auto& values = line.value_table_for_token(token);
+        for (size_t index = 0; index < values.size(); ++index)
+            costs[batch, static_cast<PositionIndex>(index)] =
+                numeric_distance_cost(values[index], values[expected_index]);
     }
 
     static void scatter_dh_last_to_row(
@@ -953,6 +1005,92 @@ namespace rllm
             initializer_name(m_embedding_initializer));
         m_input_layer.set_random_embeddings(m_embedding_initializer);
 
+        if (m_concept_embeddings_filename)
+        {
+                const auto fail = [&](std::string_view message) {
+                    std::println("Invalid concept embedding file '{}': {}", *m_concept_embeddings_filename, message);
+                    std::exit(1);
+                };
+                std::ifstream input(*m_concept_embeddings_filename);
+                if (!input)
+                    fail("cannot open file");
+                const auto document = nlohmann::json::parse(input, nullptr, false);
+                if (document.is_discarded() || !document.is_object() ||
+                    !document.contains("concepts") || !document["concepts"].is_array() ||
+                    !document.contains("relationships") || !document["relationships"].is_array())
+                    fail("expected an object with concepts and relationships arrays");
+                const auto concepts = document.at("concepts").get<std::vector<std::string>>();
+                const uint64_t seed = document.value("seed", 0x524c4c4dULL);
+                std::unordered_map<std::string, size_t> indices;
+                std::vector<std::vector<float>> vectors;
+                vectors.reserve(concepts.size());
+                for (size_t i = 0; i < concepts.size(); ++i)
+                {
+                    if (!indices.emplace(concepts[i], i).second)
+                        fail(std::format("duplicate concept '{}'", concepts[i]));
+                    vectors.push_back(concept_feature(concepts[i], seed));
+                    for (float& value : vectors.back())
+                        value *= 0.5f;
+                }
+
+                size_t relation_count = 0;
+                for (const auto& relation : document.at("relationships"))
+                {
+                    if ((!relation.is_array() || relation.size() != 3) &&
+                        (!relation.is_object() || !relation.contains("source") ||
+                         !relation.contains("target") || !relation.contains("similarity")))
+                        fail("each relationship must be [source, target, similarity] or an equivalent object");
+                    const std::string source = relation.is_array() ? relation.at(0).get<std::string>() : relation.at("source").get<std::string>();
+                    const std::string target = relation.is_array() ? relation.at(1).get<std::string>() : relation.at("target").get<std::string>();
+                    const float similarity = relation.is_array() ? relation.at(2).get<float>() : relation.at("similarity").get<float>();
+                    if (!std::isfinite(similarity) || similarity < 0.0f || similarity > 1.0f)
+                        fail("relationship similarity must be in [0, 1]");
+                    if (!indices.contains(source) || !indices.contains(target))
+                        fail(std::format("relationship references unknown concept '{}' or '{}'", source, target));
+                    auto feature = concept_feature(source < target ? source + "\n" + target : target + "\n" + source, seed ^ 0x9e3779b97f4a7c15ULL);
+                    const float scale = std::sqrt(similarity);
+                    for (size_t d = 0; d < feature.size(); ++d)
+                    {
+                        vectors[indices.at(source)][d] += scale * feature[d];
+                        vectors[indices.at(target)][d] += scale * feature[d];
+                    }
+                    ++relation_count;
+                }
+
+                const float target_rms = m_embedding_initializer == EmbeddingInitializerType::VarianceScaledUniform
+                    ? 1.0f / std::sqrt(static_cast<float>(EmbeddingDimension::MAX))
+                    : 0.1f / std::sqrt(3.0f);
+                std::unordered_map<size_t, std::vector<float>> token_vectors;
+                std::unordered_map<size_t, size_t> token_counts;
+                size_t tokenized_concepts = 0;
+                for (size_t i = 0; i < concepts.size(); ++i)
+                {
+                    float square_sum = std::inner_product(vectors[i].begin(), vectors[i].end(), vectors[i].begin(), 0.0f);
+                    const float scale = target_rms * std::sqrt(static_cast<float>(vectors[i].size()) / square_sum);
+                    const auto tokens = m_corpus.get_token_ids(concepts[i]);
+                    if (tokens.empty())
+                        continue;
+                    ++tokenized_concepts;
+                    for (const auto position : enum_iterator1D<PositionIndex>(tokens.size()))
+                    {
+                        const size_t token = static_cast<size_t>(tokens[position]);
+                        auto& accumulated = token_vectors.try_emplace(token, vectors[i].size(), 0.0f).first->second;
+                        for (size_t d = 0; d < accumulated.size(); ++d)
+                            accumulated[d] += scale * vectors[i][d];
+                        ++token_counts[token];
+                    }
+                }
+                for (auto& [token, values] : token_vectors)
+                {
+                    embedding_row_t row{};
+                    for (size_t d = 0; d < values.size(); ++d)
+                        row[d] = static_cast<float16>(values[d] / static_cast<float>(token_counts.at(token)));
+                    m_input_layer.set_embedding(static_cast<TokenID>(token), row);
+                }
+                LOG_INFO("Concept embeddings: initialized {} token rows from {}/{} concepts and {} relationships in '{}'",
+                    token_vectors.size(), tokenized_concepts, concepts.size(), relation_count, *m_concept_embeddings_filename);
+        }
+
         for (auto& block : m_transformer_blocks)
             block.randomize(m_weight_initializer, m_ffn_initializer);
 
@@ -981,6 +1119,7 @@ namespace rllm
         for (const auto& line : evaluation_lines)
             evaluation_windows.push_back({
                 .line = line,
+                .first_string_table_index = line.first_string_table_index_positions(),
                 .context_length = static_cast<PositionIndex>(
                     mtp_input_len_for_sequence(static_cast<int>(line.size())))
             });
@@ -1087,6 +1226,7 @@ namespace rllm
 
             std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> expected_by_head;
             std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> expected_string_table_index_by_head;
+            std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> expected_value_count_by_head;
             std::array<cpu_fixed_vector<int, BatchIndex>, MTP_HEAD_COUNT> active_by_head;
             for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>())
             {
@@ -1094,6 +1234,7 @@ namespace rllm
                 auto& expected_string_table_index =
                     expected_string_table_index_by_head[static_cast<size_t>(head)];
                 auto& active = active_by_head[static_cast<size_t>(head)];
+                auto& expected_value_count = expected_value_count_by_head[static_cast<size_t>(head)];
                 bool any_active = false;
                 for (size_t batch = 0; batch < window_indices.size(); ++batch)
                 {
@@ -1104,8 +1245,11 @@ namespace rllm
                     const int context_length = static_cast<int>(window.context_length);
                     expected.push_back(used ? static_cast<int>(mtp_target_for_head(
                         window.line, context_length, head)) : 0);
-                    expected_string_table_index.push_back(
-                        used ? string_table_index_for_head(window.line, context_length, head) : -1);
+                    const int index = used ? string_table_index_for_head(
+                        window.line, window.first_string_table_index, context_length, head) : -1;
+                    expected_string_table_index.push_back(index);
+                    expected_value_count.push_back(used
+                        ? value_count_for_head(window.line, context_length, head, index) : 0);
                 }
                 if (!any_active)
                     continue;
@@ -1123,9 +1267,22 @@ namespace rllm
                 m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected);
                 m_batched_output_workspace->expected_string_table_indices.copy_from_cpu(
                     queue, expected_string_table_index);
+                m_batched_output_workspace->expected_value_counts.copy_from_cpu(queue, expected_value_count);
                 m_batched_output_workspace->active_examples.copy_from_cpu(queue, active);
+                cpu_fixed_matrix<float, BatchIndex, PositionIndex> numeric_costs;
+                numeric_costs.zero();
+                for (size_t batch = 0; batch < window_indices.size(); ++batch)
+                {
+                    if (active[batch] == 0)
+                        continue;
+                    const auto& window = evaluation_windows[window_indices[batch]];
+                    set_numeric_distance_costs(window.line,
+                        static_cast<PositionIndex>(static_cast<int>(window.context_length) + static_cast<int>(head)),
+                        static_cast<BatchIndex>(batch), numeric_costs);
+                }
+                m_batched_output_workspace->numeric_distance_costs.copy_from_cpu(queue, numeric_costs);
                 const PositionIndex string_table_index_count =
-                    string_table_index_count_for_expected(expected_string_table_index);
+                    string_table_index_count_for_expected(expected_value_count);
                 m_output_layers[head].compute_batched_delta(
                     m_batched_output_workspace->logits, batch_size,
                     *m_batched_output_workspace, queue,
@@ -1141,6 +1298,10 @@ namespace rllm
                 cpu_fixed_vector<float, BatchIndex> losses;
                 losses.set_size(batch_size);
                 m_batched_output_workspace->losses.copy_to_cpu(queue, losses);
+                cpu_fixed_vector<float, BatchIndex> correct_token_probabilities;
+                correct_token_probabilities.set_size(batch_size);
+                m_batched_output_workspace->correct_token_probabilities.copy_to_cpu(
+                    queue, correct_token_probabilities);
 
                 for (size_t batch = 0; batch < window_indices.size(); ++batch)
                 {
@@ -1154,7 +1315,7 @@ namespace rllm
                     }
                     const size_t head_index = static_cast<size_t>(head);
                     per_head_loss_sum[head_index] += loss;
-                    per_head_probability_sum[head_index] += std::exp(-static_cast<double>(loss));
+                    per_head_probability_sum[head_index] += correct_token_probabilities[batch];
                     ++per_head_count[head_index];
                     if (report_worst_predictions)
                     {
@@ -1226,8 +1387,14 @@ namespace rllm
                         static_cast<size_t>(candidate.expected_string_table_index))
                     : m_output_layers[candidate.head].compute_score(score, candidate.expected);
                 const auto top = m_output_layers[candidate.head].get_top_k_by_logit(1).front();
-                const float max_logit = score.temp_values_cpu[TempStorage::START];
-                const float sum_exp = score.temp_values_cpu[TempStorage::ONE];
+                float max_logit = -std::numeric_limits<float>::infinity();
+                for (const auto token : enum_iterator1D<TokenID>())
+                    max_logit = std::max(max_logit, m_output_layers[candidate.head].m_inputs_cpu[token]);
+                float sum_exp = 0.0f;
+                for (const auto token : enum_iterator1D<TokenID>())
+                    sum_exp += std::exp(m_output_layers[candidate.head].m_inputs_cpu[token] - max_logit);
+                const float expected_probability =
+                    std::exp(m_output_layers[candidate.head].m_inputs_cpu[candidate.expected] - max_logit) / sum_exp;
                 constexpr size_t SURROUNDING_TOKEN_COUNT = 3;
                 const size_t target_index = static_cast<size_t>(window.context_length) +
                     static_cast<size_t>(candidate.head);
@@ -1253,7 +1420,7 @@ namespace rllm
                     context_excerpt += "…";
                 worst_predictions.push_back({
                     .loss = loss,
-                    .expected_probability = std::exp(-loss),
+                    .expected_probability = expected_probability,
                     .predicted_probability = std::exp(top.activation - max_logit) / sum_exp,
                     .head = candidate.head,
                     .expected = candidate.expected,
@@ -1570,10 +1737,12 @@ namespace rllm
             if (window.starts_in_block_comment)
             {
                 window.line.push_front(TokenID::BLOCK_COMMENT_START);
+                window.first_string_table_index.insert(window.first_string_table_index.begin(), 0);
                 window.context_length = static_cast<PositionIndex>(
                     static_cast<size_t>(window.context_length) + 1);
             }
             window.line.push_front(language_token(file_languages.at(window.source_index)));
+            window.first_string_table_index.insert(window.first_string_table_index.begin(), 0);
             window.context_length = static_cast<PositionIndex>(
                 static_cast<size_t>(window.context_length) + 1);
             window.source_index = file_sources.at(window.source_index);
@@ -1583,10 +1752,12 @@ namespace rllm
             if (window.starts_in_block_comment)
             {
                 window.line.push_front(TokenID::BLOCK_COMMENT_START);
+                window.first_string_table_index.insert(window.first_string_table_index.begin(), 0);
                 window.context_length = static_cast<PositionIndex>(
                     static_cast<size_t>(window.context_length) + 1);
             }
             window.line.push_front(language_token(file_languages.at(window.source_index)));
+            window.first_string_table_index.insert(window.first_string_table_index.begin(), 0);
             window.context_length = static_cast<PositionIndex>(
                 static_cast<size_t>(window.context_length) + 1);
             window.source_index = file_sources.at(window.source_index);
@@ -1819,7 +1990,11 @@ namespace rllm
                     const auto& window = training_windows[indices[start + offset]];
                     CpuInputLine line = window.line;
                     line.permute_string_table(rng);
-                    batch.push_back({std::move(line), false, window.context_length});
+                    batch.push_back({
+                        std::move(line),
+                        window.first_string_table_index,
+                        false,
+                        window.context_length});
                 }
                 total_windows_trained += batch.size();
 
@@ -2172,13 +2347,14 @@ namespace rllm
             timing->forward_ms += elapsed_ms(forward_started_at);
 
         m_training_scores.set_size(num_valid_heads);
+        const auto first_string_table_index = train_output.first_string_table_index_positions();
         float loss = 0.0f;
         for (const auto _k : enum_iterator1D<MultiTokenPredictionIndex>(num_valid_heads))
         {
             Score& s = m_training_scores[_k];
             const auto _target = mtp_target_for_head(train_output, _input_len, _k);
             const int expected_string_table_index =
-                string_table_index_for_head(train_output, _input_len, _k);
+                string_table_index_for_head(train_output, first_string_table_index, _input_len, _k);
             const float _k_loss = expected_string_table_index >= 0
                 ? m_output_layers[_k].compute_score(
                     s, _target, static_cast<size_t>(expected_string_table_index))

@@ -7,8 +7,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(PREFER_SPEED_OVER_MEMORY 0 CACHE BOOL "Use faster full attention matrices instead of compact triangular storage")
 set(RLLM_MAX_POSITION 8192 CACHE STRING "Maximum compiled token context/workspace capacity")
+set(RLLM_MAX_ATTENTION_POSITION 256 CACHE STRING "Maximum positions in one independently attended sequence")
 if(NOT RLLM_MAX_POSITION MATCHES "^[0-9]+$" OR RLLM_MAX_POSITION LESS 4)
     message(FATAL_ERROR "RLLM_MAX_POSITION must be an integer of at least 4")
+endif()
+if(NOT RLLM_MAX_ATTENTION_POSITION MATCHES "^[0-9]+$" OR RLLM_MAX_ATTENTION_POSITION LESS 4)
+    message(FATAL_ERROR "RLLM_MAX_ATTENTION_POSITION must be an integer of at least 4")
+endif()
+math(EXPR RLLM_MAX_BATCH_SIZE "${RLLM_MAX_POSITION} / ${RLLM_MAX_ATTENTION_POSITION}")
+if(RLLM_MAX_BATCH_SIZE LESS 1)
+    message(FATAL_ERROR "RLLM_MAX_POSITION must fit at least one RLLM_MAX_ATTENTION_POSITION window")
 endif()
 
 include(CheckIPOSupported)
@@ -82,6 +90,11 @@ add_subdirectory(isocline)
 find_package(Vulkan REQUIRED)
 
 add_executable(generate_domain_replace_json src/generate_domain_replace_json.cc)
+target_compile_definitions(generate_domain_replace_json PRIVATE
+    RLLM_MAX_POSITION=${RLLM_MAX_POSITION}
+    RLLM_MAX_ATTENTION_POSITION=${RLLM_MAX_ATTENTION_POSITION}
+    RLLM_MAX_BATCH_SIZE=${RLLM_MAX_BATCH_SIZE}
+)
 target_include_directories(generate_domain_replace_json PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_BINARY_DIR}/generated

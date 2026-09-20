@@ -107,7 +107,7 @@ def test_abstraction_preserves_keywords_comments_and_punctuation():
     source = "for (int index = 0; index < count; ++index) { // useful prose\nreturn index;\n}\n"
 
     assert postprocessor.abstract_code_symbols(source) == (
-        "for (int <LOOP><STI_0> = 0; <LOOP><STI_0> < <GLOBAL><STI_1>; ++<LOOP><STI_0>) { // useful prose\n"
+		"for (int <LOOP><STI_0> = <INTEGER><ITI_0>; <LOOP><STI_0> < <GLOBAL><STI_1>; ++<LOOP><STI_0>) { // useful prose\n"
         "return <LOOP><STI_0>;\n}\n"
     )
 
@@ -123,8 +123,8 @@ def test_identifier_categories_cover_parameters_locals_loops_and_unknowns():
         "void <MCP><GLOBAL><STI_0></MCP>(int <PARAM><STI_1>, "
         "<GLOBAL><STI_2> <PARAM><STI_3>) {\n"
         "auto <LOCAL><STI_4> = <PARAM><STI_1>;\n"
-        "for (int <LOOP><STI_5> = 0; <LOOP><STI_5> < <PARAM><STI_1>; "
-        "++<LOOP><STI_5>) <LOCAL><STI_4> = <GLOBAL><STI_6>;\n"
+		"for (int <LOOP><STI_5> = <INTEGER><ITI_0>; <LOOP><STI_5> < <PARAM><STI_1>; "
+		"++<LOOP><STI_5>) <LOCAL><STI_4> = <GLOBAL><STI_6>;\n"
         "}\n"
     )
 
@@ -152,9 +152,18 @@ def test_identifier_categories_use_plain_tokens():
 def test_identifier_slots_are_reused_after_scope_exit():
     source = "{ auto first = 1; { auto second = 2; } auto third = 3; } { auto fourth = 4; }"
     assert postprocessor.abstract_code_symbols(source, ".cpp") == (
-        "{ auto <LOCAL><STI_0> = 1; { auto <LOCAL><STI_1> = 2; } auto <LOCAL><STI_2> = 3; } "
-        "{ auto <LOCAL><STI_3> = 4; }"
-    )
+		"{ auto <LOCAL><STI_0> = <INTEGER><ITI_0>; { auto <LOCAL><STI_1> = <INTEGER><ITI_1>; } auto <LOCAL><STI_2> = <INTEGER><ITI_2>; } "
+		"{ auto <LOCAL><STI_3> = <INTEGER><ITI_3>; }"
+	)
+
+
+def test_numeric_constants_are_atomic_typed_tokens_with_exact_payloads():
+	source = "a = 13245; b = 3.14; c = 0xffu; d = 6.02e23; e = 0x1.fp3;"
+	assert postprocessor.abstract_code_symbols(source, ".cpp") == (
+		"<LOCAL><STI_0> = <INTEGER><ITI_0>; <LOCAL><STI_1> = <FLOAT><FTI_0>; "
+		"<LOCAL><STI_2> = <INTEGER><ITI_1>; <LOCAL><STI_3> = <FLOAT><FTI_1>; "
+		"<LOCAL><STI_4> = <FLOAT><FTI_2>;"
+	)
 
 
 def test_parameter_slots_restart_at_zero_for_each_function():
@@ -179,9 +188,15 @@ def test_global_slots_restart_for_free_functions_but_not_methods():
     assert postprocessor.abstract_code_symbols(
         "class Widget { void first() { } void second() { } };", ".cpp"
     ) == (
-        "class <GLOBAL><STI_0> { void <MCP><GLOBAL><STI_1></MCP>() { } "
+        "class <CLASS_NAME><STI_0> { void <MCP><GLOBAL><STI_1></MCP>() { } "
         "void <MCP><GLOBAL><STI_2></MCP>() { } };"
     )
+
+
+def test_class_names_keep_their_category_on_later_references():
+    assert postprocessor.abstract_code_symbols(
+        "class Widget {}; Widget value;", ".cpp"
+    ) == "class <CLASS_NAME><STI_0> {}; <CLASS_NAME><STI_0> <GLOBAL><STI_1>;"
 
 
 def test_abstraction_is_idempotent_and_marks_includes_as_mcp():
