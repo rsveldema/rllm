@@ -81,11 +81,16 @@ TEST(OutputLayerBatchTest, BatchedDeltaAndLossStayOnDevice)
     cpu_fixed_vector<float, BatchIndex> probabilities_cpu;
     probabilities_cpu.set_size(static_cast<BatchIndex>(2));
     workspace.correct_token_probabilities.copy_to_cpu(queue, probabilities_cpu);
+    cpu_fixed_vector<int, BatchIndex> top1_correct_cpu;
+    top1_correct_cpu.set_size(static_cast<BatchIndex>(2));
+    workspace.top1_correct.copy_to_cpu(queue, top1_correct_cpu);
 
     const float uniform_probability = 1.0f / static_cast<float>(TokenID::MAX);
     EXPECT_NEAR(losses_cpu[BatchIndex::START], std::log(static_cast<float>(TokenID::MAX)), 1e-4f);
     EXPECT_NEAR(probabilities_cpu[BatchIndex::START], uniform_probability, 1e-6f);
     EXPECT_FLOAT_EQ(probabilities_cpu[static_cast<BatchIndex>(1)], 0.0f);
+    EXPECT_EQ(top1_correct_cpu[BatchIndex::START], 0);
+    EXPECT_EQ(top1_correct_cpu[static_cast<BatchIndex>(1)], 0);
     for (const auto token : enum_iterator1D<TokenID>())
     {
         float expected_delta = OutputLayer::smooth - uniform_probability;
@@ -258,6 +263,9 @@ TEST(OutputLayerBatchTest, CategoryTokenAddsWeightedIndexLoss)
     cpu_fixed_vector<float, BatchIndex> probabilities_cpu;
     probabilities_cpu.set_size(static_cast<BatchIndex>(1));
     workspace.correct_token_probabilities.copy_to_cpu(queue, probabilities_cpu);
+    cpu_fixed_vector<int, BatchIndex> top1_correct_cpu;
+    top1_correct_cpu.set_size(static_cast<BatchIndex>(1));
+    workspace.top1_correct.copy_to_cpu(queue, top1_correct_cpu);
 
     std::vector<float> expected_deltas;
     std::vector<float> logits(static_cast<size_t>(TokenID::MAX), 0.0f);
@@ -267,6 +275,7 @@ TEST(OutputLayerBatchTest, CategoryTokenAddsWeightedIndexLoss)
     EXPECT_NEAR(losses_cpu[BatchIndex::START],
         1.2f * token_loss + 0.3f * std::log(static_cast<float>(PositionIndex::MAX)), 1e-4f);
     EXPECT_NEAR(probabilities_cpu[BatchIndex::START], std::exp(-token_loss), 1e-5f);
+    EXPECT_EQ(top1_correct_cpu[BatchIndex::START], 0);
 
     cpu_fixed_matrix<float, BatchIndex, PositionIndex> index_delta;
     workspace.string_table_index_delta.copy_to_cpu(queue, index_delta);
@@ -316,10 +325,14 @@ TEST(OutputLayerBatchTest, IntegerTokenIncludesConstantValueLoss)
     cpu_fixed_vector<float, BatchIndex> probabilities;
     probabilities.set_size(static_cast<BatchIndex>(1));
     workspace.correct_token_probabilities.copy_to_cpu(queue, probabilities);
+    cpu_fixed_vector<int, BatchIndex> top1_correct;
+    top1_correct.set_size(static_cast<BatchIndex>(1));
+    workspace.top1_correct.copy_to_cpu(queue, top1_correct);
     EXPECT_NEAR(losses[BatchIndex::START],
         std::log(static_cast<float>(TokenID::MAX)) + 0.3f * std::log(2.0f) + 0.1f, 1e-4f);
     EXPECT_NEAR(probabilities[BatchIndex::START],
         1.0f / static_cast<float>(TokenID::MAX), 1e-6f);
+    EXPECT_EQ(top1_correct[BatchIndex::START], 0);
 
     cpu_fixed_matrix<float, BatchIndex, PositionIndex> value_delta;
     workspace.string_table_index_delta.copy_to_cpu(queue, value_delta);

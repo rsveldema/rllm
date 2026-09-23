@@ -56,6 +56,9 @@ TEST(SerializationTest, InputLayerJsonRoundTrip)
     rllm::InputLayer loaded;
     loaded.load(nlohmann::json::parse(json_str));
 
+    // Includes both category-token and hashed identifier-name embeddings.
+    EXPECT_EQ(layer.save().dump(), loaded.save().dump());
+
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>()) {
         rllm::embedding_row_t a_emb;
         rllm::embedding_row_t b_emb;
@@ -134,6 +137,9 @@ TEST(SerializationTest, InputLayerSafetensorsRoundTrip)
     std::string load_err;
     loaded.load_from_safetensors(sf_file, &load_err);
     EXPECT_TRUE(load_err.empty()) << "Safetensors load error: " << (load_err.empty() ? "none" : load_err);
+
+    // Re-serializing compares the identifier-name table as well as token embeddings.
+    EXPECT_EQ(layer.save().dump(), loaded.save().dump());
 
     // Verify embeddings match via public get_embedding API.
     for (const auto tok : rllm::enum_iterator1D<rllm::TokenID>()) {

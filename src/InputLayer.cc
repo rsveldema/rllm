@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +18,39 @@
 
 namespace rllm
 {
+    namespace
+    {
+        constexpr float IDENTIFIER_EMBEDDING_SCALE = 0.25f;
+    }
+
+    std::vector<IdentifierHashBucket> identifier_name_hash_buckets(std::string_view name)
+    {
+        std::string normalized;
+        normalized.reserve(name.size() + 2);
+        normalized.push_back('^');
+        for (const unsigned char ch : name)
+            normalized.push_back(static_cast<char>(std::tolower(ch)));
+        normalized.push_back('$');
+
+        std::vector<IdentifierHashBucket> result;
+        const size_t count = std::min(
+            normalized.size() >= 3 ? normalized.size() - 2 : 0,
+            static_cast<size_t>(IdentifierNgramSlot::MAX));
+        result.reserve(count);
+        for (size_t start = 0; start < count; ++start)
+        {
+            uint32_t hash = 2166136261u;
+            for (size_t offset = 0; offset < 3; ++offset)
+            {
+                hash ^= static_cast<uint8_t>(normalized[start + offset]);
+                hash *= 16777619u;
+            }
+            result.push_back(static_cast<IdentifierHashBucket>(
+                hash % static_cast<uint32_t>(IdentifierHashBucket::MAX)));
+        }
+        return result;
+    }
+
     EmbeddingGradientAccumulator::EmbeddingGradientAccumulator()
     {
     }
@@ -25,24 +59,44 @@ namespace rllm
     {
         gradients.zero(queue);
         touched.zero(queue);
+        identifier_gradients.zero(queue);
+        identifier_touched.zero(queue);
     }
 
     static void accumulate_embedding_gradients(
-        // OFFLOAD_PARAMETERS(tokens, dh, gradients, touched, rows)
+        // OFFLOAD_PARAMETERS(tokens, identifier_ngram_ids, identifier_ngram_counts, dh, gradients, touched, identifier_gradients, identifier_touched, rows, identifier_scale)
         const GpuInputLine& tokens,
+        const fixed_size_matrix<int, PositionIndex, IdentifierNgramSlot>& identifier_ngram_ids,
+        const fixed_size_vector<int, PositionIndex>& identifier_ngram_counts,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
         fixed_size_matrix<float, TokenID, EmbeddingDimension>& gradients,
         fixed_size_vector<int, TokenID>& touched,
-        PositionIndex rows
+        fixed_size_matrix<float, IdentifierHashBucket, EmbeddingDimension>& identifier_gradients,
+        fixed_size_vector<int, IdentifierHashBucket>& identifier_touched,
+        PositionIndex rows,
+        float identifier_scale
         // END_OFFLOAD_PARAMETERS
     )
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
-        OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (tokens, dh, gradients, touched, rows))
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (tokens, identifier_ngram_ids, identifier_ngram_counts, dh, gradients, touched, identifier_gradients, identifier_touched, rows, identifier_scale))
         const auto tok = tokens[row];
         atomicAdd(gradients[tok, d], dh[row, d]);
         atomicMax(touched[tok], 1);
+        const int count = identifier_ngram_counts[row];
+        if (count > 0)
+            for (int slot_index = 0; slot_index < 16; ++slot_index)
+                if (slot_index < count)
+                {
+                    const auto slot = static_cast<IdentifierNgramSlot>(slot_index);
+                    const auto bucket = static_cast<IdentifierHashBucket>(identifier_ngram_ids[row, slot]);
+                    float name_gradient = dh[row, d];
+                    name_gradient *= identifier_scale;
+                    name_gradient /= static_cast<float>(count);
+                    atomicAdd(identifier_gradients[bucket, d], name_gradient);
+                    atomicMax(identifier_touched[bucket], 1);
+                }
         ENDFOR
     }
 
@@ -164,34 +218,72 @@ namespace rllm
     }
 
     static void fill_embeddings(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(tokens, embeddings, h)
+        // OFFLOAD_PARAMETERS(tokens, embeddings, identifier_embeddings, identifier_ngram_ids, identifier_ngram_counts, h, identifier_scale)
         const GpuInputLine& tokens,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h
+        const fixed_size_matrix<float16, IdentifierHashBucket, EmbeddingDimension>& identifier_embeddings,
+        const fixed_size_matrix<int, PositionIndex, IdentifierNgramSlot>& identifier_ngram_ids,
+        const fixed_size_vector<int, PositionIndex>& identifier_ngram_counts,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+        float identifier_scale
         // END_OFFLOAD_PARAMETERS
     )
     {
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(tokens.size());
 
-        OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, embeddings, h))
+        OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, embeddings, identifier_embeddings, identifier_ngram_ids, identifier_ngram_counts, h, identifier_scale))
         const int tok = static_cast<int>(tokens[pos]);
         h[pos, di] = static_cast<float>(embeddings[tok, di]);
+        const int count = identifier_ngram_counts[pos];
+        if (count > 0)
+        {
+            float identifier_value = 0.0f;
+            for (int slot_index = 0; slot_index < 16; ++slot_index)
+                if (slot_index < count)
+                {
+                    const auto slot = static_cast<IdentifierNgramSlot>(slot_index);
+                    const auto bucket = static_cast<IdentifierHashBucket>(identifier_ngram_ids[pos, slot]);
+                    identifier_value += static_cast<float>(identifier_embeddings[bucket, di]);
+                }
+            identifier_value *= identifier_scale;
+            identifier_value /= static_cast<float>(count);
+            h[pos, di] += identifier_value;
+        }
         ENDFOR
     }
 
     static void fill_packed_embeddings(VulkanQueue& queue,
-        // OFFLOAD_PARAMETERS(tokens, embeddings, h, packed_rows)
+        // OFFLOAD_PARAMETERS(tokens, embeddings, identifier_embeddings, identifier_ngram_ids, identifier_ngram_counts, h, packed_rows, identifier_scale)
         const GpuInputLine& tokens,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
+        const fixed_size_matrix<float16, IdentifierHashBucket, EmbeddingDimension>& identifier_embeddings,
+        const fixed_size_matrix<int, PositionIndex, IdentifierNgramSlot>& identifier_ngram_ids,
+        const fixed_size_vector<int, PositionIndex>& identifier_ngram_counts,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
-        PositionIndex packed_rows
+        PositionIndex packed_rows,
+        float identifier_scale
         // END_OFFLOAD_PARAMETERS
     )
     {
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(packed_rows);
-        OFFLOAD_PARFOR_2D_PARAM(queue, row, di, grid, (tokens, embeddings, h, packed_rows))
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, di, grid, (tokens, embeddings, identifier_embeddings, identifier_ngram_ids, identifier_ngram_counts, h, packed_rows, identifier_scale))
         const int tok = static_cast<int>(tokens[row]);
         h[row, di] = static_cast<float>(embeddings[tok, di]);
+        const int count = identifier_ngram_counts[row];
+        if (count > 0)
+        {
+            float identifier_value = 0.0f;
+            for (int slot_index = 0; slot_index < 16; ++slot_index)
+                if (slot_index < count)
+                {
+                    const auto slot = static_cast<IdentifierNgramSlot>(slot_index);
+                    const auto bucket = static_cast<IdentifierHashBucket>(identifier_ngram_ids[row, slot]);
+                    identifier_value += static_cast<float>(identifier_embeddings[bucket, di]);
+                }
+            identifier_value *= identifier_scale;
+            identifier_value /= static_cast<float>(count);
+            h[row, di] += identifier_value;
+        }
         ENDFOR
     }
 
@@ -199,9 +291,12 @@ namespace rllm
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_embeddings.zero(queue);
+        m_identifier_embeddings.zero(queue);
         m_embeddings_cpu.zero();
         m_adam_first.zero(queue);
         m_adam_second.zero(queue);
+        m_identifier_adam_first.zero(queue);
+        m_identifier_adam_second.zero(queue);
     }
 
     void InputLayer::set_random_embeddings(EmbeddingInitializerType type)
@@ -210,8 +305,35 @@ namespace rllm
         for (const auto tok : enum_iterator1D<TokenID>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 m_embeddings_cpu.set(tok, d, static_cast<float16>(initializer->getNextValue()));
+        cpu_fixed_matrix<float16, IdentifierHashBucket, EmbeddingDimension> identifier_embeddings_cpu;
+        for (const auto bucket : enum_iterator1D<IdentifierHashBucket>())
+            for (const auto d : enum_iterator1D<EmbeddingDimension>())
+                identifier_embeddings_cpu.set(bucket, d, static_cast<float16>(initializer->getNextValue()));
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
+        m_identifier_embeddings.copy_from_cpu(queue, identifier_embeddings_cpu);
+    }
+
+    void InputLayer::upload_identifier_features(const CpuInputLine& input, VulkanQueue& queue) const
+    {
+        cpu_fixed_matrix<int, PositionIndex, IdentifierNgramSlot> ids;
+        ids.zero();
+        cpu_fixed_vector<int, PositionIndex> counts;
+        counts.set_size(input.size());
+        counts.zero();
+        for (const auto pos : enum_iterator1D<PositionIndex>(input.size()))
+        {
+            const auto token = input.get(pos);
+            const size_t index = input.get_string_table_index(pos);
+            if (!is_identifier_category_token(token) || index == NO_STRING_TABLE_INDEX)
+                continue;
+            const auto buckets = identifier_name_hash_buckets(input.get_string_table_value(index));
+            counts[pos] = static_cast<int>(buckets.size());
+            for (size_t slot = 0; slot < buckets.size(); ++slot)
+                ids[pos, static_cast<IdentifierNgramSlot>(slot)] = static_cast<int>(buckets[slot]);
+        }
+        m_identifier_ngram_ids.copy_from_cpu(queue, ids);
+        m_identifier_ngram_counts.copy_from_cpu(queue, counts);
     }
 
     void InputLayer::set_embedding(TokenID token, const embedding_row_t& embedding)
@@ -244,9 +366,11 @@ namespace rllm
         // Sync CPU input to GPU before OFFLOAD region
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         gpu_input.sync_to_device(queue, input);
+        upload_identifier_features(input, queue);
 
         check_nan_finding_mode_embeddings("forward:start");
-        fill_embeddings(queue, gpu_input, m_embeddings, h);
+        fill_embeddings(queue, gpu_input, m_embeddings, m_identifier_embeddings,
+            m_identifier_ngram_ids, m_identifier_ngram_counts, h, IDENTIFIER_EMBEDDING_SCALE);
         check_nan_finding_mode_matrix(h, static_cast<PositionIndex>(input.size()), "hidden state", "forward:end");
     }
 
@@ -259,8 +383,11 @@ namespace rllm
         h.set_rows(input.packed_rows());
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         gpu_input.sync_to_device(queue, input);
+        upload_identifier_features(input.tokens(), queue);
         check_nan_finding_mode_embeddings("batched-forward:start");
-        fill_packed_embeddings(queue, gpu_input.tokens, m_embeddings, h, input.packed_rows());
+        fill_packed_embeddings(queue, gpu_input.tokens, m_embeddings, m_identifier_embeddings,
+            m_identifier_ngram_ids, m_identifier_ngram_counts, h, input.packed_rows(),
+            IDENTIFIER_EMBEDDING_SCALE);
         check_nan_finding_mode_matrix(h, input.packed_rows(), "batched hidden state", "batched-forward:end");
     }
 
@@ -353,7 +480,9 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_gpu_input.sync_to_device(queue, input.tokens());
         accumulate_embedding_gradients(
-            m_gpu_input, dh, accumulator.gradients, accumulator.touched, input.packed_rows());
+            m_gpu_input, m_identifier_ngram_ids, m_identifier_ngram_counts, dh,
+            accumulator.gradients, accumulator.touched, accumulator.identifier_gradients,
+            accumulator.identifier_touched, input.packed_rows(), IDENTIFIER_EMBEDDING_SCALE);
     }
 
     void InputLayer::accumulate_backward(
@@ -366,8 +495,10 @@ namespace rllm
         check_nan_finding_mode_matrix(dh, static_cast<PositionIndex>(input.size()), "gradient", "accumulate_backward:dh");
         m_gpu_input.sync_to_device(queue, input);
         accumulate_embedding_gradients(
-            m_gpu_input, dh, accumulator.gradients, accumulator.touched,
-            static_cast<PositionIndex>(input.size()));
+            m_gpu_input, m_identifier_ngram_ids, m_identifier_ngram_counts, dh,
+            accumulator.gradients, accumulator.touched, accumulator.identifier_gradients,
+            accumulator.identifier_touched, static_cast<PositionIndex>(input.size()),
+            IDENTIFIER_EMBEDDING_SCALE);
     }
 
     void InputLayer::apply_accumulated_update(
@@ -384,10 +515,15 @@ namespace rllm
         auto& values = optimizer_diagnostics_buffer();
         prepare_optimizer_gradient_clip(values);
         accumulate_optimizer_gradient_norm(accumulator.gradients, values);
+        accumulate_optimizer_gradient_norm(accumulator.identifier_gradients, values);
         finalize_optimizer_gradient_clip(values);
         adamw_update_embeddings(m_embeddings, m_adam_first, m_adam_second,
             accumulator.gradients, accumulator.touched, learning_rate,
             bias_correction1, bias_correction2, values, log_diagnostics ? 1 : 0);
+        adamw_update_identifier_embeddings(m_identifier_embeddings, m_identifier_adam_first,
+            m_identifier_adam_second, accumulator.identifier_gradients,
+            accumulator.identifier_touched, learning_rate, bias_correction1, bias_correction2,
+            values, log_diagnostics ? 1 : 0);
         if (log_diagnostics && diagnostics != nullptr)
             if (auto metrics = log_optimizer_diagnostics("embeddings"))
                 *diagnostics = std::move(*metrics);

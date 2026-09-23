@@ -51,6 +51,11 @@ namespace
         append_enum_pair(pairs, "EmbeddingDimension::START", static_cast<size_t>(rllm::EmbeddingDimension::START));
         append_enum_pair(pairs, "EmbeddingDimension::MAX", static_cast<size_t>(rllm::EmbeddingDimension::MAX));
 
+        append_enum_pair(pairs, "IdentifierHashBucket::START", static_cast<size_t>(rllm::IdentifierHashBucket::START));
+        append_enum_pair(pairs, "IdentifierHashBucket::MAX", static_cast<size_t>(rllm::IdentifierHashBucket::MAX));
+        append_enum_pair(pairs, "IdentifierNgramSlot::START", static_cast<size_t>(rllm::IdentifierNgramSlot::START));
+        append_enum_pair(pairs, "IdentifierNgramSlot::MAX", static_cast<size_t>(rllm::IdentifierNgramSlot::MAX));
+
         append_enum_pair(pairs, "AttentionPositionIndex::START", static_cast<size_t>(AttentionPositionIndex::START));
         append_enum_pair(pairs, "AttentionPositionIndex::MAX", static_cast<size_t>(AttentionPositionIndex::MAX));
 
@@ -92,6 +97,8 @@ namespace
         // Casts to enum types are not valid in generated shader code; force int casts.
         pairs.emplace_back("static_cast<TempStorage>", "(int)");
         pairs.emplace_back("static_cast<EmbeddingDimension>", "(int)");
+        pairs.emplace_back("static_cast<IdentifierHashBucket>", "(int)");
+        pairs.emplace_back("static_cast<IdentifierNgramSlot>", "(int)");
         pairs.emplace_back("static_cast<PositionIndex>", "(int)");
         pairs.emplace_back("static_cast<AttentionPositionIndex>", "(int)");
         pairs.emplace_back("static_cast<HeadsIndex>", "(int)");
@@ -102,6 +109,8 @@ namespace
         pairs.emplace_back("static_cast<FFDimension>", "(int)");
         pairs.emplace_back("static_cast<rllm::TempStorage>", "(int)");
         pairs.emplace_back("static_cast<rllm::EmbeddingDimension>", "(int)");
+        pairs.emplace_back("static_cast<rllm::IdentifierHashBucket>", "(int)");
+        pairs.emplace_back("static_cast<rllm::IdentifierNgramSlot>", "(int)");
         pairs.emplace_back("static_cast<PositionIndex>", "(int)");
         pairs.emplace_back("static_cast<AttentionPositionIndex>", "(int)");
         pairs.emplace_back("static_cast<rllm::HeadsIndex>", "(int)");

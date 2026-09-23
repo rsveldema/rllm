@@ -1100,7 +1100,7 @@ namespace rllm
     }
 
     static void finalize_batched_softmax_delta(
-        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_tokens, active_examples, losses, correct_token_probabilities, batch_size, loss_gradient_scale, category_loss_bonus, local_token, param_token, global_token, field_token, loop_token, class_name_token)
+        // OFFLOAD_PARAMETERS(logits, delta, temp, expected_tokens, active_examples, losses, correct_token_probabilities, top1_correct, batch_size, loss_gradient_scale, category_loss_bonus, local_token, param_token, global_token, field_token, loop_token, class_name_token)
         const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
         fixed_size_matrix<float, BatchIndex, TokenID>& delta,
         const fixed_size_matrix<float, BatchIndex, TempStorage>& temp,
@@ -1108,6 +1108,7 @@ namespace rllm
         const fixed_size_vector<int, BatchIndex>& active_examples,
         fixed_size_vector<float, BatchIndex>& losses,
         fixed_size_vector<float, BatchIndex>& correct_token_probabilities,
+        fixed_size_vector<int, BatchIndex>& top1_correct,
         int batch_size,
         float loss_gradient_scale,
         float category_loss_bonus,
@@ -1118,7 +1119,7 @@ namespace rllm
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
-        OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, delta, temp, expected_tokens, active_examples, losses, correct_token_probabilities, batch_size, loss_gradient_scale, category_loss_bonus, local_token, param_token, global_token, field_token, loop_token, class_name_token))
+        OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, delta, temp, expected_tokens, active_examples, losses, correct_token_probabilities, top1_correct, batch_size, loss_gradient_scale, category_loss_bonus, local_token, param_token, global_token, field_token, loop_token, class_name_token))
         if (active_examples[batch] != 0)
         {
             const int expected = expected_tokens[batch];
@@ -1138,6 +1139,17 @@ namespace rllm
                 float correct_probability = delta[batch, token];
                 correct_probability /= sum_exp;
                 correct_token_probabilities[batch] = correct_probability;
+                top1_correct[batch] = 0;
+                if (logits[batch, token] == temp[batch, TempStorage::START])
+                {
+                    int earlier_tie = 0;
+                    for (const auto candidate : enum_iterator1D<TokenID>())
+                        if (candidate < token)
+                            if (logits[batch, candidate] == logits[batch, token])
+                                earlier_tie = 1;
+                    if (earlier_tie == 0)
+                        top1_correct[batch] = 1;
+                }
                 value += (1.0f - OutputLayer::LABEL_SMOOTHING);
                 float token_loss = temp[batch, TempStorage::START];
                 token_loss += log(sum_exp);
@@ -1165,11 +1177,12 @@ namespace rllm
         const int count = static_cast<int>(batch_size);
         initialize_batched_softmax(workspace.softmax_temp, workspace.losses, count);
         workspace.correct_token_probabilities.zero(queue);
+        workspace.top1_correct.zero(queue);
         reduce_batched_logits_max(logits, workspace.softmax_temp, workspace.active_examples, count);
         compute_batched_exp_sum(logits, workspace.delta, workspace.softmax_temp, workspace.active_examples, count);
         finalize_batched_softmax_delta(logits, workspace.delta, workspace.softmax_temp,
             workspace.expected_tokens, workspace.active_examples, workspace.losses,
-            workspace.correct_token_probabilities, count,
+            workspace.correct_token_probabilities, workspace.top1_correct, count,
             loss_gradient_scale, CATEGORY_LOSS_BONUS,
             static_cast<int>(TokenID::LOCAL), static_cast<int>(TokenID::PARAM),
             static_cast<int>(TokenID::GLOBAL), static_cast<int>(TokenID::FIELD),
@@ -1191,11 +1204,12 @@ namespace rllm
         const int count = static_cast<int>(batch_size);
         initialize_batched_softmax(workspace.softmax_temp, workspace.losses, count);
         workspace.correct_token_probabilities.zero(queue);
+        workspace.top1_correct.zero(queue);
         reduce_batched_logits_max(logits, workspace.softmax_temp, workspace.active_examples, count);
         compute_batched_exp_sum(logits, workspace.delta, workspace.softmax_temp, workspace.active_examples, count);
         finalize_batched_softmax_delta(logits, workspace.delta, workspace.softmax_temp,
             workspace.expected_tokens, workspace.active_examples, workspace.losses,
-            workspace.correct_token_probabilities, count,
+            workspace.correct_token_probabilities, workspace.top1_correct, count,
             loss_gradient_scale, CATEGORY_LOSS_BONUS,
             static_cast<int>(TokenID::LOCAL), static_cast<int>(TokenID::PARAM),
             static_cast<int>(TokenID::GLOBAL), static_cast<int>(TokenID::FIELD),

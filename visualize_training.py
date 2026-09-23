@@ -153,11 +153,17 @@ def render_metrics(
 
     has_loss = False
     has_gradient = False
-    has_metric = {"perplexity": False, "mtp": False, "probability": False}
+    has_metric = {
+        "perplexity": False,
+        "mtp": False,
+        "probability": False,
+        "top1_accuracy": False,
+    }
     specifications = (
         ("perplexity", "perplexity", "Validation perplexity"),
         ("mtp", "all_mtp_loss", "Validation all-MTP loss"),
         ("probability", "correct_token_probability_percent", "Correct-token probability (%)"),
+        ("top1_accuracy", "top1_accuracy_percent", "Top-1 accuracy (%)"),
     )
     incremental_stages: list[tuple[float, int]] = []
 
@@ -272,7 +278,7 @@ def main() -> None:
         [
             ["loss", "perplexity"],
             ["mtp", "probability"],
-            ["gradient", "gradient"],
+            ["top1_accuracy", "gradient"],
         ],
         figsize=(14, 12),
         constrained_layout=True,

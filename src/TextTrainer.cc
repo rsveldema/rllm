@@ -681,7 +681,11 @@ namespace rllm
             {"perplexity", metrics.perplexity},
             {"all_mtp_loss", metrics.mtp_average_loss},
             {"correct_token_probability", metrics.average_correct_token_probability},
-            {"correct_token_probability_percent", metrics.average_correct_token_probability * 100.0}
+            {"correct_token_probability_percent", metrics.average_correct_token_probability * 100.0},
+            {"top1_accuracy", metrics.top1_accuracy},
+            {"top1_accuracy_percent", metrics.top1_accuracy * 100.0},
+            {"all_mtp_top1_accuracy", metrics.mtp_top1_accuracy},
+            {"all_mtp_top1_accuracy_percent", metrics.mtp_top1_accuracy * 100.0}
         };
         if (!m_training_progress_entries)
             initialize_training_progress_log();
@@ -744,6 +748,8 @@ namespace rllm
             auto& queue = rllm::vulkan_runtime::get_queue(0);
             m_input_layer.m_adam_first.zero(queue);
             m_input_layer.m_adam_second.zero(queue);
+            m_input_layer.m_identifier_adam_first.zero(queue);
+            m_input_layer.m_identifier_adam_second.zero(queue);
             for (auto& block : m_transformer_blocks)
             {
                 block.V_q.zero(queue);
@@ -1147,6 +1153,7 @@ namespace rllm
         constexpr size_t MTP_HEAD_COUNT = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
         std::array<double, MTP_HEAD_COUNT> per_head_loss_sum{};
         std::array<double, MTP_HEAD_COUNT> per_head_probability_sum{};
+        std::array<size_t, MTP_HEAD_COUNT> per_head_top1_correct{};
         std::array<size_t, MTP_HEAD_COUNT> per_head_count{};
         struct WorstPrediction
         {
@@ -1302,6 +1309,9 @@ namespace rllm
                 correct_token_probabilities.set_size(batch_size);
                 m_batched_output_workspace->correct_token_probabilities.copy_to_cpu(
                     queue, correct_token_probabilities);
+                cpu_fixed_vector<int, BatchIndex> top1_correct;
+                top1_correct.set_size(batch_size);
+                m_batched_output_workspace->top1_correct.copy_to_cpu(queue, top1_correct);
 
                 for (size_t batch = 0; batch < window_indices.size(); ++batch)
                 {
@@ -1316,6 +1326,7 @@ namespace rllm
                     const size_t head_index = static_cast<size_t>(head);
                     per_head_loss_sum[head_index] += loss;
                     per_head_probability_sum[head_index] += correct_token_probabilities[batch];
+                    per_head_top1_correct[head_index] += static_cast<size_t>(top1_correct[batch]);
                     ++per_head_count[head_index];
                     if (report_worst_predictions)
                     {
@@ -1434,6 +1445,7 @@ namespace rllm
         double mtp_loss_sum = 0.0;
         double mtp_probability_sum = 0.0;
         size_t mtp_prediction_count = 0;
+        size_t mtp_top1_correct = 0;
         for (size_t head = 0; head < MTP_HEAD_COUNT; ++head)
         {
             per_head_loss[head] = per_head_count[head] == 0
@@ -1442,14 +1454,18 @@ namespace rllm
             mtp_loss_sum += per_head_loss_sum[head];
             mtp_probability_sum += per_head_probability_sum[head];
             mtp_prediction_count += per_head_count[head];
+            mtp_top1_correct += per_head_top1_correct[head];
         }
         assert(per_head_count[0] == evaluation_windows.size());
         assert(mtp_prediction_count > 0);
         const double primary_count = static_cast<double>(per_head_count[0]);
         const double average_loss = per_head_loss[0];
         const double average_probability = per_head_probability_sum[0] / primary_count;
+        const double top1_accuracy = static_cast<double>(per_head_top1_correct[0]) / primary_count;
         const double mtp_average_loss = mtp_loss_sum / static_cast<double>(mtp_prediction_count);
         const double mtp_average_probability = mtp_probability_sum / static_cast<double>(mtp_prediction_count);
+        const double mtp_top1_accuracy =
+            static_cast<double>(mtp_top1_correct) / static_cast<double>(mtp_prediction_count);
         if (report_worst_predictions)
         {
             for (size_t head = 0; head < MTP_HEAD_COUNT; ++head)
@@ -1479,8 +1495,10 @@ namespace rllm
             .average_loss = static_cast<float>(average_loss),
             .perplexity = std::exp(average_loss),
             .average_correct_token_probability = average_probability,
+            .top1_accuracy = top1_accuracy,
             .mtp_average_loss = mtp_average_loss,
             .mtp_average_correct_token_probability = mtp_average_probability,
+            .mtp_top1_accuracy = mtp_top1_accuracy,
             .per_head_loss = per_head_loss,
             .per_head_count = per_head_count
         };
@@ -1660,10 +1678,11 @@ namespace rllm
                     "epoch_end", epoch, num_epochs, 1.0, validation_lines.size(), validation);
                 const float validation_loss = validation.average_loss;
                 LOG_INFO(
-                    "epoch {} validation: loss {:.6f}, perplexity {:.2f} (effective number of equally likely next-token choices; lower is better), average correct-token probability {:.3f}% across {} held-out lines",
+                    "epoch {} validation: loss {:.6f}, perplexity {:.2f} (effective number of equally likely next-token choices; lower is better), top-1 accuracy {:.3f}%, average correct-token probability {:.3f}% across {} held-out lines",
                     epoch,
                     validation_loss,
                     validation.perplexity,
+                    validation.top1_accuracy * 100.0,
                     validation.average_correct_token_probability * 100.0,
                     validation_lines.size()
                 );
@@ -1929,9 +1948,10 @@ namespace rllm
             }
             has_best_checkpoint = true;
             LOG_INFO(
-                "window validation baseline before training: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows",
+                "window validation baseline before training: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows",
                 baseline.average_loss,
                 baseline.perplexity,
+                baseline.top1_accuracy * 100.0,
                 baseline.average_correct_token_probability * 100.0,
                 baseline.mtp_average_loss,
                 validation_windows.size());
@@ -2063,11 +2083,12 @@ namespace rllm
                         static_cast<double>(start + count) / static_cast<double>(num_windows),
                         validation_windows.size(), validation);
                     LOG_INFO(
-                        "window validation at epoch {}, {:.2f}%: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows (evaluation {:.2f} s)",
+                        "window validation at epoch {}, {:.2f}%: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows (evaluation {:.2f} s)",
                         epoch,
                         static_cast<float>(start + count) / static_cast<float>(num_windows) * 100.0f,
                         validation.average_loss,
                         validation.perplexity,
+                        validation.top1_accuracy * 100.0,
                         validation.average_correct_token_probability * 100.0,
                         validation.mtp_average_loss,
                         validation_windows.size(),
@@ -2101,10 +2122,11 @@ namespace rllm
                     "epoch_end", epoch, num_epochs, 1.0,
                     validation_windows.size(), validation);
                 LOG_INFO(
-                    "window validation at epoch {} end: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows (evaluation {:.2f} s)",
+                    "window validation at epoch {} end: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows (evaluation {:.2f} s)",
                     epoch,
                     validation.average_loss,
                     validation.perplexity,
+                    validation.top1_accuracy * 100.0,
                     validation.average_correct_token_probability * 100.0,
                     validation.mtp_average_loss,
                     validation_windows.size(),

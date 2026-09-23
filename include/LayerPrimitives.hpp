@@ -130,6 +130,30 @@ namespace rllm
         MAX = 1024 * 2
     };
 
+    enum class IdentifierHashBucket : size_t
+    {
+        START = 0,
+        MAX = 512
+    };
+
+    enum class IdentifierNgramSlot : size_t
+    {
+        START = 0,
+        MAX = 16
+    };
+
+    static inline IdentifierHashBucket inc(IdentifierHashBucket id)
+    {
+        assert(id < IdentifierHashBucket::MAX);
+        return static_cast<IdentifierHashBucket>(static_cast<size_t>(id) + 1);
+    }
+
+    static inline IdentifierNgramSlot inc(IdentifierNgramSlot id)
+    {
+        assert(id < IdentifierNgramSlot::MAX);
+        return static_cast<IdentifierNgramSlot>(static_cast<size_t>(id) + 1);
+    }
+
     // position of a token in the input sequence. For example, in the input "the cat sat", the token "cat" has
     // position 1.
     enum class PositionIndex : size_t

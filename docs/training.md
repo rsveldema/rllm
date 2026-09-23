@@ -108,6 +108,15 @@ The concrete spelling for each identifier or string token is carried directly
 on that token in the per-line `string_table_index`/`string_table_value`
 metadata. Inspection output appends `<STI_n>` to show this payload, but that
 annotation is not a second runtime token and `n` is not part of the vocabulary.
+For identifier category tokens, the input layer also lowercases the concrete
+name, adds word-boundary markers, and hashes up to 16 character trigrams into a
+learned table of 512 embedding rows. Their mean, scaled by `0.25`, is added to
+the category-token embedding. Thus `add` and `values` can acquire distinct and
+partly reusable input features while still sharing `<GLOBAL>`, `<LOCAL>`, or
+the other structural category. `identifier_name_hash_buckets()` exposes this
+deterministic feature mapping for diagnostics and tests. Checkpoints created
+before this identifier embedding table was added are intentionally incompatible
+and training must start from a fresh model.
 String and character contents become
 `<STRING>`. Numeric constants become one atomic `<INTEGER>` or `<FLOAT>` token.
 Their exact source spelling, including radix, exponent, separators, and suffix,
@@ -258,11 +267,15 @@ training.
 Increasing the value makes each example train longer before the next example is visited. Lower values move through the corpus more quickly.
 
 After each epoch with validation enabled, training reports validation loss,
-perplexity, and the average probability assigned to the correct token.
+perplexity, top-1 next-token accuracy, and the average probability assigned to
+the correct token.
 Perplexity is `exp(average loss)` and can be read as the effective number of
 equally likely next-token choices, so lower is better. Correct-token probability
 is the arithmetic mean of each evaluated target's softmax probability, so
 higher is better.
+Top-1 accuracy is the fraction of held-out targets whose expected token has the
+highest logit. Use `top1_accuracy_percent`, rather than correct-token
+probability, for exact next-token prediction targets such as 90% accuracy.
 
 The model currently uses a single prediction head, so each example trains only
 the immediate next-token target. Additional MTP enum names remain reserved for
@@ -293,8 +306,9 @@ valid JSON snapshot without doing file I/O for every training batch.
 Completed timed checkpoints write a `checkpoint` entry with phase `timed`, the
 epoch and window cursor, total windows trained, and duration in milliseconds and
 seconds. The same duration is reported in `train.log` and on the console.
-Validation records include head-zero loss, perplexity, all-MTP loss, and the
-average correct-token probability. Generate `training_metrics.png` with an
+Validation records include head-zero loss, perplexity, all-MTP loss, top-1
+accuracy, and the average correct-token probability. Generate
+`training_metrics.png` with an
 overlay of every `models-*/train.json` with
 `python visualize_training.py`, or choose paths with
 `python visualize_training.py path/to/train.json -o plot.png`.
@@ -645,3 +659,24 @@ training configuration.
 The options are independent and can be combined.
 The layer number and stage name on each line identify where amplification first
 appears without adding per-batch log volume.
+## Checkpoint weight extrapolation
+
+`extrapolate_checkpoint.py` projects model weights along the change observed
+between two compatible safetensors checkpoints:
+
+```text
+future = newer + (future_epochs / checkpoint_interval_epochs) * (newer - older)
+```
+
+For example, to project one epoch beyond the newer checkpoint:
+
+```bash
+python extrapolate_checkpoint.py older.st newer.st projected.st --epochs 1
+```
+
+The checkpoint interval is inferred from the embedded epoch and window cursor.
+Use `--interval-epochs` to override it. Model tensors are extrapolated while
+the newer optimizer tensors and training cursor are preserved. The optimizer
+step is set to zero so rllm initializes fresh Adam moments when loading the
+projected checkpoint. If the newer checkpoint has a `.training.json` sidecar,
+it is copied for the projected checkpoint.

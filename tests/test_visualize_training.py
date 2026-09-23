@@ -33,7 +33,7 @@ def test_gradient_plot_is_hidden_without_diagnostic_records(tmp_path):
     fig, axes = plt.subplot_mosaic([
         ["loss", "perplexity"],
         ["mtp", "probability"],
-        ["gradient", "gradient"],
+        ["top1_accuracy", "gradient"],
     ])
     entries = [{"item_type": "window", "epoch": 0, "training_loss": 5.0}]
 
@@ -47,7 +47,7 @@ def test_gradient_plot_is_visible_with_diagnostic_records(tmp_path):
     fig, axes = plt.subplot_mosaic([
         ["loss", "perplexity"],
         ["mtp", "probability"],
-        ["gradient", "gradient"],
+        ["top1_accuracy", "gradient"],
     ])
     entries = [{
         "item_type": "window",

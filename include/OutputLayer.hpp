@@ -38,6 +38,7 @@ namespace rllm
         fixed_size_vector<int, BatchIndex> string_table_index_active_examples;
         fixed_size_vector<float, BatchIndex> losses;
         fixed_size_vector<float, BatchIndex> correct_token_probabilities;
+        fixed_size_vector<int, BatchIndex> top1_correct;
         fixed_size_vector<int, BatchIndex> row_indices;
         fixed_size_vector<int, BatchIndex> paired_row_indices;
 
@@ -50,6 +51,7 @@ namespace rllm
             string_table_index_active_examples.set_size(BatchIndex::MAX);
             losses.set_size(BatchIndex::MAX);
             correct_token_probabilities.set_size(BatchIndex::MAX);
+            top1_correct.set_size(BatchIndex::MAX);
             row_indices.set_size(BatchIndex::MAX);
             paired_row_indices.set_size(BatchIndex::MAX);
         }

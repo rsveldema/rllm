@@ -1,0 +1,36 @@
+{
+  "build_type": "release",
+  "model_directory": "models-guaranteed-90",
+  "layers": 8,
+  "window_size": 32,
+  "window_stride": 1,
+  "learn_depth": 1,
+  "strip_comments": true,
+  "sources": [
+    "curriculum/guaranteed-90:1.0"
+  ],
+  "cmake_arguments": [
+    "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
+    "-DRLLM_ENABLE_STATISTICS=OFF",
+    "-DRLLM_MAX_POSITION=64",
+    "-DRLLM_MAX_ATTENTION_POSITION=32"
+  ],
+  "training_arguments": [
+    "--epochs", "40",
+    "--disable-example-convergence",
+    "--disable-training-diagnostics",
+    "--checkpoint-interval", "300",
+    "--validation-interval", "300",
+    "--learning-rate", "0.00001",
+    "--layer-learning-rate-multiplier", "1.05",
+    "--warmup-percent", "1",
+    "--weight-initializer", "xavier-uniform",
+    "--ffn-initializer", "xavier-uniform",
+    "--embedding-initializer", "legacy-uniform",
+    "--learning-rate-schedule", "lowering",
+    "--micro-batch-size", "2",
+    "--max-validation-windows", "512",
+    "--validation-worst-count", "20",
+    "--restart-learning-rate-schedule"
+  ]
+}

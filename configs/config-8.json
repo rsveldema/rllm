@@ -12,7 +12,8 @@
     "curriculum/syntax:0.10",
     "curriculum/systems:0.10",
     "curriculum/comments:0.10",
-    "training_data2:0.50"
+    "curriculum/large:0.05",
+    "training_data2:0.45"
   ],
   "cmake_arguments": [
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",

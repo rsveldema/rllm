@@ -12,6 +12,8 @@
 
 namespace rllm
 {
+    std::vector<IdentifierHashBucket> identifier_name_hash_buckets(std::string_view name);
+
     struct OptimizerDiagnosticMetrics;
 
     /** the embedding for a given TokenID */    
@@ -21,6 +23,8 @@ namespace rllm
     {
         fixed_size_matrix<float, TokenID, EmbeddingDimension> gradients;
         fixed_size_vector<int, TokenID> touched;
+        fixed_size_matrix<float, IdentifierHashBucket, EmbeddingDimension> identifier_gradients;
+        fixed_size_vector<int, IdentifierHashBucket> identifier_touched;
 
         EmbeddingGradientAccumulator();
         void reset(VulkanQueue& queue);
@@ -105,12 +109,18 @@ namespace rllm
     private:
         // m_embeddings[token_id][d] — learned embedding for dimension d of token_id.
         fixed_size_matrix<float16, TokenID, EmbeddingDimension> m_embeddings;
+        fixed_size_matrix<float16, IdentifierHashBucket, EmbeddingDimension> m_identifier_embeddings;
         // CPU-side copy used for gradient updates and serialization.
         cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> m_embeddings_cpu;
         fixed_size_matrix<float, TokenID, EmbeddingDimension> m_adam_first;
         fixed_size_matrix<float, TokenID, EmbeddingDimension> m_adam_second;
+        fixed_size_matrix<float, IdentifierHashBucket, EmbeddingDimension> m_identifier_adam_first;
+        fixed_size_matrix<float, IdentifierHashBucket, EmbeddingDimension> m_identifier_adam_second;
+        mutable fixed_size_matrix<int, PositionIndex, IdentifierNgramSlot> m_identifier_ngram_ids;
+        mutable fixed_size_vector<int, PositionIndex> m_identifier_ngram_counts;
 
         void reset_embeddings();
+        void upload_identifier_features(const CpuInputLine& input, VulkanQueue& queue) const;
 
         // Per-call state for propagate_backward (moved out of the parallel loop to fix data race)
         // These are class members so each InputLayer instance has its own copy — no static shared state.

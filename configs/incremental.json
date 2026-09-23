@@ -27,8 +27,8 @@
   "training_arguments": [
     "--epochs", "44",
     "--disable-example-convergence",
-    "--checkpoint-interval", "3600",
-    "--validation-interval", "900",
+    "--checkpoint-interval", "600",
+    "--validation-interval", "600",
     "--learning-rate", "0.00001",
     "--layer-learning-rate-multiplier", "1.05",
     "--warmup-percent", "1",

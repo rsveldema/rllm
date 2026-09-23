@@ -339,6 +339,10 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "limit<BatchIndex::MAX>(")
     out = out.replace("enum_iterator1D<HeadDimension>(",
                       "limit<HeadDimension::MAX>(")
+    out = out.replace("enum_iterator1D<IdentifierHashBucket>(",
+                      "limit<IdentifierHashBucket::MAX>(")
+    out = out.replace("enum_iterator1D<IdentifierNgramSlot>(",
+                      "limit<IdentifierNgramSlot::MAX>(")
     out = out.replace("GpuInputLine",
                       "fixed_size_vector<TokenID, PositionIndex>")
     out = out.replace("CpuInputLine",
@@ -365,6 +369,8 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     out = out.replace(", RmsNormPartialSumIndex", ", RmsNormPartialSumIndex::MAX")
     out = out.replace(", MultiTokenPredictionIndex", ", MultiTokenPredictionIndex::MAX")
     out = out.replace(", ConflictIndex", ", ConflictIndex::MAX")
+    out = out.replace(", IdentifierHashBucket", ", IdentifierHashBucket::MAX")
+    out = out.replace(", IdentifierNgramSlot", ", IdentifierNgramSlot::MAX")
 
 
 
@@ -389,7 +395,8 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
     for _obsolete_type in (
         "TokenID", "PositionIndex", "AttentionPositionIndex", "EmbeddingDimension", "HeadsIndex", "BatchIndex",
         "TempStorage", "FFDimension", "HeadDimension",
-        "RmsNormPartialSumIndex", "MultiTokenPredictionIndex", "ConflictIndex"
+        "RmsNormPartialSumIndex", "MultiTokenPredictionIndex", "ConflictIndex",
+        "IdentifierHashBucket", "IdentifierNgramSlot"
     ):
         out = re.sub(rf"(?<!<)\b{_obsolete_type}\b(?!::)(?!\s*>)", "int", out)
     # Kernel dumps are parsed by kernel_compiler, not a C++ compiler. Strip

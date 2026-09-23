@@ -248,8 +248,10 @@ namespace rllm
             float average_loss = 0.0f;
             double perplexity = 0.0;
             double average_correct_token_probability = 0.0;
+            double top1_accuracy = 0.0;
             double mtp_average_loss = 0.0;
             double mtp_average_correct_token_probability = 0.0;
+            double mtp_top1_accuracy = 0.0;
             std::array<double, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> per_head_loss{};
             std::array<size_t, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> per_head_count{};
         };

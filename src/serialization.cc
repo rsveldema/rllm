@@ -93,19 +93,29 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_adam_first.zero(queue);
         m_adam_second.zero(queue);
+        m_identifier_adam_first.zero(queue);
+        m_identifier_adam_second.zero(queue);
         if (!j.contains("embeddings"))
             return;
 
         json_helpers::deserialize_matrix(j.at("embeddings"), m_embeddings_cpu);
         m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
+        cpu_fixed_matrix<float16, IdentifierHashBucket, EmbeddingDimension> identifier_embeddings_cpu;
+        json_helpers::deserialize_matrix(j.at("identifier_embeddings"), identifier_embeddings_cpu);
+        m_identifier_embeddings.copy_from_cpu(queue, identifier_embeddings_cpu);
     }
 
     nlohmann::json InputLayer::save() const
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_embeddings.copy_to_cpu(queue, const_cast<cpu_fixed_matrix<float16, TokenID, EmbeddingDimension>&>(m_embeddings_cpu));
+        cpu_fixed_matrix<float16, IdentifierHashBucket, EmbeddingDimension> identifier_embeddings_cpu;
+        m_identifier_embeddings.copy_to_cpu(queue, identifier_embeddings_cpu);
         queue.wait("InputLayer JSON serialization");
-        return {{"embeddings", *json_helpers::serialize_matrix(m_embeddings_cpu)}};
+        return {
+            {"embeddings", *json_helpers::serialize_matrix(m_embeddings_cpu)},
+            {"identifier_embeddings", *json_helpers::serialize_matrix(identifier_embeddings_cpu)}
+        };
     }
 
     void OutputLayer::load(const nlohmann::json& j)
@@ -479,6 +489,8 @@ namespace rllm
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         m_adam_first.zero(queue);
         m_adam_second.zero(queue);
+        m_identifier_adam_first.zero(queue);
+        m_identifier_adam_second.zero(queue);
         safetensors::safetensors_t st;
         if (!safetensors::load_from_file(filename, &st, nullptr, err))
         {
@@ -488,6 +500,7 @@ namespace rllm
         }
 
         pull_matrix("input_layer.embeddings", st, m_embeddings);
+        pull_matrix("input_layer.identifier_embeddings", st, m_identifier_embeddings);
         m_embeddings.copy_to_cpu(queue, m_embeddings_cpu);
     }
 
@@ -498,6 +511,7 @@ namespace rllm
         std::vector<uint8_t> storage;
 
         push_matrix(st, "input_layer.embeddings", m_embeddings, storage);
+        push_matrix(st, "input_layer.identifier_embeddings", m_identifier_embeddings, storage);
         st.storage = std::move(storage);
 
         if (!safetensors::save_to_file(st, filename, warn, err))
@@ -617,8 +631,11 @@ namespace rllm
 
         // Input layer (friend grants access to m_embeddings)
         push_matrix(st, "input_layer.embeddings", m_input_layer.m_embeddings, storage);
+        push_matrix(st, "input_layer.identifier_embeddings", m_input_layer.m_identifier_embeddings, storage);
         push_matrix(st, "training.input_layer.adam_first", m_input_layer.m_adam_first, storage);
         push_matrix(st, "training.input_layer.adam_second", m_input_layer.m_adam_second, storage);
+        push_matrix(st, "training.input_layer.identifier_adam_first", m_input_layer.m_identifier_adam_first, storage);
+        push_matrix(st, "training.input_layer.identifier_adam_second", m_input_layer.m_identifier_adam_second, storage);
 
         // Transformer blocks (friend grants access to W_q etc.)
         for (size_t bi = 0; bi < m_transformer_blocks.size(); ++bi)
@@ -908,6 +925,8 @@ namespace rllm
         {
             pull_matrix("training.input_layer.adam_first", st, m_input_layer.m_adam_first);
             pull_matrix("training.input_layer.adam_second", st, m_input_layer.m_adam_second);
+            pull_matrix("training.input_layer.identifier_adam_first", st, m_input_layer.m_identifier_adam_first);
+            pull_matrix("training.input_layer.identifier_adam_second", st, m_input_layer.m_identifier_adam_second);
         }
 
         // Same-depth resume already has correctly sized device allocations.

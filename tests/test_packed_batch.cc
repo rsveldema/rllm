@@ -3,7 +3,53 @@
 #include <TransformerBlock.hpp>
 #include <gtest/gtest.h>
 
+#include <string_view>
+
 using namespace rllm;
+
+namespace
+{
+    TokenID token_id_for(std::string_view text)
+    {
+        for (const auto& [token_id, info] : tokenizer_map)
+            if (info.str != nullptr && text == info.str)
+                return token_id;
+        ADD_FAILURE() << "token not found: " << text;
+        return TokenID::START;
+    }
+}
+
+TEST(PackedBatchInputTest, IdentifierNameFeaturesAreDeterministicAndNameSensitive)
+{
+    EXPECT_EQ(identifier_name_hash_buckets("AddValues"), identifier_name_hash_buckets("addvalues"));
+    EXPECT_NE(identifier_name_hash_buckets("add"), identifier_name_hash_buckets("subtract"));
+    EXPECT_LE(identifier_name_hash_buckets("a_very_long_identifier_name").size(),
+        static_cast<size_t>(IdentifierNgramSlot::MAX));
+
+    InputLayer input_layer;
+    input_layer.set_random_embeddings();
+    const TokenID global = token_id_for("<GLOBAL>");
+    CpuInputLine add;
+    CpuInputLine subtract;
+    add.push_back(global, "add");
+    subtract.push_back(global, "subtract");
+
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> add_h(add.size());
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> subtract_h(subtract.size());
+    input_layer.propagate_forward(add, add_h);
+    input_layer.propagate_forward(subtract, subtract_h);
+
+    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> add_cpu, subtract_cpu;
+    add_h.copy_to_cpu(queue, add_cpu);
+    subtract_h.copy_to_cpu(queue, subtract_cpu);
+
+    float max_difference = 0.f;
+    for (const auto d : enum_iterator1D<EmbeddingDimension>())
+        max_difference = std::max(max_difference,
+            std::abs(add_cpu[PositionIndex::START, d] - subtract_cpu[PositionIndex::START, d]));
+    EXPECT_GT(max_difference, 1e-5f);
+}
 
 TEST(PackedBatchInputTest, PacksRowsAndIsolatesCausalAttention)
 {
