@@ -29,6 +29,7 @@ namespace rllm
         case SourceLanguage::Rust: return TokenID::LANG_RUST;
         case SourceLanguage::Java: return TokenID::LANG_JAVA;
         case SourceLanguage::Shell: return TokenID::LANG_SHELL;
+        case SourceLanguage::Text: return TokenID::LANG_TEXT;
         case SourceLanguage::Unknown: break;
         }
         return TokenID::LANG_CPP;
@@ -42,6 +43,7 @@ namespace rllm
         if (name == "rust" || name == "rs") return SourceLanguage::Rust;
         if (name == "java") return SourceLanguage::Java;
         if (name == "shell" || name == "sh" || name == "bash") return SourceLanguage::Shell;
+        if (name == "text" || name == "txt" || name == "prose") return SourceLanguage::Text;
         return std::nullopt;
     }
 
@@ -80,6 +82,7 @@ namespace rllm
             case SourceLanguage::Rust: return "rust";
             case SourceLanguage::Java: return "java";
             case SourceLanguage::Shell: return "shell";
+            case SourceLanguage::Text: return "text";
             case SourceLanguage::Unknown: return "";
             }
             return "";
@@ -636,6 +639,8 @@ namespace rllm
         if (extension == ".rs") return SourceLanguage::Rust;
         if (extension == ".java") return SourceLanguage::Java;
         if (extension == ".sh") return SourceLanguage::Shell;
+        if (extension == ".txt" || extension == ".text" || extension == ".md")
+            return SourceLanguage::Text;
         if (extension == ".cpp" || extension == ".cc" || extension == ".cxx" ||
             extension == ".h" || extension == ".hpp") return SourceLanguage::Cpp;
         return SourceLanguage::Unknown;
@@ -937,10 +942,13 @@ namespace rllm
             if (!m_filters.empty())
             {
                 const auto filename = entry.path().filename().string();
+                const auto path = entry.path().generic_string();
                 bool matches_filter = false;
                 for (const auto& filter : m_filters)
                 {
-                    if (filename.find(filter) != std::string::npos)
+                    const auto normalized_filter = std::filesystem::path(filter).generic_string();
+                    if (filename.find(filter) != std::string::npos ||
+                        path.find(normalized_filter) != std::string::npos)
                     {
                         matches_filter = true;
                         break;
@@ -978,6 +986,7 @@ namespace rllm
                 if (!comment_state.line_comment_on_last_line)
                     token_data.add(TokenID::TOK_NEWLINE);
             }
+            token_data.add(TokenID::END_OF_SEQUENCE);
         }
 
         if (m_tokenization_errors > 0)
@@ -1066,6 +1075,8 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
     {
         CpuInputLine result;
         state.line_comment_on_last_line = false;
+        if (language == SourceLanguage::Text)
+            return get_token_ids(text);
         if (language == SourceLanguage::Python)
         {
             size_t indentation_position = 0;

@@ -1,0 +1,37 @@
+{
+  "build_type": "debug",
+  "model_directory": "models-english-debug",
+  "layers": 8,
+  "window_size": 32,
+  "window_stride": 16,
+  "learn_depth": 1,
+  "strip_comments": false,
+  "token_drop_probability": 0.0,
+  "token_typo_probability": 0.0,
+  "sources": [
+    "curriculum/english:1.0"
+  ],
+  "cmake_arguments": [
+    "-DDEBUG_ATTENTION_DIAGNOSTICS=ON",
+    "-DRLLM_ENABLE_STATISTICS=ON",
+    "-DRLLM_MAX_POSITION=512",
+    "-DRLLM_MAX_ATTENTION_POSITION=32"
+  ],
+  "training_arguments": [
+    "--epochs", "40",
+    "--disable-example-convergence",
+    "--checkpoint-interval", "300",
+    "--validation-interval", "60",
+    "--learning-rate", "0.00001",
+    "--layer-learning-rate-multiplier", "1.05",
+    "--warmup-percent", "10",
+    "--weight-initializer", "xavier-uniform",
+    "--ffn-initializer", "xavier-uniform",
+    "--embedding-initializer", "legacy-uniform",
+    "--learning-rate-schedule", "lowering",
+    "--micro-batch-size", "16",
+    "--max-validation-windows", "128",
+    "--validation-worst-count", "20",
+    "--disable-early-stopping"
+  ]
+}

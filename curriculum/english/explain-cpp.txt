@@ -10,9 +10,13 @@ The language allows for multi-paradigm programming, meaning it supports procedur
 It continues to evolve through modern standards like C++20 and C++23, constantly adding features that improve safety and abstractions.
 Would you like me to format these lines into a JSONL file structure so you can easily plug them into your LLM training pipeline, or should I generate more lines focusing on a specific architectural concept like C++ design patterns?
 AI responses may include mistakes.
-Learn morenow generate 100 linesHere are 100 lines of highly dense, educational English text explaining C++ concepts, programming paradigms, and software architectural structures.
+
+Here are 100 lines of highly dense, educational English text explaining C++ concepts, programming paradigms, and software architectural structures.
 Each line is structured as a standalone, token-efficient sentence suitable for training a small LLM.
-Language Fundamentals & Core MechanicsC++ is a statically typed, compiled, multi-paradigm language developed by Bjarne Stroustrup as an extension of C.
+Language Fundamentals & Core Mechanics
+
+
+C++ is a statically typed, compiled, multi-paradigm language developed by Bjarne Stroustrup as an extension of C.
 The language compiles directly into native machine code, bypassing virtual machines to achieve near-zero runtime overhead.
 Strongly typed languages like C++ enforce strict type checks during compilation to catch mismatches before execution.
 The main function serves as the definitive entry point for execution in every standard C++ application.
@@ -31,4 +35,3 @@ The private access specifier restricts variable modification solely to methods d
 The protected access specifier limits member accessibility to the base class and its derived child classes.
 Constructors handle object initialization, establishing invariants and allocating required resources when an object is instantiated.
 Destructors automatically clean up object resources, running immediately when an object goes out of scope.
-Inheritance allows a 

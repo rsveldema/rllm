@@ -67,6 +67,8 @@ namespace rllm
         EmbeddingInitializerType embedding_initializer,
         const std::optional<std::string>& concept_embeddings_filename,
         size_t micro_batch_size,
+        float token_dropout_probability,
+        float token_typo_probability,
         size_t num_epochs,
         std::optional<size_t> epoch_size,
         size_t max_validation_windows,
@@ -74,6 +76,8 @@ namespace rllm
         bool disable_early_stopping,
         bool disable_example_convergence,
         bool disable_training_diagnostics,
+        float memorization_target_accuracy,
+        float memorization_max_regression,
         bool reset_optimizer_state,
         bool restart_learning_rate_schedule,
         bool upgrade_mode,
@@ -106,6 +110,18 @@ namespace rllm
             LOG_INFO("Per-example convergence removal disabled");
         if (disable_training_diagnostics)
             LOG_INFO("Optimizer and backward training diagnostics disabled");
+        if (memorization_target_accuracy > 0.0f)
+            LOG_INFO(
+                "Memorization proof enabled: target {:.3f}% top-1 accuracy, maximum regression {:.3f} percentage points",
+                memorization_target_accuracy * 100.0f, memorization_max_regression * 100.0f);
+        if (token_dropout_probability > 0.0f)
+            LOG_INFO(
+                "Token dropout enabled: dropping {:.3f}% of training-window tokens",
+                token_dropout_probability * 100.0f);
+        if (token_typo_probability > 0.0f)
+            LOG_INFO(
+                "Token typo noise enabled: replacing {:.3f}% of training-window tokens",
+                token_typo_probability * 100.0f);
         if (upgrade_mode)
             LOG_INFO("Layer upgrade mode enabled");
         if (freeze_old_blocks && !upgrade_mode)
@@ -175,6 +191,8 @@ namespace rllm
             {"embedding_initializer", initializer_name(embedding_initializer)},
             {"concept_embeddings", concept_embeddings_filename ? nlohmann::json(*concept_embeddings_filename) : nlohmann::json(nullptr)},
             {"micro_batch_size", micro_batch_size},
+            {"token_dropout_probability", token_dropout_probability},
+            {"token_typo_probability", token_typo_probability},
             {"epochs", num_epochs},
             {"checkpoint_interval_seconds", checkpointing_interval ? nlohmann::json(checkpointing_interval->count()) : nlohmann::json(nullptr)},
             {"validation_interval_seconds", validation_interval.count()},
@@ -184,6 +202,8 @@ namespace rllm
             {"disable_early_stopping", disable_early_stopping},
             {"disable_example_convergence", disable_example_convergence},
             {"disable_training_diagnostics", disable_training_diagnostics},
+            {"memorization_target_accuracy", memorization_target_accuracy},
+            {"memorization_max_regression", memorization_max_regression},
             {"reset_optimizer_state", reset_optimizer_state},
             {"restart_learning_rate_schedule", restart_learning_rate_schedule},
             {"upgrade_mode", upgrade_mode},
@@ -214,12 +234,16 @@ namespace rllm
         nn->set_embedding_initializer(embedding_initializer);
         nn->set_concept_embeddings_filename(concept_embeddings_filename);
         nn->set_micro_batch_size(micro_batch_size);
+        nn->set_token_dropout_probability(token_dropout_probability);
+        nn->set_token_typo_probability(token_typo_probability);
         nn->set_max_validation_windows(max_validation_windows);
         nn->set_validation_worst_count(validation_worst_count);
         nn->set_validation_interval(validation_interval);
         nn->set_early_stopping_enabled(!disable_early_stopping);
         nn->set_example_convergence_enabled(!disable_example_convergence);
         nn->set_training_diagnostics_enabled(!disable_training_diagnostics);
+        nn->set_memorization_target_accuracy(memorization_target_accuracy);
+        nn->set_memorization_max_regression(memorization_max_regression);
         nn->set_reset_optimizer_state_on_load(reset_optimizer_state);
         nn->set_restart_learning_rate_schedule_on_load(restart_learning_rate_schedule);
         nn->set_upgrade_mode(upgrade_mode);

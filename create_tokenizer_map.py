@@ -251,6 +251,7 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
         "<LANG_RUST>",
         "<LANG_JAVA>",
         "<LANG_SHELL>",
+        "<LANG_TEXT>",
         "<LINE_COMMENT_START>",
         "<LINE_COMMENT_END>",
         "<BLOCK_COMMENT_START>",
@@ -267,6 +268,7 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
         "<INTEGER>",
         "<FLOAT>",
         "<STI>",
+        "<END_OF_SEQUENCE>",
     ]
 
     # The EOW suffix is metadata: generated runtime tables strip it from the
@@ -417,6 +419,7 @@ def generate_cpp_table_header(tokenizer_map) -> str:
             "<LANG_RUST>": "LANG_RUST",
             "<LANG_JAVA>": "LANG_JAVA",
             "<LANG_SHELL>": "LANG_SHELL",
+            "<LANG_TEXT>": "LANG_TEXT",
             "<LINE_COMMENT_START>": "LINE_COMMENT_START",
             "<LINE_COMMENT_END>": "LINE_COMMENT_END",
             "<BLOCK_COMMENT_START>": "BLOCK_COMMENT_START",
@@ -433,6 +436,7 @@ def generate_cpp_table_header(tokenizer_map) -> str:
             "<INTEGER>": "INTEGER",
             "<FLOAT>": "FLOAT",
             "<STI>": "STRING_TABLE_INDEX",
+            "<END_OF_SEQUENCE>": "END_OF_SEQUENCE",
         }
         if _token in language_aliases:
             cpp_table += f'    {language_aliases[_token]} = TOK_{idx},\n'

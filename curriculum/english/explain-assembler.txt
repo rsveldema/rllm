@@ -1,0 +1,50 @@
+Assembly language is a low-level representation of instructions executed by a particular processor architecture.
+An assembler translates assembly source code into machine-code bytes stored in an object file or executable image.
+Different instruction set architectures define different registers, instructions, encodings, and calling conventions.
+The x86-64, ARM, and RISC-V architectures use distinct assembly syntaxes and machine instruction formats.
+A mnemonic is a readable name such as add, move, compare, or jump that represents a machine operation.
+An operand identifies a register, immediate value, memory location, or other input used by an instruction.
+Registers are small storage locations inside a processor that can be accessed with very low latency.
+General-purpose registers commonly hold integers, addresses, loop counters, and temporary values.
+Special-purpose registers may track the instruction pointer, stack pointer, status flags, or processor control state.
+An immediate operand stores a constant value directly in or beside an encoded instruction.
+A memory operand accesses data through an address calculated from registers, constants, or both.
+Load instructions copy data from memory into registers on architectures that separate memory access from arithmetic.
+Store instructions copy data from registers into memory without performing an unrelated arithmetic operation.
+Some architectures allow arithmetic instructions to read memory directly, while others require explicit loads first.
+The instruction pointer identifies the location of the instruction that the processor will execute next.
+Sequential execution advances through adjacent instructions unless a control-flow operation changes the instruction pointer.
+A branch selects another instruction address according to a condition or an unconditional control transfer.
+A comparison instruction or arithmetic operation may produce condition information used by a later branch.
+Status flags can record properties such as zero results, negative results, carries, or signed overflow.
+Some instruction sets use dedicated comparison results instead of a shared status flag register.
+A loop can be implemented by updating a counter or pointer and branching while a condition remains true.
+A function call transfers control while preserving enough information to return to the calling location.
+A return instruction restores the caller's continuation address according to the active calling convention.
+A calling convention defines where arguments, return values, preserved registers, and temporary registers belong.
+The call stack stores function frames, return information, local data, and saved registers during nested calls.
+The stack pointer identifies the current boundary of the call stack and changes as stack space is reserved or released.
+A frame pointer can provide a stable reference to function data even while the stack pointer changes.
+Stack alignment rules ensure that data and saved state meet architectural or application binary interface requirements.
+Caller-saved registers may be overwritten by a called function, so the caller preserves them when necessary.
+Callee-saved registers must be restored by a called function before control returns to its caller.
+Labels assign readable names to instruction or data addresses that the assembler later resolves.
+A symbol can identify a function, global object, section, or external definition needed during linking.
+The linker combines object files, resolves symbol references, and assigns final or relocatable addresses.
+A relocation records an address-dependent value that cannot be finalized when an individual source file is assembled.
+Code and data are commonly organized into sections with different access permissions and loading behavior.
+The text section normally contains executable instructions, while data sections contain initialized or zero-filled objects.
+Endianness determines the byte order used to represent multi-byte values in memory.
+Operand size determines how many bits an instruction reads, transforms, or writes.
+Signed and unsigned values use the same bit patterns but require different interpretations for comparisons and extensions.
+Bitwise instructions manipulate individual bits through operations such as and, or, exclusive or, and shifts.
+Logical shifts insert zero bits, while arithmetic right shifts preserve the sign of a signed integer.
+Floating-point and vector registers support numerical operations that differ from ordinary integer instructions.
+Vector instructions perform similar operations on several packed values with one encoded instruction.
+Atomic instructions coordinate updates to shared memory when multiple processor cores execute concurrently.
+Memory-ordering rules constrain when loads and stores become visible to other threads or hardware devices.
+System calls request operating-system services through an architecture-specific instruction and application binary interface.
+Privileged instructions are restricted because they modify processor or system state requiring elevated authority.
+A debugger can inspect registers, memory, instructions, stack frames, and control flow while a program executes.
+Disassembly translates machine-code bytes back into assembly instructions, although high-level intent may be lost.
+Effective assembly programming requires understanding the target architecture, calling convention, memory model, and surrounding software interface.

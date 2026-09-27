@@ -102,6 +102,14 @@ namespace rllm
         const InputLayer& get_input_layer() const { return m_input_layer; }
         size_t get_transformer_block_count() const { return m_transformer_blocks.size(); }
         size_t get_frozen_transformer_block_count() const { return m_frozen_transformer_block_count; }
+        float get_learning_rate() const { return m_learning_rate; }
+        float get_layer_learning_rate_multiplier() const { return m_layer_learning_rate_multiplier; }
+        float get_warmup_percent() const { return m_warmup_percent; }
+        LearningRateSchedule get_learning_rate_schedule() const { return m_learning_rate_schedule; }
+        float get_simulated_annealing_decay_factor() const { return m_simulated_annealing_decay_factor; }
+        float get_simulated_annealing_initial_multiplier() const { return m_simulated_annealing_initial_multiplier; }
+        size_t get_simulated_annealing_decay_epochs() const { return m_simulated_annealing_decay_epochs; }
+        float get_simulated_annealing_min_multiplier() const { return m_simulated_annealing_min_multiplier; }
         void set_upgrade_mode(bool enabled) { m_upgrade_mode = enabled; }
         void set_freeze_old_blocks_on_upgrade(bool enabled) { m_freeze_old_blocks_on_upgrade = enabled; }
         void set_all_blocks_read_write(bool enabled) { m_all_blocks_read_write = enabled; }
@@ -122,6 +130,16 @@ namespace rllm
         void set_simulated_annealing_decay_epochs(size_t epochs) { assert(epochs > 0); m_simulated_annealing_decay_epochs = epochs; }
         void set_simulated_annealing_min_multiplier(float multiplier) { assert(multiplier > 0.0f); m_simulated_annealing_min_multiplier = multiplier; }
         void set_micro_batch_size(size_t n);
+        void set_token_dropout_probability(float probability)
+        {
+            assert(probability >= 0.0f && probability < 1.0f);
+            m_token_dropout_probability = probability;
+        }
+        void set_token_typo_probability(float probability)
+        {
+            assert(probability >= 0.0f && probability < 1.0f);
+            m_token_typo_probability = probability;
+        }
         void set_max_validation_windows(size_t n)
         {
             assert(n > 0);
@@ -140,6 +158,8 @@ namespace rllm
         void set_early_stopping_enabled(bool enabled) { m_early_stopping_enabled = enabled; }
         void set_example_convergence_enabled(bool enabled) { m_example_convergence_enabled = enabled; }
         void set_training_diagnostics_enabled(bool enabled) { m_training_diagnostics_enabled = enabled; }
+        void set_memorization_target_accuracy(float value) { m_memorization_target_accuracy = value; }
+        void set_memorization_max_regression(float value) { m_memorization_max_regression = value; }
         void set_reset_optimizer_state_on_load(bool enabled) { m_reset_optimizer_state_on_load = enabled; }
         void set_restart_learning_rate_schedule_on_load(bool enabled) { m_restart_learning_rate_schedule_on_load = enabled; }
         void set_weight_initializer(WeightInitializerType type) { m_weight_initializer = type; }
@@ -166,7 +186,11 @@ namespace rllm
 
         // returns true on success, false on failure (e.g. file not found or parse error)
         bool load(const std::string& filename);
-        void checkpoint() const;
+        std::filesystem::path checkpoint() const;
+        void link_checkpoint_alias(
+            const std::filesystem::path& checkpoint_filename,
+            const std::filesystem::path& alias_filename
+        ) const;
         void save(const std::string& filename) const;
         // Safetensors serialization
         void save_to_safetensors(const std::string& filename) const;
@@ -207,6 +231,8 @@ namespace rllm
         bool m_early_stopping_enabled = true;
         bool m_example_convergence_enabled = true;
         bool m_training_diagnostics_enabled = true;
+        float m_memorization_target_accuracy = 0.0f;
+        float m_memorization_max_regression = 1.0f;
         bool m_reset_optimizer_state_on_load = false;
         bool m_restart_learning_rate_schedule_on_load = false;
         bool m_optimizer_diagnostics_pending = false;
@@ -260,6 +286,10 @@ namespace rllm
             const std::vector<WindowExample>& evaluation_windows,
             bool report_worst_predictions = false
         );
+        EvaluationMetrics evaluate_all_window_positions(
+            const std::vector<WindowExample>& evaluation_windows,
+            bool report_worst_predictions = false
+        );
 
         TrainingMethod m_training_method = TrainingMethod::WINDOW;
         int m_window_size = 4;
@@ -276,6 +306,8 @@ namespace rllm
         float m_simulated_annealing_min_multiplier = SimulatedAnnealingLearningRate::DEFAULT_MIN_MULTIPLIER;
         std::unique_ptr<ILearningRate> m_learning_rate_provider;
         size_t m_micro_batch_size = 1;
+        float m_token_dropout_probability = 0.0f;
+        float m_token_typo_probability = 0.0f;
         size_t m_max_validation_windows = 4096;
         size_t m_validation_worst_count = 5;
         std::chrono::seconds m_validation_interval{1800};
@@ -349,7 +381,8 @@ namespace rllm
             size_t num_epochs,
             double epoch_progress,
             size_t sample_count,
-            const EvaluationMetrics& metrics
+            const EvaluationMetrics& metrics,
+            const char* item_type = "validation"
         );
         void log_timed_checkpoint(
             size_t epoch,
@@ -363,6 +396,11 @@ namespace rllm
         void flush_training_progress_log() const;
         void flush_training_progress_log_if_due(bool force = false);
         void apply_loaded_training_state_resets();
+        BatchTrainingItem make_window_training_item(
+            const WindowExample& window,
+            size_t epoch,
+            size_t window_index
+        ) const;
         size_t train_batch_items(std::vector<BatchTrainingItem>& batch, size_t steps, BatchTrainingTiming& timing);
         size_t train_batch_step(std::vector<BatchTrainingItem>& batch, size_t step, BatchTrainingTiming& timing);
         void collect_active_batch_inputs(

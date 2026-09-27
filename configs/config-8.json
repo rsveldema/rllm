@@ -6,14 +6,17 @@
   "window_stride": 64,
   "learn_depth": 1,
   "strip_comments": false,
+  "token_drop_probability": 0.0,
+  "token_typo_probability": 0.0,
   "sources": [
     "training_data0:0.05",
     "curriculum/grammar:0.15",
     "curriculum/syntax:0.10",
     "curriculum/systems:0.10",
     "curriculum/comments:0.10",
+    "curriculum/english:0.10",
     "curriculum/large:0.05",
-    "training_data2:0.45"
+    "training_data2:0.35"
   ],
   "cmake_arguments": [
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
@@ -22,7 +25,7 @@
     "-DRLLM_MAX_ATTENTION_POSITION=128"
   ],
   "training_arguments": [
-    "--epochs", "40",
+    "--epochs", "400",
     "--disable-example-convergence",
     "--disable-training-diagnostics",
     "--checkpoint-interval", "600",

@@ -70,6 +70,16 @@ def load_config(path: Path) -> dict[str, object]:
         raise ValueError("Config field 'model_directory' must be a non-empty string.")
     if "incremental_window" in config and not isinstance(config["incremental_window"], bool):
         raise ValueError("Config field 'incremental_window' must be a boolean.")
+    if "token_drop_probability" in config:
+        value = config["token_drop_probability"]
+        if (not isinstance(value, (int, float)) or isinstance(value, bool) or
+                not math.isfinite(float(value)) or float(value) < 0.0 or float(value) >= 1.0):
+            raise ValueError("Config field 'token_drop_probability' must be a number in [0, 1).")
+    if "token_typo_probability" in config:
+        value = config["token_typo_probability"]
+        if (not isinstance(value, (int, float)) or isinstance(value, bool) or
+                not math.isfinite(float(value)) or float(value) < 0.0 or float(value) >= 1.0):
+            raise ValueError("Config field 'token_typo_probability' must be a number in [0, 1).")
     return config
 
 
@@ -238,29 +248,61 @@ def clean_intermediate_checkpoints(model_dir: Path) -> Path:
     numbered = list(model_dir.glob("checkpoint-[0-9]*.st"))
     destination = model_dir / "checkpoint-latest.st"
     destination_sidecar = Path(f"{destination}.training.json")
-    candidates = numbered + ([destination] if destination.is_file() else [])
+    candidates = numbered + ([destination] if destination.is_file() and not destination.is_symlink() else [])
     if not candidates:
         raise FileNotFoundError(f"No numbered checkpoint found in '{model_dir}'.")
 
     latest = max(candidates, key=lambda path: path.stat().st_mtime)
     latest_sidecar = Path(f"{latest}.training.json")
+    preserved_numbered = {latest} if latest != destination else set()
+    preserved_sidecars: set[Path] = set()
+    resolved_model_dir = model_dir.resolve()
+    for alias in model_dir.glob("checkpoint-*.st"):
+        if not alias.is_symlink():
+            continue
+        target = (alias.parent / alias.readlink()).resolve(strict=False)
+        if target.parent == resolved_model_dir:
+            preserved_numbered.update(
+                checkpoint for checkpoint in numbered
+                if checkpoint.resolve(strict=False) == target
+            )
+    for alias in model_dir.glob("checkpoint-*.st.training.json"):
+        if not alias.is_symlink():
+            continue
+        target = (alias.parent / alias.readlink()).resolve(strict=False)
+        if target.parent == resolved_model_dir:
+            preserved_sidecars.update(
+                sidecar for sidecar in model_dir.glob("checkpoint-[0-9]*.st.training.json")
+                if sidecar.resolve(strict=False) == target
+            )
     if latest == destination:
         print(f"Preserving existing latest checkpoint {destination}")
     else:
-        print(f"Preserving latest checkpoint {latest} as {destination}")
-        latest.replace(destination)
+        print(f"Linking latest checkpoint {destination} to {latest.name}")
+        temporary = destination.with_name(f".{destination.name}.tmp")
+        if temporary.is_symlink() or temporary.exists():
+            temporary.unlink()
+        temporary.symlink_to(latest.name)
+        temporary.replace(destination)
         if latest_sidecar.is_file():
-            latest_sidecar.replace(destination_sidecar)
-        elif destination_sidecar.is_file():
+            temporary_sidecar = destination_sidecar.with_name(f".{destination_sidecar.name}.tmp")
+            if temporary_sidecar.is_symlink() or temporary_sidecar.exists():
+                temporary_sidecar.unlink()
+            temporary_sidecar.symlink_to(latest_sidecar.name)
+            temporary_sidecar.replace(destination_sidecar)
+        elif destination_sidecar.is_file() or destination_sidecar.is_symlink():
             destination_sidecar.unlink()
 
     for checkpoint in numbered:
-        if checkpoint == latest:
+        if checkpoint in preserved_numbered:
             continue
         if checkpoint.is_file():
             print(f"Deleting intermediate checkpoint {checkpoint}")
             checkpoint.unlink()
     for sidecar in model_dir.glob("checkpoint-[0-9]*.st.training.json"):
+        if (sidecar in preserved_sidecars or
+                any(sidecar == Path(f"{checkpoint}.training.json") for checkpoint in preserved_numbered)):
+            continue
         print(f"Deleting intermediate checkpoint sidecar {sidecar}")
         sidecar.unlink()
     return destination
@@ -345,11 +387,11 @@ def select_resume_model(
         return candidate
 
     if latest:
-        checkpoints = list(model_dir.glob("checkpoint-[0-9]*.st"))
-        candidate = max(checkpoints, key=lambda path: path.stat().st_mtime, default=None)
+        cleaned_latest = model_dir / "checkpoint-latest.st"
+        candidate = cleaned_latest if cleaned_latest.is_file() else None
         if candidate is None:
-            cleaned_latest = model_dir / "checkpoint-latest.st"
-            candidate = cleaned_latest if cleaned_latest.is_file() else None
+            checkpoints = list(model_dir.glob("checkpoint-[0-9]*.st"))
+            candidate = max(checkpoints, key=lambda path: path.stat().st_mtime, default=None)
         if candidate is not None and compatible_model(candidate, runtime_header, required=True):
             print(f"Resuming from latest checkpoint {candidate}")
             return candidate
@@ -755,6 +797,8 @@ def main(arguments: list[str] | None = None) -> int:
     window_size = positive_integer(config, "window_size")
     window_stride = positive_integer(config, "window_stride")
     learn_depth = positive_integer(config, "learn_depth")
+    token_dropout_probability = float(config.get("token_drop_probability", 0.0))
+    token_typo_probability = float(config.get("token_typo_probability", 0.0))
     model_dir = Path(str(config["model_directory"]))
     model_dir.mkdir(parents=True, exist_ok=True)
     if options.clean or options.latest:
@@ -919,9 +963,17 @@ def main(arguments: list[str] | None = None) -> int:
                     schedule_arguments.append("--restart-learning-rate-schedule")
                 if options.skip_warmup:
                     schedule_arguments.append("--skip-warmup")
+                token_dropout_arguments: list[str] = []
+                if token_dropout_probability > 0.0:
+                    token_dropout_arguments = ["--token-dropout", str(token_dropout_probability)]
+                token_typo_arguments: list[str] = []
+                if token_typo_probability > 0.0:
+                    token_typo_arguments = ["--token-typo", str(token_typo_probability)]
                 command = [
                     str(build_dir / "rllm"), "--train", *resume_arguments,
                     "-o", str(output_model), *train_dirs,
+                    *token_dropout_arguments,
+                    *token_typo_arguments,
                     *training_arguments,
                     "--method", f"window:{stage_window}",
                     "--window-stride", str(stage_stride),
@@ -1005,6 +1057,12 @@ def main(arguments: list[str] | None = None) -> int:
             schedule_arguments.append("--restart-learning-rate-schedule")
         if options.skip_warmup:
             schedule_arguments.append("--skip-warmup")
+        token_dropout_arguments: list[str] = []
+        if token_dropout_probability > 0.0:
+            token_dropout_arguments = ["--token-dropout", str(token_dropout_probability)]
+        token_typo_arguments: list[str] = []
+        if token_typo_probability > 0.0:
+            token_typo_arguments = ["--token-typo", str(token_typo_probability)]
 
         command = [
             str(build_dir / "rllm"), "--train", *resume_arguments,
@@ -1012,6 +1070,8 @@ def main(arguments: list[str] | None = None) -> int:
             "--method", f"window:{window_size}", "--window-stride", str(window_stride),
             "--layers", str(num_layers), "--learn-depth", str(learn_depth),
             *schedule_arguments,
+            *token_dropout_arguments,
+            *token_typo_arguments,
             *training_arguments,
         ]
         print(f"--- Starting {build_type} training ---")

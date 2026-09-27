@@ -31,6 +31,34 @@ def test_comment_removal_defaults_to_disabled(tmp_path):
     assert config["strip_comments"] is False
 
 
+def test_token_drop_probability_is_optional_and_validated(tmp_path):
+    config = valid_config()
+    config["token_drop_probability"] = 0.05
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps(config))
+
+    assert train.load_config(config_file)["token_drop_probability"] == 0.05
+
+    config["token_drop_probability"] = 1.0
+    config_file.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="token_drop_probability"):
+        train.load_config(config_file)
+
+
+def test_token_typo_probability_is_optional_and_validated(tmp_path):
+    config = valid_config()
+    config["token_typo_probability"] = 0.02
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps(config))
+
+    assert train.load_config(config_file)["token_typo_probability"] == 0.02
+
+    config["token_typo_probability"] = 1.0
+    config_file.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="token_typo_probability"):
+        train.load_config(config_file)
+
+
 def test_embedding_prefill_generator_adds_only_exact_token_declarations(tmp_path):
     base = tmp_path / "base.json"
     token_map = tmp_path / "token-map.json"
@@ -316,6 +344,7 @@ def test_incremental_config_enables_mode_without_cli_flag():
     assert config["incremental_new_block_epochs"] == 2
     assert config["incremental_upgrade_output_scale"] == 0.1
     assert "curriculum/algos:0.10" in config["sources"]
+    assert "curriculum/english:0.10" in config["sources"]
     assert config["model_directory"] == "models-8-incremental"
     assert not options.incremental_window
     assert options.incremental_window or config["incremental_window"]
@@ -350,7 +379,12 @@ def test_clean_preserves_newest_checkpoint_and_its_sidecar(tmp_path):
     preserved = train.clean_intermediate_checkpoints(tmp_path)
 
     assert preserved == tmp_path / "checkpoint-latest.st"
+    assert preserved.is_symlink()
+    assert preserved.readlink() == Path(newer.name)
     assert preserved.read_text() == newer.name
+    assert newer.exists()
+    assert Path(f"{preserved}.training.json").is_symlink()
+    assert Path(f"{preserved}.training.json").readlink() == Path(newer_sidecar.name)
     assert Path(f"{preserved}.training.json").read_text() == newer_sidecar.name
     assert not older.exists()
     assert not older_sidecar.exists()
@@ -368,6 +402,58 @@ def test_latest_selects_cleaned_checkpoint(tmp_path, monkeypatch):
     )
 
     assert selected == cleaned
+
+
+def test_clean_atomically_replaces_existing_latest_file_with_symlink(tmp_path):
+    numbered = tmp_path / "checkpoint-200.st"
+    numbered.write_text("new checkpoint")
+    cleaned = tmp_path / "checkpoint-latest.st"
+    cleaned.write_text("old checkpoint")
+    os.utime(cleaned, (1, 1))
+    os.utime(numbered, (2, 2))
+
+    train.clean_intermediate_checkpoints(tmp_path)
+
+    assert cleaned.is_symlink()
+    assert cleaned.readlink() == Path(numbered.name)
+    assert cleaned.read_text() == "new checkpoint"
+
+
+def test_clean_preserves_best_window_symlink_target(tmp_path):
+    best_target = tmp_path / "checkpoint-100.st"
+    best_sidecar = tmp_path / "checkpoint-100.st.training.json"
+    latest_target = tmp_path / "checkpoint-200.st"
+    for artifact in (best_target, best_sidecar, latest_target):
+        artifact.write_text(artifact.name)
+    (tmp_path / "checkpoint-best-window.st").symlink_to(best_target.name)
+    (tmp_path / "checkpoint-best-window.st.training.json").symlink_to(best_sidecar.name)
+    os.utime(best_target, (1, 1))
+    os.utime(latest_target, (2, 2))
+
+    train.clean_intermediate_checkpoints(tmp_path)
+
+    assert best_target.exists()
+    assert best_sidecar.exists()
+    assert (tmp_path / "checkpoint-best-window.st").read_text() == best_target.name
+    assert (tmp_path / "checkpoint-latest.st").readlink() == Path(latest_target.name)
+
+
+def test_clean_preserves_targets_of_arbitrary_checkpoint_symlinks(tmp_path):
+    linked_model = tmp_path / "checkpoint-100.st"
+    linked_sidecar = tmp_path / "checkpoint-100.st.training.json"
+    newest = tmp_path / "checkpoint-200.st"
+    for artifact in (linked_model, linked_sidecar, newest):
+        artifact.write_text(artifact.name)
+    (tmp_path / "checkpoint-pinned.st").symlink_to(linked_model.name)
+    (tmp_path / "checkpoint-pinned.st.training.json").symlink_to(linked_sidecar.name)
+    os.utime(linked_model, (1, 1))
+    os.utime(newest, (2, 2))
+
+    train.clean_intermediate_checkpoints(tmp_path)
+
+    assert linked_model.exists()
+    assert linked_sidecar.exists()
+    assert (tmp_path / "checkpoint-pinned.st").read_text() == linked_model.name
 
 
 def test_lowest_loss_selects_checkpoint_paired_with_best_validation(tmp_path, monkeypatch):

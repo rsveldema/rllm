@@ -78,11 +78,14 @@ When a checkpoint restarts partway through a stage, its baseline validation and
 subsequent records continue from the latest plotted position rather than
 drawing a line backward to the stage's local epoch zero.
 
-`--clean` is a cleanup-only operation. It renames the newest numbered timed
-checkpoint and its sidecar to `checkpoint-latest.st` and
-`checkpoint-latest.st.training.json`, removes the older numbered checkpoints
-and sidecars, and exits without building or training. `--latest` performs the
-same cleanup before building, then resumes training from
+`--clean` is a cleanup-only operation. It atomically links
+`checkpoint-latest.st` and its training sidecar to the newest numbered timed
+checkpoint and sidecar, removes the older numbered checkpoints and sidecars,
+and exits without building or training. The newest numbered checkpoint remains
+as the symlink target, avoiding a second full model file. Numbered model and
+sidecar files referenced by any other checkpoint symlink are also retained.
+`--latest` performs
+the same cleanup before building, then resumes training from
 `checkpoint-latest.st`.
 
 `--train-dir <path>` may be repeated. Add `:<weight>` to define the desired
@@ -93,10 +96,30 @@ overwhelmed by a larger source. Sampling cycles through shuffled source windows
 before repeating them. Unweighted directories default to weight `1`.
 
 The Python training launcher uses `training_data0`, the `curriculum/grammar`,
-`curriculum/syntax`, `curriculum/comments`, `curriculum/systems`, and
-`curriculum/algos` categories,
+`curriculum/syntax`, `curriculum/comments`, `curriculum/systems`,
+`curriculum/algos`, and `curriculum/english` categories,
 and `training_data2` as a weighted mixture. Change `sources` in the JSON to use
 a different corpus or weighting.
+
+The English curriculum progresses from short concrete sentences through
+grammar contrasts and dialogue to technical explanations. The general training
+configs reserve a 10 percent source share for it. Its representative vocabulary
+also appears in `tokenizer_training_data/english.txt`, so changing to this
+curriculum changes the tokenizer signature and requires a fresh-start model
+rather than resuming an older checkpoint.
+
+Plain-text `.txt`, `.text`, and `.md` files use the `<LANG_TEXT>` language
+marker. Their words and punctuation are tokenized directly; unlike program
+sources, prose does not pass through identifier, literal, or MCP abstraction.
+
+For an isolated diagnostic run, `configs/english-debug.json` trains a four-layer
+debug build exclusively on `curriculum/english`. It enables runtime statistics
+and attention diagnostics, validates every minute, and stores artifacts in
+`models-english-debug`. Start it with:
+
+```sh
+./train.py configs/english-debug.json --fresh-start
+```
 
 During language-aware tokenization, program sources are abstracted in memory so
 the model learns language structure rather than project or library vocabulary.
@@ -202,9 +225,12 @@ state: Adam first and second moments for embeddings, transformer parameters,
 and output heads; the optimizer step; the configured base and depth-scaled
 learning-rate settings; the schedule type and planned step count; and the
 current lowering or simulated-annealing position. Loading such a checkpoint
-restores this embedded state after parsing the command-line configuration, so
-the next optimizer update uses the same bias correction and effective learning
-rate. At optimizer step zero, Adam moments are known to be zero and are
+restores the optimizer and schedule position, while the active command-line or
+training-parameters configuration remains authoritative for the base learning
+rate, depth multiplier, warmup, schedule type, and simulated-annealing
+settings. This allows a resumed run to change those settings explicitly rather
+than having them silently replaced by checkpoint metadata. At optimizer step
+zero, Adam moments are known to be zero and are
 initialized directly on the device instead of uploaded from the checkpoint;
 `--reset-optimizer-state` uses the same reduced-transfer path. Window-training
 checkpoints additionally store the epoch/window cursor
@@ -240,8 +266,10 @@ This matters after tokenizer changes, such as adding the `INVALID` token, becaus
 The supplied configuration uses `training_data2` and does not set a filename
 filter, so every program in that directory is included.
 Edit the configuration's `sources` array to select another corpus. Passing one or more
-`--filter` options explicitly narrows loading to filenames containing any of
-those values. When using `curriculum`, its `preprocessor.cpp` supplies
+`--filter` options explicitly narrows loading to filenames or paths containing
+any of those values. A directory filter such as `--filter curriculum/algos`
+therefore includes every file below that directory. Multiple filters use OR
+semantics. When using `curriculum`, its `preprocessor.cpp` supplies
 dedicated completion examples for prefixes such as `#`, `#in`, and `#if`.
 Corpus loading records processed files and tokenization errors in
 `tokenization.log` beside the output model. The standard scripts therefore
@@ -258,7 +286,11 @@ Timed checkpoints, best checkpoints, training progress, and tokenization logs
 created by tests never use the production `models/` directory.
 The Python training launcher requests a timed checkpoint every
 600 seconds, for at most six timed checkpoints per hour of uninterrupted
-training.
+training. After each timed checkpoint, window training retains the two newest
+numbered checkpoints in the model directory and deletes every older numbered
+checkpoint and training sidecar. This pruning also covers checkpoints left by
+earlier runs. A checkpoint pair referenced by any symlink in the model
+directory is preserved in addition to the newest two.
 
 ## Learn Depth
 
@@ -379,6 +411,22 @@ Python training launcher sets it to `100`.
 the packed batch metadata and output workspaces are statically bounded by that
 index. The error message reports the active build's limit.
 
+`--token-dropout <P>` randomly removes ordinary tokens from training windows
+with probability `P`, where `P` must be in `[0, 1)`. Validation and
+memorization evaluation keep the original windows. Language markers,
+string-table payload markers, and other side-table-backed placeholder tokens are
+not dropped. In `train.py` configs, set top-level
+`"token_drop_probability": P` in `[0, 1)`. The default `0.0` disables token
+dropout.
+
+`--token-typo <P>` randomly replaces ordinary tokens in training windows with
+other ordinary tokenizer tokens with probability `P`, where `P` must be in
+`[0, 1)`. Validation and memorization evaluation keep the original windows.
+Boundary markers, string-table payload markers, and side-table-backed
+placeholder tokens are not replaced. In `train.py` configs, set top-level
+`"token_typo_probability": P` in `[0, 1)`. The default `0.0` disables token
+typo noise.
+
 This is useful for faster validation/checkpoint feedback on large corpora. Window training keeps its existing window-based epoch behavior.
 
 At startup, `train.log` reports the number of source tokens assigned to the
@@ -481,13 +529,15 @@ per-queue arena. The arena is reset only after that queue becomes idle, so
 forward and backward passes do not create and destroy a descriptor pool for
 every kernel invocation.
 Before the first optimizer update, training records a validation-window baseline.
-Every five minutes it reports held-out window loss, perplexity, average
+Every five minutes it reports held-out prediction loss, perplexity, average
 correct-token probability, and validation duration together with the current
 epoch and window progress.
 It also performs and reports a held-out validation at the end of every epoch,
 including epochs that finish before the five-minute interval.
-Window validation reports head-zero next-token loss as its primary metric, plus
-the aggregate loss and individual loss for all configured MTP heads. Checkpointing and
+Window validation evaluates every stride-selected prediction position in each
+held-out window, matching the positions used during training. It reports
+head-zero next-token loss as its primary metric, plus the aggregate loss and
+individual loss for all configured MTP heads. Checkpointing and
 early stopping use head-zero loss so they optimize the completion objective and
 are directly comparable with reported training loss. The baseline and each
 end-of-epoch validation also report the five worst individual predictions. Each
@@ -496,8 +546,9 @@ the MTP head, and a decoded seven-token excerpt with up to three tokens before
 and after the expected target. The target token is enclosed in parentheses;
 ellipses mark excerpt truncation.
 Held-out windows reserve up to four trailing tokens beyond their validation
-context, so each available MTP head is evaluated against a real future token.
-Short final windows contribute only the heads for which a future token exists.
+context, so every stride-selected position is evaluated against each MTP head
+that has a real future token. Short final windows contribute only the heads for
+which a future token exists.
 When the per-file reservation produces more windows than `--max-validation-windows`,
 validation distributes that budget across the source files, including at
 least one window from every file when the budget permits, and samples evenly
@@ -525,9 +576,12 @@ toward the start. It uses the current maximum window size
 regular window training, reverse-window traversal is not shuffled. Window
 stride continues to apply within each line.
 
-Window training saves `checkpoint-best-window.st` in the configured model
-artifact directory whenever end-of-epoch
-head-zero validation loss improves by at least `1e-4`. It stops after three consecutive
+Window training atomically updates `checkpoint-best-window.st` as a relative
+symlink to the numbered checkpoint whose end-of-epoch head-zero validation loss
+is best. Its training-configuration sidecar is linked to the numbered sidecar
+the same way, avoiding another full model file. Checkpoint cleanup preserves
+the numbered symlink target. An improvement must be at least `1e-4`. Training
+stops after three consecutive
 epochs without improvement and restores that best checkpoint before the final
 model is saved. When that best checkpoint is itself the resume source, baseline
 validation reuses the existing artifact instead of immediately rewriting it.
@@ -587,6 +641,19 @@ If the checkpoint has more blocks than `--layers`, the checkpoint block count is
 
 NaN/range validation is disabled by default. Pass `--nan-finding` to enable the expensive runtime checks while debugging numerical instability.
 
+To check an existing `.st` or `.safetensors` checkpoint without loading the
+model, run:
+
+```sh
+python check_checkpoint_nans.py models/checkpoint-latest.st
+```
+
+The checker streams through every floating-point tensor, so its memory use does
+not scale with checkpoint size. It exits with status `0` when the checkpoint is
+clean, `1` when it finds NaNs, and `2` when the file cannot be read or is not a
+valid Safetensors checkpoint. A failing report identifies each affected tensor,
+its NaN count, and the first flattened element index.
+
 # Early stopping
 
 Training stops after three consecutive epochs without validation-loss improvement by default. Pass
@@ -595,6 +662,24 @@ saving, and restoration of the best checkpoint remain enabled.
 `--disable-example-convergence` keeps every example active instead of removing
 examples that cross the per-example convergence threshold. This is intended for
 optimizer-stability and memorization diagnostics.
+
+`--memorization-target-percent <P>` turns window training into a deterministic
+learning-correctness test. After every epoch, rLLM evaluates every trained
+next-token prediction position in every training window without applying
+updates and records a separate `memorization` entry in `train.json` containing
+loss, perplexity, correct-token probability, head-0 top-1 accuracy, and
+all-MTP top-1 accuracy. Training succeeds early when all-MTP top-1 reaches `P`,
+saves `checkpoint-memorized.st`, and does not replace it with the best held-out
+validation checkpoint. It exits nonzero if all epochs finish below the target or
+if a memorization metric becomes non-finite. Held-out validation continues to be
+reported but does not decide whether this proof passes.
+
+`--memorization-max-regression-percent <P>` additionally fails the proof when
+training-window top-1 accuracy drops by more than `P` percentage points from
+its best observed value. `configs/guaranteed-90.json` uses a 90% target, a
+20-point regression limit, a `5e-6` learning rate, and 10% warmup. Passing now
+requires at least 90% of all trained MTP prediction positions, not merely 90%
+of head-0 window end positions, to have the correct argmax.
 
 The first optimizer update of each window-training epoch logs per-group
 diagnostics: pre-clipping gradient maximum, clipping percentage, Adam update
@@ -612,6 +697,10 @@ The corresponding training-progress entry in `train.json` contains an
 `normalized_global_gradient_norm`. Because diagnostics are sampled on the first
 optimizer update of an epoch, the array appears only on the progress entry that
 contains that update.
+
+Before each AdamW update, gradients in each parameter group are globally
+clipped to an L2 norm of `30`. The existing element-wise clamp to `[-1, 1]` is
+then applied to the globally scaled gradients.
 
 The first backward pass of each epoch also logs hidden-gradient RMS, maximum,
 and L2 norm at the output heads and after every transformer block. Within each
@@ -680,3 +769,21 @@ the newer optimizer tensors and training cursor are preserved. The optimizer
 step is set to zero so rllm initializes fresh Adam moments when loading the
 projected checkpoint. If the newer checkpoint has a `.training.json` sidecar,
 it is copied for the projected checkpoint.
+
+## Identifier engram export
+
+`export_identifier_embeddings.py` extracts the learned identifier hash table
+from an rLLM safetensors checkpoint for use with TensorFlow Embedding Projector:
+
+```bash
+python export_identifier_embeddings.py models/checkpoint-latest.st
+```
+
+The command writes an `*-identifier-engrams.tsv` vectors file and a companion
+`*-metadata.tsv` file beside the checkpoint. Load them as the vectors and
+metadata inputs at `projector.tensorflow.org`. The first metadata column lists
+representative character trigrams that hash to the bucket, so Projector shows
+string labels; the remaining columns contain the bucket number and embedding
+norm. These are representative collision members rather than original complete
+identifier names because the checkpoint's hashed table is not reversible. Use
+`--output` and `--metadata` to choose other destinations.

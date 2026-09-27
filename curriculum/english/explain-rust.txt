@@ -1,0 +1,50 @@
+Rust is a compiled systems programming language designed for performance, reliability, and memory safety.
+Rust programs compile to native machine code without requiring a garbage collector at runtime.
+The compiler uses static analysis to prevent many memory errors before a program can run.
+Every Rust program begins execution in a function named main unless it is built as a library.
+Variables are immutable by default, which makes unintended changes easier to detect.
+The mut keyword explicitly permits a variable to change after its initial assignment.
+Rust uses strong static typing while often inferring a variable's type from its value and context.
+Scalar types include integers, floating-point numbers, Boolean values, and Unicode scalar characters.
+Compound types include tuples for fixed heterogeneous values and arrays for fixed homogeneous values.
+The String type owns growable UTF-8 text, while a string slice borrows a view into existing text.
+Ownership gives each value a responsible variable that controls when the value is released.
+A value is normally dropped when its owner leaves the current lexical scope.
+Moving a value transfers ownership and prevents accidental use through the previous variable.
+Types that implement the Copy trait can be duplicated implicitly instead of being moved.
+Borrowing allows code to access a value through a reference without taking ownership of it.
+An immutable reference permits reading but does not permit modification through that reference.
+A mutable reference permits modification and requires exclusive access for the duration of the borrow.
+The borrow checker verifies that references never outlive the values to which they refer.
+Rust prevents simultaneous mutable and immutable borrowing when those accesses could conflict.
+Lifetimes describe relationships between reference validity periods without extending those periods.
+Most lifetime relationships are inferred, while explicit annotations resolve ambiguous cases.
+A struct combines related fields into a named data type with a defined layout and behavior.
+An enum represents a value that may be exactly one of several named variants.
+Enum variants may carry different kinds of associated data within the same overall type.
+Pattern matching with match handles enum variants and other structured values exhaustively.
+The if let expression provides concise matching when only one pattern requires special handling.
+Methods are functions associated with a type and may borrow, mutate, or consume their receiver.
+An associated function belongs to a type but does not take a self parameter.
+Traits define shared behavior that multiple concrete types can implement.
+Trait bounds describe capabilities required from a generic type parameter.
+Generics allow functions and data structures to operate over multiple types without losing type safety.
+Monomorphization creates specialized native code for the concrete generic types used by a program.
+The Option type represents either a present value or the explicit absence of a value.
+The Result type represents either a successful value or a recoverable error value.
+The question-mark operator returns an error early while passing a successful value to the next expression.
+Panic reports an unrecoverable failure and begins unwinding or aborting according to the build configuration.
+Iterators produce sequences lazily and support transformations such as map, filter, and fold.
+Closures are anonymous functions that may capture values from their surrounding environment.
+Smart pointers such as Box, Rc, and Arc provide different ownership and allocation strategies.
+Box stores an owned value on the heap and has one owner at a time.
+Rc enables shared ownership within one thread, while Arc provides atomic shared ownership across threads.
+Interior mutability types enforce borrowing rules at runtime or through synchronization instead of ordinary compile-time checks.
+The Send and Sync traits help the compiler prevent unsafe sharing of values between threads.
+Channels transfer messages between tasks and can reduce the need for shared mutable state.
+Unsafe Rust permits a small set of unchecked operations but does not disable the language's other safety rules.
+Modules organize names and control visibility through private defaults and the pub keyword.
+Crates are Rust compilation units, and packages contain one or more crates described by a Cargo manifest.
+Cargo builds projects, resolves dependencies, runs tests, and generates documentation using a consistent workflow.
+Unit tests commonly live beside implementation code, while integration tests live in the tests directory.
+Rust combines ownership, expressive types, and zero-cost abstractions to support safe low-level software development.

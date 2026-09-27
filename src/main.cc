@@ -72,12 +72,16 @@ struct CommandLineParser
     rllm::EmbeddingInitializerType embedding_initializer = rllm::EmbeddingInitializerType::LegacyUniform;
     std::optional<std::string> concept_embeddings_filename;
     size_t micro_batch_size = 1;
+    float token_dropout_probability = 0.0f;
+    float token_typo_probability = 0.0f;
     std::optional<size_t> epoch_size;
     size_t max_validation_windows = 4096;
     size_t validation_worst_count = 5;
     bool disable_early_stopping = false;
     bool disable_example_convergence = false;
     bool disable_training_diagnostics = false;
+    float memorization_target_accuracy = 0.0f;
+    float memorization_max_regression = 1.0f;
     bool reset_optimizer_state = false;
     bool restart_learning_rate_schedule = false;
     bool upgrade_mode = false;
@@ -123,6 +127,14 @@ struct CommandLineParser
             fail(std::format(
                 "micro_batch_size must be between 1 and {}",
                 static_cast<size_t>(rllm::BatchIndex::MAX)));
+        token_dropout_probability = j.value("token_dropout_probability", token_dropout_probability);
+        if (!std::isfinite(token_dropout_probability) ||
+            token_dropout_probability < 0.0f || token_dropout_probability >= 1.0f)
+            fail("token_dropout_probability must be in [0, 1)");
+        token_typo_probability = j.value("token_typo_probability", token_typo_probability);
+        if (!std::isfinite(token_typo_probability) ||
+            token_typo_probability < 0.0f || token_typo_probability >= 1.0f)
+            fail("token_typo_probability must be in [0, 1)");
         num_epochs = j.value("epochs", num_epochs);
         if (j.contains("train_corpus_dirs"))
             train_corpus_dirs = j["train_corpus_dirs"].get<std::vector<std::string>>();
@@ -140,6 +152,14 @@ struct CommandLineParser
         disable_early_stopping = j.value("disable_early_stopping", disable_early_stopping);
         disable_example_convergence = j.value("disable_example_convergence", disable_example_convergence);
         disable_training_diagnostics = j.value("disable_training_diagnostics", disable_training_diagnostics);
+        memorization_target_accuracy = j.value("memorization_target_accuracy", memorization_target_accuracy);
+        memorization_max_regression = j.value("memorization_max_regression", memorization_max_regression);
+        if (!std::isfinite(memorization_target_accuracy) || memorization_target_accuracy < 0.0f ||
+            memorization_target_accuracy > 1.0f)
+            fail("memorization_target_accuracy must be in [0, 1]");
+        if (!std::isfinite(memorization_max_regression) || memorization_max_regression < 0.0f ||
+            memorization_max_regression > 1.0f)
+            fail("memorization_max_regression must be in [0, 1]");
         reset_optimizer_state = j.value("reset_optimizer_state", reset_optimizer_state);
         restart_learning_rate_schedule = j.value("restart_learning_rate_schedule", restart_learning_rate_schedule);
         reset_training_cursor = j.value("reset_training_cursor", reset_training_cursor);
@@ -214,7 +234,7 @@ struct CommandLineParser
          .required_args = 1,
          .action = [&](const std::vector<std::string>& args) { load_training_parameters(args[0]); }},
         {.options = {"--filter"},
-         .description = "Specify a filter to apply (can be used multiple times for multiple filters)",
+         .description = "Include files whose filename or path contains this value (repeatable)",
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
@@ -565,6 +585,64 @@ struct CommandLineParser
              [&](const std::vector<std::string>&) {
                  disable_training_diagnostics = true;
              }},
+        {.options = {"--memorization-target-percent"},
+         .description = "Require training-window top-1 accuracy to reach this percentage",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             char* end = nullptr;
+             const float percent = std::strtof(args[0].c_str(), &end);
+             if (end == args[0].c_str() || *end != '\0' || !std::isfinite(percent) ||
+                 percent <= 0.0f || percent > 100.0f)
+             {
+                 std::println("--memorization-target-percent requires a number in (0, 100], got '{}'", args[0]);
+                 std::exit(1);
+             }
+             memorization_target_accuracy = percent / 100.0f;
+         }},
+        {.options = {"--memorization-max-regression-percent"},
+         .description = "Fail if training-window top-1 accuracy falls this many percentage points from its best",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             char* end = nullptr;
+             const float percent = std::strtof(args[0].c_str(), &end);
+             if (end == args[0].c_str() || *end != '\0' || !std::isfinite(percent) ||
+                 percent < 0.0f || percent > 100.0f)
+             {
+                 std::println("--memorization-max-regression-percent requires a number in [0, 100], got '{}'", args[0]);
+                 std::exit(1);
+             }
+             memorization_max_regression = percent / 100.0f;
+         }},
+        {.options = {"--token-dropout"},
+         .description = "Randomly drop this probability of tokens from training windows only, in [0, 1)",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             char* end = nullptr;
+             errno = 0;
+             const float probability = std::strtof(args[0].c_str(), &end);
+             if (end == args[0].c_str() || *end != '\0' || errno == ERANGE ||
+                 !std::isfinite(probability) || probability < 0.0f || probability >= 1.0f)
+             {
+                 std::println("--token-dropout requires a probability in [0, 1), got '{}'", args[0]);
+                 std::exit(1);
+             }
+             token_dropout_probability = probability;
+         }},
+        {.options = {"--token-typo"},
+         .description = "Randomly replace this probability of ordinary tokens in training windows only, in [0, 1)",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             char* end = nullptr;
+             errno = 0;
+             const float probability = std::strtof(args[0].c_str(), &end);
+             if (end == args[0].c_str() || *end != '\0' || errno == ERANGE ||
+                 !std::isfinite(probability) || probability < 0.0f || probability >= 1.0f)
+             {
+                 std::println("--token-typo requires a probability in [0, 1), got '{}'", args[0]);
+                 std::exit(1);
+             }
+             token_typo_probability = probability;
+         }},
         {.options = {"--reset-optimizer-state"},
          .description = "Resume model weights and training cursor but reset Adam moments and bias-correction step",
          .action =
@@ -854,6 +932,8 @@ int main(int argc, char* argv[])
             parser.embedding_initializer,
             parser.concept_embeddings_filename,
             parser.micro_batch_size,
+            parser.token_dropout_probability,
+            parser.token_typo_probability,
             parser.num_epochs,
             parser.epoch_size,
             parser.max_validation_windows,
@@ -861,6 +941,8 @@ int main(int argc, char* argv[])
             parser.disable_early_stopping,
             parser.disable_example_convergence,
             parser.disable_training_diagnostics,
+            parser.memorization_target_accuracy,
+            parser.memorization_max_regression,
             parser.reset_optimizer_state,
             parser.restart_learning_rate_schedule,
             parser.upgrade_mode,

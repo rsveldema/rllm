@@ -1,0 +1,50 @@
+Java is a statically typed programming language designed for portability, reliability, and maintainable software development.
+Java source code is normally compiled into bytecode that executes on a Java Virtual Machine.
+The Java Virtual Machine allows the same bytecode to run on different operating systems and processor architectures.
+Just-in-time compilation can translate frequently executed bytecode into optimized native machine code.
+Every standalone Java application begins execution in a public static method named main.
+Primitive types represent Boolean values, characters, integers, and floating-point numbers directly.
+Reference types point to objects, arrays, interfaces, records, or other heap-allocated values.
+Variables must have declared or inferred types that determine which values and operations are valid.
+Local variable type inference uses the var keyword while preserving static compile-time typing.
+Classes define object state through fields and object behavior through methods.
+An object is an instance of a class created through a constructor or another factory mechanism.
+Constructors initialize new objects and can enforce invariants required by the class.
+Encapsulation keeps implementation details private while exposing a deliberate public interface.
+The public modifier permits access from any visible context, while private restricts access to the declaring class.
+The protected modifier supports access from subclasses and from code in the same package.
+Inheritance allows one class to extend another class and reuse or specialize its behavior.
+Java classes support single implementation inheritance but may implement multiple interfaces.
+An interface defines a contract that unrelated classes can satisfy with their own implementations.
+Polymorphism allows code using an interface or base type to work with several concrete implementations.
+Method overriding replaces inherited behavior, while method overloading provides several parameter signatures.
+Abstract classes can combine incomplete operations with fields and shared concrete behavior.
+Final classes cannot be extended, and final methods cannot be overridden by subclasses.
+Records provide concise immutable data carriers with generated accessors and value-based operations.
+Enumerations define a fixed set of named instances and may also contain fields and methods.
+Packages organize related types, prevent naming conflicts, and establish a level of access control.
+Modules group packages and explicitly describe dependencies and exported application interfaces.
+Generics allow classes and methods to operate safely over families of reference types.
+Type erasure implements most Java generics without preserving every generic argument at runtime.
+Wildcards express flexible generic relationships using upper or lower type bounds.
+Arrays have fixed lengths, while collection classes provide dynamically sized data structures.
+The List interface represents an ordered collection that may contain duplicate elements.
+The Set interface represents a collection that does not contain duplicate elements.
+The Map interface associates unique keys with values and is separate from the Collection hierarchy.
+The garbage collector reclaims objects that can no longer be reached by a running program.
+Automatic memory management prevents explicit deallocation but does not prevent retaining unnecessary references.
+Checked exceptions must usually be caught or declared, while unchecked exceptions represent runtime failures.
+The try-with-resources statement closes resources automatically when control leaves its block.
+The Optional type can represent the possible absence of a return value without using a bare null reference.
+Lambda expressions provide compact implementations of functional interfaces with a single abstract method.
+The Stream API supports declarative pipelines that transform, filter, aggregate, and collect values.
+Streams are generally lazy and perform their work when a terminal operation requests a result.
+Threads allow tasks to execute concurrently, but shared mutable state requires careful synchronization.
+The synchronized keyword coordinates access through object monitors and establishes memory-visibility guarantees.
+Executors manage task scheduling and thread reuse without requiring direct thread lifecycle management.
+CompletableFuture represents asynchronous computations that can be combined into dependent processing stages.
+Immutable objects simplify reasoning because their observable state cannot change after construction.
+The Java standard library provides collections, networking, file access, concurrency, reflection, and many other facilities.
+Build tools such as Maven and Gradle compile projects, resolve dependencies, run tests, and package applications.
+JUnit supports automated unit tests through assertions, annotations, parameterized cases, and reusable fixtures.
+Java combines portable execution, automatic memory management, and a mature ecosystem for applications of many sizes.

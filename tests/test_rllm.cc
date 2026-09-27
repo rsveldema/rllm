@@ -498,6 +498,56 @@ TEST(CorpusTest, TrainingLinesRetainPythonTabsAndTrailingNewline)
     std::filesystem::remove_all(corpus_dir);
 }
 
+TEST(CorpusTest, LoadedFilesEndWithEndOfSequenceToken)
+{
+    const auto corpus_dir = std::filesystem::temp_directory_path() / "rllm_eos_token_test";
+    std::filesystem::create_directories(corpus_dir);
+    const auto source_path = corpus_dir / "sample.cpp";
+    {
+        std::ofstream source(source_path);
+        source << "int main() {\nreturn 0;\n}\n";
+    }
+
+    std::vector<std::string> filters = {".cpp"};
+    Corpus corpus(filters);
+    corpus.load_files_from_dir(corpus_dir.string());
+    const auto files = corpus.get_file_token_sequences();
+
+    ASSERT_EQ(files.size(), 1u);
+    ASSERT_FALSE(files[0].empty());
+    EXPECT_EQ(files[0].back(), TokenID::END_OF_SEQUENCE);
+    EXPECT_EQ(std::ranges::count(files[0], TokenID::END_OF_SEQUENCE), 1);
+
+    std::filesystem::remove_all(corpus_dir);
+}
+
+TEST(CorpusTest, FilterCanSelectAllFilesInDirectory)
+{
+    const auto corpus_dir = std::filesystem::temp_directory_path() / "rllm_directory_filter_test";
+    const auto chosen_dir = corpus_dir / "chosen";
+    const auto other_dir = corpus_dir / "other";
+    std::filesystem::create_directories(chosen_dir);
+    std::filesystem::create_directories(other_dir);
+    {
+        std::ofstream(chosen_dir / "first.cpp") << "int first;\n";
+        std::ofstream(chosen_dir / "second.py") << "second = 2\n";
+        std::ofstream(other_dir / "third.cpp") << "int third;\n";
+    }
+
+    std::vector<std::string> filters = {chosen_dir.generic_string()};
+    Corpus corpus(filters);
+    corpus.load_files_from_dir(corpus_dir.string());
+
+    const auto files = corpus.get_file_token_sequences();
+    const auto languages = corpus.get_file_languages();
+    ASSERT_EQ(files.size(), 2u);
+    ASSERT_EQ(languages.size(), 2u);
+    EXPECT_NE(std::ranges::find(languages, SourceLanguage::Cpp), languages.end());
+    EXPECT_NE(std::ranges::find(languages, SourceLanguage::Python), languages.end());
+
+    std::filesystem::remove_all(corpus_dir);
+}
+
 TEST(CorpusTest, CppKeywordAndPrefixesUseDedicatedTokens)
 {
     std::vector<std::string> filters;
@@ -568,7 +618,8 @@ TEST(CorpusTest, LanguageMarkersAreAtomicAndNamesAreParsed)
              std::pair{"python", SourceLanguage::Python},
              std::pair{"rust", SourceLanguage::Rust},
              std::pair{"java", SourceLanguage::Java},
-             std::pair{"shell", SourceLanguage::Shell}})
+             std::pair{"shell", SourceLanguage::Shell},
+             std::pair{"text", SourceLanguage::Text}})
     {
         ASSERT_EQ(parse_source_language(name), expected);
         const auto spelling = corpus.get_token_from_id(language_token(expected));
@@ -577,6 +628,40 @@ TEST(CorpusTest, LanguageMarkersAreAtomicAndNamesAreParsed)
         EXPECT_EQ(tokens.get(0u), language_token(expected));
     }
     EXPECT_FALSE(parse_source_language("unknown").has_value());
+}
+
+TEST(CorpusTest, PlainTextRetainsWordsWithoutSourceAbstraction)
+{
+    const std::vector<std::string> filters;
+    Corpus corpus(filters);
+    CommentLexState state;
+    const std::string text = "The careful reader noticed the error.";
+    const auto tokens = corpus.get_token_ids(
+        text, SourceLanguage::Text, state);
+    const auto raw_tokens = corpus.get_token_ids(text);
+
+    EXPECT_EQ(std::ranges::count(tokens.m_cpu, TokenID::GLOBAL), 0);
+    EXPECT_EQ(tokens.m_cpu, raw_tokens.m_cpu);
+}
+
+TEST(CorpusTest, PlainTextExtensionsUseTheTextLanguageMarker)
+{
+    const auto corpus_dir = std::filesystem::temp_directory_path() / "rllm_text_language_test";
+    std::filesystem::create_directories(corpus_dir);
+    std::ofstream(corpus_dir / "sample.txt") << "English prose remains prose.\n";
+    std::ofstream(corpus_dir / "notes.md") << "Markdown words remain words.\n";
+
+    const std::vector<std::string> filters;
+    Corpus corpus(filters);
+    corpus.load_files_from_dir(corpus_dir.string());
+    const auto languages = corpus.get_file_languages();
+
+    ASSERT_EQ(languages.size(), 2u);
+    EXPECT_TRUE(std::ranges::all_of(
+        languages, [](SourceLanguage language) { return language == SourceLanguage::Text; }));
+    EXPECT_EQ(language_token(SourceLanguage::Text), TokenID::LANG_TEXT);
+
+    std::filesystem::remove_all(corpus_dir);
 }
 
 TEST(CorpusTest, CommentMarkersTrackLineBlockAndNestedComments)

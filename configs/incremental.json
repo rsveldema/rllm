@@ -10,13 +10,16 @@
   "incremental_new_block_epochs": 2,
   "incremental_upgrade_output_scale": 0.1,
   "strip_comments": false,
+  "token_drop_probability": 0.0,
+  "token_typo_probability": 0.0,
   "sources": [
     "training_data0:0.05",
     "curriculum/grammar:0.15",
     "curriculum/syntax:0.10",
     "curriculum/systems:0.10",
     "curriculum/algos:0.10",
-    "training_data2:0.50"
+    "curriculum/english:0.10",
+    "training_data2:0.40"
   ],
   "cmake_arguments": [
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",

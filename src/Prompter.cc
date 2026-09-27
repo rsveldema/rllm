@@ -126,7 +126,7 @@ namespace rllm
         };
         for (const auto marker : {
                  "<LANG_CPP>", "<LANG_C>", "<LANG_PYTHON>",
-                 "<LANG_RUST>", "<LANG_JAVA>", "<LANG_SHELL>"})
+                 "<LANG_RUST>", "<LANG_JAVA>", "<LANG_SHELL>", "<LANG_TEXT>"})
             replace_all(marker, "");
         replace_all(
             "<LINE_COMMENT_START>",

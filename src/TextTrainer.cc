@@ -8,6 +8,7 @@
 #include <TokenIDFormatter.hpp>
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -58,6 +59,132 @@ namespace rllm
                 value = (state * 2685821657736338717ULL) & 1ULL ? 1.0f : -1.0f;
             }
             return result;
+        }
+
+        bool can_apply_training_token_noise(TokenID token)
+        {
+            if (token == TokenID::STRING_TABLE_INDEX ||
+                token_string_category(token) != TokenStringCategory::None)
+                return false;
+            const auto iter = tokenizer_map.find(token);
+            return iter != tokenizer_map.end() &&
+                iter->second.str != nullptr &&
+                iter->second.str[0] != '<';
+        }
+
+        bool can_use_as_typo_replacement(TokenID token)
+        {
+            if (!can_apply_training_token_noise(token))
+                return false;
+            const auto iter = tokenizer_map.find(token);
+            return iter != tokenizer_map.end() &&
+                iter->second.str != nullptr &&
+                iter->second.str[0] != '\0';
+        }
+
+        bool is_checkpoint_alias_target(const std::filesystem::path& filename)
+        {
+            std::error_code error;
+            const auto expected = std::filesystem::weakly_canonical(filename, error);
+            if (error)
+                return false;
+
+            for (const auto& entry : std::filesystem::directory_iterator(filename.parent_path(), error))
+            {
+                if (error)
+                    break;
+                if (!entry.is_symlink(error))
+                {
+                    error.clear();
+                    continue;
+                }
+                const auto target = std::filesystem::weakly_canonical(entry.path(), error);
+                if (!error && target == expected)
+                    return true;
+                error.clear();
+            }
+            return false;
+        }
+
+        void retire_timed_checkpoint(const std::filesystem::path& checkpoint)
+        {
+            const std::filesystem::path sidecar = checkpoint.string() + ".training.json";
+            if (is_checkpoint_alias_target(checkpoint) || is_checkpoint_alias_target(sidecar))
+            {
+                LOG_INFO("preserving timed checkpoint '{}' because an alias points to it", checkpoint.string());
+                return;
+            }
+
+            std::error_code error;
+            if (std::filesystem::remove(checkpoint, error))
+            {
+                LOG_INFO("deleted timed checkpoint two intervals back '{}'", checkpoint.string());
+            }
+            else if (error)
+            {
+                LOG_INFO("failed to delete timed checkpoint '{}': {}", checkpoint.string(), error.message());
+            }
+
+            error.clear();
+            if (!std::filesystem::remove(sidecar, error) && error)
+                LOG_INFO("failed to delete timed checkpoint sidecar '{}': {}", sidecar.string(), error.message());
+        }
+
+        void prune_numbered_checkpoints(const std::filesystem::path& directory)
+        {
+            std::vector<std::pair<uint64_t, std::filesystem::path>> checkpoints;
+            std::error_code error;
+            for (const auto& entry : std::filesystem::directory_iterator(directory, error))
+            {
+                if (error)
+                    break;
+                const std::string name = entry.path().filename().string();
+                constexpr std::string_view prefix = "checkpoint-";
+                constexpr std::string_view suffix = ".st";
+                if (!name.starts_with(prefix) || !name.ends_with(suffix))
+                    continue;
+                const std::string_view timestamp{name.data() + prefix.size(), name.size() - prefix.size() - suffix.size()};
+                uint64_t value = 0;
+                const auto [end, parse_error] = std::from_chars(
+                    timestamp.data(), timestamp.data() + timestamp.size(), value);
+                if (parse_error == std::errc{} && end == timestamp.data() + timestamp.size())
+                    checkpoints.emplace_back(value, entry.path());
+            }
+
+            std::ranges::sort(checkpoints, {}, &std::pair<uint64_t, std::filesystem::path>::first);
+            if (checkpoints.size() <= 2)
+                return;
+            for (size_t index = 0; index + 2 < checkpoints.size(); ++index)
+                retire_timed_checkpoint(checkpoints[index].second);
+        }
+
+        const std::vector<TokenID>& typo_replacement_tokens()
+        {
+            static const std::vector<TokenID> tokens = [] {
+                std::vector<TokenID> result;
+                for (const auto token : enum_iterator1D<TokenID>())
+                {
+                    if (can_use_as_typo_replacement(token))
+                        result.push_back(token);
+                }
+                return result;
+            }();
+            return tokens;
+        }
+
+        TokenID random_typo_replacement(TokenID original, std::mt19937& rng)
+        {
+            const auto& tokens = typo_replacement_tokens();
+            if (tokens.empty())
+                return original;
+            std::uniform_int_distribution<size_t> replacement{0, tokens.size() - 1};
+            for (int attempt = 0; attempt < 32; ++attempt)
+            {
+                const TokenID candidate = tokens[replacement(rng)];
+                if (candidate != original)
+                    return candidate;
+            }
+            return original;
         }
     }
 
@@ -664,14 +791,14 @@ namespace rllm
 
     void TextTrainer::log_validation_progress(
         const char* phase, size_t epoch, size_t num_epochs, double epoch_progress,
-        size_t sample_count, const EvaluationMetrics& metrics)
+        size_t sample_count, const EvaluationMetrics& metrics, const char* item_type)
     {
         const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         nlohmann::json entry{
             {"timestamp_ms", timestamp_ms},
             {"method", training_method_to_string(m_training_method)},
-            {"item_type", "validation"},
+            {"item_type", item_type},
             {"phase", phase},
             {"epoch", epoch},
             {"epoch_percent", static_cast<double>(epoch) / static_cast<double>(num_epochs) * 100.0},
@@ -687,6 +814,8 @@ namespace rllm
             {"all_mtp_top1_accuracy", metrics.mtp_top1_accuracy},
             {"all_mtp_top1_accuracy_percent", metrics.mtp_top1_accuracy * 100.0}
         };
+        if (std::string_view{item_type} == "memorization")
+            entry["memorization_loss"] = metrics.average_loss;
         if (!m_training_progress_entries)
             initialize_training_progress_log();
         m_training_progress_entries->push_back(std::move(entry));
@@ -1504,6 +1633,24 @@ namespace rllm
         };
     }
 
+    TextTrainer::EvaluationMetrics TextTrainer::evaluate_all_window_positions(
+        const std::vector<WindowExample>& evaluation_windows,
+        bool report_worst_predictions)
+    {
+        std::vector<WindowExample> prediction_windows;
+        for (const auto& window : evaluation_windows)
+        {
+            const int context = static_cast<int>(window.context_length);
+            for (int local = 0; local < context; local += static_cast<int>(m_window_stride))
+            {
+                auto prediction_window = window;
+                prediction_window.context_length = static_cast<PositionIndex>(local + 1);
+                prediction_windows.push_back(std::move(prediction_window));
+            }
+        }
+        return evaluate(prediction_windows, report_worst_predictions);
+    }
+
 #if 0 // Retired prefix/line training implementations.
     void TextTrainer::train_with_increasingly_longer_sequences(const CpuInputLine& line_of_file, bool verbose, size_t max_iterations)
     {
@@ -1729,6 +1876,63 @@ namespace rllm
 
 #endif
 
+    TextTrainer::BatchTrainingItem TextTrainer::make_window_training_item(
+        const WindowExample& window,
+        size_t epoch,
+        size_t window_index) const
+    {
+        const auto seed = [](uint32_t salt, size_t epoch, size_t window_index) {
+            return static_cast<std::mt19937::result_type>(
+                salt ^
+                (static_cast<uint32_t>(epoch) * 0x85ebca6bu) ^
+                (static_cast<uint32_t>(window_index) * 0xc2b2ae35u));
+        };
+
+        CpuInputLine line = window.line;
+        std::mt19937 string_table_rng{seed(0x9e3779b9u, epoch, window_index)};
+        line.permute_string_table(string_table_rng);
+        auto first_string_table_index = window.first_string_table_index;
+        auto context_length = window.context_length;
+
+        if ((m_token_dropout_probability > 0.0f || m_token_typo_probability > 0.0f) &&
+            static_cast<size_t>(line.size()) > 2)
+        {
+            std::mt19937 noise_rng{seed(0xd1b54a35u, epoch, window_index)};
+            std::bernoulli_distribution drop{m_token_dropout_probability};
+            std::bernoulli_distribution typo{m_token_typo_probability};
+            CpuInputLine filtered;
+            filtered.push_back_from(line, PositionIndex::START);
+            const size_t line_size = static_cast<size_t>(line.size());
+            for (size_t position = 1; position < line_size; ++position)
+            {
+                const TokenID token = line.get(position);
+                const bool keep_last_target = position + 1 == line_size;
+                const bool can_apply_noise = !keep_last_target && can_apply_training_token_noise(token);
+                if (can_apply_noise && drop(noise_rng))
+                    continue;
+                if (can_apply_noise && typo(noise_rng))
+                    filtered.push_back(random_typo_replacement(token, noise_rng));
+                else
+                    filtered.push_back_from(line, static_cast<PositionIndex>(position));
+            }
+            if (static_cast<size_t>(filtered.size()) >= 2)
+            {
+                line = std::move(filtered);
+                first_string_table_index = line.first_string_table_index_positions();
+                context_length = static_cast<PositionIndex>(
+                    std::min(
+                        static_cast<size_t>(context_length),
+                        static_cast<size_t>(line.size()) - 1));
+            }
+        }
+
+        return {
+            std::move(line),
+            std::move(first_string_table_index),
+            false,
+            context_length};
+    }
+
     void TextTrainer::train_with_window(int window_size, bool verbose, size_t num_epochs, const std::optional<std::chrono::seconds>& checkpointing_interval)
     {
         assert(window_size >= 4);
@@ -1889,6 +2093,9 @@ namespace rllm
         auto next_validation_at = std::chrono::steady_clock::now() + m_validation_interval;
         float best_validation_loss = std::numeric_limits<float>::infinity();
         size_t epochs_without_improvement = 0;
+        double best_memorization_accuracy = 0.0;
+        bool memorization_target_reached = false;
+        bool memorization_failed = false;
         bool has_best_checkpoint = false;
         const auto best_checkpoint_filename = model_artifact_path(
             m_training_method == TrainingMethod::REVERSE_WINDOW ?
@@ -1919,7 +2126,7 @@ namespace rllm
         }
         if (!validation_windows.empty())
         {
-            const auto baseline = evaluate(validation_windows, true);
+            const auto baseline = evaluate_all_window_positions(validation_windows, true);
             const double baseline_epoch_progress =
                 m_has_loaded_training_state && m_checkpoint_window_count == training_windows.size() &&
                 m_checkpoint_window_count != 0
@@ -1928,7 +2135,7 @@ namespace rllm
                 : 0.0;
             log_validation_progress(
                 "baseline", m_checkpoint_epoch, num_epochs, baseline_epoch_progress,
-                validation_windows.size(), baseline);
+                baseline.per_head_count[0], baseline);
             best_validation_loss = baseline.average_loss;
             const auto normalized_best_checkpoint =
                 std::filesystem::absolute(best_checkpoint_filename).lexically_normal();
@@ -1944,17 +2151,17 @@ namespace rllm
             }
             else
             {
-                save(best_checkpoint_filename.string());
+                link_checkpoint_alias(checkpoint(), best_checkpoint_filename);
             }
             has_best_checkpoint = true;
             LOG_INFO(
-                "window validation baseline before training: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows",
+                "window validation baseline before training: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out predictions",
                 baseline.average_loss,
                 baseline.perplexity,
                 baseline.top1_accuracy * 100.0,
                 baseline.average_correct_token_probability * 100.0,
                 baseline.mtp_average_loss,
-                validation_windows.size());
+                baseline.per_head_count[0]);
         }
         // Optimizer update kernels always bind this buffer, even on updates for
         // which diagnostics collection is disabled. Allocate it and both pinned
@@ -2007,14 +2214,9 @@ namespace rllm
                 batch.reserve(count);
                 for (size_t offset = 0; offset < count; ++offset)
                 {
-                    const auto& window = training_windows[indices[start + offset]];
-                    CpuInputLine line = window.line;
-                    line.permute_string_table(rng);
-                    batch.push_back({
-                        std::move(line),
-                        window.first_string_table_index,
-                        false,
-                        window.context_length});
+                    const size_t window_index = indices[start + offset];
+                    batch.push_back(make_window_training_item(
+                        training_windows[window_index], epoch, window_index));
                 }
                 total_windows_trained += batch.size();
 
@@ -2022,7 +2224,8 @@ namespace rllm
                 {
                     LOG_INFO("creating timed checkpoint at epoch {}, window {}, total windows trained {}", epoch, start, total_windows_trained);
                     const auto checkpoint_started_at = std::chrono::steady_clock::now();
-                    checkpoint();
+                    const auto timed_checkpoint = checkpoint();
+                    prune_numbered_checkpoints(timed_checkpoint.parent_path());
                     const double checkpoint_ms = elapsed_ms(checkpoint_started_at);
                     LOG_INFO(
                         "timed checkpoint at epoch {}, window {} completed in {:.3f} seconds",
@@ -2077,13 +2280,13 @@ namespace rllm
                 if (!validation_windows.empty() && std::chrono::steady_clock::now() >= next_validation_at)
                 {
                     const auto validation_started = std::chrono::steady_clock::now();
-                    const auto validation = evaluate(validation_windows);
+                    const auto validation = evaluate_all_window_positions(validation_windows);
                     log_validation_progress(
                         "timed", epoch, num_epochs,
                         static_cast<double>(start + count) / static_cast<double>(num_windows),
-                        validation_windows.size(), validation);
+                        validation.per_head_count[0], validation);
                     LOG_INFO(
-                        "window validation at epoch {}, {:.2f}%: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows (evaluation {:.2f} s)",
+                        "window validation at epoch {}, {:.2f}%: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out predictions (evaluation {:.2f} s)",
                         epoch,
                         static_cast<float>(start + count) / static_cast<float>(num_windows) * 100.0f,
                         validation.average_loss,
@@ -2091,7 +2294,7 @@ namespace rllm
                         validation.top1_accuracy * 100.0,
                         validation.average_correct_token_probability * 100.0,
                         validation.mtp_average_loss,
-                        validation_windows.size(),
+                        validation.per_head_count[0],
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
                     next_validation_at = std::chrono::steady_clock::now() + m_validation_interval;
                 }
@@ -2117,27 +2320,29 @@ namespace rllm
             if (!validation_windows.empty())
             {
                 const auto validation_started = std::chrono::steady_clock::now();
-                const auto validation = evaluate(validation_windows, true);
+                const auto validation = evaluate_all_window_positions(validation_windows, true);
                 log_validation_progress(
                     "epoch_end", epoch, num_epochs, 1.0,
-                    validation_windows.size(), validation);
+                    validation.per_head_count[0], validation);
                 LOG_INFO(
-                    "window validation at epoch {} end: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out windows (evaluation {:.2f} s)",
+                    "window validation at epoch {} end: head-0 loss {:.6f}, head-0 perplexity {:.2f}, head-0 top-1 accuracy {:.3f}%, head-0 average correct-token probability {:.3f}%, all-MTP loss {:.6f} across {} held-out predictions (evaluation {:.2f} s)",
                     epoch,
                     validation.average_loss,
                     validation.perplexity,
                     validation.top1_accuracy * 100.0,
                     validation.average_correct_token_probability * 100.0,
                     validation.mtp_average_loss,
-                    validation_windows.size(),
+                    validation.per_head_count[0],
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
                 next_validation_at = std::chrono::steady_clock::now() + m_validation_interval;
+                std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+                const auto epoch_checkpoint_filename = checkpoint();
 
                 if ((validation.average_loss + VALIDATION_IMPROVEMENT_EPSILON) < best_validation_loss)
                 {
                     best_validation_loss = validation.average_loss;
                     epochs_without_improvement = 0;
-                    save(best_checkpoint_filename.string());
+                    link_checkpoint_alias(epoch_checkpoint_filename, best_checkpoint_filename);
                     has_best_checkpoint = true;
                     LOG_INFO(
                         "Saved new best window checkpoint '{}' with head-0 validation loss {:.6f}",
@@ -2158,9 +2363,72 @@ namespace rllm
                     }
                 }
             }
+            else
+            {
+                std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
+                checkpoint();
+            }
 
-            std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
-            checkpoint();
+            if (m_memorization_target_accuracy > 0.0f)
+            {
+                const auto memorization_started = std::chrono::steady_clock::now();
+                const auto memorization = evaluate_all_window_positions(training_windows);
+                log_validation_progress(
+                    "epoch_end", epoch, num_epochs, 1.0,
+                    memorization.per_head_count[0], memorization, "memorization");
+                LOG_INFO(
+                    "memorization at epoch {} end: loss {:.6f}, perplexity {:.2f}, top-1 accuracy {:.3f}%, average correct-token probability {:.3f}% across {} head-0 training predictions (all-MTP top-1 {:.3f}% across {} predictions, evaluation {:.2f} s)",
+                    epoch,
+                    memorization.average_loss,
+                    memorization.perplexity,
+                    memorization.top1_accuracy * 100.0,
+                    memorization.average_correct_token_probability * 100.0,
+                    memorization.per_head_count[0],
+                    memorization.mtp_top1_accuracy * 100.0,
+                    std::accumulate(
+                        memorization.per_head_count.begin(), memorization.per_head_count.end(), size_t{0}),
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - memorization_started).count());
+
+                const bool finite = std::isfinite(memorization.average_loss) &&
+                    std::isfinite(memorization.perplexity) &&
+                    std::isfinite(memorization.average_correct_token_probability) &&
+                    std::isfinite(memorization.top1_accuracy) &&
+                    std::isfinite(memorization.mtp_top1_accuracy);
+                const double proof_accuracy = memorization.mtp_top1_accuracy;
+                if (!finite)
+                {
+                    LOG_INFO("memorization proof failed: non-finite training-set metric");
+                    memorization_failed = true;
+                    should_stop = true;
+                }
+                else if (best_memorization_accuracy - proof_accuracy >
+                    static_cast<double>(m_memorization_max_regression))
+                {
+                    LOG_INFO(
+                        "memorization proof failed: all-MTP top-1 accuracy regressed from {:.3f}% to {:.3f}% (limit {:.3f} percentage points)",
+                        best_memorization_accuracy * 100.0,
+                        proof_accuracy * 100.0,
+                        m_memorization_max_regression * 100.0f);
+                    memorization_failed = true;
+                    should_stop = true;
+                }
+                else
+                {
+                    best_memorization_accuracy = std::max(
+                        best_memorization_accuracy, proof_accuracy);
+                    if (proof_accuracy >= m_memorization_target_accuracy)
+                    {
+                        memorization_target_reached = true;
+                        should_stop = true;
+                        save(model_artifact_path("checkpoint-memorized.st").string());
+                        LOG_INFO(
+                            "memorization proof passed: {:.3f}% all-MTP top-1 accuracy reached target {:.3f}%",
+                            proof_accuracy * 100.0,
+                            m_memorization_target_accuracy * 100.0f);
+                    }
+                }
+            }
+
             print_parallel_statistics_for_epoch(epoch);
             if (should_stop)
                 break;
@@ -2169,7 +2437,7 @@ namespace rllm
         // Loading recreates transformer blocks and their workspaces, so GPU buffer
         // allocation must be enabled again before restoring the best checkpoint.
         device_buffer_allocation_freeze.reset();
-        if (has_best_checkpoint)
+        if (has_best_checkpoint && m_memorization_target_accuracy <= 0.0f)
         {
             if (load(best_checkpoint_filename.string()))
             {
@@ -2181,6 +2449,15 @@ namespace rllm
             {
                 LOG_INFO("failed to restore best window checkpoint '{}'", best_checkpoint_filename.string());
             }
+        }
+        if (m_memorization_target_accuracy > 0.0f &&
+            (!memorization_target_reached || memorization_failed))
+        {
+            LOG_INFO(
+                "memorization proof failed: best top-1 accuracy {:.3f}% did not satisfy target {:.3f}%",
+                best_memorization_accuracy * 100.0,
+                m_memorization_target_accuracy * 100.0f);
+            std::exit(2);
         }
     }
 

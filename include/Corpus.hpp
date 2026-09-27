@@ -24,6 +24,7 @@ namespace rllm
         Rust,
         Java,
         Shell,
+        Text,
         Unknown
     };
 

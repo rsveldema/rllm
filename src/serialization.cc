@@ -358,12 +358,52 @@ namespace rllm
         flush_training_progress_log();
     }
 
-    void TextTrainer::checkpoint() const
+    std::filesystem::path TextTrainer::checkpoint() const
     {
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         const auto filename = model_artifact_path(std::format("checkpoint-{}.st", now_ms));
         std::filesystem::create_directories(filename.parent_path());
         save(filename.string());
+        return filename;
+    }
+
+    void TextTrainer::link_checkpoint_alias(
+        const std::filesystem::path& checkpoint_filename,
+        const std::filesystem::path& alias_filename) const
+    {
+        const auto replace_with_relative_symlink = [](
+            const std::filesystem::path& target,
+            const std::filesystem::path& alias) {
+            const auto temporary = alias.parent_path() / ("." + alias.filename().string() + ".tmp");
+            std::error_code error;
+            std::filesystem::remove(temporary, error);
+            error.clear();
+            std::filesystem::create_symlink(target.filename(), temporary, error);
+            if (error)
+            {
+                std::println(
+                    "Failed to create checkpoint symlink '{}' -> '{}': {}",
+                    temporary.string(), target.filename().string(), error.message());
+                std::exit(1);
+            }
+            std::filesystem::rename(temporary, alias, error);
+            if (error)
+            {
+                std::filesystem::remove(temporary);
+                std::println(
+                    "Failed to publish checkpoint symlink '{}' as '{}': {}",
+                    temporary.string(), alias.string(), error.message());
+                std::exit(1);
+            }
+        };
+
+        replace_with_relative_symlink(checkpoint_filename, alias_filename);
+        const std::filesystem::path checkpoint_sidecar = checkpoint_filename.string() + ".training.json";
+        const std::filesystem::path alias_sidecar = alias_filename.string() + ".training.json";
+        if (std::filesystem::is_regular_file(checkpoint_sidecar))
+            replace_with_relative_symlink(checkpoint_sidecar, alias_sidecar);
+        else
+            std::filesystem::remove(alias_sidecar);
     }
 
 
@@ -767,25 +807,32 @@ namespace rllm
                 return header.count(key) && header.at(key, &value);
             };
             int schedule = 0;
+            float checkpoint_learning_rate = 0.0f;
+            float checkpoint_layer_learning_rate_multiplier = 0.0f;
+            float checkpoint_simulated_annealing_decay_factor = 0.0f;
+            float checkpoint_simulated_annealing_initial_multiplier = 0.0f;
+            size_t checkpoint_simulated_annealing_decay_epochs = 0;
+            float checkpoint_simulated_annealing_min_multiplier = 0.0f;
             std::string warmup_percent_text;
+            float checkpoint_warmup_percent = 0.0f;
             if (header.count("training.warmup_percent") &&
                 (!header.at("training.warmup_percent", &warmup_percent_text) ||
-                 !parse_metadata_number(warmup_percent_text, m_warmup_percent) ||
-                 !std::isfinite(m_warmup_percent) ||
-                 m_warmup_percent <= 0.0f || m_warmup_percent > 100.0f))
+                 !parse_metadata_number(warmup_percent_text, checkpoint_warmup_percent) ||
+                 !std::isfinite(checkpoint_warmup_percent) ||
+                 checkpoint_warmup_percent <= 0.0f || checkpoint_warmup_percent > 100.0f))
             {
                 std::println("Invalid warmup percentage in {}", filename);
                 return false;
             }
             if (!parse_value("training.optimizer_step", m_optimizer_step) ||
-                !parse_value("training.learning_rate", m_learning_rate) ||
-                !parse_value("training.layer_learning_rate_multiplier", m_layer_learning_rate_multiplier) ||
+                !parse_value("training.learning_rate", checkpoint_learning_rate) ||
+                !parse_value("training.layer_learning_rate_multiplier", checkpoint_layer_learning_rate_multiplier) ||
                 !parse_value("training.learning_rate_schedule", schedule) ||
                 !parse_value("training.learning_rate_schedule_steps", m_learning_rate_schedule_steps) ||
-                !parse_value("training.simulated_annealing_decay_factor", m_simulated_annealing_decay_factor) ||
-                !parse_value("training.simulated_annealing_initial_multiplier", m_simulated_annealing_initial_multiplier) ||
-                !parse_value("training.simulated_annealing_decay_epochs", m_simulated_annealing_decay_epochs) ||
-                !parse_value("training.simulated_annealing_min_multiplier", m_simulated_annealing_min_multiplier) ||
+                !parse_value("training.simulated_annealing_decay_factor", checkpoint_simulated_annealing_decay_factor) ||
+                !parse_value("training.simulated_annealing_initial_multiplier", checkpoint_simulated_annealing_initial_multiplier) ||
+                !parse_value("training.simulated_annealing_decay_epochs", checkpoint_simulated_annealing_decay_epochs) ||
+                !parse_value("training.simulated_annealing_min_multiplier", checkpoint_simulated_annealing_min_multiplier) ||
                 !parse_value("training.learning_rate_step", m_loaded_learning_rate_step) ||
                 !parse_value("training.current_learning_rate", m_loaded_current_learning_rate) ||
                 !parse_value("training.epochs_at_current_rate", m_loaded_epochs_at_current_rate) ||
@@ -798,7 +845,6 @@ namespace rllm
                 std::println("Invalid or incomplete training state in {}", filename);
                 return false;
             }
-            m_learning_rate_schedule = static_cast<LearningRateSchedule>(schedule);
             std::string window_count_text;
             if (header.count("training.window_count") && header.at("training.window_count", &window_count_text) &&
                 !parse_metadata_number(window_count_text, m_checkpoint_window_count))

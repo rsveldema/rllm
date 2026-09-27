@@ -21,8 +21,9 @@ deliberately excluded so concrete identifiers and literal vocabulary cannot
 become learned tokens.
 
 `<MCP>`, `</MCP>`, `<LOOP>`, `<LOCAL>`, `<PARAM>`, `<GLOBAL>`, `<FIELD>`,
-`<STRING>`, and `<STI>` are reserved atomic tokens. Identifiers following `.`, `->`, or
-C/C++ `::` use `<FIELD>`; the base expression retains its normal scoped
+`<STRING>`, `<STI>`, and `<END_OF_SEQUENCE>` are reserved atomic tokens. The
+corpus loader appends `<END_OF_SEQUENCE>` once at the end of every loaded file.
+Identifiers following `.`, `->`, or C/C++ `::` use `<FIELD>`; the base expression retains its normal scoped
 identifier category. Rust `::` paths keep global identifiers because they
 describe module paths rather than C++ member or namespace access.
 The training postprocessor uses them to remove concrete program vocabulary and

@@ -1,0 +1,59 @@
+A computer follows instructions that are expressed in a precise form.
+A program is a sequence of those instructions and the data they use.
+An algorithm describes a method for solving a class of problems.
+An implementation expresses an algorithm in a programming language.
+
+A variable associates a name with a value.
+The value may change while a program runs.
+A constant represents a value that should not change.
+A type describes which values and operations are valid.
+
+A function accepts zero or more inputs and may produce an output.
+Its parameters describe the expected inputs.
+The caller supplies arguments for those parameters.
+A return value carries a result back to the caller.
+
+A condition is an expression that can be true or false.
+An if statement selects an action according to a condition.
+A loop repeats an action while a condition holds or for each item in a collection.
+Good loop design makes progress toward a clear stopping condition.
+
+An array stores an ordered sequence of elements.
+An index identifies a position in that sequence.
+The first valid index is often zero, but this depends on the language.
+Access outside the valid range is an error.
+
+A stack removes the most recently added item first.
+A queue removes the earliest added item first.
+A set stores distinct items without requiring a particular order.
+A map associates keys with values.
+
+Testing compares observed behavior with expected behavior.
+A unit test examines a small component in isolation.
+An integration test checks whether components work together.
+A regression test preserves behavior that previously failed.
+
+An error message should state what failed and provide useful context.
+Useful context may include an operation, a location, and the unexpected value.
+An error should be handled where the program has enough information to respond.
+Silently ignoring an error usually makes diagnosis harder.
+
+Concurrency allows multiple tasks to make progress during the same period.
+Parallelism allows multiple tasks to execute at the same instant.
+Shared mutable state requires coordination.
+A race condition occurs when results depend on uncontrolled timing.
+
+Memory has a finite capacity and a cost to access.
+A cache keeps frequently used data near the place where it is needed.
+Local access patterns often use a cache more effectively than scattered patterns.
+Measurements are necessary because intuition about performance can be wrong.
+
+A model learns statistical patterns from examples.
+Training adjusts parameters to reduce an objective function.
+Validation estimates how well the model performs on examples not used for adjustment.
+Low training error with high validation error can indicate overfitting.
+
+Clear technical writing defines terms before relying on them.
+It separates observations from assumptions and conclusions.
+It gives enough detail for another person to repeat the procedure.
+It also states important limitations and unresolved questions.

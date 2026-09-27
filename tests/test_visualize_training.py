@@ -63,3 +63,26 @@ def test_gradient_plot_is_visible_with_diagnostic_records(tmp_path):
 
     assert axes["gradient"].get_visible()
     plt.close(fig)
+
+
+def test_memorization_metrics_are_plotted_separately(tmp_path):
+    fig, axes = plt.subplot_mosaic([
+        ["loss", "perplexity"],
+        ["mtp", "probability"],
+        ["top1_accuracy", "gradient"],
+    ])
+    entries = [{
+        "item_type": "memorization",
+        "epoch": 2,
+        "epoch_progress": 1.0,
+        "memorization_loss": 0.2,
+        "perplexity": 1.22,
+        "correct_token_probability_percent": 92.0,
+        "top1_accuracy_percent": 100.0,
+    }]
+
+    visualize_training.render_metrics(fig, axes, [(tmp_path / "train.json", entries)])
+
+    assert any("memorization" in line.get_label() for line in axes["loss"].lines)
+    assert any("memorization" in line.get_label() for line in axes["top1_accuracy"].lines)
+    plt.close(fig)

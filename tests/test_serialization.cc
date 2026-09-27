@@ -5,6 +5,7 @@
 #include <Corpus.hpp>
 #include <Statistics.hpp>
 #include <TextTrainer.hpp>
+#include <safetensors.hh>
 
 #include <filesystem>
 #include <fstream>
@@ -201,6 +202,33 @@ TEST(SerializationTest, TextTrainerShortSafetensorsExtensionRoundTrip)
     std::filesystem::remove(sf_file);
 }
 
+TEST(SerializationTest, CheckpointAliasUsesRelativeModelAndSidecarSymlinks)
+{
+    rllm::Corpus corpus({});
+    rllm::Statistics stats;
+    rllm::TextTrainer network(0, corpus, stats);
+    const auto directory = std::filesystem::temp_directory_path() / "rllm-checkpoint-alias-test";
+    std::filesystem::create_directories(directory);
+    const auto checkpoint = directory / "checkpoint-123.st";
+    const auto sidecar = std::filesystem::path(checkpoint.string() + ".training.json");
+    const auto alias = directory / "checkpoint-best-window.st";
+    const auto alias_sidecar = std::filesystem::path(alias.string() + ".training.json");
+    {
+        std::ofstream(checkpoint) << "model";
+        std::ofstream(sidecar) << "parameters";
+        std::ofstream(alias) << "old model";
+        std::ofstream(alias_sidecar) << "old parameters";
+    }
+
+    network.link_checkpoint_alias(checkpoint, alias);
+
+    EXPECT_TRUE(std::filesystem::is_symlink(alias));
+    EXPECT_EQ(std::filesystem::read_symlink(alias), checkpoint.filename());
+    EXPECT_TRUE(std::filesystem::is_symlink(alias_sidecar));
+    EXPECT_EQ(std::filesystem::read_symlink(alias_sidecar), sidecar.filename());
+    std::filesystem::remove_all(directory);
+}
+
 TEST(SerializationTest, TextTrainerJsonLoadCanExtendTransformerBlocks)
 {
     rllm::Corpus corpus({});
@@ -231,6 +259,61 @@ TEST(SerializationTest, TextTrainerSafetensorsLoadCanExtendTransformerBlocks)
     rllm::TextTrainer loaded(3, corpus, stats);
     EXPECT_TRUE(loaded.load(sf_file));
     EXPECT_EQ(loaded.get_transformer_block_count(), 3u);
+
+    std::filesystem::remove(sf_file);
+}
+
+TEST(SerializationTest, SafetensorsTrainingStateDoesNotOverrideActiveLearningRateConfiguration)
+{
+    rllm::Corpus corpus({});
+    rllm::Statistics stats;
+    rllm::TextTrainer source(0, corpus, stats);
+    const std::string sf_file = (std::filesystem::temp_directory_path() / "checkpoint-config-precedence.st").string();
+    source.save(sf_file);
+
+    safetensors::safetensors_t checkpoint;
+    std::string warning;
+    std::string error;
+    ASSERT_TRUE(safetensors::load_from_file(sf_file, &checkpoint, &warning, &error)) << error;
+    checkpoint.metadata.insert("training_state_version", "1");
+    checkpoint.metadata.insert("training.optimizer_step", "7");
+    checkpoint.metadata.insert("training.learning_rate", "0.01");
+    checkpoint.metadata.insert("training.layer_learning_rate_multiplier", "1.1");
+    checkpoint.metadata.insert("training.warmup_percent", "20");
+    checkpoint.metadata.insert("training.learning_rate_schedule", "2");
+    checkpoint.metadata.insert("training.learning_rate_schedule_steps", "100");
+    checkpoint.metadata.insert("training.simulated_annealing_decay_factor", "0.7");
+    checkpoint.metadata.insert("training.simulated_annealing_initial_multiplier", "8");
+    checkpoint.metadata.insert("training.simulated_annealing_decay_epochs", "3");
+    checkpoint.metadata.insert("training.simulated_annealing_min_multiplier", "0.03");
+    checkpoint.metadata.insert("training.learning_rate_step", "7");
+    checkpoint.metadata.insert("training.current_learning_rate", "0.08");
+    checkpoint.metadata.insert("training.epochs_at_current_rate", "1");
+    checkpoint.metadata.insert("training.epoch", "2");
+    checkpoint.metadata.insert("training.window", "4");
+    checkpoint.metadata.insert("training.window_count", "8");
+    checkpoint.metadata.insert("training.rng_state", "");
+    ASSERT_TRUE(safetensors::save_to_file(checkpoint, sf_file, &warning, &error)) << error;
+
+    rllm::TextTrainer loaded(0, corpus, stats);
+    loaded.set_learning_rate(0.02f);
+    loaded.set_layer_learning_rate_multiplier(1.2f);
+    loaded.set_warmup_percent(5.0f);
+    loaded.set_learning_rate_schedule(rllm::LearningRateSchedule::Lowering);
+    loaded.set_simulated_annealing_decay_factor(0.6f);
+    loaded.set_simulated_annealing_initial_multiplier(4.0f);
+    loaded.set_simulated_annealing_decay_epochs(2);
+    loaded.set_simulated_annealing_min_multiplier(0.05f);
+
+    ASSERT_TRUE(loaded.load(sf_file));
+    EXPECT_FLOAT_EQ(loaded.get_learning_rate(), 0.02f);
+    EXPECT_FLOAT_EQ(loaded.get_layer_learning_rate_multiplier(), 1.2f);
+    EXPECT_FLOAT_EQ(loaded.get_warmup_percent(), 5.0f);
+    EXPECT_EQ(loaded.get_learning_rate_schedule(), rllm::LearningRateSchedule::Lowering);
+    EXPECT_FLOAT_EQ(loaded.get_simulated_annealing_decay_factor(), 0.6f);
+    EXPECT_FLOAT_EQ(loaded.get_simulated_annealing_initial_multiplier(), 4.0f);
+    EXPECT_EQ(loaded.get_simulated_annealing_decay_epochs(), 2u);
+    EXPECT_FLOAT_EQ(loaded.get_simulated_annealing_min_multiplier(), 0.05f);
 
     std::filesystem::remove(sf_file);
 }

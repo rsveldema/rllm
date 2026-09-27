@@ -162,8 +162,9 @@ namespace rllm
     {
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TempStorage>(static_cast<TempStorage>(1)), (values))
+        const float maximum_norm = 30.0f;
         const float norm = sqrt(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM]);
-        values[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE] = ((norm > 1.0f) ? (1.0f / norm) : 1.0f);
+        values[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE] = ((norm > maximum_norm) ? (maximum_norm / norm) : 1.0f);
         ENDFOR
     }
 

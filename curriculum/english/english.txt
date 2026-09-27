@@ -1,0 +1,11 @@
+This is just an example text for training.
+We do this because even normal c++/pascal/etc. code has some english text in it.
+We can extend it to german/dutch/etc. later.
+Some acronyms are ok.
+Exclamation marks should end a sentence!
+Just like a question?
+Should we keep this or delete this code?
+
+some errors are possible, for example, a missing capital letter at the start of a sentence.
+It can also happen that a missing period
+occurs in a sentence.

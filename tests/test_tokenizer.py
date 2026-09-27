@@ -98,10 +98,13 @@ def test_hash_prefixed_identifier_is_not_learned_as_a_token():
 def test_invalid_token_is_reserved_even_when_absent_from_training_text():
     tokenizer_map = ctm.create_tokenizer_map("abc abc")
     assert "INVALID" in tokenizer_map
+    assert "<END_OF_SEQUENCE>" in tokenizer_map
+    assert "<LANG_TEXT>" in tokenizer_map
 
 
 @pytest.mark.parametrize("token", [
     "<MCP>", "</MCP>", "<LOOP>", "<LOCAL>", "<PARAM>", "<GLOBAL>", "<FIELD>", "<STRING>", "<STI>",
+    "<END_OF_SEQUENCE>",
 ])
 def test_source_abstraction_tokens_are_reserved(token):
     tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")

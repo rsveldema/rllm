@@ -169,8 +169,9 @@ def render_metrics(
 
     for input_path, entries in datasets:
         label = input_path.parent.name
-        training = [entry for entry in entries if entry.get("item_type") != "validation"]
+        training = [entry for entry in entries if entry.get("item_type") == "window"]
         validation = [entry for entry in entries if entry.get("item_type") == "validation"]
+        memorization = [entry for entry in entries if entry.get("item_type") == "memorization"]
         stages = [entry for entry in entries if entry.get("item_type") == "incremental_stage"]
         if stages and not incremental_stages:
             incremental_stages = sorted(
@@ -205,11 +206,22 @@ def render_metrics(
             axes["loss"].plot(
                 val_x, val_loss, "o-", label=f"{label} validation", linewidth=2)
             has_loss = True
+        mem_x, mem_loss = series(memorization, "memorization_loss", True)
+        if mem_loss:
+            axes["loss"].plot(
+                mem_x, mem_loss, "s--", label=f"{label} memorization", linewidth=1.5)
+            has_loss = True
 
         for axis_name, key, _title in specifications:
             xs, ys = series(validation, key, True)
             if ys:
                 axes[axis_name].plot(xs, ys, marker="o", linewidth=2, label=label)
+                has_metric[axis_name] = True
+            mem_x, mem_y = series(memorization, key, True)
+            if mem_y:
+                axes[axis_name].plot(
+                    mem_x, mem_y, marker="s", linestyle="--", linewidth=1.5,
+                    label=f"{label} memorization")
                 has_metric[axis_name] = True
 
         for group, (xs, ys) in optimizer_gradient_series(training).items():
