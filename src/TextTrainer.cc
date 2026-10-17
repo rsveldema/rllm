@@ -34,6 +34,25 @@
 
 namespace rllm
 {
+    std::vector<size_t> make_transformer_execution_order(
+        size_t block_count, size_t first_block, size_t last_block, size_t loop_count)
+    {
+        if (block_count == 0)
+            return {};
+        assert(loop_count > 0);
+        assert(first_block <= last_block && last_block < block_count);
+        std::vector<size_t> order;
+        order.reserve(block_count + (loop_count - 1) * (last_block - first_block + 1));
+        for (size_t block = 0; block < first_block; ++block)
+            order.push_back(block);
+        for (size_t repeat = 0; repeat < loop_count; ++repeat)
+            for (size_t block = first_block; block <= last_block; ++block)
+                order.push_back(block);
+        for (size_t block = last_block + 1; block < block_count; ++block)
+            order.push_back(block);
+        return order;
+    }
+
     namespace
     {
         uint64_t concept_seed(std::string_view value, uint64_t seed)
@@ -583,13 +602,15 @@ namespace rllm
         m_input_layer.propagate_forward(m_last_input, ws.h);
         check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, "after input layer forward");
 
-        // Pass through each transformer block in order
-        for (size_t block_index = 0; block_index < m_transformer_blocks.size(); ++block_index)
+        // Repeated entries share block parameters but retain per-execution
+        // activations for correct reverse-order backpropagation.
+        for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
         {
+            const size_t block_index = m_transformer_execution_order[execution];
             auto& block = m_transformer_blocks[block_index];
-            block.forward(ws.h, m_seq_len, ws.transformer_workspaces[block_index]);
+            block.forward(ws.h, m_seq_len, ws.transformer_workspaces[execution]);
             char phase[96];
-            std::snprintf(phase, sizeof(phase), "after transformer block %zu forward", block_index);
+            std::snprintf(phase, sizeof(phase), "after transformer block %zu execution %zu forward", block_index, execution);
             check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, phase);
         }
 
@@ -747,6 +768,10 @@ namespace rllm
             {"method", training_method_to_string(m_training_method)},
             {"item_type", item_type},
             {"layers", m_transformer_blocks.size()},
+            {"transformer_executions", m_transformer_execution_order.size()},
+            {"loop_first_layer", m_loop_first_block + 1},
+            {"loop_last_layer", m_loop_last_block + 1},
+            {"loop_count", m_loop_count},
             {"window_size", m_window_size},
             {"window_stride", m_window_stride},
             {"epoch", epoch},
@@ -800,6 +825,11 @@ namespace rllm
             {"method", training_method_to_string(m_training_method)},
             {"item_type", item_type},
             {"phase", phase},
+            {"layers", m_transformer_blocks.size()},
+            {"transformer_executions", m_transformer_execution_order.size()},
+            {"loop_first_layer", m_loop_first_block + 1},
+            {"loop_last_layer", m_loop_last_block + 1},
+            {"loop_count", m_loop_count},
             {"epoch", epoch},
             {"epoch_percent", static_cast<double>(epoch) / static_cast<double>(num_epochs) * 100.0},
             {"epoch_progress", epoch_progress},
@@ -917,11 +947,37 @@ namespace rllm
 
     void TextTrainer::reset_workspaces()
     {
-        m_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(PositionIndex::START, m_transformer_blocks.size());
+        rebuild_transformer_execution_order();
+        // Release the previous device-backed buffers before constructing a
+        // larger unrolled workspace. unique_ptr assignment would otherwise
+        // keep the old allocation alive until after the new one is complete.
+        m_forward_workspace.reset();
+        m_backward_workspace.reset();
+        m_gradient_accumulation_workspace.reset();
+        m_gpu_packed_batch.reset();
+        m_batched_output_workspace.reset();
+        m_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(PositionIndex::START, m_transformer_execution_order.size());
         m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
         m_gradient_accumulation_workspace = std::make_unique<GradientAccumulationWorkspace>(m_transformer_blocks.size());
         m_gpu_packed_batch = std::make_unique<GpuPackedBatchInput>();
         m_batched_output_workspace = std::make_unique<BatchedOutputWorkspace>();
+    }
+
+    void TextTrainer::rebuild_transformer_execution_order()
+    {
+        m_transformer_execution_order = make_transformer_execution_order(
+            m_transformer_blocks.size(), m_loop_first_block, m_loop_last_block, m_loop_count);
+    }
+
+    void TextTrainer::set_transformer_loop(size_t first_block, size_t last_block, size_t count)
+    {
+        assert(count > 0);
+        assert(first_block <= last_block && last_block < m_transformer_blocks.size());
+        m_loop_first_block = first_block;
+        m_loop_last_block = last_block;
+        m_loop_count = count;
+        m_transformer_loop_override_on_load = true;
+        reset_workspaces();
     }
 
     void TextTrainer::set_micro_batch_size(size_t n)
@@ -1101,18 +1157,18 @@ namespace rllm
         auto* p_dh = &ws.dh;
         auto* p_din = &ws.din;
         const auto transformer_started_at = std::chrono::steady_clock::now();
-        for (int i = static_cast<int>(m_transformer_blocks.size()) - 1;
-             i >= 0; --i)
+        for (size_t reverse_execution = m_transformer_execution_order.size(); reverse_execution-- > 0; )
         {
+            const size_t i = m_transformer_execution_order[reverse_execution];
             {
                 const auto phase = std::format("before transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, phase.c_str());
             }
-            m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, m_forward_workspace->transformer_workspaces[static_cast<size_t>(i)]);
-            if (static_cast<size_t>(i) >= m_frozen_transformer_block_count)
+            m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, m_forward_workspace->transformer_workspaces[reverse_execution]);
+            if (i >= m_frozen_transformer_block_count)
                 m_transformer_blocks[i].accumulate_gradients(
                     ws.transformer_block,
-                    m_gradient_accumulation_workspace->transformer_blocks[static_cast<size_t>(i)]);
+                    m_gradient_accumulation_workspace->transformer_blocks[i]);
             {
                 const auto phase = std::format("after transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_din, m_seq_len, phase.c_str());
@@ -1343,14 +1399,15 @@ namespace rllm
             const bool diagnose_first_batch = completed_windows == 0;
             if (diagnose_first_batch)
                 queue.wait("baseline validation input-layer forward");
-            for (size_t block = 0; block < m_transformer_blocks.size(); ++block)
+            for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
             {
+                const size_t block = m_transformer_execution_order[execution];
                 m_transformer_blocks[block].forward_batched(
-                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[block]);
+                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[execution]);
                 if (diagnose_first_batch)
                 {
                     const auto label = std::format(
-                        "baseline validation transformer block {} forward", block);
+                        "baseline validation transformer block {} execution {} forward", block, execution);
                     queue.wait(label.c_str());
                 }
             }
@@ -2498,6 +2555,13 @@ namespace rllm
 
         const size_t read_write_transformer_blocks =
             m_transformer_blocks.size() - m_frozen_transformer_block_count;
+        LOG_INFO(
+            "Transformer loop: layers {}-{} execute {} total passes ({} physical blocks, {} effective executions)",
+            m_loop_first_block + 1,
+            m_loop_last_block + 1,
+            m_loop_count,
+            m_transformer_blocks.size(),
+            m_transformer_execution_order.size());
         LOG_INFO(
             "Transformer block access: {} read-only, {} read-write",
             m_frozen_transformer_block_count,

@@ -246,7 +246,7 @@ TEST(SerializationTest, TextTrainerJsonLoadCanExtendTransformerBlocks)
     std::filesystem::remove(json_file);
 }
 
-TEST(SerializationTest, TextTrainerSafetensorsLoadCanExtendTransformerBlocks)
+TEST(SerializationTest, TextTrainerSafetensorsStoresTransformerLoop)
 {
     rllm::Corpus corpus({});
     rllm::Statistics stats;
@@ -256,9 +256,29 @@ TEST(SerializationTest, TextTrainerSafetensorsLoadCanExtendTransformerBlocks)
     source.save(sf_file);
     ASSERT_TRUE(std::filesystem::exists(sf_file));
 
-    rllm::TextTrainer loaded(3, corpus, stats);
+    safetensors::safetensors_t checkpoint;
+    std::string warning;
+    std::string error;
+    ASSERT_TRUE(safetensors::load_from_file(sf_file, &checkpoint, &warning, &error)) << error;
+    std::string first;
+    std::string last;
+    std::string count;
+    ASSERT_TRUE(checkpoint.metadata.at("loop_first_block", &first));
+    ASSERT_TRUE(checkpoint.metadata.at("loop_last_block", &last));
+    ASSERT_TRUE(checkpoint.metadata.at("loop_count", &count));
+    EXPECT_EQ(first, "0");
+    EXPECT_EQ(last, "0");
+    EXPECT_EQ(count, "1");
+
+    rllm::TextTrainer loaded(2, corpus, stats);
     EXPECT_TRUE(loaded.load(sf_file));
-    EXPECT_EQ(loaded.get_transformer_block_count(), 3u);
+    EXPECT_EQ(loaded.get_transformer_block_count(), 2u);
+    EXPECT_EQ(loaded.get_loop_first_block(), 0u);
+    EXPECT_EQ(loaded.get_loop_last_block(), 0u);
+    EXPECT_EQ(loaded.get_loop_count(), 1u);
+    EXPECT_EQ(
+        loaded.get_transformer_execution_order(),
+        (std::vector<size_t>{0, 1}));
 
     std::filesystem::remove(sf_file);
 }

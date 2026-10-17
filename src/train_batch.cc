@@ -435,19 +435,20 @@ namespace rllm
         if (collect_diagnostics)
             log_hidden_gradient_diagnostics(*dh, packed_rows,
                 std::format("output heads -> transformer layer {}", m_transformer_blocks.size() - 1));
-        for (int index = static_cast<int>(m_transformer_blocks.size()) - 1;
-             index >= 0; --index)
+        for (size_t reverse_execution = m_transformer_execution_order.size(); reverse_execution-- > 0; )
         {
+            const size_t index = m_transformer_execution_order[reverse_execution];
             m_transformer_blocks[index].backward(*dh, *din, back.transformer_block,
-                forward.transformer_workspaces[index], true, collect_diagnostics, index);
-            if (static_cast<size_t>(index) >= m_frozen_transformer_block_count)
+                forward.transformer_workspaces[reverse_execution], true, collect_diagnostics,
+                static_cast<int>(index));
+            if (index >= m_frozen_transformer_block_count)
                 m_transformer_blocks[index].accumulate_gradients(
                     back.transformer_block,
                     m_gradient_accumulation_workspace->transformer_blocks[index]);
             if (collect_diagnostics)
                 log_hidden_gradient_diagnostics(*din, packed_rows,
-                    index == 0 ? "transformer layer 0 -> input embeddings" :
-                    std::format("transformer layer {} -> layer {}", index, index - 1));
+                    reverse_execution == 0 ? "transformer execution 0 -> input embeddings" :
+                    std::format("transformer execution {} -> {}", reverse_execution, reverse_execution - 1));
             std::swap(dh, din);
         }
         m_backward_diagnostics_pending = false;
@@ -497,8 +498,12 @@ namespace rllm
         const auto forward_started = std::chrono::steady_clock::now();
         forward.reset(queue, rows);
         m_input_layer.propagate_forward(packed, *m_gpu_packed_batch, forward.h);
-        for (size_t i = 0; i < m_transformer_blocks.size(); ++i)
-            m_transformer_blocks[i].forward_batched(forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[i]);
+        for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
+        {
+            const size_t block = m_transformer_execution_order[execution];
+            m_transformer_blocks[block].forward_batched(
+                forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[execution]);
+        }
         timing.forward_ms += elapsed_ms(forward_started);
 
         auto& back = *m_backward_workspace;
@@ -520,7 +525,7 @@ namespace rllm
         }
         train_batch_transformer_backward(rows, timing);
         const auto input_started = std::chrono::steady_clock::now();
-        auto& input_gradient = (m_transformer_blocks.size() % 2 == 0) ? back.dh : back.din;
+        auto& input_gradient = (m_transformer_execution_order.size() % 2 == 0) ? back.dh : back.din;
         m_input_layer.accumulate_backward_packed(
             packed, input_gradient, m_gradient_accumulation_workspace->embeddings);
         timing.backward_input_ms += elapsed_ms(input_started);

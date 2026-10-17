@@ -19,6 +19,7 @@
   ],
   "training_arguments": [
     "--epochs", "40",
+    "--loop-layers", "3-6:2",
     "--disable-example-convergence",
     "--checkpoint-interval", "300",
     "--validation-interval", "60",

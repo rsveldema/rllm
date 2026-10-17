@@ -21,6 +21,30 @@ environment variables. Resume behavior is selected with the mutually exclusive
 directory, even when a best-validation checkpoint exists. With none of these,
 the launcher selects a compatible checkpoint automatically.
 
+Use `--loop-layers P-Q:N` to execute the one-based transformer-block range
+`P` through `Q` for `N` total passes. For example, `--layers 8
+--loop-layers 3-5:4` executes blocks in the order `1,2,3,4,5,3,4,5,3,4,5,3,4,5,6,7,8`.
+The repeated passes share the same block parameters, while each execution keeps
+its own forward activations so backpropagation traverses the complete unrolled
+graph. Gradients from all invocations of a block accumulate before its one
+optimizer update. `N=1` is equivalent to an ordinary transformer.
+
+In a launcher configuration, put the option in `training_arguments`, for
+example:
+
+```json
+"training_arguments": ["--loop-layers", "3-5:4"]
+```
+
+The physical layer count remains the value supplied by `--layers`; the
+effective execution depth is `layers + (N - 1) * (Q - P + 1)`. Activation
+memory and compute therefore grow with effective depth, but parameter count
+does not. The loop range and count are stored in model checkpoints and in
+training sidecars when explicitly configured, restored for inference and
+resume, and included in `train.json`
+records as `loop_first_layer`, `loop_last_layer`, `loop_count`, and
+`transformer_executions`. Older checkpoints default to the no-op loop `1-1:1`.
+
 `RLLM_MAX_POSITION` controls packed-row capacity, while
 `RLLM_MAX_ATTENTION_POSITION` controls the maximum length of each independently
 attended sequence. Attention workspaces have shape packed rows by local

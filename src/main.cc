@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -77,6 +78,10 @@ struct CommandLineParser
     std::optional<size_t> epoch_size;
     size_t max_validation_windows = 4096;
     size_t validation_worst_count = 5;
+    size_t loop_first_layer = 1;
+    size_t loop_last_layer = 1;
+    size_t loop_count = 1;
+    bool transformer_loop_configured = false;
     bool disable_early_stopping = false;
     bool disable_example_convergence = false;
     bool disable_training_diagnostics = false;
@@ -109,6 +114,15 @@ struct CommandLineParser
         window_size = j.value("window_size", window_size);
         window_stride = j.value("window_stride", window_stride);
         learn_depth = j.value("learn_depth", learn_depth);
+        if (j.contains("loop_first_layer") || j.contains("loop_last_layer") || j.contains("loop_count"))
+        {
+            if (!j.contains("loop_first_layer") || !j.contains("loop_last_layer") || !j.contains("loop_count"))
+                fail("loop_first_layer, loop_last_layer, and loop_count must be specified together");
+            loop_first_layer = j.at("loop_first_layer").get<size_t>();
+            loop_last_layer = j.at("loop_last_layer").get<size_t>();
+            loop_count = j.at("loop_count").get<size_t>();
+            transformer_loop_configured = true;
+        }
         learning_rate = j.value("learning_rate", learning_rate);
         layer_learning_rate_multiplier = j.value("layer_learning_rate_multiplier", layer_learning_rate_multiplier);
         if (!std::isfinite(layer_learning_rate_multiplier) ||
@@ -247,6 +261,25 @@ struct CommandLineParser
              [&](const std::vector<std::string>& args) {
                  num_layers = std::atoi(args[0].c_str());
              }},
+        {.options = {"--loop-layers"},
+         .description = "Repeat one-based transformer range P-Q for N total passes, formatted P-Q:N",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             size_t first = 0;
+             size_t last = 0;
+             size_t count = 0;
+             char trailing = '\0';
+             if (std::sscanf(args[0].c_str(), "%zu-%zu:%zu%c", &first, &last, &count, &trailing) != 3 ||
+                 first == 0 || last < first || count == 0)
+             {
+                 std::println("--loop-layers requires P-Q:N with 1 <= P <= Q and N >= 1, got '{}'", args[0]);
+                 std::exit(1);
+             }
+             loop_first_layer = first;
+             loop_last_layer = last;
+             loop_count = count;
+             transformer_loop_configured = true;
+         }},
         {.options = {"--upgrade-mode"},
          .description = "Increase a checkpoint's transformer-layer count",
          .action = [&](const std::vector<std::string>&) { upgrade_mode = true; }},
@@ -871,6 +904,14 @@ struct CommandLineParser
             std::println("Error: --dump-concepts cannot be combined with --train");
             print_usage_and_exit(argv[0], 1);
         }
+        if (loop_first_layer == 0 || loop_last_layer < loop_first_layer || loop_count == 0 ||
+            loop_last_layer > static_cast<size_t>(num_layers))
+        {
+            std::println(
+                "Error: transformer loop requires 1 <= P <= Q <= {} and N >= 1; got {}-{}:{}",
+                num_layers, loop_first_layer, loop_last_layer, loop_count);
+            std::exit(1);
+        }
     }
 };
 
@@ -918,6 +959,10 @@ int main(int argc, char* argv[])
             parser.window_size,
             parser.window_stride,
             parser.learn_depth,
+            parser.loop_first_layer,
+            parser.loop_last_layer,
+            parser.loop_count,
+            parser.transformer_loop_configured,
             parser.learning_rate,
             parser.layer_learning_rate_multiplier,
             parser.warmup_percent,

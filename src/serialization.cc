@@ -279,6 +279,22 @@ namespace rllm
                     m_weight_initializer, m_ffn_initializer,
                     m_upgrade_residual_output_scale);
             }
+            const size_t saved_loop_first = j.value("loop_first_block", size_t{0});
+            const size_t saved_loop_last = j.value("loop_last_block", size_t{0});
+            const size_t saved_loop_count = j.value("loop_count", size_t{1});
+            if (saved_loop_count == 0 ||
+                (target_blocks != 0 &&
+                 (saved_loop_first > saved_loop_last || saved_loop_last >= target_blocks)))
+            {
+                std::println("Invalid transformer loop configuration in {}", filename);
+                return false;
+            }
+            if (!m_transformer_loop_override_on_load)
+            {
+                m_loop_first_block = saved_loop_first;
+                m_loop_last_block = saved_loop_last;
+                m_loop_count = saved_loop_count;
+            }
             if (target_blocks != saved_blocks)
             {
                 std::println(
@@ -331,6 +347,9 @@ namespace rllm
         j["tokenizer_vocab_size"] = static_cast<size_t>(TokenID::MAX);
         j["tokenizer_signature"] = tokenizer_signature();
         j["frozen_transformer_blocks"] = m_frozen_transformer_block_count;
+        j["loop_first_block"] = m_loop_first_block;
+        j["loop_last_block"] = m_loop_last_block;
+        j["loop_count"] = m_loop_count;
         j["input_layer"] = m_input_layer.save();
 
         auto blocks = nlohmann::json::array();
@@ -726,6 +745,9 @@ namespace rllm
         st.metadata.insert("tokenizer_vocab_size", std::to_string(static_cast<size_t>(TokenID::MAX)));
         st.metadata.insert("tokenizer_signature", std::to_string(tokenizer_signature()));
         st.metadata.insert("frozen_transformer_blocks", std::to_string(m_frozen_transformer_block_count));
+        st.metadata.insert("loop_first_block", std::to_string(m_loop_first_block));
+        st.metadata.insert("loop_last_block", std::to_string(m_loop_last_block));
+        st.metadata.insert("loop_count", std::to_string(m_loop_count));
         if (m_learning_rate_provider)
         {
             st.metadata.insert("training_state_version", "1");
@@ -937,6 +959,35 @@ namespace rllm
         if (m_all_blocks_read_write)
             m_frozen_transformer_block_count = 0;
 
+        size_t saved_loop_first = 0;
+        size_t saved_loop_last = 0;
+        size_t saved_loop_count = 1;
+        const auto parse_optional_loop_metadata = [&](const char* name, size_t& value) {
+            std::string text;
+            return !header.count(name) ||
+                (header.at(name, &text) && parse_metadata_number(text, value));
+        };
+        if (!parse_optional_loop_metadata("loop_first_block", saved_loop_first) ||
+            !parse_optional_loop_metadata("loop_last_block", saved_loop_last) ||
+            !parse_optional_loop_metadata("loop_count", saved_loop_count) ||
+            saved_loop_count == 0 ||
+            (target_blocks != 0 &&
+             (saved_loop_first > saved_loop_last || saved_loop_last >= target_blocks)))
+        {
+            std::println("Invalid transformer loop configuration in {}", filename);
+            return false;
+        }
+        const bool loop_configuration_changed = !m_transformer_loop_override_on_load &&
+            (m_loop_first_block != saved_loop_first ||
+             m_loop_last_block != saved_loop_last ||
+             m_loop_count != saved_loop_count);
+        if (!m_transformer_loop_override_on_load)
+        {
+            m_loop_first_block = saved_loop_first;
+            m_loop_last_block = saved_loop_last;
+            m_loop_count = saved_loop_count;
+        }
+
         if ((resized_model || m_reset_training_cursor_on_load) && m_has_loaded_training_state)
         {
             m_checkpoint_epoch = 0;
@@ -1054,7 +1105,7 @@ namespace rllm
                 filename
             );
         }
-        if (rebuild_blocks)
+        if (rebuild_blocks || loop_configuration_changed)
             reset_workspaces();
 
         if (st.tensors.count("output_layers.0.W_lm_head"))

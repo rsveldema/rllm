@@ -854,6 +854,16 @@ TEST(CorpusTest, LargeFilesContributeTrainingAndValidationWindows)
     }));
 }
 
+TEST(TextTrainerTest, TransformerLoopExpandsOnlyTheSelectedBlockRange)
+{
+    EXPECT_EQ(
+        make_transformer_execution_order(8, 2, 4, 3),
+        (std::vector<size_t>{0, 1, 2, 3, 4, 2, 3, 4, 2, 3, 4, 5, 6, 7}));
+    EXPECT_EQ(
+        make_transformer_execution_order(4, 1, 2, 1),
+        (std::vector<size_t>{0, 1, 2, 3}));
+}
+
 namespace
 {
     constexpr int BENCH_ITERS = 20;

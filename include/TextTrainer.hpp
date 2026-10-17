@@ -27,6 +27,9 @@
 
 namespace rllm
 {
+    std::vector<size_t> make_transformer_execution_order(
+        size_t block_count, size_t first_block, size_t last_block, size_t loop_count);
+
     struct TextTrainerForwardWorkspace;
     struct BackwardPropWorkspace;
     struct GradientAccumulationWorkspace;
@@ -101,6 +104,10 @@ namespace rllm
         const OutputLayer& get_output_layer(MultiTokenPredictionIndex idx) const { return m_output_layers[idx]; }
         const InputLayer& get_input_layer() const { return m_input_layer; }
         size_t get_transformer_block_count() const { return m_transformer_blocks.size(); }
+        const std::vector<size_t>& get_transformer_execution_order() const { return m_transformer_execution_order; }
+        size_t get_loop_first_block() const { return m_loop_first_block; }
+        size_t get_loop_last_block() const { return m_loop_last_block; }
+        size_t get_loop_count() const { return m_loop_count; }
         size_t get_frozen_transformer_block_count() const { return m_frozen_transformer_block_count; }
         float get_learning_rate() const { return m_learning_rate; }
         float get_layer_learning_rate_multiplier() const { return m_layer_learning_rate_multiplier; }
@@ -115,6 +122,7 @@ namespace rllm
         void set_all_blocks_read_write(bool enabled) { m_all_blocks_read_write = enabled; }
         void set_upgrade_residual_output_scale(float scale) { m_upgrade_residual_output_scale = scale; }
         void set_reset_training_cursor_on_load(bool enabled) { m_reset_training_cursor_on_load = enabled; }
+        void set_transformer_loop(size_t first_block, size_t last_block, size_t count);
 
         void set_training_method(TrainingMethod m) { m_training_method = m; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
@@ -219,6 +227,11 @@ namespace rllm
         InputLayer  m_input_layer;
         CpuInputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
         std::vector<TransformerBlock> m_transformer_blocks;
+        std::vector<size_t> m_transformer_execution_order;
+        size_t m_loop_first_block = 0;
+        size_t m_loop_last_block = 0;
+        size_t m_loop_count = 1;
+        bool m_transformer_loop_override_on_load = false;
         size_t m_frozen_transformer_block_count = 0;
         bool m_upgrade_mode = false;
         bool m_freeze_old_blocks_on_upgrade = false;
@@ -426,6 +439,7 @@ namespace rllm
             BatchTrainingTiming& timing
         );
         void train_batch_transformer_backward(PositionIndex packed_rows, BatchTrainingTiming& timing);
+        void rebuild_transformer_execution_order();
         size_t finish_converged_batch_items(
             std::vector<BatchTrainingItem>& batch,
             const std::vector<size_t>& active_indices,

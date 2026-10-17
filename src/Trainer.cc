@@ -53,6 +53,10 @@ namespace rllm
         int window_size,
         size_t window_stride,
         size_t learn_depth,
+        size_t loop_first_layer,
+        size_t loop_last_layer,
+        size_t loop_count,
+        bool transformer_loop_configured,
         float learning_rate,
         float layer_learning_rate_multiplier,
         float warmup_percent,
@@ -214,12 +218,20 @@ namespace rllm
             {"train_corpus_dirs", train_corpus_dirs},
             {"filters", m_filters}
         };
+        if (transformer_loop_configured)
+        {
+            training_parameters["loop_first_layer"] = loop_first_layer;
+            training_parameters["loop_last_layer"] = loop_last_layer;
+            training_parameters["loop_count"] = loop_count;
+        }
         nn->set_training_parameters_json(training_parameters.dump(2));
         nn->set_training_progress_filename((artifact_directory / "train.json").string());
         nn->set_training_method(method);
         nn->set_window_size(window_size);
         nn->set_window_stride(window_stride);
         nn->set_learn_depth(learn_depth);
+        if (transformer_loop_configured)
+            nn->set_transformer_loop(loop_first_layer - 1, loop_last_layer - 1, loop_count);
         nn->set_learning_rate(learning_rate);
         nn->set_layer_learning_rate_multiplier(layer_learning_rate_multiplier);
         nn->set_warmup_percent(warmup_percent);
