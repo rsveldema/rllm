@@ -27,8 +27,21 @@
 
 namespace rllm
 {
+    inline constexpr size_t LOOP_ARCHITECTURE_VERSION = 1;
+    inline constexpr float LOOP_INPUT_INJECTION = 0.25f;
+    inline constexpr float LOOP_ITERATION_EMBEDDING_SCALE = 0.02f;
+    inline constexpr float LOOP_AUXILIARY_LOSS_WEIGHT = 0.1f;
+
     std::vector<size_t> make_transformer_execution_order(
         size_t block_count, size_t first_block, size_t last_block, size_t loop_count);
+    void apply_loop_transition(
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& loop_input,
+        const fixed_size_vector<float, EmbeddingDimension>& iteration_embedding);
+    void backward_loop_transition(
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& gradient,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& loop_input_gradient,
+        int is_first_iteration);
 
     struct TextTrainerForwardWorkspace;
     struct BackwardPropWorkspace;
@@ -434,12 +447,18 @@ namespace rllm
             const std::vector<BatchTrainingItem>& batch,
             const std::vector<size_t>& active_indices,
             const PackedBatchInput& packed,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& hidden,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& hidden_gradient,
+            float loss_weight,
+            bool record_primary_loss,
             VulkanQueue& queue,
             std::vector<float>& primary_losses,
             BatchTrainingTiming& timing
         );
         void train_batch_transformer_backward(PositionIndex packed_rows, BatchTrainingTiming& timing);
         void rebuild_transformer_execution_order();
+        float transformer_residual_scale(size_t block) const;
+        std::optional<size_t> loop_iteration_for_execution(size_t execution) const;
         size_t finish_converged_batch_items(
             std::vector<BatchTrainingItem>& batch,
             const std::vector<size_t>& active_indices,

@@ -3,6 +3,7 @@
 #include "TextTrainerInternal.hpp"
 #include <LogFormatting.hpp>
 #include <NumericLoss.hpp>
+#include <vecmath.hpp>
 
 #include <algorithm>
 #include <array>
@@ -321,7 +322,11 @@ namespace rllm
 
     void TextTrainer::train_window_all_positions(
         const std::vector<BatchTrainingItem>& batch, const std::vector<size_t>& active_indices,
-        const PackedBatchInput& packed, VulkanQueue& queue, std::vector<float>& primary_losses,
+        const PackedBatchInput& packed,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& hidden,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& hidden_gradient,
+        float loss_weight, bool record_primary_loss,
+        VulkanQueue& queue, std::vector<float>& primary_losses,
         BatchTrainingTiming& timing)
     {
         const auto started = std::chrono::steady_clock::now();
@@ -348,7 +353,7 @@ namespace rllm
                 }
         }
         assert(!predictions.empty());
-        const float scale = 1.0f / static_cast<float>(predictions.size());
+        const float scale = loss_weight / static_cast<float>(predictions.size());
         std::vector<double> primary_sums(active_indices.size());
         std::vector<size_t> primary_counts(active_indices.size());
         auto& back = *m_backward_workspace;
@@ -372,7 +377,7 @@ namespace rllm
             }
             const auto count = static_cast<BatchIndex>(selected.size());
             m_batched_output_workspace->row_indices.copy_from_cpu(queue, rows);
-            gather_indexed_hidden(m_forward_workspace->h, m_batched_output_workspace->row_indices,
+            gather_indexed_hidden(hidden, m_batched_output_workspace->row_indices,
                 m_batched_output_workspace->h_last, static_cast<int>(count));
             m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected);
             m_batched_output_workspace->expected_string_table_indices.copy_from_cpu(
@@ -402,8 +407,8 @@ namespace rllm
                 m_batched_output_workspace->h_last, count, m_batched_output_workspace->dh_last,
                 m_gradient_accumulation_workspace->output_layers[head], string_table_index_count);
             add_indexed_hidden_gradient(m_batched_output_workspace->dh_last,
-                m_batched_output_workspace->row_indices, back.dh, static_cast<int>(count));
-            if (head == MultiTokenPredictionIndex::START)
+                m_batched_output_workspace->row_indices, hidden_gradient, static_cast<int>(count));
+            if (record_primary_loss && head == MultiTokenPredictionIndex::START)
             {
                 cpu_fixed_vector<float, BatchIndex> losses;
                 losses.set_size(count);
@@ -449,6 +454,13 @@ namespace rllm
                 log_hidden_gradient_diagnostics(*din, packed_rows,
                     reverse_execution == 0 ? "transformer execution 0 -> input embeddings" :
                     std::format("transformer execution {} -> {}", reverse_execution, reverse_execution - 1));
+            if (const auto iteration = loop_iteration_for_execution(reverse_execution))
+            {
+                if (*iteration > 0)
+                    element_wise_sum(*din,
+                        forward.transformer_workspaces[reverse_execution].auxiliary_gradient, *din);
+                backward_loop_transition(*din, back.loop_input_gradient, *iteration == 0);
+            }
             std::swap(dh, din);
         }
         m_backward_diagnostics_pending = false;
@@ -500,9 +512,17 @@ namespace rllm
         m_input_layer.propagate_forward(packed, *m_gpu_packed_batch, forward.h);
         for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
         {
+            if (const auto iteration = loop_iteration_for_execution(execution))
+            {
+                if (*iteration == 0)
+                    forward.loop_input = forward.h;
+                prepare_loop_iteration_embedding(forward, *iteration, queue);
+                apply_loop_transition(forward.h, forward.loop_input, forward.loop_iteration_embedding);
+            }
             const size_t block = m_transformer_execution_order[execution];
             m_transformer_blocks[block].forward_batched(
-                forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[execution]);
+                forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[execution],
+                transformer_residual_scale(block));
         }
         timing.forward_ms += elapsed_ms(forward_started);
 
@@ -512,7 +532,23 @@ namespace rllm
         const auto backward_started = std::chrono::steady_clock::now();
         back.dh.zero(queue);
         back.din.zero(queue);
-        train_window_all_positions(batch, active_indices, packed, queue, losses, timing);
+        train_window_all_positions(batch, active_indices, packed, forward.h, back.dh,
+            1.0f, true, queue, losses, timing);
+        if (m_loop_count > 1)
+        {
+            const float auxiliary_weight =
+                LOOP_AUXILIARY_LOSS_WEIGHT / static_cast<float>(m_loop_count - 1);
+            for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
+            {
+                const auto iteration = loop_iteration_for_execution(execution);
+                if (!iteration || *iteration == 0)
+                    continue;
+                auto& execution_workspace = forward.transformer_workspaces[execution];
+                train_window_all_positions(batch, active_indices, packed,
+                    execution_workspace.h_in, execution_workspace.auxiliary_gradient,
+                    auxiliary_weight, false, queue, losses, timing);
+            }
+        }
         add_entity_consistency_loss(contexts, packed, forward.h, back.dh,
             *m_batched_output_workspace, queue);
         for (const float loss : losses)

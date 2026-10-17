@@ -129,6 +129,13 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dst
     );
 
+    void element_wise_scaled_sum(
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& lhs,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& rhs,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dst,
+        float rhs_scale
+    );
+
     void swiglu_forward(
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre,
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre,

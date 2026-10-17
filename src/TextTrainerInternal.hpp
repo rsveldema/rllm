@@ -7,12 +7,15 @@ namespace rllm
     struct TextTrainerForwardWorkspace
     {
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input;
+        fixed_size_vector<float, EmbeddingDimension> loop_iteration_embedding;
         fixed_size_vector<float, EmbeddingDimension> h_last;
         std::vector<ForwardWorkspace> transformer_workspaces;
 
         TextTrainerForwardWorkspace(PositionIndex seq_len, size_t num_transformer_blocks)
-            : h(seq_len)
+            : h(seq_len), loop_input(seq_len)
         {
+            loop_iteration_embedding.set_size(EmbeddingDimension::MAX);
             transformer_workspaces.reserve(num_transformer_blocks);
             for (size_t i = 0; i < num_transformer_blocks; ++i)
                 transformer_workspaces.emplace_back(seq_len);
@@ -22,10 +25,14 @@ namespace rllm
         void reset(VulkanQueue& queue, PositionIndex seq_len)
         {
             h.set_rows(seq_len);
+            loop_input.set_rows(seq_len);
             for (auto& workspace : transformer_workspaces)
                 workspace.reset(queue, seq_len);
         }
     };
+
+    void prepare_loop_iteration_embedding(
+        TextTrainerForwardWorkspace& workspace, size_t iteration, VulkanQueue& queue);
 
     struct BackwardPropWorkspace
     {
@@ -35,10 +42,11 @@ namespace rllm
         fixed_size_vector<float, EmbeddingDimension> dh_last;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dh;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input_gradient;
         BackwardWorkspace transformer_block;
 
         explicit BackwardPropWorkspace(PositionIndex seq_len)
-            : dh(seq_len), din(seq_len), transformer_block(seq_len)
+            : dh(seq_len), din(seq_len), loop_input_gradient(seq_len), transformer_block(seq_len)
         {
             output_layer_delta.set_size(TokenID::MAX);
             output_string_table_index_delta.set_size(PositionIndex::MAX);
@@ -50,6 +58,8 @@ namespace rllm
         {
             dh.set_rows(seq_len);
             din.set_rows(seq_len);
+            loop_input_gradient.set_rows(seq_len);
+            loop_input_gradient.zero(queue);
             transformer_block.reset(queue, seq_len);
             output_layer_delta.zero(queue);
             output_string_table_index_delta.zero(queue);

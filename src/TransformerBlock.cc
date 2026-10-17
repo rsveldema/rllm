@@ -1007,9 +1007,10 @@ namespace rllm
     }
 
     void TransformerBlock::forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len,
-        ForwardWorkspace& workspace)
+        ForwardWorkspace& workspace, float residual_scale)
     {
         auto& ws = workspace;
+        ws.residual_scale = residual_scale;
 
         check_nan_finding_mode("forward:start");
         ws.h_in = h;
@@ -1033,7 +1034,7 @@ namespace rllm
         // ── 4. Output projection + residual ──────────────────────────────────
         matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
 
-        element_wise_sum(h, ws.attn_proj, ws.h_mid);
+        element_wise_scaled_sum(h, ws.attn_proj, ws.h_mid, residual_scale);
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
         //rms_norm_vulkan_optimized_with_workspace(ws.h_mid, ws.h_norm_ff, ws.rms_norm_row_sums, ws.rms_norm_inv_rms);
@@ -1047,7 +1048,7 @@ namespace rllm
         matmul_ABt(ws.ffn_act, W_down, ws.ffn_out);
 
         // ── 7. Residual ───────────────────────────────────────────────────────
-        element_wise_sum(ws.h_mid, ws.ffn_out, h);
+        element_wise_scaled_sum(ws.h_mid, ws.ffn_out, h, residual_scale);
         check_nan_finding_mode("forward:end");
     }
 
@@ -1055,10 +1056,12 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
         PositionIndex packed_rows,
         const GpuPackedBatchInput& batch,
-        ForwardWorkspace& workspace
+        ForwardWorkspace& workspace,
+        float residual_scale
     )
     {
         auto& ws = workspace;
+        ws.residual_scale = residual_scale;
         ws.packed_batch = &batch;
         check_nan_finding_mode("batched-forward:start");
         ws.h_in = h;
@@ -1070,12 +1073,12 @@ namespace rllm
         ws.attn_concat.zero(queue);
         forward_batched_attention_heads(ws, packed_rows, batch);
         matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
-        element_wise_sum(h, ws.attn_proj, ws.h_mid);
+        element_wise_scaled_sum(h, ws.attn_proj, ws.h_mid, residual_scale);
         rms_norm(ws.h_mid, ws.h_norm_ff);
         matmul_ABt_2_matrix_muls(ws.h_norm_ff, W_gate, ws.gate_pre, W_up, ws.up_pre);
         swiglu_forward(ws.gate_pre, ws.up_pre, ws.ffn_act, packed_rows);
         matmul_ABt(ws.ffn_act, W_down, ws.ffn_out);
-        element_wise_sum(ws.h_mid, ws.ffn_out, h);
+        element_wise_scaled_sum(ws.h_mid, ws.ffn_out, h, residual_scale);
         check_nan_finding_mode("batched-forward:end");
     }
 
@@ -1504,13 +1507,14 @@ namespace rllm
         check_transformer_hidden_nan_finding_mode(queue, ws->d_h_mid, seq, "d_h_mid", "after residual copy from dout");
 
         // d_ffn_act = d_ffn_out @ W_down   (W_down[D × Dff])
-        matmul_AB(dout, W_down, ws->d_ffn_act);
+        element_wise_scaled_sum(ws->d_h_mid, dout, ws->d_residual_branch, fwd.residual_scale - 1.0f);
+        matmul_AB(ws->d_residual_branch, W_down, ws->d_ffn_act);
         if (log_gradient_diagnostics)
             log_ffn_gradient_diagnostics(ws->d_ffn_act, seq, diagnostic_label("after FFN down projection"));
         check_transformer_ff_nan_finding_mode(queue, ws->d_ffn_act, seq, "d_ffn_act", "after FFN down projection backward");
 
         // dW_down[D, Dff] += dout^T @ ffn_act
-        matmul_AtB_acc(dout, fwd.ffn_act, ws->dW_down, fwd.seq_len);
+        matmul_AtB_acc(ws->d_residual_branch, fwd.ffn_act, ws->dW_down, fwd.seq_len);
 
         // SwiGLU backward: d(silu(g)*u) / dg, du
         swiglu_backward(fwd.seq_len, fwd.gate_pre, fwd.up_pre, ws->d_ffn_act, ws->d_gate_pre, ws->d_up_pre);
@@ -1543,11 +1547,12 @@ namespace rllm
         //                             d_h_in (residual part) = d_h_mid (accumulated below)
 
         // d_attn_concat = d_attn_proj @ W_o
-        matmul_AB(ws->d_h_mid, W_o, ws->d_attn_concat);
+        element_wise_scaled_sum(ws->d_h_norm_attn, ws->d_h_mid, ws->d_residual_branch, fwd.residual_scale);
+        matmul_AB(ws->d_residual_branch, W_o, ws->d_attn_concat);
         if (log_gradient_diagnostics)
             log_hidden_gradient_diagnostics(ws->d_attn_concat, seq, diagnostic_label("after attention output projection"));
         check_transformer_hidden_nan_finding_mode(queue, ws->d_attn_concat, seq, "d_attn_concat", "after output projection backward");
-        matmul_AtB_acc(ws->d_h_mid, fwd.attn_concat, ws->dW_o, fwd.seq_len);
+        matmul_AtB_acc(ws->d_residual_branch, fwd.attn_concat, ws->dW_o, fwd.seq_len);
 
         // Per-head backward
         backward_attention_heads(*ws, fwd, log_gradient_diagnostics, diagnostic_layer);

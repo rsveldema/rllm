@@ -34,6 +34,47 @@
 
 namespace rllm
 {
+    void apply_loop_transition(
+            // OFFLOAD_PARAMETERS(h, loop_input, iteration_embedding)
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& loop_input,
+            const fixed_size_vector<float, EmbeddingDimension>& iteration_embedding
+            // END_OFFLOAD_PARAMETERS
+        )
+        {
+            auto& queue = vulkan_runtime::get_queue(0);
+            const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(h.num_rows());
+            OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (h, loop_input, iteration_embedding))
+            const float recurrent = h[row, d];
+            const float injected = loop_input[row, d];
+            const float iteration_signal = iteration_embedding[d];
+            h[row, d] = ((recurrent * 0.75f) + ((injected * 0.25f) + iteration_signal));
+            ENDFOR
+        }
+
+    void backward_loop_transition(
+            // OFFLOAD_PARAMETERS(gradient, loop_input_gradient, is_first_iteration)
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& gradient,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& loop_input_gradient,
+            int is_first_iteration
+            // END_OFFLOAD_PARAMETERS
+        )
+        {
+            auto& queue = vulkan_runtime::get_queue(0);
+            const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(gradient.num_rows());
+            OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (gradient, loop_input_gradient, is_first_iteration))
+            const float g = gradient[row, d];
+            loop_input_gradient[row, d] += (g * 0.25f);
+            gradient[row, d] = (g * 0.75f);
+            // is_first_iteration is a flag (callers pass *iteration == 0): it is
+            // true only for the pass whose loop_input was the activation
+            // captured before iteration 0. All injection gradients flow to
+            // that captured activation, so they re-join the chain there.
+            if (is_first_iteration != 0)
+                gradient[row, d] += loop_input_gradient[row, d];
+            ENDFOR
+        }
+
     std::vector<size_t> make_transformer_execution_order(
         size_t block_count, size_t first_block, size_t last_block, size_t loop_count)
     {
@@ -51,6 +92,23 @@ namespace rllm
         for (size_t block = last_block + 1; block < block_count; ++block)
             order.push_back(block);
         return order;
+    }
+
+    void prepare_loop_iteration_embedding(
+        TextTrainerForwardWorkspace& workspace, size_t iteration, VulkanQueue& queue)
+    {
+        cpu_fixed_vector<float, EmbeddingDimension> embedding;
+        embedding.set_size(EmbeddingDimension::MAX);
+        for (const auto d : enum_iterator1D<EmbeddingDimension>())
+        {
+            const float frequency = std::pow(
+                10000.0f, -static_cast<float>(static_cast<int>(d) / 2) /
+                    static_cast<float>(static_cast<int>(EmbeddingDimension::MAX)));
+            const float phase = static_cast<float>(iteration + 1) * frequency;
+            embedding[d] = LOOP_ITERATION_EMBEDDING_SCALE *
+                ((static_cast<int>(d) & 1) ? std::cos(phase) : std::sin(phase));
+        }
+        workspace.loop_iteration_embedding.copy_from_cpu(queue, embedding);
     }
 
     namespace
@@ -606,9 +664,17 @@ namespace rllm
         // activations for correct reverse-order backpropagation.
         for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
         {
+            if (const auto iteration = loop_iteration_for_execution(execution))
+            {
+                if (*iteration == 0)
+                    ws.loop_input = ws.h;
+                prepare_loop_iteration_embedding(ws, *iteration, queue);
+                apply_loop_transition(ws.h, ws.loop_input, ws.loop_iteration_embedding);
+            }
             const size_t block_index = m_transformer_execution_order[execution];
             auto& block = m_transformer_blocks[block_index];
-            block.forward(ws.h, m_seq_len, ws.transformer_workspaces[execution]);
+            block.forward(ws.h, m_seq_len, ws.transformer_workspaces[execution],
+                transformer_residual_scale(block_index));
             char phase[96];
             std::snprintf(phase, sizeof(phase), "after transformer block %zu execution %zu forward", block_index, execution);
             check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, phase);
@@ -772,6 +838,7 @@ namespace rllm
             {"loop_first_layer", m_loop_first_block + 1},
             {"loop_last_layer", m_loop_last_block + 1},
             {"loop_count", m_loop_count},
+            {"loop_architecture_version", LOOP_ARCHITECTURE_VERSION},
             {"window_size", m_window_size},
             {"window_stride", m_window_stride},
             {"epoch", epoch},
@@ -830,6 +897,7 @@ namespace rllm
             {"loop_first_layer", m_loop_first_block + 1},
             {"loop_last_layer", m_loop_last_block + 1},
             {"loop_count", m_loop_count},
+            {"loop_architecture_version", LOOP_ARCHITECTURE_VERSION},
             {"epoch", epoch},
             {"epoch_percent", static_cast<double>(epoch) / static_cast<double>(num_epochs) * 100.0},
             {"epoch_progress", epoch_progress},
@@ -967,6 +1035,24 @@ namespace rllm
     {
         m_transformer_execution_order = make_transformer_execution_order(
             m_transformer_blocks.size(), m_loop_first_block, m_loop_last_block, m_loop_count);
+    }
+
+    float TextTrainer::transformer_residual_scale(size_t block) const
+    {
+        if (m_loop_count <= 1 || block < m_loop_first_block || block > m_loop_last_block)
+            return 1.0f;
+        return 1.0f / std::sqrt(static_cast<float>(m_loop_count));
+    }
+
+    std::optional<size_t> TextTrainer::loop_iteration_for_execution(size_t execution) const
+    {
+        if (m_loop_count <= 1 || execution < m_loop_first_block)
+            return std::nullopt;
+        const size_t width = m_loop_last_block - m_loop_first_block + 1;
+        const size_t relative = execution - m_loop_first_block;
+        if (relative >= width * m_loop_count || relative % width != 0)
+            return std::nullopt;
+        return relative / width;
     }
 
     void TextTrainer::set_transformer_loop(size_t first_block, size_t last_block, size_t count)
@@ -1173,6 +1259,8 @@ namespace rllm
                 const auto phase = std::format("after transformer block {} backward", i);
                 check_hidden_nan_finding_mode(queue, *p_din, m_seq_len, phase.c_str());
             }
+            if (const auto iteration = loop_iteration_for_execution(reverse_execution))
+                backward_loop_transition(*p_din, ws.loop_input_gradient, *iteration == 0);
             std::swap(p_dh, p_din);
         }
         if (timing)
@@ -1401,9 +1489,17 @@ namespace rllm
                 queue.wait("baseline validation input-layer forward");
             for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
             {
+                if (const auto iteration = loop_iteration_for_execution(execution))
+                {
+                    if (*iteration == 0)
+                        forward.loop_input = forward.h;
+                    prepare_loop_iteration_embedding(forward, *iteration, queue);
+                    apply_loop_transition(forward.h, forward.loop_input, forward.loop_iteration_embedding);
+                }
                 const size_t block = m_transformer_execution_order[execution];
                 m_transformer_blocks[block].forward_batched(
-                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[execution]);
+                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[execution],
+                    transformer_residual_scale(block));
                 if (diagnose_first_batch)
                 {
                     const auto label = std::format(

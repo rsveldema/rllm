@@ -681,6 +681,24 @@ namespace rllm
         ENDFOR
     }
 
+    void element_wise_scaled_sum(
+        // OFFLOAD_PARAMETERS(lhs, rhs, dst, rhs_scale)
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& lhs,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& rhs,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dst,
+        float rhs_scale
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(lhs.num_rows());
+        OFFLOAD_PARFOR_2D_PARAM(queue, t, d, grid, (lhs, rhs, dst, rhs_scale))
+        const float left = lhs[t, d];
+        const float right = rhs[t, d];
+        dst[t, d] = math::clamp((left + (rhs_scale * right)), -10000.0f, 10000.0f);
+        ENDFOR
+    }
+
     void swiglu_forward(
         // OFFLOAD_PARAMETERS(gate_pre, up_pre, ffn_act)
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre,

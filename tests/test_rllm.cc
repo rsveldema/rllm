@@ -15,6 +15,7 @@
 #include <cpu/cpu_flex_rows_cols_matrix.hpp>
 #include <cpu/cpu_flex_rows_matrix.hpp>
 #include <cpu/cpu_fixed_triangular_matrix.hpp>
+#include <cpu/cpu_fixed_vector.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -862,6 +863,104 @@ TEST(TextTrainerTest, TransformerLoopExpandsOnlyTheSelectedBlockRange)
     EXPECT_EQ(
         make_transformer_execution_order(4, 1, 2, 1),
         (std::vector<size_t>{0, 1, 2, 3}));
+}
+
+// The loop transition is linear, so with a zero iteration embedding and no
+// blocks in between, composing three transitions maps loop_input to itself:
+// h0 = 0.75*x + 0.25*x = x, h1 = 0.75*h0 + 0.25*x = x, h2 = 0.75*h1 + 0.25*x = x.
+// Therefore the gradient of sum(w * h2) w.r.t. the captured loop_input must be
+// exactly w. This only holds if every injection gradient (0.25*g_i) re-joins
+// the chain at iteration 0, where loop_input was captured.
+TEST(TextTrainerTest, LoopTransitionBackwardMatchesForward)
+{
+    using namespace rllm;
+    auto& queue = rllm::vulkan_runtime::get_queue(0);
+
+    const auto T = static_cast<PositionIndex>(4);
+    constexpr int LOOP_COUNT = 3;
+    constexpr float RECURRENT = 0.75f;
+    constexpr float INJECTION = 0.25f;
+
+    std::srand(1234);
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_w(T);
+    for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(T))
+        cpu_w[t, d] = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 2.0f - 1.0f;
+
+    // A zero iteration embedding isolates the transition math from the signal.
+    cpu_fixed_vector<float, EmbeddingDimension> cpu_embedding;
+    cpu_embedding.set_size(EmbeddingDimension::MAX);
+    for (const auto d : enum_iterator1D<EmbeddingDimension>())
+        cpu_embedding[d] = 0.0f;
+    fixed_size_vector<float, EmbeddingDimension> iteration_embedding;
+    iteration_embedding.copy_from_cpu(queue, cpu_embedding);
+
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(T);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input(T);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> gradient(T);
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input_gradient(T);
+
+    // Forward: loop_input is captured once, before iteration 0.
+    fill(h, 0.3f);
+    loop_input = h;
+    for (int iteration = 0; iteration < LOOP_COUNT; ++iteration)
+        apply_loop_transition(h, loop_input, iteration_embedding);
+
+    // Backward: the loss gradient at the final transition output is w. The
+    // transitions run in reverse order; with no blocks between them the
+    // outgoing gradient of one transition is the incoming gradient of the next.
+    gradient.copy_from_cpu(queue, cpu_w);
+    loop_input_gradient.zero(queue);
+    std::vector<cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension>> dx_per_iteration;
+    for (int iteration = LOOP_COUNT - 1; iteration >= 0; --iteration)
+    {
+        backward_loop_transition(gradient, loop_input_gradient, iteration == 0);
+        cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dx(T);
+        gradient.copy_to_cpu(queue, dx);
+        dx_per_iteration.push_back(dx);
+    }
+
+    // Each transition passes 0.75 of its incoming gradient to the recurrent
+    // path: iteration 2 -> 0.75*w, iteration 1 -> 0.75^2*w. Iteration 0 is
+    // checked separately below because its outgoing gradient also carries the
+    // accumulated injection term.
+    for (int iteration = LOOP_COUNT - 1; iteration >= 1; --iteration)
+    {
+        const auto& dx = dx_per_iteration[LOOP_COUNT - 1 - iteration];
+        const float expected_scale = std::pow(RECURRENT, static_cast<float>(LOOP_COUNT - iteration));
+        for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(T))
+        {
+            const float actual = dx[t, d];
+            const float expected = expected_scale * cpu_w[t, d];
+            EXPECT_NEAR(actual, expected, 1e-4f)
+                << "recurrent gradient mismatch at iteration " << iteration;
+        }
+    }
+
+    // The accumulated injection gradient must be 0.25 * sum(g_i) with
+    // g_2 = w, g_1 = 0.75*w, g_0 = 0.75^2*w.
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_loop_grad(T);
+    loop_input_gradient.copy_to_cpu(queue, cpu_loop_grad);
+    const float expected_loop_grad_scale =
+        INJECTION * (1.0f + RECURRENT + RECURRENT * RECURRENT);
+    for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(T))
+    {
+        const float actual = cpu_loop_grad[t, d];
+        const float expected = expected_loop_grad_scale * cpu_w[t, d];
+        EXPECT_NEAR(actual, expected, 1e-4f)
+            << "injection gradient accumulation mismatch";
+    }
+
+    // Gradient reaching the captured loop_input: recurrent part 0.75^3*w plus
+    // the full accumulated injection 0.25*(1 + 0.75 + 0.5625)*w = 0.578125*w,
+    // totalling exactly 1.0*w because the composed forward map is the identity.
+    const auto& dx0 = dx_per_iteration.back();
+    for (const auto [t, d] : enum_iterator2D<PositionIndex, EmbeddingDimension>(T))
+    {
+        const float actual = dx0[t, d];
+        const float expected = cpu_w[t, d];
+        EXPECT_NEAR(actual, expected, 1e-4f)
+            << "total gradient w.r.t. loop_input must equal w";
+    }
 }
 
 namespace

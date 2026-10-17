@@ -29,6 +29,24 @@ its own forward activations so backpropagation traverses the complete unrolled
 graph. Gradients from all invocations of a block accumulate before its one
 optimizer update. `N=1` is equivalent to an ordinary transformer.
 
+When `N > 1`, loop execution also applies the version-1 loop architecture:
+
+- A fixed sinusoidal iteration embedding (amplitude `0.02`) identifies each
+  pass through the shared blocks.
+- The state entering the first pass is retained as the pre-loop input. At each
+  pass boundary the recurrent state receives a bounded update consisting of
+  75% recurrent state and 25% pre-loop state, plus the iteration embedding.
+- Attention and feed-forward residual updates inside repeated blocks are
+  scaled by `1 / sqrt(N)` to keep repeated residual growth controlled.
+- Each intermediate loop boundary receives next-token supervision. The total
+  auxiliary loss weight is `0.1`, divided evenly over the `N - 1` intermediate
+  boundaries; the final model output retains its normal loss weight.
+
+These rules change the meaning of a looped checkpoint. Checkpoints now store
+`loop_architecture_version=1`; older looped checkpoints remain loadable but
+will use the current transition rules, so starting a fresh run is recommended
+when comparing learning curves.
+
 In a launcher configuration, put the option in `training_arguments`, for
 example:
 

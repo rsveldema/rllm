@@ -282,6 +282,14 @@ namespace rllm
             const size_t saved_loop_first = j.value("loop_first_block", size_t{0});
             const size_t saved_loop_last = j.value("loop_last_block", size_t{0});
             const size_t saved_loop_count = j.value("loop_count", size_t{1});
+            const size_t saved_loop_architecture =
+                j.value("loop_architecture_version", size_t{0});
+            if (saved_loop_architecture > LOOP_ARCHITECTURE_VERSION)
+            {
+                std::println("Unsupported loop architecture version {} in {}",
+                    saved_loop_architecture, filename);
+                return false;
+            }
             if (saved_loop_count == 0 ||
                 (target_blocks != 0 &&
                  (saved_loop_first > saved_loop_last || saved_loop_last >= target_blocks)))
@@ -350,6 +358,7 @@ namespace rllm
         j["loop_first_block"] = m_loop_first_block;
         j["loop_last_block"] = m_loop_last_block;
         j["loop_count"] = m_loop_count;
+        j["loop_architecture_version"] = LOOP_ARCHITECTURE_VERSION;
         j["input_layer"] = m_input_layer.save();
 
         auto blocks = nlohmann::json::array();
@@ -748,6 +757,7 @@ namespace rllm
         st.metadata.insert("loop_first_block", std::to_string(m_loop_first_block));
         st.metadata.insert("loop_last_block", std::to_string(m_loop_last_block));
         st.metadata.insert("loop_count", std::to_string(m_loop_count));
+        st.metadata.insert("loop_architecture_version", std::to_string(LOOP_ARCHITECTURE_VERSION));
         if (m_learning_rate_provider)
         {
             st.metadata.insert("training_state_version", "1");
@@ -962,6 +972,7 @@ namespace rllm
         size_t saved_loop_first = 0;
         size_t saved_loop_last = 0;
         size_t saved_loop_count = 1;
+        size_t saved_loop_architecture = 0;
         const auto parse_optional_loop_metadata = [&](const char* name, size_t& value) {
             std::string text;
             return !header.count(name) ||
@@ -970,6 +981,8 @@ namespace rllm
         if (!parse_optional_loop_metadata("loop_first_block", saved_loop_first) ||
             !parse_optional_loop_metadata("loop_last_block", saved_loop_last) ||
             !parse_optional_loop_metadata("loop_count", saved_loop_count) ||
+            !parse_optional_loop_metadata("loop_architecture_version", saved_loop_architecture) ||
+            saved_loop_architecture > LOOP_ARCHITECTURE_VERSION ||
             saved_loop_count == 0 ||
             (target_blocks != 0 &&
              (saved_loop_first > saved_loop_last || saved_loop_last >= target_blocks)))

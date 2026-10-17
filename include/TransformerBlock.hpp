@@ -56,8 +56,10 @@ namespace rllm
         // Temporaries used only within forward() itself
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> auxiliary_gradient;
         fixed_size_vector<float, RmsNormPartialSumIndex> rms_norm_row_sums;
         fixed_size_vector<float, PositionIndex> rms_norm_inv_rms;
+        float residual_scale = 1.0f;
 
         explicit ForwardWorkspace(PositionIndex seq)
             : seq_len(seq)
@@ -74,6 +76,7 @@ namespace rllm
             , ffn_act(seq)
             , attn_proj(seq)
             , ffn_out(seq)
+            , auxiliary_gradient(seq)
         {
             attn_w.set_size(HeadsIndex::MAX);
         }
@@ -95,6 +98,8 @@ namespace rllm
             ffn_act.set_rows(seq);
             attn_proj.set_rows(seq);
             ffn_out.set_rows(seq);
+            auxiliary_gradient.set_rows(seq);
+            auxiliary_gradient.zero(queue);
             attn_w.set_size(HeadsIndex::MAX);
             rms_norm_row_sums.zero(queue);
             rms_norm_inv_rms.zero(queue);
@@ -126,6 +131,7 @@ namespace rllm
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_k;
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_h_norm_attn;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> d_residual_branch;
 
         fixed_size_obj_vector<AttentionMatrix, HeadsIndex> d_scores;
         fixed_size_obj_vector<AttentionMatrix, HeadsIndex> d_raw;
@@ -141,6 +147,7 @@ namespace rllm
             , d_K(seq)
             , d_V(seq)
             , d_h_norm_attn(seq)
+            , d_residual_branch(seq)
         {
             d_scores.set_size(HeadsIndex::MAX);
             d_raw.set_size(HeadsIndex::MAX);
@@ -158,6 +165,7 @@ namespace rllm
             d_K.set_rows(seq);
             d_V.set_rows(seq);
             d_h_norm_attn.set_rows(seq);
+            d_residual_branch.set_rows(seq);
             d_scores.set_size(HeadsIndex::MAX);
             d_raw.set_size(HeadsIndex::MAX);
             dW_down.zero(queue);
@@ -212,12 +220,13 @@ namespace rllm
 
         // Forward pass.  h[seq_len × D_MODEL] is modified in-place.
         // Caches intermediate activations for the backward pass.
-        void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, ForwardWorkspace& workspace);
+        void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, ForwardWorkspace& workspace, float residual_scale = 1.0f);
         void forward_batched(
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
             PositionIndex packed_rows,
             const GpuPackedBatchInput& batch,
-            ForwardWorkspace& workspace
+            ForwardWorkspace& workspace,
+            float residual_scale = 1.0f
         );
 
         // Backward pass. dout[seq_len x D_MODEL] = dL/dh_out.
