@@ -1076,7 +1076,47 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         CpuInputLine result;
         state.line_comment_on_last_line = false;
         if (language == SourceLanguage::Text)
-            return get_token_ids(text);
+        {
+            size_t segment_start = 0;
+            const auto append_segment = [&](size_t end) {
+                if (end == segment_start)
+                    return;
+                const auto tokens = get_token_ids(text.substr(segment_start, end - segment_start));
+                for (const auto position : enum_iterator1D<PositionIndex>(tokens.size()))
+                    result.push_back(tokens[position]);
+            };
+            for (size_t position = 0; position < text.size();)
+            {
+                if (text[position] != ' ' && text[position] != '\t')
+                {
+                    ++position;
+                    continue;
+                }
+                append_segment(position);
+                if (text[position] == '\t')
+                {
+                    result.push_back(TokenID::TEXT_TAB);
+                    segment_start = ++position;
+                    continue;
+                }
+
+                const size_t spaces_start = position;
+                while (position < text.size() && text[position] == ' ')
+                    ++position;
+                size_t spaces = position - spaces_start;
+                while (spaces >= 2)
+                {
+                    const size_t compressed_spaces = std::min<size_t>(spaces, 8);
+                    result.push_back(TokenID::TEXT_TAB);
+                    spaces -= compressed_spaces;
+                }
+                if (spaces == 1)
+                    result.push_back(TokenID::SPACE);
+                segment_start = position;
+            }
+            append_segment(text.size());
+            return result;
+        }
         if (language == SourceLanguage::Python)
         {
             size_t indentation_position = 0;
@@ -1312,6 +1352,10 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                     return std::nullopt;
                 result += "<STI_" + std::to_string(index) + ">";
             }
+            else if (token_id == TokenID::SPACE)
+                result += ' ';
+            else if (token_id == TokenID::TEXT_TAB)
+                result += '\t';
             else
             {
                 result += get_token_from_id(token_id);
@@ -1325,7 +1369,12 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                     result += prefix + std::to_string(index) + ">";
                 }
             }
-            if (token_info.end_of_word)
+            const auto next = static_cast<size_t>(i) + 1;
+            const bool next_is_explicit_whitespace =
+                next < static_cast<size_t>(line.size()) &&
+                (line[static_cast<PositionIndex>(next)] == TokenID::SPACE ||
+                 line[static_cast<PositionIndex>(next)] == TokenID::TEXT_TAB);
+            if (token_info.end_of_word && !next_is_explicit_whitespace)
             {
                 result += ' ';
             }

@@ -201,7 +201,7 @@ namespace rllm
       public:
         // Optimizer hyper-parameters
         static constexpr float ADAM_BETA1 = 0.9f;
-        static constexpr float ADAM_BETA2 = 0.999f;
+        static constexpr float ADAM_BETA2 = 0.95f;
         static constexpr float ADAM_EPSILON = 1e-8f;
         static constexpr float WEIGHT_DECAY = 0.01f;
         static constexpr float GRAD_CLIP = 1.0f;

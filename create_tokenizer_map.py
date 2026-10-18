@@ -111,7 +111,7 @@ LANGUAGE_KEYWORD_PREFIXES = tuple(
 
 def read_all_files_in_directory(directory):
     all_text = ""
-    for filename in os.listdir(directory):
+    for filename in sorted(os.listdir(directory)):
         if filename.startswith("."):
             continue # skip hidden files
         for ext in training_file_extensions:
@@ -268,6 +268,8 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
         "<INTEGER>",
         "<FLOAT>",
         "<STI>",
+        "<SPACE>",
+        "<TAB>",
         "<END_OF_SEQUENCE>",
     ]
 
@@ -309,9 +311,12 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
                 tokens.append(ch)
 
 
-    # Corpus-derived BPE pieces would encode concrete names and literal
-    # vocabulary. Keywords, their prefixes, and characters provide fallback
-    # coverage without teaching the model project or library identifiers.
+    # Learn frequent subword pieces from the configured tokenizer corpus.
+    # Explicit keywords and character fallbacks remain in the vocabulary, so
+    # BPE augments coverage without making any spelling unrepresentable.
+    corpus_words = get_unique_words_with_frequency(
+        split_text_using_seperators(text, seperators))
+    tokens.extend(compute_bpe_tokens(corpus_words))
 
     # Create a dictionary to count the frequency of each token.
     token_freq = defaultdict(int)
@@ -436,6 +441,8 @@ def generate_cpp_table_header(tokenizer_map) -> str:
             "<INTEGER>": "INTEGER",
             "<FLOAT>": "FLOAT",
             "<STI>": "STRING_TABLE_INDEX",
+            "<SPACE>": "SPACE",
+            "<TAB>": "TEXT_TAB",
             "<END_OF_SEQUENCE>": "END_OF_SEQUENCE",
         }
         if _token in language_aliases:
@@ -484,12 +491,22 @@ if __name__ == "__main__":
     parser.add_argument("--cc-out",  default="src/tokenizer_map.cc")
     parser.add_argument("--hpp-out", default="include/tokenizer_map.hpp")
     parser.add_argument("--json-out", help="Optional path for the generated token_map.json")
+    parser.add_argument(
+        "--training-directory",
+        action="append",
+        dest="training_directories",
+        help="Directory containing tokenizer training text; may be repeated",
+    )
     parser.add_argument("--support-extra-latin-characters", action="store_true", help="Include additional Latin characters (beyond basic ASCII) as single-character tokens")
     args = parser.parse_args()
 
-    conatenated_text = read_all_files_in_directory("tokenizer_training_data")
-    print(f"Total characters in corpus: {len(conatenated_text)}")
-    tokenizer_map = create_tokenizer_map(conatenated_text, support_extra_latin_characters=args.support_extra_latin_characters)
+    training_directories = args.training_directories or ["tokenizer_training_data"]
+    concatenated_text = "".join(
+        read_all_files_in_directory(directory)
+        for directory in training_directories
+    )
+    print(f"Total characters in corpus: {len(concatenated_text)}")
+    tokenizer_map = create_tokenizer_map(concatenated_text, support_extra_latin_characters=args.support_extra_latin_characters)
 
     print(f"Total unique tokens: {len(tokenizer_map)}")
 

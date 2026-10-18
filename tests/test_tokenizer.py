@@ -83,11 +83,11 @@ def test_neural_network_hpp_no_skipped_chars(token_vocab):
     assert skipped == [], f"Characters not covered by any token: {skipped!r}"
 
 
-def test_concrete_identifier_is_not_learned_as_a_token(token_vocab):
+def test_repeated_corpus_words_are_learned_as_bpe_tokens(token_vocab):
     matched, _ = _greedy_tokenize('"NeuralNetwork.hpp"', token_vocab)
-    assert "Neural" not in matched
-    assert "Network" not in matched
-    assert "hpp" not in matched
+    assert "Neural" in matched
+    assert "Network" in matched
+    assert "hpp" in matched
 
 
 def test_hash_prefixed_identifier_is_not_learned_as_a_token():
@@ -100,11 +100,13 @@ def test_invalid_token_is_reserved_even_when_absent_from_training_text():
     assert "INVALID" in tokenizer_map
     assert "<END_OF_SEQUENCE>" in tokenizer_map
     assert "<LANG_TEXT>" in tokenizer_map
+    assert "<SPACE>" in tokenizer_map
+    assert "<TAB>" in tokenizer_map
 
 
 @pytest.mark.parametrize("token", [
     "<MCP>", "</MCP>", "<LOOP>", "<LOCAL>", "<PARAM>", "<GLOBAL>", "<FIELD>", "<STRING>", "<STI>",
-    "<END_OF_SEQUENCE>",
+    "<SPACE>", "<TAB>", "<END_OF_SEQUENCE>",
 ])
 def test_source_abstraction_tokens_are_reserved(token):
     tokenizer_map = ctm.create_tokenizer_map("unrelated corpus")

@@ -3,7 +3,7 @@
   "model_directory": "models-8",
   "layers": 8,
   "window_size": 128,
-  "window_stride": 64,
+  "window_stride": 1,
   "learn_depth": 1,
   "strip_comments": false,
   "token_drop_probability": 0.0,
@@ -15,8 +15,9 @@
     "curriculum/systems:0.10",
     "curriculum/comments:0.10",
     "curriculum/english:0.10",
+    "curriculum/math:0.05",
     "curriculum/large:0.05",
-    "training_data2:0.35"
+    "training_data2:0.30"
   ],
   "cmake_arguments": [
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",

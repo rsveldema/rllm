@@ -1,0 +1,39 @@
+{
+  "build_type": "release",
+  "model_directory": "models-english-overfit",
+  "layers": 8,
+  "window_size": 32,
+  "window_stride": 1,
+  "learn_depth": 200,
+  "strip_comments": false,
+  "token_drop_probability": 0.0,
+  "token_typo_probability": 0.0,
+  "sources": [
+    "curriculum/english-overfit:1.0"
+  ],
+  "cmake_arguments": [
+    "-DDEBUG_ATTENTION_DIAGNOSTICS=ON",
+    "-DRLLM_ENABLE_STATISTICS=ON",
+    "-DRLLM_MAX_POSITION=512",
+    "-DRLLM_MAX_ATTENTION_POSITION=32"
+  ],
+  "training_arguments": [
+    "--epochs", "1",
+    "--loop-layers", "3-6:2",
+    "--disable-example-convergence",
+    "--checkpoint-interval", "300",
+    "--validation-interval", "300",
+    "--learning-rate", "0.000005",
+    "--layer-learning-rate-multiplier", "1.0",
+    "--weight-initializer", "xavier-uniform",
+    "--ffn-initializer", "xavier-uniform",
+    "--embedding-initializer", "legacy-uniform",
+    "--learning-rate-schedule", "constant",
+    "--micro-batch-size", "4",
+    "--max-validation-windows", "4",
+    "--validation-worst-count", "4",
+    "--memorization-target-percent", "98",
+    "--memorization-max-regression-percent", "20",
+    "--disable-early-stopping"
+  ]
+}

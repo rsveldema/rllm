@@ -16,12 +16,19 @@ boundaries, so `while` is a single token but the `while` portion of
 `while_value` is not treated as the keyword. Every nontrivial keyword prefix is
 also retained explicitly, so `wh`, `whi`, `whil`, `#de`, `#def`, `impl`, and
 `interf` remain tokens for incomplete prompts. ASCII character tokens remain
-as fallbacks for all other incomplete text. Corpus-derived BPE pieces are
-deliberately excluded so concrete identifiers and literal vocabulary cannot
-become learned tokens.
+as fallbacks for all other incomplete text. The generator also learns up to
+500 byte-pair-encoding merges from files in `tokenizer_training_data/` and
+`curriculum/english-large/`. These pieces improve frequently occurring English
+and technical text while character fallbacks keep unseen spellings
+representable.
 
 `<MCP>`, `</MCP>`, `<LOOP>`, `<LOCAL>`, `<PARAM>`, `<GLOBAL>`, `<FIELD>`,
-`<STRING>`, `<STI>`, and `<END_OF_SEQUENCE>` are reserved atomic tokens. The
+`<STRING>`, `<STI>`, `<SPACE>`, `<TAB>`, and `<END_OF_SEQUENCE>` are reserved
+atomic tokens. Plain-text tokenization emits `<SPACE>` for a lone literal space
+and `<TAB>` for a literal tab or a run of two through eight spaces. Longer space
+runs are consumed in groups of up to eight, with a final lone space represented
+by `<SPACE>`. Source-language tokenization retains its existing whitespace
+handling, including literal tab tokens for Python indentation. The
 corpus loader appends `<END_OF_SEQUENCE>` once at the end of every loaded file.
 Identifiers following `.`, `->`, or C/C++ `::` use `<FIELD>`; the base expression retains its normal scoped
 identifier category. Rust `::` paths keep global identifiers because they

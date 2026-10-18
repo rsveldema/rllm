@@ -575,6 +575,32 @@ namespace rllm
             [](size_t total, const WindowExample& window) { return total + static_cast<size_t>(window.line.size()); });
     }
 
+    // Rows supervised by train_window_all_positions: it walks each window's context in
+    // window-stride steps, so a window contributes ceil(context_length / stride) rows.
+    struct SupervisionCoverage
+    {
+        size_t supervised_positions = 0;
+        size_t available_boundaries = 0;
+        size_t minimum_per_window = std::numeric_limits<size_t>::max();
+    };
+
+    static SupervisionCoverage window_supervision_coverage(
+        const std::vector<WindowExample>& windows, size_t stride)
+    {
+        SupervisionCoverage coverage;
+        for (const auto& window : windows)
+        {
+            const size_t context = static_cast<size_t>(window.context_length);
+            const size_t supervised = (context + stride - 1) / stride;
+            coverage.supervised_positions += supervised;
+            coverage.available_boundaries += context;
+            coverage.minimum_per_window = std::min(coverage.minimum_per_window, supervised);
+        }
+        if (coverage.minimum_per_window == std::numeric_limits<size_t>::max())
+            coverage.minimum_per_window = 0;
+        return coverage;
+    }
+
     static std::vector<size_t> make_weighted_window_indices(
         const std::vector<WindowExample>& windows,
         const std::vector<double>& source_weights,
@@ -730,7 +756,6 @@ namespace rllm
         if ((now - last_checkpoint_at) < checkpointing_interval.value())
             return false;
 
-        last_checkpoint_at = now;
         return true;
     }
 
@@ -2032,7 +2057,8 @@ namespace rllm
     TextTrainer::BatchTrainingItem TextTrainer::make_window_training_item(
         const WindowExample& window,
         size_t epoch,
-        size_t window_index) const
+        size_t window_index,
+        std::mt19937& noise_rng) const
     {
         const auto seed = [](uint32_t salt, size_t epoch, size_t window_index) {
             return static_cast<std::mt19937::result_type>(
@@ -2042,15 +2068,15 @@ namespace rllm
         };
 
         CpuInputLine line = window.line;
-        std::mt19937 string_table_rng{seed(0x9e3779b9u, epoch, window_index)};
-        line.permute_string_table(string_table_rng);
+        noise_rng.seed(seed(0x9e3779b9u, epoch, window_index));
+        line.permute_string_table(noise_rng);
         auto first_string_table_index = window.first_string_table_index;
         auto context_length = window.context_length;
 
         if ((m_token_dropout_probability > 0.0f || m_token_typo_probability > 0.0f) &&
             static_cast<size_t>(line.size()) > 2)
         {
-            std::mt19937 noise_rng{seed(0xd1b54a35u, epoch, window_index)};
+            noise_rng.seed(seed(0xd1b54a35u, epoch, window_index));
             std::bernoulli_distribution drop{m_token_dropout_probability};
             std::bernoulli_distribution typo{m_token_typo_probability};
             CpuInputLine filtered;
@@ -2163,6 +2189,22 @@ namespace rllm
             token_count(files), files.size(),
             window_token_occurrence_count(training_windows), training_windows.size());
 
+        const auto coverage = window_supervision_coverage(training_windows, m_window_stride);
+        LOG_INFO(
+            "Supervision coverage: {} supervised prediction rows per epoch across {} windows ({} next-token boundaries available, {} supervised positions in the smallest window)",
+            coverage.supervised_positions, training_windows.size(),
+            coverage.available_boundaries, coverage.minimum_per_window);
+        if (coverage.available_boundaries > 0 &&
+            coverage.supervised_positions * 2 < coverage.available_boundaries)
+        {
+            LOG_INFO(
+                "WARNING: window stride {} supervises fewer than half of the next-token boundaries ({} of {} rows). "
+                "Each window only trains {} positions, so most tokens are never a prediction target. "
+                "Lower --window-stride (the default is 1) or raise --window-size to widen supervision.",
+                m_window_stride, coverage.supervised_positions, coverage.available_boundaries,
+                coverage.minimum_per_window);
+        }
+
         const size_t steps_per_window = training_steps_per_example(m_transformer_blocks.size(), m_learn_depth);
         const size_t windows_per_epoch = training_windows.size();
         const size_t rows_per_full_window = static_cast<size_t>(window_size - 1);
@@ -2231,11 +2273,14 @@ namespace rllm
                 m_optimizer_step, m_learning_rate_provider->current_rate());
         }
         m_last_logged_learning_rate = std::numeric_limits<float>::quiet_NaN();
-        std::mt19937 rng{42};
+        // std::mt19937 carries about 5 KiB of state. Keep both generators off
+        // the stack because this training function already has a large frame.
+        auto rng = std::make_unique<std::mt19937>(42);
+        auto window_noise_rng = std::make_unique<std::mt19937>();
         if (m_has_loaded_training_state && !m_checkpoint_rng_state.empty())
         {
             std::istringstream state{m_checkpoint_rng_state};
-            if (!(state >> rng))
+            if (!(state >> *rng))
             {
                 LOG_INFO("Invalid checkpoint shuffle state; refusing non-deterministic resume");
                 std::exit(1);
@@ -2315,6 +2360,11 @@ namespace rllm
                 baseline.average_correct_token_probability * 100.0,
                 baseline.mtp_average_loss,
                 baseline.per_head_count[0]);
+
+            // Baseline validation and the initial best-checkpoint save are
+            // setup work, not training time. Start the timed-checkpoint
+            // interval only after both have completed.
+            last_checkpoint_at = std::chrono::steady_clock::now();
         }
         // Optimizer update kernels always bind this buffer, even on updates for
         // which diagnostics collection is disabled. Allocate it and both pinned
@@ -2338,13 +2388,13 @@ namespace rllm
             m_checkpoint_window_count = num_windows;
             {
                 std::ostringstream state;
-                state << rng;
+                state << *rng;
                 m_checkpoint_rng_state = state.str();
             }
             auto indices = make_weighted_window_indices(
                 training_windows,
                 m_corpus.source_weights(),
-                rng,
+                *rng,
                 m_training_method == TrainingMethod::WINDOW);
 
             const size_t first_window = epoch == first_epoch ? m_checkpoint_window : 0;
@@ -2369,7 +2419,7 @@ namespace rllm
                 {
                     const size_t window_index = indices[start + offset];
                     batch.push_back(make_window_training_item(
-                        training_windows[window_index], epoch, window_index));
+                        training_windows[window_index], epoch, window_index, *window_noise_rng));
                 }
                 total_windows_trained += batch.size();
 
@@ -2380,6 +2430,7 @@ namespace rllm
                     const auto timed_checkpoint = checkpoint();
                     prune_numbered_checkpoints(timed_checkpoint.parent_path());
                     const double checkpoint_ms = elapsed_ms(checkpoint_started_at);
+                    last_checkpoint_at = std::chrono::steady_clock::now();
                     LOG_INFO(
                         "timed checkpoint at epoch {}, window {} completed in {:.3f} seconds",
                         epoch, start, checkpoint_ms / 1000.0);
@@ -2434,6 +2485,10 @@ namespace rllm
                 {
                     const auto validation_started = std::chrono::steady_clock::now();
                     const auto validation = evaluate_all_window_positions(validation_windows);
+                    const auto validation_finished = std::chrono::steady_clock::now();
+                    // Timed checkpoints measure active time between saves.
+                    // Pause that clock while validation occupies the device.
+                    last_checkpoint_at += validation_finished - validation_started;
                     log_validation_progress(
                         "timed", epoch, num_epochs,
                         static_cast<double>(start + count) / static_cast<double>(num_windows),
@@ -2448,8 +2503,8 @@ namespace rllm
                         validation.average_correct_token_probability * 100.0,
                         validation.mtp_average_loss,
                         validation.per_head_count[0],
-                        std::chrono::duration<double>(std::chrono::steady_clock::now() - validation_started).count());
-                    next_validation_at = std::chrono::steady_clock::now() + m_validation_interval;
+                        std::chrono::duration<double>(validation_finished - validation_started).count());
+                    next_validation_at = validation_finished + m_validation_interval;
                 }
             }
 
@@ -2466,7 +2521,7 @@ namespace rllm
             m_checkpoint_window = 0;
             {
                 std::ostringstream state;
-                state << rng;
+                state << *rng;
                 m_checkpoint_rng_state = state.str();
             }
 
@@ -2490,6 +2545,7 @@ namespace rllm
                 next_validation_at = std::chrono::steady_clock::now() + m_validation_interval;
                 std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
                 const auto epoch_checkpoint_filename = checkpoint();
+                last_checkpoint_at = std::chrono::steady_clock::now();
 
                 if ((validation.average_loss + VALIDATION_IMPROVEMENT_EPSILON) < best_validation_loss)
                 {
@@ -2520,6 +2576,7 @@ namespace rllm
             {
                 std::println("creating end-of-epoch checkpoint at epoch {}", epoch);
                 checkpoint();
+                last_checkpoint_at = std::chrono::steady_clock::now();
             }
 
             if (m_memorization_target_accuracy > 0.0f)

@@ -1,0 +1,1 @@
+Generics allow classes and methods to share behavior.

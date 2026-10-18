@@ -1,0 +1,13 @@
+A triangle has three sides.
+A square has four equal sides.
+A rectangle has four right angles.
+A circle has no straight sides.
+
+The perimeter of a square with side 3 is 12.
+The area of a square with side 4 is 16.
+The area of a rectangle with width 3 and height 5 is 15.
+The area of a triangle with base 6 and height 4 is 12.
+
+A right angle measures 90 degrees.
+A straight angle measures 180 degrees.
+The angles inside a triangle add to 180 degrees.

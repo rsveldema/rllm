@@ -47,6 +47,7 @@ set(
 # --- tokenizer_map codegen ---------------------------------------------------
 # Glob the input files so CMake re-runs if any of them change.
 file(GLOB TOKENIZER_TRAINING_FILES "${CMAKE_SOURCE_DIR}/tokenizer_training_data/*")
+file(GLOB TOKENIZER_ENGLISH_LARGE_FILES "${CMAKE_SOURCE_DIR}/curriculum/english-large/*")
 
 set(TOKENIZER_GEN_DIR "${CMAKE_BINARY_DIR}/generated")
 set(TOKENIZER_CC  "${TOKENIZER_GEN_DIR}/tokenizer_map.cc")
@@ -61,10 +62,13 @@ add_custom_command(
             "--cc-out"  "${TOKENIZER_CC}"
             "--hpp-out" "${TOKENIZER_HPP}"
             "--json-out" "${TOKENIZER_JSON}"
+            "--training-directory" "${CMAKE_SOURCE_DIR}/tokenizer_training_data"
+            "--training-directory" "${CMAKE_SOURCE_DIR}/curriculum/english-large"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     DEPENDS
         "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
         ${TOKENIZER_TRAINING_FILES}
+        ${TOKENIZER_ENGLISH_LARGE_FILES}
     COMMENT "Generating tokenizer_map.cc, tokenizer_map.hpp, and token_map.json in build/generated"
     VERBATIM
 )

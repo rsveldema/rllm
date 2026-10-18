@@ -636,13 +636,36 @@ TEST(CorpusTest, PlainTextRetainsWordsWithoutSourceAbstraction)
     const std::vector<std::string> filters;
     Corpus corpus(filters);
     CommentLexState state;
-    const std::string text = "The careful reader noticed the error.";
+    const std::string text = "Word order\tmatters.";
     const auto tokens = corpus.get_token_ids(
         text, SourceLanguage::Text, state);
     const auto raw_tokens = corpus.get_token_ids(text);
 
     EXPECT_EQ(std::ranges::count(tokens.m_cpu, TokenID::GLOBAL), 0);
-    EXPECT_EQ(tokens.m_cpu, raw_tokens.m_cpu);
+    EXPECT_EQ(std::ranges::count(tokens.m_cpu, TokenID::SPACE), 1);
+    EXPECT_EQ(std::ranges::count(tokens.m_cpu, TokenID::TEXT_TAB), 1);
+    EXPECT_EQ(std::ranges::count(raw_tokens.m_cpu, TokenID::SPACE), 0);
+    EXPECT_EQ(std::ranges::count(raw_tokens.m_cpu, TokenID::TEXT_TAB), 0);
+    EXPECT_EQ(corpus.get_line(tokens), text);
+}
+
+TEST(CorpusTest, PlainTextCompressesConsecutiveSpacesAsTabs)
+{
+    const std::vector<std::string> filters;
+    Corpus corpus(filters);
+    for (size_t spaces = 2; spaces <= 8; ++spaces)
+    {
+        CommentLexState state;
+        const auto tokens = corpus.get_token_ids(
+            "one" + std::string(spaces, ' ') + "two", SourceLanguage::Text, state);
+
+        EXPECT_EQ(std::ranges::count(tokens.m_cpu, TokenID::TEXT_TAB), 1)
+            << "space count: " << spaces;
+        EXPECT_EQ(std::ranges::count(tokens.m_cpu, TokenID::SPACE), 0)
+            << "space count: " << spaces;
+        EXPECT_EQ(corpus.get_line(tokens), "one\ttwo")
+            << "space count: " << spaces;
+    }
 }
 
 TEST(CorpusTest, PlainTextExtensionsUseTheTextLanguageMarker)

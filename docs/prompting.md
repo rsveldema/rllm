@@ -10,6 +10,10 @@ explicit virtual `<STI>` token whose metadata points into the prompt's
 with `<MCP>` and `</MCP>`. Source text does not need to contain these tokens
 explicitly; already-normalized markers are still accepted.
 
+Use `/language text` for plain-text prompts. Rendered output restores spaces
+and tabs from the explicit `<SPACE>` and `<TAB>` tokens emitted by text-mode
+tokenization, so generated words do not run together.
+
 Interactive prompt mode keeps an in-memory history of submitted inputs. Use
 the up and down arrow keys to navigate backward and forward through entries.
 History lasts for the current prompt session and is not written to disk.

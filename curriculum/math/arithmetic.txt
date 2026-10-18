@@ -1,0 +1,18 @@
+One plus one equals two.
+2 + 3 = 5.
+Seven minus four equals three.
+9 - 5 = 4.
+Three times four equals twelve.
+6 * 5 = 30.
+Eight divided by two equals four.
+20 / 5 = 4.
+
+The sum of 4 and 6 is 10.
+The difference between 11 and 3 is 8.
+The product of 7 and 3 is 21.
+The quotient of 18 and 6 is 3.
+
+Half of 14 is 7.
+One quarter of 20 is 5.
+Three quarters of 12 is 9.
+The remainder when 17 is divided by 5 is 2.

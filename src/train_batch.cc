@@ -356,7 +356,6 @@ namespace rllm
         const float scale = loss_weight / static_cast<float>(predictions.size());
         std::vector<double> primary_sums(active_indices.size());
         std::vector<size_t> primary_counts(active_indices.size());
-        auto& back = *m_backward_workspace;
         while (!predictions.empty())
         {
             const auto head = predictions.front().head;

@@ -134,6 +134,8 @@ namespace rllm
         replace_all("<LINE_COMMENT_END>", "\n");
         replace_all("<BLOCK_COMMENT_START>", "/*");
         replace_all("<BLOCK_COMMENT_END>", "*/");
+        replace_all("<SPACE>", " ");
+        replace_all("<TAB>", "\t");
         return text;
     }
 
@@ -177,6 +179,11 @@ namespace rllm
             }
             else
                 text += token_text;
+
+            const auto token_info = tokenizer_map.find(token);
+            if (language != SourceLanguage::Text &&
+                token_info != tokenizer_map.end() && token_info->second.end_of_word)
+                text += ' ';
         }
         return render_prompt_text(std::move(text), language);
     }
@@ -218,17 +225,17 @@ namespace rllm
                  std::println("  Attention heads:      {}", static_cast<size_t>(HeadsIndex::MAX));
                  std::println("  Transformer layers:   {}", nn.get_transformer_block_count());
              }},
-            {{"/language", "/lang"}, "Set prompt language: /language <cpp|c|python|rust|java|shell>", [&]() {
+            {{"/language", "/lang"}, "Set prompt language: /language <cpp|c|python|rust|java|shell|text>", [&]() {
                 const auto space = command.find(' ');
                 if (space == std::string::npos)
                 {
-                    std::println("Usage: /language <cpp|c|python|rust|java|shell>");
+                    std::println("Usage: /language <cpp|c|python|rust|java|shell|text>");
                     return;
                 }
                 const auto language = parse_source_language(command.substr(space + 1));
                 if (!language.has_value())
                 {
-                    std::println("Unknown language. Choose cpp, c, python, rust, java, or shell.");
+                    std::println("Unknown language. Choose cpp, c, python, rust, java, shell, or text.");
                     return;
                 }
                 options.language = *language;

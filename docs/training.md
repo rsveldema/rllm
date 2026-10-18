@@ -139,7 +139,7 @@ before repeating them. Unweighted directories default to weight `1`.
 
 The Python training launcher uses `training_data0`, the `curriculum/grammar`,
 `curriculum/syntax`, `curriculum/comments`, `curriculum/systems`,
-`curriculum/algos`, and `curriculum/english` categories,
+`curriculum/algos`, `curriculum/english`, and `curriculum/math` categories,
 and `training_data2` as a weighted mixture. Change `sources` in the JSON to use
 a different corpus or weighting.
 
@@ -151,8 +151,10 @@ curriculum changes the tokenizer signature and requires a fresh-start model
 rather than resuming an older checkpoint.
 
 Plain-text `.txt`, `.text`, and `.md` files use the `<LANG_TEXT>` language
-marker. Their words and punctuation are tokenized directly; unlike program
-sources, prose does not pass through identifier, literal, or MCP abstraction.
+marker. Their words and punctuation are tokenized directly. A lone space uses
+`<SPACE>`; a literal tab or run of two through eight spaces uses `<TAB>`.
+Unlike program sources,
+prose does not pass through identifier, literal, or MCP abstraction.
 
 For an isolated diagnostic run, `configs/english-debug.json` trains a four-layer
 debug build exclusively on `curriculum/english`. It enables runtime statistics
@@ -328,8 +330,13 @@ Timed checkpoints, best checkpoints, training progress, and tokenization logs
 created by tests never use the production `models/` directory.
 The Python training launcher requests a timed checkpoint every
 600 seconds, for at most six timed checkpoints per hour of uninterrupted
-training. After each timed checkpoint, window training retains the two newest
-numbered checkpoints in the model directory and deletes every older numbered
+training. The interval starts when the preceding timed or end-of-epoch
+checkpoint finishes, so time spent serializing a large checkpoint cannot make
+another checkpoint immediately due. Time spent running baseline or mid-epoch
+validation is also excluded from this interval, so a long validation pass does
+not make a timed checkpoint immediately due. After each timed checkpoint, window
+training retains the two newest numbered checkpoints in the model directory
+and deletes every older numbered
 checkpoint and training sidecar. This pruning also covers checkpoints left by
 earlier runs. A checkpoint pair referenced by any symlink in the model
 directory is preserved in addition to the newest two.
@@ -534,6 +541,18 @@ stride-selected row; higher MTP heads predict the additional available future
 tokens. Adjacent windows overlap by one token, so stride `1` covers every
 next-token boundary exactly once without rebuilding every prefix.
 
+The same value also bounds how far a window reaches: a window keeps only
+`floor((window_size - 2) / stride) * stride` prediction boundaries, so a large
+stride shortens windows as well as subsampling them. With `--window-size 32
+--window-stride 16` each window is 17 tokens long and supervises just two rows,
+which leaves most tokens without a prediction target and lets the model
+memorize those rows instead of learning general next-token prediction. Keep the
+stride at `1`, or keep it at most a small fraction of the window size, unless
+the reduced output-layer work is specifically what you want to measure. Training
+logs a `Supervision coverage:` line with the number of supervised rows per epoch
+and warns when the stride supervises fewer than half of the available
+next-token boundaries.
+
 Window training deterministically reserves 20% of the windows within each file
 for validation. Every file large enough to produce at least two windows
 therefore contributes to both training and validation; shorter files remain
@@ -656,12 +675,14 @@ output workspace and per-example packed-row boundaries. Token-level packed
 metadata and transformer activations are instead bounded by `PositionIndex::MAX`
 and are not multiplied by the number of batch slots.
 
-All learned parameters use AdamW with `beta1=0.9`, `beta2=0.999`,
+All learned parameters use AdamW with `beta1=0.9`, `beta2=0.95`,
 `epsilon=1e-8`, and decoupled weight decay `0.01`. Gradients retain the existing
 clipping. The old SGD-specific fan-in learning-rate scaling is not applied,
 because AdamW normalizes updates by their second moment. Loading a checkpoint
-restores its weights and starts fresh Adam moment buffers and optimizer step;
-optimizer state is not serialized.
+restores serialized Adam moments when they are present. Use
+`--reset-optimizer-state` when resuming a checkpoint created with different
+Adam coefficients, because its moment estimates are not compatible with the
+new coefficients.
 
 Large learning rates can still saturate the clipped weights and produce losses
 around `38400`, which means the target logit is clamped far below another

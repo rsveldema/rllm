@@ -1,0 +1,17 @@
+If x + 3 = 8, then x = 5.
+If x - 4 = 6, then x = 10.
+If 3 * x = 15, then x = 5.
+If x / 4 = 3, then x = 12.
+
+To solve x + 7 = 12, subtract 7 from both sides.
+x + 7 = 12.
+x = 12 - 7.
+x = 5.
+
+To solve 2 * x = 14, divide both sides by 2.
+2 * x = 14.
+x = 14 / 2.
+x = 7.
+
+When x = 4, the expression 2 * x + 1 equals 9.
+When y = 3, the expression y * y equals 9.

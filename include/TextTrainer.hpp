@@ -425,7 +425,8 @@ namespace rllm
         BatchTrainingItem make_window_training_item(
             const WindowExample& window,
             size_t epoch,
-            size_t window_index
+            size_t window_index,
+            std::mt19937& noise_rng
         ) const;
         size_t train_batch_items(std::vector<BatchTrainingItem>& batch, size_t steps, BatchTrainingTiming& timing);
         size_t train_batch_step(std::vector<BatchTrainingItem>& batch, size_t step, BatchTrainingTiming& timing);
