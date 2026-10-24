@@ -340,6 +340,25 @@ TEST(CorpusTest, PythonScopeManagementReusesIdentifierSlotsAfterDedent)
     EXPECT_EQ(tokenize("    fourth = 4"), "<LOCAL><STI_0>=<INTEGER><ITI_0>");
 }
 
+TEST(CorpusTest, PythonDictionaryBracesDoNotPopIndentationScopes)
+{
+    Corpus corpus{{}};
+    CommentLexState state;
+    const std::vector<std::string> lines{
+        "def build():",
+        "    values = {",
+        "'first': 1,",
+        "}",
+        "result = build()",
+    };
+
+    for (const auto& line : lines)
+        EXPECT_NO_FATAL_FAILURE(corpus.get_token_ids(line, SourceLanguage::Python, state));
+
+    EXPECT_EQ(state.identifier_scopes.scopes.size(), 1u);
+    EXPECT_EQ(state.identifier_scopes.indentation_levels.size(), 1u);
+}
+
 TEST(CorpusTest, JavaScopeManagementReusesIdentifierSlots)
 {
     DefaultMCP mcp;
@@ -646,6 +665,16 @@ TEST(CorpusTest, PlainTextRetainsWordsWithoutSourceAbstraction)
     EXPECT_EQ(std::ranges::count(tokens.m_cpu, TokenID::TEXT_TAB), 1);
     EXPECT_EQ(std::ranges::count(raw_tokens.m_cpu, TokenID::SPACE), 0);
     EXPECT_EQ(std::ranges::count(raw_tokens.m_cpu, TokenID::TEXT_TAB), 0);
+    EXPECT_EQ(corpus.get_line(tokens), text);
+}
+
+TEST(CorpusTest, PlainTextRoundTripsUnseenUnicodeThroughByteFallbacks)
+{
+    Corpus corpus{{}};
+    const std::string text = "caféКот猫😺";
+
+    const auto tokens = corpus.get_token_ids(text);
+
     EXPECT_EQ(corpus.get_line(tokens), text);
 }
 

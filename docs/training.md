@@ -137,11 +137,52 @@ sources, so small curriculum corpora can remain represented without being
 overwhelmed by a larger source. Sampling cycles through shuffled source windows
 before repeating them. Unweighted directories default to weight `1`.
 
-The Python training launcher uses `training_data0`, the `curriculum/grammar`,
+The standard eight-layer configuration uses all general-purpose training data:
+`training_data0`, `training_data2`, and the `curriculum/grammar`,
 `curriculum/syntax`, `curriculum/comments`, `curriculum/systems`,
-`curriculum/algos`, `curriculum/english`, and `curriculum/math` categories,
-and `training_data2` as a weighted mixture. Change `sources` in the JSON to use
-a different corpus or weighting.
+`curriculum/algos`, `curriculum/english`, `curriculum/english-large`,
+`curriculum/math`, and `curriculum/large` categories as a weighted mixture.
+The specialized `curriculum/english-overfit` and `curriculum/guaranteed-90`
+diagnostic sets remain isolated in their dedicated configurations. Change
+`sources` in the JSON to use a different corpus or weighting.
+
+Validation scores every token position in each sampled window. The standard
+eight-layer configuration therefore caps validation at eight file-balanced
+windows, keeping a validation pass near one to two minutes on the target GPU.
+This cap affects only evaluation; all training windows remain enabled.
+
+The standard eight-layer configuration also prepares a cached 10,000-file
+sample of Hugging Face's `HuggingFaceTB/smollm-corpus` `python-edu` subset in
+`~/huggingface/smollm-python-edu` and gives it a five percent source
+weight. Install the repository's Python dependencies once with:
+
+```sh
+uv pip install --no-config --index-url https://pypi.org/simple -r requirements.txt
+```
+
+The download is resumable: existing blob files are reused on later launches,
+and newly downloaded metadata is appended to `manifest.jsonl`. Configure it
+with the `python_edu` object in the training JSON. `max_files` limits the cache
+size; setting it to `0` requests the complete 7.68-million-file corpus. The
+full corpus can take many hours and require substantial storage. Set `enabled`
+to `false` to train without downloading or including this source. Python-Edu
+files are retained only when they contain at least one `#` comment or Python
+docstring and every letter in that prose uses the Latin script. Files without
+comments and files with non-Latin comments are rejected and recorded in the
+manifest so later resumptions do not download them again. Existing cached files
+are checked and pruned on the next preparation.
+
+The configuration similarly streams a cached 10,000-story sample from
+`AlgoDriveAI/TinyMathStories_gpt-oss-20b` into
+`~/huggingface/tiny-math-stories`. These persistent paths avoid downloading the
+corpora again after temporary-directory cleanup. Each dataset row is stored as a
+separate `.txt` file so training windows cannot cross story boundaries. The
+downloader rejects rows containing letters from non-Latin writing systems, so
+only English stories enter this source; accented Latin letters and mathematical
+symbols remain supported. Previously cached non-English rows are removed on the
+next preparation. The source receives five percent of epoch draws. Its `tiny_math_stories` settings
+support the same `enabled`, `directory`, `max_files`, and `weight` controls;
+`max_files: 0` downloads the complete approximately 1.65 GB training split.
 
 The English curriculum progresses from short concrete sentences through
 grammar contrasts and dialogue to technical explanations. The general training
@@ -222,6 +263,11 @@ so placement of identifier-category tokens, `<STRING>`, and `<MCP>...</MCP>` can
 without rewriting repository sources. Each training launch refreshes them.
 
 `./train.py config-6.json` stores artifacts in the configured model directory.
+New runs also store the generated tokenizer source, header, and JSON map in the
+model directory's `tokenizer/` subdirectory. Resume runs build with this frozen
+snapshot and never recompute token IDs from the current tokenizer-training
+corpus. Legacy checkpoints without a snapshot require their original tokenizer
+artifacts to be restored there, or a deliberate `--fresh-start`.
 Unless `--latest`, `--fresh-start`, or `--resume-model` is supplied, it tries to resume from
 the newest timed or cleaned checkpoint in the matching model directory, then
 falls back to `after_training.st` and `checkpoint-best-window.st`. When starting

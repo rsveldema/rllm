@@ -1,3 +1,6 @@
 pytest
 lark
 matplotlib
+datasets
+boto3
+botocore

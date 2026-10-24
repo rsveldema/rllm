@@ -1,11 +1,14 @@
 import os
 import json
 from pathlib import Path
+import warnings
 
 import pytest
 
 import train
 import generate_embedding_prefill
+import download_huggingface_text
+import download_python_edu
 
 
 def valid_config() -> dict[str, object]:
@@ -348,6 +351,189 @@ def test_incremental_config_enables_mode_without_cli_flag():
     assert config["model_directory"] == "models-8-incremental"
     assert not options.incremental_window
     assert options.incremental_window or config["incremental_window"]
+
+
+def test_model_8_config_enables_all_general_training_sources():
+    config = train.load_config(Path("configs/config-8.json"))
+    configured_sources = {
+        train.split_source(source)[0] for source in config["sources"]
+    }
+
+    assert configured_sources == {
+        "training_data0",
+        "curriculum/grammar",
+        "curriculum/syntax",
+        "curriculum/systems",
+        "curriculum/comments",
+        "curriculum/algos",
+        "curriculum/english",
+        "curriculum/english-large",
+        "curriculum/math",
+        "curriculum/large",
+        "training_data2",
+    }
+    local_weight = sum(
+        float(train.split_source(source)[1]) for source in config["sources"]
+    )
+    assert (
+        local_weight
+        + config["python_edu"]["weight"]
+        + config["tiny_math_stories"]["weight"]
+    ) == pytest.approx(1.0)
+    max_validation_windows = config["training_arguments"].index(
+        "--max-validation-windows"
+    )
+    assert config["training_arguments"][max_validation_windows + 1] == "8"
+    assert config["python_edu"] == {
+        "enabled": True,
+        "directory": "~/huggingface/smollm-python-edu",
+        "max_files": 10000,
+        "workers": 16,
+        "weight": 0.05,
+    }
+    assert config["tiny_math_stories"] == {
+        "enabled": True,
+        "directory": "~/huggingface/tiny-math-stories",
+        "max_files": 10000,
+        "weight": 0.05,
+    }
+
+
+def test_python_edu_source_is_downloaded_and_weighted(tmp_path, monkeypatch):
+    commands = []
+    monkeypatch.setattr(train, "run", lambda command: commands.append(command))
+    config = {
+        "python_edu": {
+            "enabled": True,
+            "directory": str(tmp_path),
+            "max_files": 25,
+            "workers": 3,
+            "weight": 0.125,
+        }
+    }
+
+    assert train.prepare_python_edu_source(config) == f"{tmp_path}:0.125"
+    assert commands[0][1:] == [
+        str(train.ROOT / "download_python_edu.py"),
+        "--output-dir", str(tmp_path),
+        "--max-files", "25",
+        "--workers", "3",
+    ]
+
+
+def test_python_edu_requires_english_comments_or_docstrings():
+    assert download_python_edu.has_english_comments(
+        '# Explain the result\ndef answer():\n    """Return the value."""\n    return 42\n'
+    )
+    assert download_python_edu.has_english_comments(
+        'def answer():\n    """Café values are accepted."""\n    return 42\n'
+    )
+    assert not download_python_edu.has_english_comments("def answer():\n    return 42\n")
+    assert not download_python_edu.has_english_comments(
+        "# Вернуть значение\ndef answer():\n    return 42\n"
+    )
+
+
+def test_python_edu_ignores_invalid_escape_warnings():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SyntaxWarning)
+        assert download_python_edu.has_english_comments(
+            'pattern = "\\s"\n# Match whitespace\n'
+        )
+
+
+def test_resume_uses_model_tokenizer_snapshot(tmp_path):
+    model_dir = tmp_path / "models-8"
+    model_dir.mkdir()
+    (model_dir / "checkpoint-1.st").write_bytes(b"checkpoint")
+
+    assert train.tokenizer_snapshot_for_resume(
+        model_dir, None, None, fresh_start=False
+    ) == model_dir / "tokenizer"
+    assert train.tokenizer_snapshot_for_resume(
+        model_dir, None, None, fresh_start=True
+    ) is None
+
+
+def test_explicit_resume_uses_checkpoint_directory_tokenizer(tmp_path):
+    checkpoint = tmp_path / "imported" / "model.st"
+
+    assert train.tokenizer_snapshot_for_resume(
+        tmp_path / "models-8", None, str(checkpoint), fresh_start=False
+    ) == checkpoint.parent / "tokenizer"
+
+
+def test_tokenizer_snapshot_copies_all_generated_artifacts(tmp_path):
+    build_dir = tmp_path / "build"
+    generated = build_dir / "generated"
+    generated.mkdir(parents=True)
+    for name in train.TOKENIZER_ARTIFACTS:
+        (generated / name).write_text(name, encoding="utf-8")
+
+    snapshot = train.save_tokenizer_snapshot(build_dir, tmp_path / "models-8")
+
+    assert {path.name for path in snapshot.iterdir()} == set(train.TOKENIZER_ARTIFACTS)
+    for name in train.TOKENIZER_ARTIFACTS:
+        assert (snapshot / name).read_text(encoding="utf-8") == name
+
+
+def test_tiny_math_stories_source_is_downloaded_and_weighted(tmp_path, monkeypatch):
+    commands = []
+    monkeypatch.setattr(train, "run", lambda command: commands.append(command))
+    config = {
+        "tiny_math_stories": {
+            "enabled": True,
+            "directory": str(tmp_path),
+            "max_files": 50,
+            "weight": 0.2,
+        }
+    }
+
+    assert train.prepare_tiny_math_stories_source(config) == f"{tmp_path}:0.2"
+    assert commands[0][1:] == [
+        str(train.ROOT / "download_huggingface_text.py"),
+        "--repository", "AlgoDriveAI/TinyMathStories_gpt-oss-20b",
+        "--output-dir", str(tmp_path),
+        "--max-files", "50",
+        "--english-only",
+    ]
+
+
+def test_huggingface_text_download_is_resumable(tmp_path, monkeypatch):
+    rows = [{"text": "first story"}, {"text": "second story"}]
+    monkeypatch.setattr(
+        download_huggingface_text,
+        "load_dataset_function",
+        lambda: lambda *args, **kwargs: rows,
+    )
+
+    assert download_huggingface_text.download("example/data", tmp_path, 2) == 0
+    assert (tmp_path / "files/000000000.txt").read_text() == "first story\n"
+    assert (tmp_path / "files/000000001.txt").read_text() == "second story\n"
+    assert download_huggingface_text.download("example/data", tmp_path, 2) == 0
+    assert len((tmp_path / "manifest.jsonl").read_text().splitlines()) == 2
+
+
+def test_huggingface_text_download_can_keep_only_english(tmp_path, monkeypatch):
+    rows = [
+        {"text": "Once upon a time, there were 3 apples."},
+        {"text": "Жил-был маленький кот."},
+        {"text": "The café had two cakes ÷ four friends."},
+    ]
+    monkeypatch.setattr(
+        download_huggingface_text,
+        "load_dataset_function",
+        lambda: lambda *args, **kwargs: rows,
+    )
+
+    assert download_huggingface_text.download(
+        "example/data", tmp_path, 2, english_only=True,
+    ) == 0
+    downloaded = sorted((tmp_path / "files").glob("*.txt"))
+    assert [path.read_text() for path in downloaded] == [
+        "Once upon a time, there were 3 apples.\n",
+        "The café had two cakes ÷ four friends.\n",
+    ]
 
 
 def test_incremental_stage_marker_is_visible_as_epoch_offset(tmp_path):

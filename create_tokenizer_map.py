@@ -10,6 +10,21 @@ import os
 # The marker is also emitted as its own token so the C++ tokenizer can
 # recognise word-end positions in the input stream.
 EOW_MARKER = '·'  # U+00B7 MIDDLE DOT
+BYTE_TOKEN_PREFIX = "<BYTE_"
+
+
+def byte_fallback_token(value: int) -> str:
+    return f"{BYTE_TOKEN_PREFIX}{value:02X}>"
+
+
+def byte_fallback_value(token: str) -> int | None:
+    if not (token.startswith(BYTE_TOKEN_PREFIX) and token.endswith(">")):
+        return None
+    try:
+        value = int(token[len(BYTE_TOKEN_PREFIX):-1], 16)
+    except ValueError:
+        return None
+    return value if 0x80 <= value <= 0xFF else None
 
 # read the sample data and create a dictionary of longest
 # sequences of characters that appear in the data, and assign each sequence a unique ID.
@@ -326,6 +341,11 @@ def create_tokenizer_map(text, support_extra_latin_characters: bool = False) -> 
     # Sort tokens by length (longest first) and then by frequency (most common first).
     sorted_tokens = sorted(token_freq.keys(), key=lambda x: (-len(x), -token_freq[x]))
 
+    # The runtime tokenizer operates on UTF-8 bytes. Keep a fallback token for
+    # every non-ASCII byte so arbitrary Unicode input is losslessly tokenizable.
+    # Append these after learned pieces so they cannot preempt longer matches.
+    sorted_tokens.extend(byte_fallback_token(value) for value in range(0x80, 0x100))
+
     # Create a mapping of token to unique ID.
     tokenizer_map = {token: idx for idx, token in enumerate(sorted_tokens)}
 
@@ -346,7 +366,10 @@ def generate_cpp_table_impl(tokenizer_map) -> str:
         stripped = token[:-len(EOW_MARKER)] if is_eow else token
         if not stripped:
             continue # skip the lone EOW_MARKER token
-        if stripped == "\t":
+        fallback_byte = byte_fallback_value(stripped)
+        if fallback_byte is not None:
+            display_token = f"\\x{fallback_byte:02x}"
+        elif stripped == "\t":
             display_token = "\\t"
         elif stripped == "\n":
             display_token = "\\n"

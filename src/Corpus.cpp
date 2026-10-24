@@ -327,6 +327,9 @@ namespace rllm
         std::string out;
         out.reserve(text.size());
         bool expect_library_name = false;
+        const bool uses_brace_scopes =
+            language == SourceLanguage::Cpp || language == SourceLanguage::C ||
+            language == SourceLanguage::Rust || language == SourceLanguage::Java;
         size_t i = 0;
         while (i < text.size())
         {
@@ -564,7 +567,7 @@ namespace rllm
                 i = first_end;
                 continue;
             }
-            if (text[i] == '{')
+            if (uses_brace_scopes && text[i] == '{')
             {
                 scopes.scopes.emplace_back(std::move(scopes.pending_parameters));
                 scopes.pending_parameters.clear();
@@ -573,7 +576,7 @@ namespace rllm
                 scopes.pending_class_scope = false;
                 scopes.pending_function_scope = false;
             }
-            else if (text[i] == '}' && scopes.scopes.size() > 1)
+            else if (uses_brace_scopes && text[i] == '}' && scopes.scopes.size() > 1)
             {
                 scopes.scopes.pop_back();
                 scopes.class_scopes.pop_back();

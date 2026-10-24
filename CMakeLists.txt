@@ -45,6 +45,7 @@ set(
 )
 
 # --- tokenizer_map codegen ---------------------------------------------------
+set(RLLM_TOKENIZER_SNAPSHOT_DIR "" CACHE PATH "Directory containing a frozen tokenizer")
 # Glob the input files so CMake re-runs if any of them change.
 file(GLOB TOKENIZER_TRAINING_FILES "${CMAKE_SOURCE_DIR}/tokenizer_training_data/*")
 file(GLOB TOKENIZER_ENGLISH_LARGE_FILES "${CMAKE_SOURCE_DIR}/curriculum/english-large/*")
@@ -56,22 +57,39 @@ set(TOKENIZER_JSON "${TOKENIZER_GEN_DIR}/token_map.json")
 
 file(MAKE_DIRECTORY "${TOKENIZER_GEN_DIR}")
 
-add_custom_command(
-    OUTPUT  "${TOKENIZER_CC}" "${TOKENIZER_HPP}" "${TOKENIZER_JSON}"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
-            "--cc-out"  "${TOKENIZER_CC}"
-            "--hpp-out" "${TOKENIZER_HPP}"
-            "--json-out" "${TOKENIZER_JSON}"
-            "--training-directory" "${CMAKE_SOURCE_DIR}/tokenizer_training_data"
-            "--training-directory" "${CMAKE_SOURCE_DIR}/curriculum/english-large"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    DEPENDS
-        "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
-        ${TOKENIZER_TRAINING_FILES}
-        ${TOKENIZER_ENGLISH_LARGE_FILES}
-    COMMENT "Generating tokenizer_map.cc, tokenizer_map.hpp, and token_map.json in build/generated"
-    VERBATIM
-)
+if(RLLM_TOKENIZER_SNAPSHOT_DIR)
+    set(TOKENIZER_SNAPSHOT_CC "${RLLM_TOKENIZER_SNAPSHOT_DIR}/tokenizer_map.cc")
+    set(TOKENIZER_SNAPSHOT_HPP "${RLLM_TOKENIZER_SNAPSHOT_DIR}/tokenizer_map.hpp")
+    set(TOKENIZER_SNAPSHOT_JSON "${RLLM_TOKENIZER_SNAPSHOT_DIR}/token_map.json")
+    foreach(SNAPSHOT_FILE IN ITEMS TOKENIZER_SNAPSHOT_CC TOKENIZER_SNAPSHOT_HPP TOKENIZER_SNAPSHOT_JSON)
+        if(NOT EXISTS "${${SNAPSHOT_FILE}}")
+            message(FATAL_ERROR "Tokenizer snapshot is incomplete: missing ${${SNAPSHOT_FILE}}")
+        endif()
+    endforeach()
+    add_custom_command(
+        OUTPUT "${TOKENIZER_CC}" "${TOKENIZER_HPP}" "${TOKENIZER_JSON}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${TOKENIZER_SNAPSHOT_CC}" "${TOKENIZER_CC}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${TOKENIZER_SNAPSHOT_HPP}" "${TOKENIZER_HPP}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${TOKENIZER_SNAPSHOT_JSON}" "${TOKENIZER_JSON}"
+        DEPENDS "${TOKENIZER_SNAPSHOT_CC}" "${TOKENIZER_SNAPSHOT_HPP}" "${TOKENIZER_SNAPSHOT_JSON}"
+        COMMENT "Restoring frozen tokenizer snapshot from ${RLLM_TOKENIZER_SNAPSHOT_DIR}"
+        VERBATIM
+    )
+else()
+    add_custom_command(
+        OUTPUT  "${TOKENIZER_CC}" "${TOKENIZER_HPP}" "${TOKENIZER_JSON}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py"
+                "--cc-out"  "${TOKENIZER_CC}"
+                "--hpp-out" "${TOKENIZER_HPP}"
+                "--json-out" "${TOKENIZER_JSON}"
+                "--training-directory" "${CMAKE_SOURCE_DIR}/tokenizer_training_data"
+                "--training-directory" "${CMAKE_SOURCE_DIR}/curriculum/english-large"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/create_tokenizer_map.py" ${TOKENIZER_TRAINING_FILES} ${TOKENIZER_ENGLISH_LARGE_FILES}
+        COMMENT "Generating tokenizer_map.cc, tokenizer_map.hpp, and token_map.json in build/generated"
+        VERBATIM
+    )
+endif()
 add_custom_target(generate_tokenizer_map DEPENDS "${TOKENIZER_CC}" "${TOKENIZER_HPP}" "${TOKENIZER_JSON}")
 # -----------------------------------------------------------------------------
 

@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parent
+TOKENIZER_ARTIFACTS = ("tokenizer_map.cc", "tokenizer_map.hpp", "token_map.json")
 
 
 def run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -31,6 +33,35 @@ def run(command: list[str], *, capture: bool = False) -> subprocess.CompletedPro
         text=True,
         stdout=subprocess.PIPE if capture else None,
     )
+
+
+def tokenizer_snapshot_for_resume(
+    model_dir: Path, previous_dir: Path | None, resume_model: str | None,
+    *, fresh_start: bool,
+) -> Path | None:
+    """Return the frozen tokenizer directory required by a resumed run."""
+    if fresh_start:
+        return None
+    if resume_model is not None:
+        return Path(resume_model).parent / "tokenizer"
+    local_models = (
+        any(model_dir.glob("checkpoint-*.st"))
+        or (model_dir / "after_training.st").is_file()
+    )
+    if local_models:
+        return model_dir / "tokenizer"
+    if previous_dir is not None:
+        return previous_dir / "tokenizer"
+    return None
+
+
+def save_tokenizer_snapshot(build_dir: Path, model_dir: Path) -> Path:
+    """Persist the generated tokenizer needed to resume this model."""
+    snapshot = model_dir / "tokenizer"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    for name in TOKENIZER_ARTIFACTS:
+        shutil.copy2(build_dir / "generated" / name, snapshot / name)
+    return snapshot
 
 
 def positive_integer(config: dict[str, object], name: str) -> int:
@@ -80,6 +111,41 @@ def load_config(path: Path) -> dict[str, object]:
         if (not isinstance(value, (int, float)) or isinstance(value, bool) or
                 not math.isfinite(float(value)) or float(value) < 0.0 or float(value) >= 1.0):
             raise ValueError("Config field 'token_typo_probability' must be a number in [0, 1).")
+    if "python_edu" in config:
+        python_edu = config["python_edu"]
+        if not isinstance(python_edu, dict):
+            raise ValueError("Config field 'python_edu' must be an object.")
+        if not isinstance(python_edu.get("enabled", False), bool):
+            raise ValueError("Config field 'python_edu.enabled' must be a boolean.")
+        if python_edu.get("enabled", False):
+            if not isinstance(python_edu.get("directory"), str) or not python_edu["directory"]:
+                raise ValueError("Config field 'python_edu.directory' must be a non-empty string.")
+            max_files = python_edu.get("max_files", 0)
+            if not isinstance(max_files, int) or isinstance(max_files, bool) or max_files < 0:
+                raise ValueError("Config field 'python_edu.max_files' must be a non-negative integer.")
+            workers = python_edu.get("workers", 16)
+            if not isinstance(workers, int) or isinstance(workers, bool) or workers < 1:
+                raise ValueError("Config field 'python_edu.workers' must be a positive integer.")
+            weight = python_edu.get("weight", 1.0)
+            if (not isinstance(weight, (int, float)) or isinstance(weight, bool)
+                    or not math.isfinite(float(weight)) or float(weight) <= 0.0):
+                raise ValueError("Config field 'python_edu.weight' must be a positive number.")
+    if "tiny_math_stories" in config:
+        tiny_math = config["tiny_math_stories"]
+        if not isinstance(tiny_math, dict):
+            raise ValueError("Config field 'tiny_math_stories' must be an object.")
+        if not isinstance(tiny_math.get("enabled", False), bool):
+            raise ValueError("Config field 'tiny_math_stories.enabled' must be a boolean.")
+        if tiny_math.get("enabled", False):
+            if not isinstance(tiny_math.get("directory"), str) or not tiny_math["directory"]:
+                raise ValueError("Config field 'tiny_math_stories.directory' must be a non-empty string.")
+            max_files = tiny_math.get("max_files", 0)
+            if not isinstance(max_files, int) or isinstance(max_files, bool) or max_files < 0:
+                raise ValueError("Config field 'tiny_math_stories.max_files' must be a non-negative integer.")
+            weight = tiny_math.get("weight", 1.0)
+            if (not isinstance(weight, (int, float)) or isinstance(weight, bool)
+                    or not math.isfinite(float(weight)) or float(weight) <= 0.0):
+                raise ValueError("Config field 'tiny_math_stories.weight' must be a positive number.")
     return config
 
 
@@ -88,6 +154,39 @@ def split_source(source: str) -> tuple[str, str | None]:
     if separator and path and weight:
         return path, weight
     return source, None
+
+
+def prepare_python_edu_source(config: dict[str, object]) -> str | None:
+    settings = config.get("python_edu")
+    if not isinstance(settings, dict) or not settings.get("enabled", False):
+        return None
+    directory = Path(str(settings["directory"])).expanduser()
+    command = [
+        sys.executable, str(ROOT / "download_python_edu.py"),
+        "--output-dir", str(directory),
+        "--max-files", str(settings.get("max_files", 0)),
+        "--workers", str(settings.get("workers", 16)),
+    ]
+    print(f"Preparing HuggingFaceTB/smollm-corpus python-edu in {directory}...")
+    run(command)
+    return f"{directory}:{float(settings.get('weight', 1.0))}"
+
+
+def prepare_tiny_math_stories_source(config: dict[str, object]) -> str | None:
+    settings = config.get("tiny_math_stories")
+    if not isinstance(settings, dict) or not settings.get("enabled", False):
+        return None
+    directory = Path(str(settings["directory"])).expanduser()
+    command = [
+        sys.executable, str(ROOT / "download_huggingface_text.py"),
+        "--repository", "AlgoDriveAI/TinyMathStories_gpt-oss-20b",
+        "--output-dir", str(directory),
+        "--max-files", str(settings.get("max_files", 0)),
+        "--english-only",
+    ]
+    print(f"Preparing AlgoDriveAI/TinyMathStories_gpt-oss-20b in {directory}...")
+    run(command)
+    return f"{directory}:{float(settings.get('weight', 1.0))}"
 
 
 def previous_model_directory(num_layers: int) -> Path | None:
@@ -191,7 +290,9 @@ def _runtime_tokenizer_signature(tokenizer_source: Path) -> int:
     for token_id, token_text, end_of_word in sorted(entries):
         signature ^= token_id
         signature = (signature * 1099511628211) & mask
-        for byte in token_text.encode("utf-8"):
+        # Generated C++ uses \xNN escapes for arbitrary byte tokens. Map the
+        # evaluated code points back to their original single-byte values.
+        for byte in token_text.encode("latin-1"):
             signature ^= byte
             signature = (signature * 1099511628211) & mask
         signature ^= 1 if end_of_word else 0
@@ -820,8 +921,37 @@ def main(arguments: list[str] | None = None) -> int:
 
     build_type = str(config["build_type"])
     build_dir = ROOT / f"build_{build_type}"
+    previous_dir = previous_model_directory(num_layers)
+    tokenizer_snapshot = tokenizer_snapshot_for_resume(
+        model_dir, previous_dir, options.resume_model,
+        fresh_start=options.fresh_start,
+    )
+    cmake_arguments = list(string_list(config, "cmake_arguments"))
+    if tokenizer_snapshot is not None:
+        missing = [
+            name for name in TOKENIZER_ARTIFACTS
+            if not (tokenizer_snapshot / name).is_file()
+        ]
+        if missing:
+            print(
+                f"Cannot resume without the checkpoint tokenizer snapshot in "
+                f"'{tokenizer_snapshot}' (missing {', '.join(missing)}).",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"Reusing frozen tokenizer snapshot from {tokenizer_snapshot}")
+        cmake_arguments.append(
+            f"-DRLLM_TOKENIZER_SNAPSHOT_DIR={tokenizer_snapshot.resolve()}"
+        )
+    else:
+        # Clear a snapshot path retained by an earlier configuration of the
+        # same build directory so fresh runs regenerate their vocabulary.
+        cmake_arguments.append("-DRLLM_TOKENIZER_SNAPSHOT_DIR=")
     print(f"Configuring and building {build_type} before training...")
-    run([str(ROOT / f"build_{build_type}.sh"), *string_list(config, "cmake_arguments")])
+    run([str(ROOT / f"build_{build_type}.sh"), *cmake_arguments])
+    if tokenizer_snapshot is None:
+        snapshot = save_tokenizer_snapshot(build_dir, model_dir)
+        print(f"Saved frozen tokenizer snapshot to {snapshot}")
 
     strip_comments = (
         bool(config["strip_comments"])
@@ -846,6 +976,20 @@ def main(arguments: list[str] | None = None) -> int:
 
     sources = string_list(config, "sources")
     try:
+        python_edu_source = prepare_python_edu_source(config)
+    except (OSError, subprocess.CalledProcessError, ValueError) as error:
+        print(f"Cannot prepare python-edu training data: {error}", file=sys.stderr)
+        return 1
+    if python_edu_source is not None:
+        sources += (python_edu_source,)
+    try:
+        tiny_math_source = prepare_tiny_math_stories_source(config)
+    except (OSError, subprocess.CalledProcessError, ValueError) as error:
+        print(f"Cannot prepare TinyMathStories training data: {error}", file=sys.stderr)
+        return 1
+    if tiny_math_source is not None:
+        sources += (tiny_math_source,)
+    try:
         configured_training_arguments = string_list(config, "training_arguments")
         if incremental_mode:
             training_arguments = remove_embedding_prefill(configured_training_arguments)
@@ -861,7 +1005,6 @@ def main(arguments: list[str] | None = None) -> int:
     except (OSError, subprocess.CalledProcessError, ValueError) as error:
         print(f"Cannot generate embedding prefill graph: {error}", file=sys.stderr)
         return 1
-    previous_dir = previous_model_directory(num_layers)
     runtime_header = build_dir / "generated/tokenizer_map.hpp"
 
     with tempfile.TemporaryDirectory(prefix="rllm-training-no-comments-") if strip_comments else _NullTemporaryDirectory() as temporary:

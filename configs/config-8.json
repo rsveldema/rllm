@@ -8,16 +8,31 @@
   "strip_comments": false,
   "token_drop_probability": 0.0,
   "token_typo_probability": 0.0,
+  "python_edu": {
+    "enabled": true,
+    "directory": "~/huggingface/smollm-python-edu",
+    "max_files": 10000,
+    "workers": 16,
+    "weight": 0.05
+  },
+  "tiny_math_stories": {
+    "enabled": true,
+    "directory": "~/huggingface/tiny-math-stories",
+    "max_files": 10000,
+    "weight": 0.05
+  },
   "sources": [
     "training_data0:0.05",
-    "curriculum/grammar:0.15",
+    "curriculum/grammar:0.10",
     "curriculum/syntax:0.10",
     "curriculum/systems:0.10",
-    "curriculum/comments:0.10",
+    "curriculum/comments:0.05",
+    "curriculum/algos:0.05",
     "curriculum/english:0.10",
+    "curriculum/english-large:0.10",
     "curriculum/math:0.05",
     "curriculum/large:0.05",
-    "training_data2:0.30"
+    "training_data2:0.15"
   ],
   "cmake_arguments": [
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
@@ -44,7 +59,7 @@
     "--simulated-annealing-decay-epochs", "1",
     "--simulated-annealing-min-multiplier", "0.02",
     "--micro-batch-size", "64",
-    "--max-validation-windows", "512",
+    "--max-validation-windows", "8",
     "--validation-worst-count", "100",
     "--vulkan-device", "R9700",
     "--restart-learning-rate-schedule"

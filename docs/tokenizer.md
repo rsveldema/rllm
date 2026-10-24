@@ -20,7 +20,10 @@ as fallbacks for all other incomplete text. The generator also learns up to
 500 byte-pair-encoding merges from files in `tokenizer_training_data/` and
 `curriculum/english-large/`. These pieces improve frequently occurring English
 and technical text while character fallbacks keep unseen spellings
-representable.
+representable. Tokens for UTF-8 bytes `0x80` through `0xFF` are appended after
+the learned pieces as a universal, lossless fallback for non-ASCII text. This
+allows downloaded corpora containing unseen scripts, symbols, or emoji to be
+tokenized without rebuilding the vocabulary for every new character.
 
 `<MCP>`, `</MCP>`, `<LOOP>`, `<LOCAL>`, `<PARAM>`, `<GLOBAL>`, `<FIELD>`,
 `<STRING>`, `<STI>`, `<SPACE>`, `<TAB>`, and `<END_OF_SEQUENCE>` are reserved

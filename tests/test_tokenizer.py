@@ -83,6 +83,26 @@ def test_neural_network_hpp_no_skipped_chars(token_vocab):
     assert skipped == [], f"Characters not covered by any token: {skipped!r}"
 
 
+def test_generated_runtime_map_has_non_ascii_byte_fallbacks():
+    tokenizer_map = ctm.create_tokenizer_map("ASCII corpus")
+    generated = ctm.generate_cpp_table_impl(tokenizer_map)
+
+    for value in range(0x80, 0x100):
+        token = ctm.byte_fallback_token(value)
+        assert token in tokenizer_map
+        assert f'"\\x{value:02x}"' in generated
+
+    learned_ids = [
+        token_id for token, token_id in tokenizer_map.items()
+        if ctm.byte_fallback_value(token) is None
+    ]
+    fallback_ids = [
+        token_id for token, token_id in tokenizer_map.items()
+        if ctm.byte_fallback_value(token) is not None
+    ]
+    assert max(learned_ids) < min(fallback_ids)
+
+
 def test_repeated_corpus_words_are_learned_as_bpe_tokens(token_vocab):
     matched, _ = _greedy_tokenize('"NeuralNetwork.hpp"', token_vocab)
     assert "Neural" in matched
