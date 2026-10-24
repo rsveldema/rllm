@@ -6,6 +6,8 @@
 #include <LearningRate.hpp>
 #include <OptimizerDiagnostics.hpp>
 #include <TransformerBlock.hpp>
+#include <TrainingAlgorithm.hpp>
+#include <dust/Dust.hpp>
 #include <LayerPrimitives.hpp>
 #include <OutputLayer.hpp>
 #include <Statistics.hpp>
@@ -138,6 +140,8 @@ namespace rllm
         void set_transformer_loop(size_t first_block, size_t last_block, size_t count);
 
         void set_training_method(TrainingMethod m) { m_training_method = m; }
+        void set_training_algorithm(TrainingAlgorithm algorithm);
+        void set_dust_population(size_t population) { m_dust_settings.population = population; }
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
         void set_window_stride(size_t n) { assert(n > 0); m_window_stride = n; }
         void set_learn_depth(size_t n) { assert(n > 0); m_learn_depth = n; }
@@ -268,6 +272,7 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> m_last_hidden;
         PositionIndex m_seq_len{PositionIndex::START};
         std::unique_ptr<TextTrainerForwardWorkspace> m_forward_workspace;
+        std::unique_ptr<TextTrainerForwardWorkspace> m_dust_forward_workspace;
         std::unique_ptr<BackwardPropWorkspace> m_backward_workspace;
         std::unique_ptr<GradientAccumulationWorkspace> m_gradient_accumulation_workspace;
         std::unique_ptr<GpuPackedBatchInput> m_gpu_packed_batch;
@@ -318,6 +323,9 @@ namespace rllm
         );
 
         TrainingMethod m_training_method = TrainingMethod::WINDOW;
+        TrainingAlgorithm m_training_algorithm = TrainingAlgorithm::Backprop;
+        dust::Settings m_dust_settings;
+        uint64_t m_dust_seed = 0;
         int m_window_size = 4;
         size_t m_window_stride = 1;
         size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
@@ -380,6 +388,7 @@ namespace rllm
             double primary_loss_sum = 0.0;
             size_t primary_loss_count = 0;
             size_t rounds = 0;
+            size_t dust_population_evaluations = 0;
 
             double average_primary_loss() const
             {
@@ -435,15 +444,6 @@ namespace rllm
             std::vector<size_t>& active_indices,
             std::vector<CpuInputLine>& contexts
         ) const;
-        void train_batch_output_heads(
-            const std::vector<BatchTrainingItem>& batch,
-            const std::vector<size_t>& active_indices,
-            const std::vector<MultiTokenPredictionIndex>& valid_heads,
-            BatchIndex packed_batch_size,
-            VulkanQueue& queue,
-            std::vector<float>& primary_losses,
-            BatchTrainingTiming& timing
-        );
         void train_window_all_positions(
             const std::vector<BatchTrainingItem>& batch,
             const std::vector<size_t>& active_indices,

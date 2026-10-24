@@ -22,6 +22,8 @@ namespace rllm
             size_t num_layers,
             bool verbose,
             TrainingMethod method,
+            TrainingAlgorithm training_algorithm,
+            size_t dust_population,
             std::optional<std::chrono::seconds> checkpointing_interval,
             std::chrono::seconds validation_interval,
             int window_size,

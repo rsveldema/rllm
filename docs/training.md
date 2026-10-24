@@ -263,6 +263,23 @@ so placement of identifier-category tokens, `<STRING>`, and `<MCP>...</MCP>` can
 without rewriting repository sources. Each training launch refreshes them.
 
 `./train.py config-6.json` stores artifacts in the configured model directory.
+
+Training algorithm selection is independent from window traversal. The default
+`--training-algorithm backprop` uses reverse-mode differentiation. The
+experimental `--training-algorithm dust` selects forward-only activation-space
+perturbation and accepts `--dust-population N`; the initial supported recipe is
+population 256. Both values are persisted in checkpoint training metadata so a
+resume cannot silently switch credit-assignment algorithms.
+
+The DUST backend evaluates clean per-token losses, then evaluates a population
+of simultaneous hidden-state and output-logit perturbations. Vulkan kernels
+turn each token's loss improvement into reward-weighted activation estimates;
+cached clean-pass inputs form local outer-product updates without traversing
+activation Jacobians. Training progress records `training_algorithm`,
+`dust_population`, and `dust_population_evaluations`, so the existing progress
+visualizer can display DUST runs without a separate file format. Reverse-mode
+code is compiled from `src/backprop/`; DUST kernels and estimators are compiled
+from `src/dust/`.
 New runs also store the generated tokenizer source, header, and JSON map in the
 model directory's `tokenizer/` subdirectory. Resume runs build with this frozen
 snapshot and never recompute token IDs from the current tokenizer-training

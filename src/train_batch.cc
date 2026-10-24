@@ -3,6 +3,7 @@
 #include "TextTrainerInternal.hpp"
 #include <LogFormatting.hpp>
 #include <NumericLoss.hpp>
+#include <dust/Dust.hpp>
 #include <vecmath.hpp>
 
 #include <algorithm>
@@ -217,108 +218,6 @@ namespace rllm
         }
     }
 
-    void TextTrainer::train_batch_output_heads(
-        const std::vector<BatchTrainingItem>& batch, const std::vector<size_t>& active_indices,
-        const std::vector<MultiTokenPredictionIndex>& valid_heads, BatchIndex batch_size,
-        VulkanQueue& queue, std::vector<float>& primary_losses, BatchTrainingTiming& timing)
-    {
-        const auto started = std::chrono::steady_clock::now();
-        std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> expected_by_head;
-        std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> expected_string_table_index_by_head;
-        std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> expected_value_count_by_head;
-        std::array<cpu_fixed_vector<int, BatchIndex>, static_cast<size_t>(MultiTokenPredictionIndex::MAX)> active_by_head;
-        std::vector<MultiTokenPredictionIndex> head_order;
-        for (const auto head : enum_iterator1D<MultiTokenPredictionIndex>())
-            if (head != MultiTokenPredictionIndex::START)
-                head_order.push_back(head);
-        head_order.push_back(MultiTokenPredictionIndex::START);
-
-        size_t active_prediction_count = 0;
-        for (const auto count : valid_heads)
-            active_prediction_count += static_cast<size_t>(count);
-        assert(active_prediction_count > 0);
-        const float loss_gradient_scale = 1.0f / static_cast<float>(active_prediction_count);
-
-        for (const auto head : head_order)
-        {
-            auto& expected = expected_by_head[static_cast<size_t>(head)];
-            auto& expected_string_table_index =
-                expected_string_table_index_by_head[static_cast<size_t>(head)];
-            auto& active_flags = active_by_head[static_cast<size_t>(head)];
-            auto& expected_value_count = expected_value_count_by_head[static_cast<size_t>(head)];
-            for (size_t active = 0; active < active_indices.size(); ++active)
-            {
-                const bool used = head < valid_heads[active];
-                active_flags.push_back(used ? 1 : 0);
-                if (!used)
-                {
-                    expected.push_back(0);
-                    expected_string_table_index.push_back(-1);
-                    expected_value_count.push_back(0);
-                    continue;
-                }
-                const auto& line = batch[active_indices[active]].line;
-                const auto& item = batch[active_indices[active]];
-                const int input_length = item.context_length.has_value()
-                    ? static_cast<int>(*item.context_length)
-                    : batch_input_len(static_cast<int>(line.size()));
-                expected.push_back(static_cast<int>(target_for_head(line, input_length, head)));
-                const int index = string_table_index_for_head(
-                    line, item.first_string_table_index, input_length, head);
-                expected_string_table_index.push_back(index);
-                expected_value_count.push_back(value_count_for_head(line, input_length, head, index));
-            }
-        }
-
-        for (const auto head : head_order)
-        {
-            if (std::none_of(valid_heads.begin(), valid_heads.end(), [head](auto count) { return head < count; }))
-                continue;
-            m_output_layers[head].forward_batched(m_batched_output_workspace->h_last, batch_size, m_batched_output_workspace->logits, queue);
-            m_batched_output_workspace->expected_tokens.copy_from_cpu(queue, expected_by_head[static_cast<size_t>(head)]);
-            m_batched_output_workspace->expected_string_table_indices.copy_from_cpu(
-                queue, expected_string_table_index_by_head[static_cast<size_t>(head)]);
-            m_batched_output_workspace->expected_value_counts.copy_from_cpu(
-                queue, expected_value_count_by_head[static_cast<size_t>(head)]);
-            m_batched_output_workspace->active_examples.copy_from_cpu(queue, active_by_head[static_cast<size_t>(head)]);
-            cpu_fixed_matrix<float, BatchIndex, PositionIndex> numeric_costs;
-            numeric_costs.zero();
-            for (size_t active = 0; active < active_indices.size(); ++active)
-            {
-                if (head >= valid_heads[active])
-                    continue;
-                const auto& item = batch[active_indices[active]];
-                const int input_length = item.context_length.has_value()
-                    ? static_cast<int>(*item.context_length)
-                    : batch_input_len(static_cast<int>(item.line.size()));
-                set_numeric_distance_costs(item.line,
-                    static_cast<PositionIndex>(input_length + static_cast<int>(head)),
-                    static_cast<BatchIndex>(active), numeric_costs);
-            }
-            m_batched_output_workspace->numeric_distance_costs.copy_from_cpu(queue, numeric_costs);
-            const PositionIndex string_table_index_count = string_table_index_count_for_expected(
-                expected_value_count_by_head[static_cast<size_t>(head)]);
-            m_output_layers[head].compute_batched_delta(
-                m_batched_output_workspace->logits, batch_size, *m_batched_output_workspace, queue,
-                m_batched_output_workspace->expected_string_table_indices,
-                loss_gradient_scale, string_table_index_count);
-            m_output_layers[head].backward_batched_accumulate(
-                m_batched_output_workspace->delta,
-                m_batched_output_workspace->string_table_index_delta,
-                m_batched_output_workspace->h_last, batch_size,
-                m_batched_output_workspace->dh_last, m_gradient_accumulation_workspace->output_layers[head],
-                string_table_index_count);
-            if (head == MultiTokenPredictionIndex::START)
-            {
-                cpu_fixed_vector<float, BatchIndex> losses;
-                losses.set_size(batch_size);
-                m_batched_output_workspace->losses.copy_to_cpu(queue, losses);
-                for (size_t active = 0; active < active_indices.size(); ++active)
-                    primary_losses[active] = losses[static_cast<BatchIndex>(active)];
-            }
-        }
-        timing.backward_output_ms += elapsed_ms(started);
-    }
 
     void TextTrainer::train_window_all_positions(
         const std::vector<BatchTrainingItem>& batch, const std::vector<size_t>& active_indices,
@@ -401,17 +300,93 @@ namespace rllm
                 *m_batched_output_workspace, queue,
                 m_batched_output_workspace->expected_string_table_indices, scale,
                 string_table_index_count);
-            m_output_layers[head].backward_batched_accumulate(m_batched_output_workspace->delta,
-                m_batched_output_workspace->string_table_index_delta,
-                m_batched_output_workspace->h_last, count, m_batched_output_workspace->dh_last,
-                m_gradient_accumulation_workspace->output_layers[head], string_table_index_count);
-            add_indexed_hidden_gradient(m_batched_output_workspace->dh_last,
-                m_batched_output_workspace->row_indices, hidden_gradient, static_cast<int>(count));
+            if (m_training_algorithm == TrainingAlgorithm::Dust)
+            {
+                const auto loss_bytes = static_cast<VkDeviceSize>(
+                    static_cast<size_t>(count) * sizeof(float));
+                m_batched_output_workspace->clean_losses.device_buffer().copy_from(
+                    queue, m_batched_output_workspace->losses.device_buffer(), loss_bytes);
+                m_batched_output_workspace->dust_error.zero(queue);
+                m_batched_output_workspace->dust_hidden_error.zero(queue);
+                const float sigma = m_dust_settings.activation_noise;
+                const float inverse_population_sigma =
+                    scale / (static_cast<float>(m_dust_settings.population) * sigma);
+                for (size_t member = 0; member < m_dust_settings.population; ++member)
+                {
+                    // Recreate clean logits, then apply one deterministic Gaussian
+                    // population member. Only forward loss evaluations occur here.
+                    const auto hidden_bytes = static_cast<VkDeviceSize>(
+                        static_cast<size_t>(count) *
+                        static_cast<size_t>(EmbeddingDimension::MAX) * sizeof(float));
+                    m_batched_output_workspace->dust_perturbed_hidden.device_buffer().copy_from(
+                        queue, m_batched_output_workspace->h_last.device_buffer(), hidden_bytes);
+                    dust::gaussian_batched_hidden_noise(
+                        m_batched_output_workspace->dust_hidden_noise, count,
+                        ++m_dust_seed);
+                    dust::perturb_batched_hidden(
+                        m_batched_output_workspace->dust_perturbed_hidden,
+                        m_batched_output_workspace->dust_hidden_noise,
+                        count, sigma);
+                    m_output_layers[head].forward_batched(
+                        m_batched_output_workspace->dust_perturbed_hidden, count,
+                        m_batched_output_workspace->logits, queue);
+                    dust::gaussian_logit_noise(
+                        m_batched_output_workspace->dust_noise, count,
+                        ++m_dust_seed);
+                    dust::perturb_logits(m_batched_output_workspace->logits,
+                        m_batched_output_workspace->dust_noise, count, sigma);
+                    m_output_layers[head].compute_batched_delta(
+                        m_batched_output_workspace->logits, count,
+                        *m_batched_output_workspace, queue,
+                        m_batched_output_workspace->expected_string_table_indices,
+                        scale, string_table_index_count);
+                    dust::compute_rewards(
+                        m_batched_output_workspace->clean_losses,
+                        m_batched_output_workspace->losses,
+                        m_batched_output_workspace->dust_rewards, count);
+                    dust::accumulate_logit_error(
+                        m_batched_output_workspace->dust_rewards,
+                        m_batched_output_workspace->dust_noise,
+                        m_batched_output_workspace->dust_error, count,
+                        inverse_population_sigma);
+                    dust::accumulate_batched_hidden_error(
+                        m_batched_output_workspace->dust_rewards,
+                        m_batched_output_workspace->dust_hidden_noise,
+                        m_batched_output_workspace->dust_hidden_error, count,
+                        inverse_population_sigma);
+                    ++timing.dust_population_evaluations;
+                }
+                auto& accumulator = m_gradient_accumulation_workspace->output_layers[head];
+                dust::accumulate_output_outer_product(
+                    m_batched_output_workspace->dust_error,
+                    m_batched_output_workspace->h_last,
+                    accumulator.dW_lm_head, count);
+                accumulator.touched = true;
+                add_indexed_hidden_gradient(
+                    m_batched_output_workspace->dust_hidden_error,
+                    m_batched_output_workspace->row_indices, hidden_gradient,
+                    static_cast<int>(count));
+            }
+            else
+            {
+                m_output_layers[head].backward_batched_accumulate(
+                    m_batched_output_workspace->delta,
+                    m_batched_output_workspace->string_table_index_delta,
+                    m_batched_output_workspace->h_last, count,
+                    m_batched_output_workspace->dh_last,
+                    m_gradient_accumulation_workspace->output_layers[head],
+                    string_table_index_count);
+                add_indexed_hidden_gradient(m_batched_output_workspace->dh_last,
+                    m_batched_output_workspace->row_indices, hidden_gradient,
+                    static_cast<int>(count));
+            }
             if (record_primary_loss && head == MultiTokenPredictionIndex::START)
             {
                 cpu_fixed_vector<float, BatchIndex> losses;
                 losses.set_size(count);
-                m_batched_output_workspace->losses.copy_to_cpu(queue, losses);
+                (m_training_algorithm == TrainingAlgorithm::Dust
+                    ? m_batched_output_workspace->clean_losses
+                    : m_batched_output_workspace->losses).copy_to_cpu(queue, losses);
                 for (size_t sample = 0; sample < selected.size(); ++sample)
                 {
                     const auto active = predictions[selected[sample]].active;
@@ -428,44 +403,6 @@ namespace rllm
         timing.backward_output_ms += elapsed_ms(started);
     }
 
-    void TextTrainer::train_batch_transformer_backward(PositionIndex packed_rows, BatchTrainingTiming& timing)
-    {
-        auto& back = *m_backward_workspace;
-        auto& forward = *m_forward_workspace;
-        auto* dh = &back.dh;
-        auto* din = &back.din;
-        const auto started = std::chrono::steady_clock::now();
-        const bool collect_diagnostics = m_backward_diagnostics_pending;
-        if (collect_diagnostics)
-            log_hidden_gradient_diagnostics(*dh, packed_rows,
-                std::format("output heads -> transformer layer {}", m_transformer_blocks.size() - 1));
-        for (size_t reverse_execution = m_transformer_execution_order.size(); reverse_execution-- > 0; )
-        {
-            const size_t index = m_transformer_execution_order[reverse_execution];
-            m_transformer_blocks[index].backward(*dh, *din, back.transformer_block,
-                forward.transformer_workspaces[reverse_execution], true, collect_diagnostics,
-                static_cast<int>(index));
-            if (index >= m_frozen_transformer_block_count)
-                m_transformer_blocks[index].accumulate_gradients(
-                    back.transformer_block,
-                    m_gradient_accumulation_workspace->transformer_blocks[index]);
-            if (collect_diagnostics)
-                log_hidden_gradient_diagnostics(*din, packed_rows,
-                    reverse_execution == 0 ? "transformer execution 0 -> input embeddings" :
-                    std::format("transformer execution {} -> {}", reverse_execution, reverse_execution - 1));
-            if (const auto iteration = loop_iteration_for_execution(reverse_execution))
-            {
-                if (*iteration > 0)
-                    element_wise_sum(*din,
-                        forward.transformer_workspaces[reverse_execution].auxiliary_gradient, *din);
-                backward_loop_transition(*din, back.loop_input_gradient, *iteration == 0);
-            }
-            std::swap(dh, din);
-        }
-        m_backward_diagnostics_pending = false;
-        timing.backward_transformer_ms += elapsed_ms(started);
-        (void) packed_rows;
-    }
 
     size_t TextTrainer::finish_converged_batch_items(
         std::vector<BatchTrainingItem>& batch, const std::vector<size_t>& indices,
@@ -533,7 +470,7 @@ namespace rllm
         back.din.zero(queue);
         train_window_all_positions(batch, active_indices, packed, forward.h, back.dh,
             1.0f, true, queue, losses, timing);
-        if (m_loop_count > 1)
+        if (m_training_algorithm == TrainingAlgorithm::Backprop && m_loop_count > 1)
         {
             const float auxiliary_weight =
                 LOOP_AUXILIARY_LOSS_WEIGHT / static_cast<float>(m_loop_count - 1);
@@ -548,8 +485,9 @@ namespace rllm
                     auxiliary_weight, false, queue, losses, timing);
             }
         }
-        add_entity_consistency_loss(contexts, packed, forward.h, back.dh,
-            *m_batched_output_workspace, queue);
+        if (m_training_algorithm == TrainingAlgorithm::Backprop)
+            add_entity_consistency_loss(contexts, packed, forward.h, back.dh,
+                *m_batched_output_workspace, queue);
         for (const float loss : losses)
         {
             if (std::isfinite(loss))
@@ -558,12 +496,42 @@ namespace rllm
                 ++timing.primary_loss_count;
             }
         }
-        train_batch_transformer_backward(rows, timing);
-        const auto input_started = std::chrono::steady_clock::now();
-        auto& input_gradient = (m_transformer_execution_order.size() % 2 == 0) ? back.dh : back.din;
-        m_input_layer.accumulate_backward_packed(
-            packed, input_gradient, m_gradient_accumulation_workspace->embeddings);
-        timing.backward_input_ms += elapsed_ms(input_started);
+        if (m_training_algorithm == TrainingAlgorithm::Dust)
+        {
+            // DUST turns the reward-weighted final-activation estimate into
+            // local outer products using activations cached by the clean pass.
+            // No reverse traversal or activation Jacobian is evaluated.
+            for (size_t execution = 0;
+                 execution < m_transformer_execution_order.size(); ++execution)
+            {
+                const size_t block = m_transformer_execution_order[execution];
+                if (block < m_frozen_transformer_block_count)
+                    continue;
+                const auto& cached = forward.transformer_workspaces[execution];
+                auto& accumulator =
+                    m_gradient_accumulation_workspace->transformer_blocks[block];
+                dust::accumulate_hidden_outer_product(
+                    back.dh, cached.attn_concat, accumulator.dW_o, rows);
+                dust::accumulate_hidden_ff_outer_product(
+                    back.dh, cached.ffn_act, accumulator.dW_down, rows);
+                accumulator.touched = true;
+            }
+            // The embedding lookup is itself a local linear operation, so its
+            // DUST update is just the estimated activation error accumulated
+            // into the rows selected by the packed token IDs.
+            m_input_layer.accumulate_backward_packed(
+                packed, back.dh, m_gradient_accumulation_workspace->embeddings);
+        }
+        if (m_training_algorithm == TrainingAlgorithm::Backprop)
+        {
+            train_batch_transformer_backward(rows, timing);
+            const auto input_started = std::chrono::steady_clock::now();
+            auto& input_gradient = (m_transformer_execution_order.size() % 2 == 0)
+                ? back.dh : back.din;
+            m_input_layer.accumulate_backward_packed(
+                packed, input_gradient, m_gradient_accumulation_workspace->embeddings);
+            timing.backward_input_ms += elapsed_ms(input_started);
+        }
         timing.backward_ms += elapsed_ms(backward_started);
         const auto apply_started = std::chrono::steady_clock::now();
         apply_accumulated_gradients(1.0f);

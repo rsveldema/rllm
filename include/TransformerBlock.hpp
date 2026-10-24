@@ -18,6 +18,7 @@
 
 namespace rllm
 {
+    namespace dust { struct ForwardPerturbation; }
     using AttentionMatrix = fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>;
 
     struct TransformerGradientAccumulator
@@ -226,7 +227,9 @@ namespace rllm
             PositionIndex packed_rows,
             const GpuPackedBatchInput& batch,
             ForwardWorkspace& workspace,
-            float residual_scale = 1.0f
+            float residual_scale = 1.0f,
+            dust::ForwardPerturbation* perturbation = nullptr,
+            size_t execution = 0
         );
 
         // Backward pass. dout[seq_len x D_MODEL] = dL/dh_out.

@@ -4,6 +4,8 @@
 #include <LogFormatting.hpp>
 #include <WeightInitialization.hpp>
 #include <TextTrainer.hpp>
+#include <TrainingAlgorithm.hpp>
+#include <dust/Dust.hpp>
 #include <Statistics.hpp>
 #include <TransformerBlock.hpp>
 #include <parallel.hpp>
@@ -59,7 +61,6 @@ TEST(LearningRateScheduleTest, WarmsUpThenCosineDecays)
         1e-6f);
     EXPECT_FLOAT_EQ(LoweringLearningRate::scale_for_step(1, 0), 1.0f);
 }
-
 TEST(LearningRateScheduleTest, WarmupPercentageControlsPlannedEpochFraction)
 {
     constexpr size_t total_steps = 1000;
@@ -2043,4 +2044,100 @@ TEST(TransformerBlockTest, RmsNormBackwardMatchesCpuReference)
     constexpr float tol = 1e-4f;
     EXPECT_LT(max_diff, tol)
         << "rms_norm_backward vs reference: max_diff=" << max_diff;
+}
+TEST(TrainingAlgorithmTest, NamesAreStableForMetadata)
+{
+    EXPECT_EQ(training_algorithm_name(TrainingAlgorithm::Backprop), "backprop");
+    EXPECT_EQ(training_algorithm_name(TrainingAlgorithm::Dust), "dust");
+}
+
+TEST(DustEstimatorTest, RewardWeightedNoiseAndOuterProduct)
+{
+    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    constexpr auto rows = static_cast<PositionIndex>(2);
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> host_noise;
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> host_input;
+    host_noise.set_rows(rows);
+    host_input.set_rows(rows);
+    host_noise.zero();
+    host_input.zero();
+    host_noise[PositionIndex::START, EmbeddingDimension::START] = 2.0f;
+    host_noise[static_cast<PositionIndex>(1), EmbeddingDimension::START] = 3.0f;
+    host_input[PositionIndex::START, EmbeddingDimension::START] = 5.0f;
+    host_input[static_cast<PositionIndex>(1), EmbeddingDimension::START] = 7.0f;
+
+    flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> noise(rows), input(rows), error(rows);
+    noise.copy_from_cpu(queue, host_noise);
+    input.copy_from_cpu(queue, host_input);
+    error.zero(queue);
+    cpu_fixed_vector<float, PositionIndex> host_rewards;
+    host_rewards.set_size(rows);
+    host_rewards[PositionIndex::START] = 4.0f;
+    host_rewards[static_cast<PositionIndex>(1)] = -2.0f;
+    fixed_size_vector<float, PositionIndex> rewards;
+    rewards.copy_from_cpu(queue, host_rewards);
+
+    dust::accumulate_hidden_error(rewards, noise, error, rows, 0.25f);
+    fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> gradient;
+    gradient.zero(queue);
+    dust::accumulate_hidden_outer_product(error, input, gradient, rows);
+    queue.wait("DUST estimator test");
+
+    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> host_error;
+    cpu_fixed_matrix<float, EmbeddingDimension, EmbeddingDimension> host_gradient;
+    error.copy_to_cpu(queue, host_error);
+    gradient.copy_to_cpu(queue, host_gradient);
+    EXPECT_FLOAT_EQ((host_error[PositionIndex::START, EmbeddingDimension::START]), -2.0f);
+    EXPECT_FLOAT_EQ((host_error[static_cast<PositionIndex>(1), EmbeddingDimension::START]), 1.5f);
+    EXPECT_FLOAT_EQ((host_gradient[EmbeddingDimension::START, EmbeddingDimension::START]), 0.5f);
+}
+
+TEST(DustEstimatorTest, MatchesBackpropOnScalarLinearLayer)
+{
+    // This is the one-dimensional form of the same local outer product used by
+    // the Vulkan estimator: perturb y=w*x, estimate dL/dy from rewards, then
+    // multiply by cached x. Antithetic members remove the quadratic bias.
+    constexpr double weight = 0.7;
+    constexpr double input = 1.3;
+    constexpr double target = -0.2;
+    constexpr double sigma = 0.05;
+    constexpr size_t pairs = 32768;
+    const double activation = weight * input;
+    const auto loss = [&](double value) {
+        const double residual = value - target;
+        return 0.5 * residual * residual;
+    };
+    const double clean_loss = loss(activation);
+    std::mt19937_64 generator(42);
+    std::normal_distribution<double> normal;
+    double estimated_activation_gradient = 0.0;
+    for (size_t pair = 0; pair < pairs; ++pair)
+    {
+        const double noise = normal(generator);
+        for (const double sign : {-1.0, 1.0})
+        {
+            const double signed_noise = sign * noise;
+            const double reward = clean_loss - loss(activation + sigma * signed_noise);
+            estimated_activation_gradient -= reward * signed_noise;
+        }
+    }
+    estimated_activation_gradient /= (2.0 * static_cast<double>(pairs) * sigma);
+    const double dust_gradient = estimated_activation_gradient * input;
+    const double backprop_gradient = (activation - target) * input;
+    EXPECT_NEAR(dust_gradient, backprop_gradient, 0.015);
+}
+
+TEST(DustEstimatorTest, ProjectionSeedsAreDeterministicAndSiteSpecific)
+{
+    dust::ForwardPerturbation perturbation(
+        static_cast<PositionIndex>(1), 1234, 0.2f, 0.05f);
+    EXPECT_EQ(
+        perturbation.site_seed(dust::ProjectionSite::Query, 3),
+        perturbation.site_seed(dust::ProjectionSite::Query, 3));
+    EXPECT_NE(
+        perturbation.site_seed(dust::ProjectionSite::Query, 3),
+        perturbation.site_seed(dust::ProjectionSite::Key, 3));
+    EXPECT_NE(
+        perturbation.site_seed(dust::ProjectionSite::Query, 3),
+        perturbation.site_seed(dust::ProjectionSite::Query, 4));
 }

@@ -364,7 +364,7 @@ namespace rllm
                 numeric_distance_cost(values[index], values[expected_index]);
     }
 
-    static void scatter_dh_last_to_row(
+    void scatter_dh_last_to_row(
         // OFFLOAD_PARAMETERS(dh_last, dh, last_pos)
         const fixed_size_vector<float, EmbeddingDimension>& dh_last,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
@@ -470,7 +470,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void check_hidden_nan_finding_mode(VulkanQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex rows, const char* phase)
+    void check_hidden_nan_finding_mode(VulkanQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex rows, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -518,7 +518,7 @@ namespace rllm
         }
     }
 
-    static void check_hidden_vector_nan_finding_mode(VulkanQueue& queue, const fixed_size_vector<float, EmbeddingDimension>& values, const char* phase)
+    void check_hidden_vector_nan_finding_mode(VulkanQueue& queue, const fixed_size_vector<float, EmbeddingDimension>& values, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -532,7 +532,7 @@ namespace rllm
         }
     }
 
-    static void check_token_vector_nan_finding_mode(VulkanQueue& queue, const fixed_size_vector<float, TokenID>& values, float bound, const char* name, const char* phase)
+    void check_token_vector_nan_finding_mode(VulkanQueue& queue, const fixed_size_vector<float, TokenID>& values, float bound, const char* name, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -857,6 +857,9 @@ namespace rllm
         nlohmann::json entry{
             {"timestamp_ms", timestamp_ms},
             {"method", training_method_to_string(m_training_method)},
+            {"training_algorithm", training_algorithm_name(m_training_algorithm)},
+            {"dust_population", m_training_algorithm == TrainingAlgorithm::Dust
+                ? m_dust_settings.population : 0},
             {"item_type", item_type},
             {"layers", m_transformer_blocks.size()},
             {"transformer_executions", m_transformer_execution_order.size()},
@@ -886,6 +889,8 @@ namespace rllm
             {"backward_transformer_ms", timing.backward_transformer_ms},
             {"backward_input_ms", timing.backward_input_ms}
         };
+        if (m_training_algorithm == TrainingAlgorithm::Dust)
+            entry["dust_population_evaluations"] = timing.dust_population_evaluations;
         if (!m_pending_optimizer_diagnostics.empty())
         {
             auto diagnostics = nlohmann::json::array();
@@ -1045,11 +1050,15 @@ namespace rllm
         // larger unrolled workspace. unique_ptr assignment would otherwise
         // keep the old allocation alive until after the new one is complete.
         m_forward_workspace.reset();
+        m_dust_forward_workspace.reset();
         m_backward_workspace.reset();
         m_gradient_accumulation_workspace.reset();
         m_gpu_packed_batch.reset();
         m_batched_output_workspace.reset();
         m_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(PositionIndex::START, m_transformer_execution_order.size());
+        if (m_training_algorithm == TrainingAlgorithm::Dust)
+            m_dust_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(
+                PositionIndex::START, m_transformer_execution_order.size());
         m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
         m_gradient_accumulation_workspace = std::make_unique<GradientAccumulationWorkspace>(m_transformer_blocks.size());
         m_gpu_packed_batch = std::make_unique<GpuPackedBatchInput>();
@@ -1060,6 +1069,14 @@ namespace rllm
     {
         m_transformer_execution_order = make_transformer_execution_order(
             m_transformer_blocks.size(), m_loop_first_block, m_loop_last_block, m_loop_count);
+    }
+
+    void TextTrainer::set_training_algorithm(TrainingAlgorithm algorithm)
+    {
+        if (m_training_algorithm == algorithm)
+            return;
+        m_training_algorithm = algorithm;
+        reset_workspaces();
     }
 
     float TextTrainer::transformer_residual_scale(size_t block) const
@@ -1208,96 +1225,6 @@ namespace rllm
 
     TextTrainer::~TextTrainer() = default;
 
-    void TextTrainer::propagate_backward_mtp(const fixed_size_obj_vector<Score, MultiTokenPredictionIndex>& scores, MultiTokenPredictionIndex num_valid, TrainingStepTiming* timing)
-    {
-        assert(m_seq_len > PositionIndex::START);
-
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
-        m_backward_workspace->reset(queue, m_seq_len);
-
-        auto& ws = *m_backward_workspace;
-        ws.dh.set_rows(m_seq_len);
-        ws.din.set_rows(m_seq_len);
-
-        const auto last_pos = dec(m_seq_len);
-        copy_hidden_row_to_vector(m_forward_workspace->h, last_pos, ws.h_last_vec);
-
-        // Accumulate dh_last contributions from every valid output head.
-        ws.dh_last.zero(queue);
-        const auto output_started_at = std::chrono::steady_clock::now();
-        for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>(num_valid))
-        {
-            {
-                ws.output_layer_delta.set_size(scores[oi].values.size());
-                const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(scores[oi].values.size()) * sizeof(float));
-                if (bytes > 0)
-                    ws.output_layer_delta.device_buffer().copy_from(queue, scores[oi].values.device_buffer(), bytes);
-            }
-            {
-                ws.output_string_table_index_delta.set_size(scores[oi].string_table_index_values.size());
-                const auto bytes = static_cast<VkDeviceSize>(
-                    static_cast<size_t>(scores[oi].string_table_index_values.size()) * sizeof(float));
-                if (bytes > 0)
-                    ws.output_string_table_index_delta.device_buffer().copy_from(
-                        queue, scores[oi].string_table_index_values.device_buffer(), bytes);
-            }
-            {
-                const auto phase = std::format("output head {} backward delta", static_cast<size_t>(oi));
-                check_token_vector_nan_finding_mode(queue, ws.output_layer_delta, 10.0f, "output delta", phase.c_str());
-            }
-            m_output_layers[oi].backward_accumulate(
-                ws.output_layer_delta,
-                ws.output_string_table_index_delta,
-                ws.h_last_vec,
-                ws.dh_last,
-                m_gradient_accumulation_workspace->output_layers[oi]);
-            {
-                const auto phase = std::format("after output head {} backward", static_cast<size_t>(oi));
-                check_hidden_vector_nan_finding_mode(queue, ws.dh_last, phase.c_str());
-            }
-        }
-        if (timing)
-            timing->backward_output_ms += elapsed_ms(output_started_at);
-
-        // Propagate the summed gradient through the transformer blocks.
-        ws.dh.zero(queue);
-        ws.din.zero(queue);
-        scatter_dh_last_to_row(ws.dh_last, ws.dh, last_pos);
-        check_hidden_nan_finding_mode(queue, ws.dh, m_seq_len, "after dh_last scatter");
-
-        auto* p_dh = &ws.dh;
-        auto* p_din = &ws.din;
-        const auto transformer_started_at = std::chrono::steady_clock::now();
-        for (size_t reverse_execution = m_transformer_execution_order.size(); reverse_execution-- > 0; )
-        {
-            const size_t i = m_transformer_execution_order[reverse_execution];
-            {
-                const auto phase = std::format("before transformer block {} backward", i);
-                check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, phase.c_str());
-            }
-            m_transformer_blocks[i].backward(*p_dh, *p_din, ws.transformer_block, m_forward_workspace->transformer_workspaces[reverse_execution]);
-            if (i >= m_frozen_transformer_block_count)
-                m_transformer_blocks[i].accumulate_gradients(
-                    ws.transformer_block,
-                    m_gradient_accumulation_workspace->transformer_blocks[i]);
-            {
-                const auto phase = std::format("after transformer block {} backward", i);
-                check_hidden_nan_finding_mode(queue, *p_din, m_seq_len, phase.c_str());
-            }
-            if (const auto iteration = loop_iteration_for_execution(reverse_execution))
-                backward_loop_transition(*p_din, ws.loop_input_gradient, *iteration == 0);
-            std::swap(p_dh, p_din);
-        }
-        if (timing)
-            timing->backward_transformer_ms += elapsed_ms(transformer_started_at);
-
-        const auto input_started_at = std::chrono::steady_clock::now();
-        check_hidden_nan_finding_mode(queue, *p_dh, m_seq_len, "before input layer backward");
-        m_input_layer.accumulate_backward(
-            m_last_input, *p_dh, m_gradient_accumulation_workspace->embeddings);
-        if (timing)
-            timing->backward_input_ms += elapsed_ms(input_started_at);
-    }
 
 
     void TextTrainer::set_random_weights_and_connections()
@@ -2756,12 +2683,16 @@ namespace rllm
                 static_cast<double>(transformer_gpu_bytes) / 1'000'000.0);
         }
 
-        const size_t batch_slot_gpu_bytes =
+        size_t batch_slot_gpu_bytes =
             2 * static_cast<size_t>(EmbeddingDimension::MAX) * sizeof(float) + // h_last, dh_last
             2 * vocab * sizeof(float) +                                       // logits, delta
             static_cast<size_t>(TempStorage::MAX) * sizeof(float) +           // softmax_temp
             2 * sizeof(int) + sizeof(float) +                                 // expected token, active flag, loss
             3 * sizeof(int);                                                   // packed row begin, end, last
+        batch_slot_gpu_bytes +=
+            2 * vocab * sizeof(float) + // DUST logit noise and estimated error
+            3 * d_model * sizeof(float) + // hidden noise, estimate, perturbed hidden
+            2 * sizeof(float); // clean loss and reward
         const size_t batch_gpu_bytes = batch_slot_gpu_bytes * static_cast<size_t>(BatchIndex::MAX);
         LOG_INFO(
             "Estimated batch-slot GPU memory: {:.2f} KB per slot x {} slots = {:.2f} MB "
@@ -2890,7 +2821,10 @@ namespace rllm
         }
 
         const auto backward_started_at = std::chrono::steady_clock::now();
-        propagate_backward_mtp(m_training_scores, num_valid_heads, timing);
+        if (m_training_algorithm == TrainingAlgorithm::Backprop)
+            propagate_backward_mtp(m_training_scores, num_valid_heads, timing);
+        // DUST population updates are implemented by the all-position batched
+        // trainer. The legacy per-example convergence probe remains forward-only.
         if (timing)
             timing->backward_ms += elapsed_ms(backward_started_at);
         if (manage_accumulator)

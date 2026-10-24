@@ -4,6 +4,19 @@
 
 namespace rllm
 {
+    void scatter_dh_last_to_row(
+        const fixed_size_vector<float, EmbeddingDimension>& dh_last,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
+        PositionIndex last_pos);
+    void check_hidden_nan_finding_mode(VulkanQueue& queue,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+        PositionIndex rows, const char* phase);
+    void check_hidden_vector_nan_finding_mode(VulkanQueue& queue,
+        const fixed_size_vector<float, EmbeddingDimension>& values, const char* phase);
+    void check_token_vector_nan_finding_mode(VulkanQueue& queue,
+        const fixed_size_vector<float, TokenID>& values, float bound,
+        const char* name, const char* phase);
+
     struct TextTrainerForwardWorkspace
     {
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;

@@ -48,6 +48,8 @@ namespace rllm
         size_t num_layers,
         bool verbose,
         TrainingMethod method,
+        TrainingAlgorithm training_algorithm,
+        size_t dust_population,
         std::optional<std::chrono::seconds> checkpointing_interval,
         std::chrono::seconds validation_interval,
         int window_size,
@@ -178,6 +180,8 @@ namespace rllm
             {"version", 1},
             {"layers", num_layers},
             {"method", training_method_to_string(method)},
+            {"training_algorithm", training_algorithm_name(training_algorithm)},
+            {"dust_population", dust_population},
             {"window_size", window_size},
             {"window_stride", window_stride},
             {"learn_depth", learn_depth},
@@ -227,6 +231,8 @@ namespace rllm
         nn->set_training_parameters_json(training_parameters.dump(2));
         nn->set_training_progress_filename((artifact_directory / "train.json").string());
         nn->set_training_method(method);
+        nn->set_training_algorithm(training_algorithm);
+        nn->set_dust_population(dust_population);
         nn->set_window_size(window_size);
         nn->set_window_stride(window_stride);
         nn->set_learn_depth(learn_depth);

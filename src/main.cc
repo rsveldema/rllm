@@ -52,6 +52,8 @@ struct CommandLineParser
     bool verbose = false;
     size_t num_epochs = 1000;
     rllm::TrainingMethod method = rllm::TrainingMethod::WINDOW;
+    rllm::TrainingAlgorithm training_algorithm = rllm::TrainingAlgorithm::Backprop;
+    size_t dust_population = 256;
     int window_size = 4;
     size_t window_stride = 1;
     std::optional<std::chrono::seconds> checkpointing_interval = std::chrono::seconds{120};
@@ -197,6 +199,13 @@ struct CommandLineParser
         if (method_name == "window") method = rllm::TrainingMethod::WINDOW;
         else if (method_name == "reverse_window") method = rllm::TrainingMethod::REVERSE_WINDOW;
         else fail(std::format("unknown training method '{}'", method_name));
+
+        const auto algorithm_name = j.value("training_algorithm", "backprop");
+        if (algorithm_name == "backprop") training_algorithm = rllm::TrainingAlgorithm::Backprop;
+        else if (algorithm_name == "dust") training_algorithm = rllm::TrainingAlgorithm::Dust;
+        else fail(std::format("unknown training algorithm '{}'", algorithm_name));
+        dust_population = j.value("dust_population", dust_population);
+        if (dust_population == 0) fail("dust_population must be positive");
 
         const auto schedule = j.value("learning_rate_schedule", "lowering");
         if (schedule == "constant") learning_rate_schedule = rllm::LearningRateSchedule::Constant;
@@ -783,6 +792,28 @@ struct CommandLineParser
              }
              concept_min_similarity = value;
          }},
+        {.options = {"--training-algorithm"},
+         .description = "Training algorithm: backprop or dust",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             if (args[0] == "backprop") training_algorithm = rllm::TrainingAlgorithm::Backprop;
+             else if (args[0] == "dust") training_algorithm = rllm::TrainingAlgorithm::Dust;
+             else {
+                 std::println("Unknown training algorithm '{}'. Valid values: backprop, dust", args[0]);
+                 std::exit(1);
+             }
+         }},
+        {.options = {"--dust-population"},
+         .description = "DUST activation-perturbation population",
+         .required_args = 1,
+         .action = [&](const std::vector<std::string>& args) {
+             const int value = std::atoi(args[0].c_str());
+             if (value <= 0) {
+                 std::println("--dust-population requires a positive integer");
+                 std::exit(1);
+             }
+             dust_population = static_cast<size_t>(value);
+         }},
         {.options = {"--method"},
          .description = std::format(
              "Training method: window:<N> or reverse_window[:N], with metadata prefixes and all-position causal loss (N >= 4)"
@@ -954,6 +985,8 @@ int main(int argc, char* argv[])
             parser.num_layers,
             parser.verbose,
             parser.method,
+            parser.training_algorithm,
+            parser.dust_population,
             parser.checkpointing_interval,
             parser.validation_interval,
             parser.window_size,

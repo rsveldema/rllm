@@ -2,6 +2,7 @@
 #include <RandomHelpers.hpp>
 #include <RuntimeConfig.hpp>
 #include <TransformerBlock.hpp>
+#include <dust/Dust.hpp>
 #include <OptimizerDiagnostics.hpp>
 #include <WeightInitialization.hpp>
 #include <enum_iterator1D.hpp>
@@ -1057,7 +1058,9 @@ namespace rllm
         PositionIndex packed_rows,
         const GpuPackedBatchInput& batch,
         ForwardWorkspace& workspace,
-        float residual_scale
+        float residual_scale,
+        dust::ForwardPerturbation* perturbation,
+        size_t execution
     )
     {
         auto& ws = workspace;
@@ -1067,17 +1070,33 @@ namespace rllm
         ws.h_in = h;
         rms_norm(h, ws.h_norm_attn);
         matmul_ABt_3_matrix_muls(ws.h_norm_attn, W_q, ws.Q, W_k, ws.K, W_v, ws.V);
+        if (perturbation)
+        {
+            perturbation->hidden(ws.Q, dust::ProjectionSite::Query, execution);
+            perturbation->hidden(ws.K, dust::ProjectionSite::Key, execution);
+            perturbation->hidden(ws.V, dust::ProjectionSite::Value, execution);
+        }
         // Use per-example local positions so RoPE restarts at zero in each packed sequence.
         apply_packed_rope(ws.Q, ws.K, batch.local_position, packed_rows, 1.0f);
         auto& queue = rllm::vulkan_runtime::get_queue(0);
         ws.attn_concat.zero(queue);
         forward_batched_attention_heads(ws, packed_rows, batch);
         matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
+        if (perturbation)
+            perturbation->hidden(
+                ws.attn_proj, dust::ProjectionSite::AttentionOutput, execution);
         element_wise_scaled_sum(h, ws.attn_proj, ws.h_mid, residual_scale);
         rms_norm(ws.h_mid, ws.h_norm_ff);
         matmul_ABt_2_matrix_muls(ws.h_norm_ff, W_gate, ws.gate_pre, W_up, ws.up_pre);
+        if (perturbation)
+        {
+            perturbation->ff(ws.gate_pre, dust::ProjectionSite::Gate, execution);
+            perturbation->ff(ws.up_pre, dust::ProjectionSite::Up, execution);
+        }
         swiglu_forward(ws.gate_pre, ws.up_pre, ws.ffn_act, packed_rows);
         matmul_ABt(ws.ffn_act, W_down, ws.ffn_out);
+        if (perturbation)
+            perturbation->hidden(ws.ffn_out, dust::ProjectionSite::Down, execution);
         element_wise_scaled_sum(ws.h_mid, ws.ffn_out, h, residual_scale);
         check_nan_finding_mode("batched-forward:end");
     }

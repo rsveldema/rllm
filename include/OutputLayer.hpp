@@ -37,6 +37,17 @@ namespace rllm
         fixed_size_vector<int, BatchIndex> active_examples;
         fixed_size_vector<int, BatchIndex> string_table_index_active_examples;
         fixed_size_vector<float, BatchIndex> losses;
+        // DUST reuses the ordinary output workspace so clean and perturbed
+        // losses never need a host round trip between population members.
+        fixed_size_vector<float, BatchIndex> clean_losses;
+        fixed_size_vector<float, BatchIndex> dust_rewards;
+        fixed_size_vector<float, PositionIndex> dust_row_rewards;
+        fixed_size_vector<float, PositionIndex> dust_attention_rewards;
+        fixed_size_matrix<float, BatchIndex, TokenID> dust_noise;
+        fixed_size_matrix<float, BatchIndex, TokenID> dust_error;
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension> dust_hidden_noise;
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension> dust_hidden_error;
+        fixed_size_matrix<float, BatchIndex, EmbeddingDimension> dust_perturbed_hidden;
         fixed_size_vector<float, BatchIndex> correct_token_probabilities;
         fixed_size_vector<int, BatchIndex> top1_correct;
         fixed_size_vector<int, BatchIndex> row_indices;
@@ -50,6 +61,10 @@ namespace rllm
             active_examples.set_size(BatchIndex::MAX);
             string_table_index_active_examples.set_size(BatchIndex::MAX);
             losses.set_size(BatchIndex::MAX);
+            clean_losses.set_size(BatchIndex::MAX);
+            dust_rewards.set_size(BatchIndex::MAX);
+            dust_row_rewards.set_size(PositionIndex::MAX);
+            dust_attention_rewards.set_size(PositionIndex::MAX);
             correct_token_probabilities.set_size(BatchIndex::MAX);
             top1_correct.set_size(BatchIndex::MAX);
             row_indices.set_size(BatchIndex::MAX);
