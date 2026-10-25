@@ -271,15 +271,32 @@ perturbation and accepts `--dust-population N`; the initial supported recipe is
 population 256. Both values are persisted in checkpoint training metadata so a
 resume cannot silently switch credit-assignment algorithms.
 
-The DUST backend evaluates clean per-token losses, then evaluates a population
-of simultaneous hidden-state and output-logit perturbations. Vulkan kernels
-turn each token's loss improvement into reward-weighted activation estimates;
-cached clean-pass inputs form local outer-product updates without traversing
-activation Jacobians. Training progress records `training_algorithm`,
+The DUST backend evaluates clean per-token losses, then reruns the complete
+transformer for a population of simultaneous Q, K, V, attention-output, gate,
+up, down, and output-logit perturbations. Vulkan kernels turn each token's loss
+improvement into a reward-weighted estimate for the specific projection that
+was perturbed. K and V receive decayed causal credit from later tokens in the
+same packed example; cached clean-pass inputs form local outer-product updates
+without traversing activation Jacobians. Training progress records `training_algorithm`,
 `dust_population`, and `dust_population_evaluations`, so the existing progress
 visualizer can display DUST runs without a separate file format. Reverse-mode
 code is compiled from `src/backprop/`; DUST kernels and estimators are compiled
 from `src/dust/`.
+
+### Backprop optimizer
+
+The backprop backend uses a hybrid Muon + AdamW optimizer. Muon updates the
+two-dimensional hidden-layer projection matrices (Q, K, V, attention output,
+and the three FFN projections), while AdamW updates embeddings, output heads,
+and other parameters that are not hidden-layer matrices. Muon uses Nesterov
+momentum and five Newton-Schulz orthogonalization steps.
+
+Backprop checkpoints store Muon momentum buffers and identify the optimizer as
+`muon+adamw`. DUST checkpoints retain AdamW state and identify the optimizer as
+`adamw`. Optimizer checkpoint format version 2 is intentionally incompatible
+with older optimizer-state checkpoints; load older model weights as a fresh run
+when migrating.
+
 New runs also store the generated tokenizer source, header, and JSON map in the
 model directory's `tokenizer/` subdirectory. Resume runs build with this frozen
 snapshot and never recompute token IDs from the current tokenizer-training

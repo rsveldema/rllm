@@ -3,6 +3,7 @@
 #include <RuntimeConfig.hpp>
 #include <TransformerBlock.hpp>
 #include <dust/Dust.hpp>
+#include <backprop/Muon.hpp>
 #include <OptimizerDiagnostics.hpp>
 #include <WeightInitialization.hpp>
 #include <enum_iterator1D.hpp>
@@ -1613,7 +1614,9 @@ namespace rllm
         accumulator.touched = true;
     }
 
-    void TransformerBlock::apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2)
+    void TransformerBlock::apply_accumulated_update(TransformerGradientAccumulator& accumulator,
+        float learning_rate, float bias_correction1, float bias_correction2,
+        bool use_muon, backprop::MuonWorkspace& muon_workspace)
     {
         auto& diagnostics = optimizer_diagnostics_buffer();
         const int collect = optimizer_diagnostics_enabled() ? 1 : 0;
@@ -1628,14 +1631,26 @@ namespace rllm
         accumulate_optimizer_gradient_norm(accumulator.dW_up, diagnostics);
         accumulate_optimizer_gradient_norm(accumulator.dW_down, diagnostics);
         finalize_optimizer_gradient_clip(diagnostics);
-        const float embedding_lr = learning_rate;
-        adamw_update(W_q, V_q, S_q, accumulator.dW_q, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
-        adamw_update(W_k, V_k, S_k, accumulator.dW_k, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
-        adamw_update(W_v, V_v, S_v, accumulator.dW_v, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
-        adamw_update(W_o, V_o, S_o, accumulator.dW_o, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
-        adamw_update(W_gate, V_gate, S_gate, accumulator.dW_gate, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
-        adamw_update(W_up, V_up, S_up, accumulator.dW_up, embedding_lr, bias_correction1, bias_correction2, diagnostics, collect);
-        adamw_update(W_down, V_down, S_down, accumulator.dW_down, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+        if (use_muon)
+        {
+            backprop::muon_update(W_q, V_q, S_q, accumulator.dW_q, muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_k, V_k, S_k, accumulator.dW_k, muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_v, V_v, S_v, accumulator.dW_v, muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_o, V_o, S_o, accumulator.dW_o, muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_gate, V_gate, S_gate, accumulator.dW_gate, muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_up, V_up, S_up, accumulator.dW_up, muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_down, V_down, S_down, accumulator.dW_down, muon_workspace, learning_rate, diagnostics);
+        }
+        else
+        {
+            adamw_update(W_q, V_q, S_q, accumulator.dW_q, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_k, V_k, S_k, accumulator.dW_k, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_v, V_v, S_v, accumulator.dW_v, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_o, V_o, S_o, accumulator.dW_o, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_gate, V_gate, S_gate, accumulator.dW_gate, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_up, V_up, S_up, accumulator.dW_up, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_down, V_down, S_down, accumulator.dW_down, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+        }
     }
 
     // ── serialisation ──────────────────────────────────────────────────────────

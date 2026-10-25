@@ -1,6 +1,7 @@
 #pragma once
 
 #include <TextTrainer.hpp>
+#include <backprop/Muon.hpp>
 
 namespace rllm
 {
@@ -86,6 +87,7 @@ namespace rllm
         fixed_size_obj_vector<OutputLayerGradientAccumulator, MultiTokenPredictionIndex> output_layers;
         std::vector<TransformerGradientAccumulator> transformer_blocks;
         EmbeddingGradientAccumulator embeddings;
+        backprop::MuonWorkspace muon;
 
         explicit GradientAccumulationWorkspace(size_t num_transformer_blocks)
             : transformer_blocks(num_transformer_blocks)

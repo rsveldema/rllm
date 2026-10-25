@@ -666,7 +666,7 @@ namespace rllm
             static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (h, last_rows, h_last, batch_size))
         h_last[batch, d] = h[last_rows[batch], d];
-        ENDFOR
+        ENDFORrmm
     }
 
     // Layers
@@ -1193,7 +1193,9 @@ namespace rllm
                 begin_optimizer_diagnostics();
             m_transformer_blocks[i].apply_accumulated_update(
                 m_gradient_accumulation_workspace->transformer_blocks[i], layer_learning_rate,
-                bias_correction1, bias_correction2);
+                bias_correction1, bias_correction2,
+                m_training_algorithm == TrainingAlgorithm::Backprop,
+                m_gradient_accumulation_workspace->muon);
             if (collect_diagnostics)
                 if (auto metrics = log_optimizer_diagnostics(
                         std::format("transformer layer {}", i)))

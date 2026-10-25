@@ -2141,3 +2141,45 @@ TEST(DustEstimatorTest, ProjectionSeedsAreDeterministicAndSiteSpecific)
         perturbation.site_seed(dust::ProjectionSite::Query, 3),
         perturbation.site_seed(dust::ProjectionSite::Query, 4));
 }
+
+TEST(DustEstimatorTest, ScattersAndPropagatesCausalRewards)
+{
+    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    cpu_fixed_vector<float, BatchIndex> host_rewards;
+    host_rewards.push_back(2.0f);
+    host_rewards.push_back(3.0f);
+    cpu_fixed_vector<int, BatchIndex> host_indices;
+    host_indices.push_back(1);
+    host_indices.push_back(2);
+    fixed_size_vector<float, BatchIndex> rewards;
+    fixed_size_vector<int, BatchIndex> indices;
+    rewards.copy_from_cpu(queue, host_rewards);
+    indices.copy_from_cpu(queue, host_indices);
+
+    fixed_size_vector<float, PositionIndex> row_rewards, credited;
+    row_rewards.set_size(PositionIndex::MAX);
+    credited.set_size(PositionIndex::MAX);
+    row_rewards.zero(queue);
+    dust::scatter_rewards(rewards, indices, row_rewards,
+        static_cast<BatchIndex>(2));
+    cpu_fixed_vector<int, PositionIndex> host_row_batch;
+    host_row_batch.push_back(0);
+    host_row_batch.push_back(0);
+    host_row_batch.push_back(0);
+    fixed_size_vector<int, PositionIndex> row_batch;
+    row_batch.copy_from_cpu(queue, host_row_batch);
+    cpu_fixed_vector<int, BatchIndex> host_row_end;
+    host_row_end.push_back(3);
+    fixed_size_vector<int, BatchIndex> row_end;
+    row_end.copy_from_cpu(queue, host_row_end);
+    dust::causal_credit_rewards(row_rewards, credited, row_batch, row_end,
+        static_cast<PositionIndex>(3), 0.5f);
+    queue.wait("DUST causal reward test");
+
+    cpu_fixed_vector<float, PositionIndex> host_credited;
+    host_credited.set_size(static_cast<PositionIndex>(3));
+    credited.copy_to_cpu(queue, host_credited);
+    EXPECT_FLOAT_EQ(host_credited[PositionIndex::START], 1.75f);
+    EXPECT_FLOAT_EQ(host_credited[static_cast<PositionIndex>(1)], 3.5f);
+    EXPECT_FLOAT_EQ(host_credited[static_cast<PositionIndex>(2)], 3.0f);
+}

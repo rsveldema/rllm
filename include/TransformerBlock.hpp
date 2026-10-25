@@ -18,6 +18,7 @@
 
 namespace rllm
 {
+    namespace backprop { struct MuonWorkspace; }
     namespace dust { struct ForwardPerturbation; }
     using AttentionMatrix = fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>;
 
@@ -241,7 +242,9 @@ namespace rllm
             backward(dout, din, workspace, fwd_workspace);
         }
         void accumulate_gradients(const BackwardWorkspace& workspace, TransformerGradientAccumulator& accumulator);
-        void apply_accumulated_update(TransformerGradientAccumulator& accumulator, float learning_rate, float bias_correction1, float bias_correction2);
+        void apply_accumulated_update(TransformerGradientAccumulator& accumulator,
+            float learning_rate, float bias_correction1, float bias_correction2,
+            bool use_muon, backprop::MuonWorkspace& muon_workspace);
 
         // GPU storage owned by this block plus its per-layer forward workspace,
         // gradient accumulator, and its share of the shared backward workspace.

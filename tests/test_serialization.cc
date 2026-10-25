@@ -295,7 +295,8 @@ TEST(SerializationTest, SafetensorsTrainingStateDoesNotOverrideActiveLearningRat
     std::string warning;
     std::string error;
     ASSERT_TRUE(safetensors::load_from_file(sf_file, &checkpoint, &warning, &error)) << error;
-    checkpoint.metadata.insert("training_state_version", "1");
+    checkpoint.metadata.insert("training_state_version", "2");
+    checkpoint.metadata.insert("training.optimizer", "muon+adamw");
     checkpoint.metadata.insert("training.optimizer_step", "7");
     checkpoint.metadata.insert("training.learning_rate", "0.01");
     checkpoint.metadata.insert("training.layer_learning_rate_multiplier", "1.1");

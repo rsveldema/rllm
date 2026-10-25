@@ -717,20 +717,33 @@ namespace rllm
             push_matrix(st, pfx + "W_gate", block.W_gate, storage);
             push_matrix(st, pfx + "W_up", block.W_up, storage);
             push_matrix(st, pfx + "W_down", block.W_down, storage);
-            push_matrix(st, "training." + pfx + "V_q", block.V_q, storage);
-            push_matrix(st, "training." + pfx + "V_k", block.V_k, storage);
-            push_matrix(st, "training." + pfx + "V_v", block.V_v, storage);
-            push_matrix(st, "training." + pfx + "V_o", block.V_o, storage);
-            push_matrix(st, "training." + pfx + "V_gate", block.V_gate, storage);
-            push_matrix(st, "training." + pfx + "V_up", block.V_up, storage);
-            push_matrix(st, "training." + pfx + "V_down", block.V_down, storage);
-            push_matrix(st, "training." + pfx + "S_q", block.S_q, storage);
-            push_matrix(st, "training." + pfx + "S_k", block.S_k, storage);
-            push_matrix(st, "training." + pfx + "S_v", block.S_v, storage);
-            push_matrix(st, "training." + pfx + "S_o", block.S_o, storage);
-            push_matrix(st, "training." + pfx + "S_gate", block.S_gate, storage);
-            push_matrix(st, "training." + pfx + "S_up", block.S_up, storage);
-            push_matrix(st, "training." + pfx + "S_down", block.S_down, storage);
+            if (m_training_algorithm == TrainingAlgorithm::Backprop)
+            {
+                push_matrix(st, "training." + pfx + "muon_momentum_q", block.V_q, storage);
+                push_matrix(st, "training." + pfx + "muon_momentum_k", block.V_k, storage);
+                push_matrix(st, "training." + pfx + "muon_momentum_v", block.V_v, storage);
+                push_matrix(st, "training." + pfx + "muon_momentum_o", block.V_o, storage);
+                push_matrix(st, "training." + pfx + "muon_momentum_gate", block.V_gate, storage);
+                push_matrix(st, "training." + pfx + "muon_momentum_up", block.V_up, storage);
+                push_matrix(st, "training." + pfx + "muon_momentum_down", block.V_down, storage);
+            }
+            else
+            {
+                push_matrix(st, "training." + pfx + "V_q", block.V_q, storage);
+                push_matrix(st, "training." + pfx + "V_k", block.V_k, storage);
+                push_matrix(st, "training." + pfx + "V_v", block.V_v, storage);
+                push_matrix(st, "training." + pfx + "V_o", block.V_o, storage);
+                push_matrix(st, "training." + pfx + "V_gate", block.V_gate, storage);
+                push_matrix(st, "training." + pfx + "V_up", block.V_up, storage);
+                push_matrix(st, "training." + pfx + "V_down", block.V_down, storage);
+                push_matrix(st, "training." + pfx + "S_q", block.S_q, storage);
+                push_matrix(st, "training." + pfx + "S_k", block.S_k, storage);
+                push_matrix(st, "training." + pfx + "S_v", block.S_v, storage);
+                push_matrix(st, "training." + pfx + "S_o", block.S_o, storage);
+                push_matrix(st, "training." + pfx + "S_gate", block.S_gate, storage);
+                push_matrix(st, "training." + pfx + "S_up", block.S_up, storage);
+                push_matrix(st, "training." + pfx + "S_down", block.S_down, storage);
+            }
         }
 
         // Output layers (friend grants access to m_output_layers internals)
@@ -760,7 +773,9 @@ namespace rllm
         st.metadata.insert("loop_architecture_version", std::to_string(LOOP_ARCHITECTURE_VERSION));
         if (m_learning_rate_provider)
         {
-            st.metadata.insert("training_state_version", "1");
+            st.metadata.insert("training_state_version", "2");
+            st.metadata.insert("training.optimizer",
+                m_training_algorithm == TrainingAlgorithm::Backprop ? "muon+adamw" : "adamw");
             st.metadata.insert("training.optimizer_step", std::to_string(m_optimizer_step));
             st.metadata.insert("training.learning_rate", std::to_string(m_learning_rate));
             st.metadata.insert("training.layer_learning_rate_multiplier", std::to_string(m_layer_learning_rate_multiplier));
@@ -828,7 +843,7 @@ namespace rllm
         std::string training_state_version;
         if (header.count("training_state_version") &&
             header.at("training_state_version", &training_state_version) &&
-            training_state_version == "1")
+            training_state_version == "2")
         {
             const auto parse_value = [&](const char* key, auto& value) {
                 std::string text;
@@ -838,6 +853,15 @@ namespace rllm
             const auto read_string = [&](const char* key, std::string& value) {
                 return header.count(key) && header.at(key, &value);
             };
+            std::string checkpoint_optimizer;
+            const std::string expected_optimizer =
+                m_training_algorithm == TrainingAlgorithm::Backprop ? "muon+adamw" : "adamw";
+            if (!read_string("training.optimizer", checkpoint_optimizer) ||
+                checkpoint_optimizer != expected_optimizer)
+            {
+                std::println("Checkpoint optimizer is incompatible with runtime backend in {}", filename);
+                return false;
+            }
             int schedule = 0;
             float checkpoint_learning_rate = 0.0f;
             float checkpoint_layer_learning_rate_multiplier = 0.0f;
@@ -1056,6 +1080,7 @@ namespace rllm
             std::string pfx = "transformer_blocks." + std::to_string(bi) + ".";
 
             auto& block = m_transformer_blocks[bi];
+            auto& queue = rllm::vulkan_runtime::get_queue(0);
 
             // Directly pull each weight matrix into the block's members.
             pull_matrix(pfx + "W_q", st, block.W_q);
@@ -1068,24 +1093,43 @@ namespace rllm
             if (load_optimizer_tensors)
             {
                 const std::string tpfx = "training." + pfx;
-                pull_matrix(tpfx + "V_q", st, block.V_q);
-                pull_matrix(tpfx + "V_k", st, block.V_k);
-                pull_matrix(tpfx + "V_v", st, block.V_v);
-                pull_matrix(tpfx + "V_o", st, block.V_o);
-                pull_matrix(tpfx + "V_gate", st, block.V_gate);
-                pull_matrix(tpfx + "V_up", st, block.V_up);
-                pull_matrix(tpfx + "V_down", st, block.V_down);
-                pull_matrix(tpfx + "S_q", st, block.S_q);
-                pull_matrix(tpfx + "S_k", st, block.S_k);
-                pull_matrix(tpfx + "S_v", st, block.S_v);
-                pull_matrix(tpfx + "S_o", st, block.S_o);
-                pull_matrix(tpfx + "S_gate", st, block.S_gate);
-                pull_matrix(tpfx + "S_up", st, block.S_up);
-                pull_matrix(tpfx + "S_down", st, block.S_down);
+                if (m_training_algorithm == TrainingAlgorithm::Backprop)
+                {
+                    pull_matrix(tpfx + "muon_momentum_q", st, block.V_q);
+                    pull_matrix(tpfx + "muon_momentum_k", st, block.V_k);
+                    pull_matrix(tpfx + "muon_momentum_v", st, block.V_v);
+                    pull_matrix(tpfx + "muon_momentum_o", st, block.V_o);
+                    pull_matrix(tpfx + "muon_momentum_gate", st, block.V_gate);
+                    pull_matrix(tpfx + "muon_momentum_up", st, block.V_up);
+                    pull_matrix(tpfx + "muon_momentum_down", st, block.V_down);
+                    block.S_q.zero(queue);
+                    block.S_k.zero(queue);
+                    block.S_v.zero(queue);
+                    block.S_o.zero(queue);
+                    block.S_gate.zero(queue);
+                    block.S_up.zero(queue);
+                    block.S_down.zero(queue);
+                }
+                else
+                {
+                    pull_matrix(tpfx + "V_q", st, block.V_q);
+                    pull_matrix(tpfx + "V_k", st, block.V_k);
+                    pull_matrix(tpfx + "V_v", st, block.V_v);
+                    pull_matrix(tpfx + "V_o", st, block.V_o);
+                    pull_matrix(tpfx + "V_gate", st, block.V_gate);
+                    pull_matrix(tpfx + "V_up", st, block.V_up);
+                    pull_matrix(tpfx + "V_down", st, block.V_down);
+                    pull_matrix(tpfx + "S_q", st, block.S_q);
+                    pull_matrix(tpfx + "S_k", st, block.S_k);
+                    pull_matrix(tpfx + "S_v", st, block.S_v);
+                    pull_matrix(tpfx + "S_o", st, block.S_o);
+                    pull_matrix(tpfx + "S_gate", st, block.S_gate);
+                    pull_matrix(tpfx + "S_up", st, block.S_up);
+                    pull_matrix(tpfx + "S_down", st, block.S_down);
+                }
             }
             else
             {
-                auto& queue = rllm::vulkan_runtime::get_queue(0);
                 block.V_q.zero(queue);
                 block.V_k.zero(queue);
                 block.V_v.zero(queue);

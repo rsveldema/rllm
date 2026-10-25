@@ -333,6 +333,8 @@ def hard_apply_symbol_values(text: str, symbol_values: dict[str, str] | None) ->
                       "limit<AttentionPositionIndex::MAX>(")
     out = out.replace("enum_iterator1D<EmbeddingDimension>(",
                       "limit<EmbeddingDimension::MAX>(")
+    out = out.replace("enum_iterator1D<FFDimension>(",
+                      "limit<FFDimension::MAX>(")
     out = out.replace("enum_iterator1D<HeadsIndex>(",
                       "limit<HeadsIndex::MAX>(")
     out = out.replace("enum_iterator1D<BatchIndex>(",

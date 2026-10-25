@@ -113,6 +113,7 @@ function(rllm_define_lib target_name)
         "${RLLM_COMPILE_SRC_DIR}/OptimizerDiagnostics.cc"
         "${RLLM_COMPILE_SRC_DIR}/TextTrainer.cc"
         "${RLLM_COMPILE_SRC_DIR}/backprop/Backprop.cc"
+        "${RLLM_COMPILE_SRC_DIR}/backprop/Muon.cc"
         "${RLLM_COMPILE_SRC_DIR}/dust/Dust.cc"
         "${RLLM_COMPILE_SRC_DIR}/train_batch.cc"
         "${RLLM_COMPILE_SRC_DIR}/RuntimeConfig.cc"

@@ -307,26 +307,46 @@ namespace rllm
                 m_batched_output_workspace->clean_losses.device_buffer().copy_from(
                     queue, m_batched_output_workspace->losses.device_buffer(), loss_bytes);
                 m_batched_output_workspace->dust_error.zero(queue);
-                m_batched_output_workspace->dust_hidden_error.zero(queue);
                 const float sigma = m_dust_settings.activation_noise;
                 const float inverse_population_sigma =
                     scale / (static_cast<float>(m_dust_settings.population) * sigma);
+                const float inverse_population_attention_sigma =
+                    scale / (static_cast<float>(m_dust_settings.population) *
+                        m_dust_settings.attention_noise);
+                auto& dust_forward = *m_dust_forward_workspace;
+                auto& scratch = m_backward_workspace->transformer_block;
+                const auto packed_rows = packed.packed_rows();
                 for (size_t member = 0; member < m_dust_settings.population; ++member)
                 {
-                    // Recreate clean logits, then apply one deterministic Gaussian
-                    // population member. Only forward loss evaluations occur here.
-                    const auto hidden_bytes = static_cast<VkDeviceSize>(
-                        static_cast<size_t>(count) *
-                        static_cast<size_t>(EmbeddingDimension::MAX) * sizeof(float));
-                    m_batched_output_workspace->dust_perturbed_hidden.device_buffer().copy_from(
-                        queue, m_batched_output_workspace->h_last.device_buffer(), hidden_bytes);
-                    dust::gaussian_batched_hidden_noise(
-                        m_batched_output_workspace->dust_hidden_noise, count,
-                        ++m_dust_seed);
-                    dust::perturb_batched_hidden(
+                    // Evaluate one forward-only member with independent,
+                    // reproducible perturbations at every linear projection.
+                    const uint64_t member_seed = ++m_dust_seed;
+                    dust::ForwardPerturbation perturbation(packed_rows, member_seed,
+                        sigma, m_dust_settings.attention_noise);
+                    dust_forward.reset(queue, packed_rows);
+                    m_input_layer.propagate_forward(
+                        packed, *m_gpu_packed_batch, dust_forward.h);
+                    for (size_t execution = 0;
+                         execution < m_transformer_execution_order.size(); ++execution)
+                    {
+                        if (const auto iteration = loop_iteration_for_execution(execution))
+                        {
+                            if (*iteration == 0)
+                                dust_forward.loop_input = dust_forward.h;
+                            prepare_loop_iteration_embedding(dust_forward, *iteration, queue);
+                            apply_loop_transition(dust_forward.h, dust_forward.loop_input,
+                                dust_forward.loop_iteration_embedding);
+                        }
+                        const size_t block = m_transformer_execution_order[execution];
+                        m_transformer_blocks[block].forward_batched(
+                            dust_forward.h, packed_rows, *m_gpu_packed_batch,
+                            dust_forward.transformer_workspaces[execution],
+                            transformer_residual_scale(block), &perturbation, execution);
+                    }
+                    gather_indexed_hidden(dust_forward.h,
+                        m_batched_output_workspace->row_indices,
                         m_batched_output_workspace->dust_perturbed_hidden,
-                        m_batched_output_workspace->dust_hidden_noise,
-                        count, sigma);
+                        static_cast<int>(count));
                     m_output_layers[head].forward_batched(
                         m_batched_output_workspace->dust_perturbed_hidden, count,
                         m_batched_output_workspace->logits, queue);
@@ -349,11 +369,91 @@ namespace rllm
                         m_batched_output_workspace->dust_noise,
                         m_batched_output_workspace->dust_error, count,
                         inverse_population_sigma);
-                    dust::accumulate_batched_hidden_error(
+
+                    // Convert sparse prediction rewards to packed row rewards.
+                    // K/V perturbations receive causal credit from later rows in
+                    // the same example because those rows can attend to them.
+                    m_batched_output_workspace->dust_row_rewards.zero(queue);
+                    dust::scatter_rewards(
                         m_batched_output_workspace->dust_rewards,
-                        m_batched_output_workspace->dust_hidden_noise,
-                        m_batched_output_workspace->dust_hidden_error, count,
-                        inverse_population_sigma);
+                        m_batched_output_workspace->row_indices,
+                        m_batched_output_workspace->dust_row_rewards, count);
+                    dust::causal_credit_rewards(
+                        m_batched_output_workspace->dust_row_rewards,
+                        m_batched_output_workspace->dust_attention_rewards,
+                        m_gpu_packed_batch->row_batch, m_gpu_packed_batch->row_end,
+                        packed_rows, m_dust_settings.credit_decay);
+
+                    for (size_t execution = 0;
+                         execution < m_transformer_execution_order.size(); ++execution)
+                    {
+                        const size_t block = m_transformer_execution_order[execution];
+                        if (block < m_frozen_transformer_block_count)
+                            continue;
+                        const auto& cached =
+                            m_forward_workspace->transformer_workspaces[execution];
+                        auto& accumulator =
+                            m_gradient_accumulation_workspace->transformer_blocks[block];
+
+                        const auto hidden_site = [&](dust::ProjectionSite site,
+                            const fixed_size_vector<float, PositionIndex>& rewards,
+                            auto& gradient, const auto& input, float inverse_sigma)
+                        {
+                            scratch.d_h_norm_attn.zero(queue);
+                            dust::gaussian_hidden_noise(perturbation.hidden_noise,
+                                packed_rows, perturbation.site_seed(site, execution));
+                            dust::accumulate_hidden_error(rewards,
+                                perturbation.hidden_noise, scratch.d_h_norm_attn,
+                                packed_rows, inverse_sigma);
+                            dust::accumulate_hidden_outer_product(
+                                scratch.d_h_norm_attn, input, gradient, packed_rows);
+                        };
+                        hidden_site(dust::ProjectionSite::Query,
+                            m_batched_output_workspace->dust_row_rewards,
+                            accumulator.dW_q, cached.h_norm_attn,
+                            inverse_population_attention_sigma);
+                        hidden_site(dust::ProjectionSite::Key,
+                            m_batched_output_workspace->dust_attention_rewards,
+                            accumulator.dW_k, cached.h_norm_attn,
+                            inverse_population_attention_sigma);
+                        hidden_site(dust::ProjectionSite::Value,
+                            m_batched_output_workspace->dust_attention_rewards,
+                            accumulator.dW_v, cached.h_norm_attn,
+                            inverse_population_attention_sigma);
+                        hidden_site(dust::ProjectionSite::AttentionOutput,
+                            m_batched_output_workspace->dust_row_rewards,
+                            accumulator.dW_o, cached.attn_concat,
+                            inverse_population_sigma);
+
+                        const auto ff_site = [&](dust::ProjectionSite site,
+                            auto& gradient)
+                        {
+                            scratch.d_gate_pre.zero(queue);
+                            dust::gaussian_ff_noise(perturbation.ff_noise,
+                                packed_rows, perturbation.site_seed(site, execution));
+                            dust::accumulate_ff_error(
+                                m_batched_output_workspace->dust_row_rewards,
+                                perturbation.ff_noise, scratch.d_gate_pre,
+                                packed_rows, inverse_population_sigma);
+                            dust::accumulate_ff_hidden_outer_product(
+                                scratch.d_gate_pre, cached.h_norm_ff,
+                                gradient, packed_rows);
+                        };
+                        ff_site(dust::ProjectionSite::Gate, accumulator.dW_gate);
+                        ff_site(dust::ProjectionSite::Up, accumulator.dW_up);
+                        scratch.d_h_norm_attn.zero(queue);
+                        dust::gaussian_hidden_noise(perturbation.hidden_noise,
+                            packed_rows, perturbation.site_seed(
+                                dust::ProjectionSite::Down, execution));
+                        dust::accumulate_hidden_error(
+                            m_batched_output_workspace->dust_row_rewards,
+                            perturbation.hidden_noise, scratch.d_h_norm_attn,
+                            packed_rows, inverse_population_sigma);
+                        dust::accumulate_hidden_ff_outer_product(
+                            scratch.d_h_norm_attn, cached.ffn_act,
+                            accumulator.dW_down, packed_rows);
+                        accumulator.touched = true;
+                    }
                     ++timing.dust_population_evaluations;
                 }
                 auto& accumulator = m_gradient_accumulation_workspace->output_layers[head];
@@ -362,10 +462,6 @@ namespace rllm
                     m_batched_output_workspace->h_last,
                     accumulator.dW_lm_head, count);
                 accumulator.touched = true;
-                add_indexed_hidden_gradient(
-                    m_batched_output_workspace->dust_hidden_error,
-                    m_batched_output_workspace->row_indices, hidden_gradient,
-                    static_cast<int>(count));
             }
             else
             {
@@ -495,32 +591,6 @@ namespace rllm
                 timing.primary_loss_sum += loss;
                 ++timing.primary_loss_count;
             }
-        }
-        if (m_training_algorithm == TrainingAlgorithm::Dust)
-        {
-            // DUST turns the reward-weighted final-activation estimate into
-            // local outer products using activations cached by the clean pass.
-            // No reverse traversal or activation Jacobian is evaluated.
-            for (size_t execution = 0;
-                 execution < m_transformer_execution_order.size(); ++execution)
-            {
-                const size_t block = m_transformer_execution_order[execution];
-                if (block < m_frozen_transformer_block_count)
-                    continue;
-                const auto& cached = forward.transformer_workspaces[execution];
-                auto& accumulator =
-                    m_gradient_accumulation_workspace->transformer_blocks[block];
-                dust::accumulate_hidden_outer_product(
-                    back.dh, cached.attn_concat, accumulator.dW_o, rows);
-                dust::accumulate_hidden_ff_outer_product(
-                    back.dh, cached.ffn_act, accumulator.dW_down, rows);
-                accumulator.touched = true;
-            }
-            // The embedding lookup is itself a local linear operation, so its
-            // DUST update is just the estimated activation error accumulated
-            // into the rows selected by the packed token IDs.
-            m_input_layer.accumulate_backward_packed(
-                packed, back.dh, m_gradient_accumulation_workspace->embeddings);
         }
         if (m_training_algorithm == TrainingAlgorithm::Backprop)
         {
