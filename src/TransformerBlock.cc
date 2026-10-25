@@ -271,21 +271,28 @@ namespace rllm
         scan_embedding_embedding_velocity_matrix(V_k, flag, -GRAD_CLIP, GRAD_CLIP);
         scan_embedding_embedding_velocity_matrix(V_v, flag, -GRAD_CLIP, GRAD_CLIP);
         scan_embedding_embedding_velocity_matrix(V_o, flag, -GRAD_CLIP, GRAD_CLIP);
-        scan_embedding_embedding_velocity_matrix(S_q, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
-        scan_embedding_embedding_velocity_matrix(S_k, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
-        scan_embedding_embedding_velocity_matrix(S_v, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
-        scan_embedding_embedding_velocity_matrix(S_o, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        if (m_adam_second_moments)
+        {
+            scan_embedding_embedding_velocity_matrix(m_adam_second_moments->q, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+            scan_embedding_embedding_velocity_matrix(m_adam_second_moments->k, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+            scan_embedding_embedding_velocity_matrix(m_adam_second_moments->v, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+            scan_embedding_embedding_velocity_matrix(m_adam_second_moments->o, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        }
 
         scan_ff_embedding_weight_matrix(W_gate, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
         scan_ff_embedding_weight_matrix(W_up, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
         scan_ff_embedding_velocity_matrix(V_gate, flag, -GRAD_CLIP, GRAD_CLIP);
         scan_ff_embedding_velocity_matrix(V_up, flag, -GRAD_CLIP, GRAD_CLIP);
-        scan_ff_embedding_velocity_matrix(S_gate, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
-        scan_ff_embedding_velocity_matrix(S_up, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        if (m_adam_second_moments)
+        {
+            scan_ff_embedding_velocity_matrix(m_adam_second_moments->gate, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+            scan_ff_embedding_velocity_matrix(m_adam_second_moments->up, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        }
 
         scan_embedding_ff_weight_matrix(W_down, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
         scan_embedding_ff_velocity_matrix(V_down, flag, -GRAD_CLIP, GRAD_CLIP);
-        scan_embedding_ff_velocity_matrix(S_down, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
+        if (m_adam_second_moments)
+            scan_embedding_ff_velocity_matrix(m_adam_second_moments->down, flag, 0.0f, GRAD_CLIP * GRAD_CLIP);
 
         if (nan_scan_failed(queue, flag))
         {
@@ -468,13 +475,16 @@ namespace rllm
         V_gate.zero(queue);
         V_up.zero(queue);
         V_down.zero(queue);
-        S_q.zero(queue);
-        S_k.zero(queue);
-        S_v.zero(queue);
-        S_o.zero(queue);
-        S_gate.zero(queue);
-        S_up.zero(queue);
-        S_down.zero(queue);
+        if (m_adam_second_moments)
+        {
+            m_adam_second_moments->q.zero(queue);
+            m_adam_second_moments->k.zero(queue);
+            m_adam_second_moments->v.zero(queue);
+            m_adam_second_moments->o.zero(queue);
+            m_adam_second_moments->gate.zero(queue);
+            m_adam_second_moments->up.zero(queue);
+            m_adam_second_moments->down.zero(queue);
+        }
     }
 
     // ── normalisation ──────────────────────────────────────────────────────────
@@ -504,45 +514,60 @@ namespace rllm
         ENDFOR
     }
 
+    size_t ForwardWorkspace::storage_size_bytes() const
+    {
+        size_t bytes =
+            h_in.storage_size_bytes() + h_norm_attn.storage_size_bytes() +
+            Q.storage_size_bytes() + K.storage_size_bytes() + V.storage_size_bytes() +
+            attn_concat.storage_size_bytes() + h_mid.storage_size_bytes() +
+            h_norm_ff.storage_size_bytes() + gate_pre.storage_size_bytes() +
+            up_pre.storage_size_bytes() + ffn_act.storage_size_bytes() +
+            attn_proj.storage_size_bytes() + ffn_out.storage_size_bytes() +
+            auxiliary_gradient.storage_size_bytes() +
+            decltype(rms_norm_row_sums)::CAPACITY * sizeof(float) +
+            decltype(rms_norm_inv_rms)::CAPACITY * sizeof(float);
+        for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
+            bytes += attn_w[hi].storage_size_bytes();
+        return bytes;
+    }
+
     size_t TransformerBlock::memory_usage_bytes(
         const ForwardWorkspace& fwd,
-        const BackwardWorkspace& bwd,
+        const BackwardWorkspace* bwd,
         const TransformerGradientAccumulator& grad,
-        size_t backward_workspace_share_count) const
+        size_t shared_workspace_count,
+        bool include_forward_workspace,
+        size_t additional_shared_workspace_bytes) const
     {
-        assert(backward_workspace_share_count > 0);
+        assert(shared_workspace_count > 0);
 
-        const size_t persistent =
+        size_t persistent =
             W_q.storage_size_bytes() + W_k.storage_size_bytes() + W_v.storage_size_bytes() + W_o.storage_size_bytes() +
             V_q.storage_size_bytes() + V_k.storage_size_bytes() + V_v.storage_size_bytes() + V_o.storage_size_bytes() +
-            S_q.storage_size_bytes() + S_k.storage_size_bytes() + S_v.storage_size_bytes() + S_o.storage_size_bytes() +
             W_gate.storage_size_bytes() + W_up.storage_size_bytes() + W_down.storage_size_bytes() +
-            V_gate.storage_size_bytes() + V_up.storage_size_bytes() + V_down.storage_size_bytes() +
-            S_gate.storage_size_bytes() + S_up.storage_size_bytes() + S_down.storage_size_bytes();
+            V_gate.storage_size_bytes() + V_up.storage_size_bytes() + V_down.storage_size_bytes();
+        if (m_adam_second_moments)
+            persistent += m_adam_second_moments->q.storage_size_bytes() * 4 +
+                m_adam_second_moments->gate.storage_size_bytes() * 2 +
+                m_adam_second_moments->down.storage_size_bytes();
 
-        size_t forward =
-            fwd.h_in.storage_size_bytes() + fwd.h_norm_attn.storage_size_bytes() +
-            fwd.Q.storage_size_bytes() + fwd.K.storage_size_bytes() + fwd.V.storage_size_bytes() +
-            fwd.attn_concat.storage_size_bytes() + fwd.h_mid.storage_size_bytes() +
-            fwd.h_norm_ff.storage_size_bytes() + fwd.gate_pre.storage_size_bytes() +
-            fwd.up_pre.storage_size_bytes() + fwd.ffn_act.storage_size_bytes() +
-            fwd.attn_proj.storage_size_bytes() + fwd.ffn_out.storage_size_bytes() +
-            decltype(fwd.rms_norm_row_sums)::CAPACITY * sizeof(float) +
-            decltype(fwd.rms_norm_inv_rms)::CAPACITY * sizeof(float);
-        for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
-            forward += fwd.attn_w[hi].storage_size_bytes();
+        const size_t forward = include_forward_workspace ? fwd.storage_size_bytes() : 0;
 
-        size_t backward =
-            bwd.d_h_mid.storage_size_bytes() + bwd.d_ffn_act.storage_size_bytes() +
-            bwd.dW_down.storage_size_bytes() + bwd.d_gate_pre.storage_size_bytes() +
-            bwd.d_up_pre.storage_size_bytes() + bwd.d_h_norm_ff.storage_size_bytes() +
-            bwd.dW_gate.storage_size_bytes() + bwd.dW_up.storage_size_bytes() +
-            bwd.d_attn_concat.storage_size_bytes() + bwd.dW_o.storage_size_bytes() +
-            bwd.d_Q.storage_size_bytes() + bwd.d_K.storage_size_bytes() + bwd.d_V.storage_size_bytes() +
-            bwd.dW_q.storage_size_bytes() + bwd.dW_k.storage_size_bytes() + bwd.dW_v.storage_size_bytes() +
-            bwd.d_h_norm_attn.storage_size_bytes();
-        for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
-            backward += bwd.d_scores[hi].storage_size_bytes() + bwd.d_raw[hi].storage_size_bytes();
+        size_t shared = additional_shared_workspace_bytes;
+        if (bwd)
+        {
+            shared +=
+                bwd->d_h_mid.storage_size_bytes() + bwd->d_ffn_act.storage_size_bytes() +
+                bwd->dW_down.storage_size_bytes() + bwd->d_gate_pre.storage_size_bytes() +
+                bwd->d_up_pre.storage_size_bytes() + bwd->d_h_norm_ff.storage_size_bytes() +
+                bwd->dW_gate.storage_size_bytes() + bwd->dW_up.storage_size_bytes() +
+                bwd->d_attn_concat.storage_size_bytes() + bwd->dW_o.storage_size_bytes() +
+                bwd->d_Q.storage_size_bytes() + bwd->d_K.storage_size_bytes() + bwd->d_V.storage_size_bytes() +
+                bwd->dW_q.storage_size_bytes() + bwd->dW_k.storage_size_bytes() + bwd->dW_v.storage_size_bytes() +
+                bwd->d_h_norm_attn.storage_size_bytes() + bwd->d_residual_branch.storage_size_bytes();
+            for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
+                shared += bwd->d_scores[hi].storage_size_bytes() + bwd->d_raw[hi].storage_size_bytes();
+        }
 
         const size_t gradient_accumulator =
             grad.dW_down.storage_size_bytes() + grad.dW_gate.storage_size_bytes() +
@@ -550,7 +575,7 @@ namespace rllm
             grad.dW_q.storage_size_bytes() + grad.dW_k.storage_size_bytes() +
             grad.dW_v.storage_size_bytes();
 
-        return persistent + forward + gradient_accumulator + backward / backward_workspace_share_count;
+        return persistent + forward + gradient_accumulator + shared / shared_workspace_count;
     }
 
 
@@ -776,6 +801,26 @@ namespace rllm
     TransformerBlock::~TransformerBlock() = default;
     TransformerBlock::TransformerBlock(TransformerBlock&&) noexcept = default;
     TransformerBlock& TransformerBlock::operator=(TransformerBlock&&) noexcept = default;
+
+    void TransformerBlock::set_adam_second_moments_enabled(bool enabled)
+    {
+        if (enabled == static_cast<bool>(m_adam_second_moments))
+            return;
+        if (!enabled)
+        {
+            m_adam_second_moments.reset();
+            return;
+        }
+        m_adam_second_moments = std::make_unique<AdamSecondMoments>();
+        auto& queue = vulkan_runtime::get_queue(0);
+        m_adam_second_moments->q.zero(queue);
+        m_adam_second_moments->k.zero(queue);
+        m_adam_second_moments->v.zero(queue);
+        m_adam_second_moments->o.zero(queue);
+        m_adam_second_moments->gate.zero(queue);
+        m_adam_second_moments->up.zero(queue);
+        m_adam_second_moments->down.zero(queue);
+    }
 
     // ── forward pass ──────────────────────────────────────────────────────────
 
@@ -1616,7 +1661,7 @@ namespace rllm
 
     void TransformerBlock::apply_accumulated_update(TransformerGradientAccumulator& accumulator,
         float learning_rate, float bias_correction1, float bias_correction2,
-        bool use_muon, backprop::MuonWorkspace& muon_workspace)
+        bool use_muon, backprop::MuonWorkspace* muon_workspace)
     {
         auto& diagnostics = optimizer_diagnostics_buffer();
         const int collect = optimizer_diagnostics_enabled() ? 1 : 0;
@@ -1633,23 +1678,25 @@ namespace rllm
         finalize_optimizer_gradient_clip(diagnostics);
         if (use_muon)
         {
-            backprop::muon_update(W_q, V_q, S_q, accumulator.dW_q, muon_workspace, learning_rate, diagnostics);
-            backprop::muon_update(W_k, V_k, S_k, accumulator.dW_k, muon_workspace, learning_rate, diagnostics);
-            backprop::muon_update(W_v, V_v, S_v, accumulator.dW_v, muon_workspace, learning_rate, diagnostics);
-            backprop::muon_update(W_o, V_o, S_o, accumulator.dW_o, muon_workspace, learning_rate, diagnostics);
-            backprop::muon_update(W_gate, V_gate, S_gate, accumulator.dW_gate, muon_workspace, learning_rate, diagnostics);
-            backprop::muon_update(W_up, V_up, S_up, accumulator.dW_up, muon_workspace, learning_rate, diagnostics);
-            backprop::muon_update(W_down, V_down, S_down, accumulator.dW_down, muon_workspace, learning_rate, diagnostics);
+            assert(muon_workspace);
+            backprop::muon_update(W_q, V_q, accumulator.dW_q, *muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_k, V_k, accumulator.dW_k, *muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_v, V_v, accumulator.dW_v, *muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_o, V_o, accumulator.dW_o, *muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_gate, V_gate, accumulator.dW_gate, *muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_up, V_up, accumulator.dW_up, *muon_workspace, learning_rate, diagnostics);
+            backprop::muon_update(W_down, V_down, accumulator.dW_down, *muon_workspace, learning_rate, diagnostics);
         }
         else
         {
-            adamw_update(W_q, V_q, S_q, accumulator.dW_q, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
-            adamw_update(W_k, V_k, S_k, accumulator.dW_k, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
-            adamw_update(W_v, V_v, S_v, accumulator.dW_v, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
-            adamw_update(W_o, V_o, S_o, accumulator.dW_o, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
-            adamw_update(W_gate, V_gate, S_gate, accumulator.dW_gate, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
-            adamw_update(W_up, V_up, S_up, accumulator.dW_up, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
-            adamw_update(W_down, V_down, S_down, accumulator.dW_down, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            assert(m_adam_second_moments);
+            adamw_update(W_q, V_q, m_adam_second_moments->q, accumulator.dW_q, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_k, V_k, m_adam_second_moments->k, accumulator.dW_k, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_v, V_v, m_adam_second_moments->v, accumulator.dW_v, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_o, V_o, m_adam_second_moments->o, accumulator.dW_o, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_gate, V_gate, m_adam_second_moments->gate, accumulator.dW_gate, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_up, V_up, m_adam_second_moments->up, accumulator.dW_up, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
+            adamw_update(W_down, V_down, m_adam_second_moments->down, accumulator.dW_down, learning_rate, bias_correction1, bias_correction2, diagnostics, collect);
         }
     }
 
@@ -1712,13 +1759,16 @@ namespace rllm
         V_gate.zero(queue);
         V_up.zero(queue);
         V_down.zero(queue);
-        S_q.zero(queue);
-        S_k.zero(queue);
-        S_v.zero(queue);
-        S_o.zero(queue);
-        S_gate.zero(queue);
-        S_up.zero(queue);
-        S_down.zero(queue);
+        if (m_adam_second_moments)
+        {
+            m_adam_second_moments->q.zero(queue);
+            m_adam_second_moments->k.zero(queue);
+            m_adam_second_moments->v.zero(queue);
+            m_adam_second_moments->o.zero(queue);
+            m_adam_second_moments->gate.zero(queue);
+            m_adam_second_moments->up.zero(queue);
+            m_adam_second_moments->down.zero(queue);
+        }
     }
 
 } // namespace rllm

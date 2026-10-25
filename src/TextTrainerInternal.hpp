@@ -43,6 +43,14 @@ namespace rllm
             for (auto& workspace : transformer_workspaces)
                 workspace.reset(queue, seq_len);
         }
+
+        ForwardWorkspace& transformer_workspace(size_t execution)
+        {
+            assert(!transformer_workspaces.empty());
+            return transformer_workspaces.size() == 1
+                ? transformer_workspaces.front()
+                : transformer_workspaces[execution];
+        }
     };
 
     void prepare_loop_iteration_embedding(
@@ -82,17 +90,92 @@ namespace rllm
         }
     };
 
+    struct DustWorkspace
+    {
+        struct ActivationCache
+        {
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_attn;
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_ff;
+            flexible_rows_matrix<float, PositionIndex, FFDimension> ffn_act;
+
+            explicit ActivationCache(PositionIndex rows)
+                : h_norm_attn(rows), attn_concat(rows), h_norm_ff(rows), ffn_act(rows)
+            {}
+
+            void reset(PositionIndex rows)
+            {
+                h_norm_attn.set_rows(rows);
+                attn_concat.set_rows(rows);
+                h_norm_ff.set_rows(rows);
+                ffn_act.set_rows(rows);
+            }
+
+            size_t storage_size_bytes() const
+            {
+                return h_norm_attn.storage_size_bytes() + attn_concat.storage_size_bytes() +
+                    h_norm_ff.storage_size_bytes() + ffn_act.storage_size_bytes();
+            }
+        };
+
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> hidden_error;
+        flexible_rows_matrix<float, PositionIndex, FFDimension> ff_error;
+        std::vector<ActivationCache> activation_caches;
+        dust::ForwardPerturbation perturbation;
+
+        DustWorkspace(PositionIndex rows, size_t execution_count)
+            : hidden_error(rows), ff_error(rows), perturbation(rows, 0, 0.0f, 0.0f)
+        {
+            activation_caches.reserve(execution_count);
+            for (size_t execution = 0; execution < execution_count; ++execution)
+                activation_caches.emplace_back(rows);
+        }
+
+        void reset(PositionIndex rows)
+        {
+            hidden_error.set_rows(rows);
+            ff_error.set_rows(rows);
+            for (auto& cache : activation_caches)
+                cache.reset(rows);
+        }
+
+        void allocate_device_buffers(VulkanQueue& queue)
+        {
+            hidden_error.zero(queue);
+            ff_error.zero(queue);
+            perturbation.hidden_noise.zero(queue);
+            perturbation.ff_noise.zero(queue);
+            for (auto& cache : activation_caches)
+            {
+                cache.h_norm_attn.zero(queue);
+                cache.attn_concat.zero(queue);
+                cache.h_norm_ff.zero(queue);
+                cache.ffn_act.zero(queue);
+            }
+        }
+
+        size_t storage_size_bytes() const
+        {
+            size_t bytes = hidden_error.storage_size_bytes() + ff_error.storage_size_bytes();
+            for (const auto& cache : activation_caches)
+                bytes += cache.storage_size_bytes();
+            return bytes;
+        }
+    };
+
     struct GradientAccumulationWorkspace
     {
         fixed_size_obj_vector<OutputLayerGradientAccumulator, MultiTokenPredictionIndex> output_layers;
         std::vector<TransformerGradientAccumulator> transformer_blocks;
         EmbeddingGradientAccumulator embeddings;
-        backprop::MuonWorkspace muon;
+        std::unique_ptr<backprop::MuonWorkspace> muon;
 
-        explicit GradientAccumulationWorkspace(size_t num_transformer_blocks)
+        explicit GradientAccumulationWorkspace(size_t num_transformer_blocks, bool use_muon)
             : transformer_blocks(num_transformer_blocks)
         {
             output_layers.set_size(MultiTokenPredictionIndex::MAX);
+            if (use_muon)
+                muon = std::make_unique<backprop::MuonWorkspace>();
         }
 
         void reset(VulkanQueue& queue)

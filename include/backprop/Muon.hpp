@@ -19,22 +19,19 @@ namespace rllm::backprop
     void muon_update(
         fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& weight,
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& momentum,
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& update,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient,
+        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient_update,
         MuonWorkspace& workspace, float learning_rate,
         fixed_size_vector<float, TempStorage>& diagnostics);
     void muon_update(
         fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& weight,
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>& momentum,
-        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& update,
-        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& gradient,
+        fixed_size_matrix<float, FFDimension, EmbeddingDimension>& gradient_update,
         MuonWorkspace& workspace, float learning_rate,
         fixed_size_vector<float, TempStorage>& diagnostics);
     void muon_update(
         fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& weight,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& momentum,
-        fixed_size_matrix<float, EmbeddingDimension, FFDimension>& update,
-        const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient,
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient_update,
         MuonWorkspace& workspace, float learning_rate,
         fixed_size_vector<float, TempStorage>& diagnostics);
 }

@@ -270,11 +270,15 @@ namespace rllm
             for (const auto& b : blocks_j)
             {
                 m_transformer_blocks.emplace_back();
+                m_transformer_blocks.back().set_adam_second_moments_enabled(
+                    m_training_algorithm == TrainingAlgorithm::Dust);
                 m_transformer_blocks.back().load(b);
             }
             for (size_t i = saved_blocks; i < target_blocks; ++i)
             {
                 auto& block = m_transformer_blocks.emplace_back();
+                block.set_adam_second_moments_enabled(
+                    m_training_algorithm == TrainingAlgorithm::Dust);
                 block.randomize(
                     m_weight_initializer, m_ffn_initializer,
                     m_upgrade_residual_output_scale);
@@ -618,13 +622,16 @@ namespace rllm
         V_gate.zero(queue);
         V_up.zero(queue);
         V_down.zero(queue);
-        S_q.zero(queue);
-        S_k.zero(queue);
-        S_v.zero(queue);
-        S_o.zero(queue);
-        S_gate.zero(queue);
-        S_up.zero(queue);
-        S_down.zero(queue);
+        if (m_adam_second_moments)
+        {
+            m_adam_second_moments->q.zero(queue);
+            m_adam_second_moments->k.zero(queue);
+            m_adam_second_moments->v.zero(queue);
+            m_adam_second_moments->o.zero(queue);
+            m_adam_second_moments->gate.zero(queue);
+            m_adam_second_moments->up.zero(queue);
+            m_adam_second_moments->down.zero(queue);
+        }
     }
 
     void TransformerBlock::save_to_safetensors(const std::string& filename, std::string* warn, std::string* err) const
@@ -729,6 +736,7 @@ namespace rllm
             }
             else
             {
+                assert(block.m_adam_second_moments);
                 push_matrix(st, "training." + pfx + "V_q", block.V_q, storage);
                 push_matrix(st, "training." + pfx + "V_k", block.V_k, storage);
                 push_matrix(st, "training." + pfx + "V_v", block.V_v, storage);
@@ -736,13 +744,13 @@ namespace rllm
                 push_matrix(st, "training." + pfx + "V_gate", block.V_gate, storage);
                 push_matrix(st, "training." + pfx + "V_up", block.V_up, storage);
                 push_matrix(st, "training." + pfx + "V_down", block.V_down, storage);
-                push_matrix(st, "training." + pfx + "S_q", block.S_q, storage);
-                push_matrix(st, "training." + pfx + "S_k", block.S_k, storage);
-                push_matrix(st, "training." + pfx + "S_v", block.S_v, storage);
-                push_matrix(st, "training." + pfx + "S_o", block.S_o, storage);
-                push_matrix(st, "training." + pfx + "S_gate", block.S_gate, storage);
-                push_matrix(st, "training." + pfx + "S_up", block.S_up, storage);
-                push_matrix(st, "training." + pfx + "S_down", block.S_down, storage);
+                push_matrix(st, "training." + pfx + "S_q", block.m_adam_second_moments->q, storage);
+                push_matrix(st, "training." + pfx + "S_k", block.m_adam_second_moments->k, storage);
+                push_matrix(st, "training." + pfx + "S_v", block.m_adam_second_moments->v, storage);
+                push_matrix(st, "training." + pfx + "S_o", block.m_adam_second_moments->o, storage);
+                push_matrix(st, "training." + pfx + "S_gate", block.m_adam_second_moments->gate, storage);
+                push_matrix(st, "training." + pfx + "S_up", block.m_adam_second_moments->up, storage);
+                push_matrix(st, "training." + pfx + "S_down", block.m_adam_second_moments->down, storage);
             }
         }
 
@@ -1072,7 +1080,11 @@ namespace rllm
             m_transformer_blocks.clear();
             m_transformer_blocks.reserve(target_blocks);
             for (size_t bi = 0; bi < target_blocks; ++bi)
-                m_transformer_blocks.emplace_back();
+            {
+                auto& block = m_transformer_blocks.emplace_back();
+                block.set_adam_second_moments_enabled(
+                    m_training_algorithm == TrainingAlgorithm::Dust);
+            }
         }
 
         for (size_t bi = 0; bi < num_blocks; ++bi)
@@ -1102,16 +1114,10 @@ namespace rllm
                     pull_matrix(tpfx + "muon_momentum_gate", st, block.V_gate);
                     pull_matrix(tpfx + "muon_momentum_up", st, block.V_up);
                     pull_matrix(tpfx + "muon_momentum_down", st, block.V_down);
-                    block.S_q.zero(queue);
-                    block.S_k.zero(queue);
-                    block.S_v.zero(queue);
-                    block.S_o.zero(queue);
-                    block.S_gate.zero(queue);
-                    block.S_up.zero(queue);
-                    block.S_down.zero(queue);
                 }
                 else
                 {
+                    assert(block.m_adam_second_moments);
                     pull_matrix(tpfx + "V_q", st, block.V_q);
                     pull_matrix(tpfx + "V_k", st, block.V_k);
                     pull_matrix(tpfx + "V_v", st, block.V_v);
@@ -1119,13 +1125,13 @@ namespace rllm
                     pull_matrix(tpfx + "V_gate", st, block.V_gate);
                     pull_matrix(tpfx + "V_up", st, block.V_up);
                     pull_matrix(tpfx + "V_down", st, block.V_down);
-                    pull_matrix(tpfx + "S_q", st, block.S_q);
-                    pull_matrix(tpfx + "S_k", st, block.S_k);
-                    pull_matrix(tpfx + "S_v", st, block.S_v);
-                    pull_matrix(tpfx + "S_o", st, block.S_o);
-                    pull_matrix(tpfx + "S_gate", st, block.S_gate);
-                    pull_matrix(tpfx + "S_up", st, block.S_up);
-                    pull_matrix(tpfx + "S_down", st, block.S_down);
+                    pull_matrix(tpfx + "S_q", st, block.m_adam_second_moments->q);
+                    pull_matrix(tpfx + "S_k", st, block.m_adam_second_moments->k);
+                    pull_matrix(tpfx + "S_v", st, block.m_adam_second_moments->v);
+                    pull_matrix(tpfx + "S_o", st, block.m_adam_second_moments->o);
+                    pull_matrix(tpfx + "S_gate", st, block.m_adam_second_moments->gate);
+                    pull_matrix(tpfx + "S_up", st, block.m_adam_second_moments->up);
+                    pull_matrix(tpfx + "S_down", st, block.m_adam_second_moments->down);
                 }
             }
             else
@@ -1137,13 +1143,16 @@ namespace rllm
                 block.V_gate.zero(queue);
                 block.V_up.zero(queue);
                 block.V_down.zero(queue);
-                block.S_q.zero(queue);
-                block.S_k.zero(queue);
-                block.S_v.zero(queue);
-                block.S_o.zero(queue);
-                block.S_gate.zero(queue);
-                block.S_up.zero(queue);
-                block.S_down.zero(queue);
+                if (block.m_adam_second_moments)
+                {
+                    block.m_adam_second_moments->q.zero(queue);
+                    block.m_adam_second_moments->k.zero(queue);
+                    block.m_adam_second_moments->v.zero(queue);
+                    block.m_adam_second_moments->o.zero(queue);
+                    block.m_adam_second_moments->gate.zero(queue);
+                    block.m_adam_second_moments->up.zero(queue);
+                    block.m_adam_second_moments->down.zero(queue);
+                }
             }
         }
         for (size_t bi = num_blocks; bi < target_blocks; ++bi)

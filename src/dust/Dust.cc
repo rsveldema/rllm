@@ -109,19 +109,45 @@ namespace rllm::dust
     }
 
     void gaussian_hidden_noise(
+        // OFFLOAD_PARAMETERS(noise, rows, seed)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& noise,
         PositionIndex rows,
-        uint64_t seed)
+        uint seed
+        // END_OFFLOAD_PARAMETERS
+    )
     {
-        cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> host;
-        host.set_rows(rows);
-        std::mt19937_64 generator(seed);
-        std::normal_distribution<float> normal;
-        for (const auto row : enum_iterator1D<PositionIndex>(rows))
-            for (const auto d : enum_iterator1D<EmbeddingDimension>())
-                host[row, d] = normal(generator);
         noise.set_rows(rows);
-        noise.copy_from_cpu(vulkan_runtime::get_queue(0), host);
+        auto& queue = vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (noise, rows, seed))
+        const float row_value = float(row);
+        const float dimension_value = float(d);
+        const float seed_value = float(seed);
+        const float state = (((row_value * 12.9898f) +
+            (dimension_value * 78.233f)) + seed_value);
+        const float shifted_state = (state + 19.19f);
+        const float sine1 = sin(state);
+        const float sine2 = sin(shifted_state);
+        const float raw1 = (sine1 * 43758.5453f);
+        const float raw2 = (sine2 * 24634.6345f);
+        const int whole1 = int(raw1);
+        const int whole2 = int(raw2);
+        const float whole1_value = float(whole1);
+        const float whole2_value = float(whole2);
+        const float difference1 = (raw1 - whole1_value);
+        const float difference2 = (raw2 - whole2_value);
+        const float fraction1 = (difference1 < 0.0f) ? -difference1 : difference1;
+        const float fraction2 = (difference2 < 0.0f) ? -difference2 : difference2;
+        const float scaled_fraction1 = (fraction1 * 0.999999f);
+        const float u1 = (scaled_fraction1 + 0.000001f);
+        const float u2 = fraction2;
+        const float logarithm = log(u1);
+        const float radius_squared = (-2.0f * logarithm);
+        const float radius = sqrt(radius_squared);
+        const float angle = (6.283185307179586f * u2);
+        const float cosine = cos(angle);
+        noise[row, d] = (radius * cosine);
+        ENDFOR
     }
 
     void compute_rewards(
@@ -231,17 +257,43 @@ namespace rllm::dust
     }
 
     void gaussian_logit_noise(
+        // OFFLOAD_PARAMETERS(noise, count, seed)
         fixed_size_matrix<float, BatchIndex, TokenID>& noise,
-        BatchIndex count, uint64_t seed)
+        BatchIndex count, uint seed
+        // END_OFFLOAD_PARAMETERS
+    )
     {
-        cpu_fixed_matrix<float, BatchIndex, TokenID> host;
-        host.zero();
-        std::mt19937_64 generator(seed);
-        std::normal_distribution<float> normal;
-        for (const auto item : enum_iterator1D<BatchIndex>(count))
-            for (const auto token : enum_iterator1D<TokenID>())
-                host[item, token] = normal(generator);
-        noise.copy_from_cpu(vulkan_runtime::get_queue(0), host);
+        auto& queue = vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<BatchIndex, TokenID>(count);
+        OFFLOAD_PARFOR_2D_PARAM(queue, item, token, grid, (noise, count, seed))
+        const float item_value = float(item);
+        const float token_value = float(token);
+        const float seed_value = float(seed);
+        const float state = (((item_value * 12.9898f) +
+            (token_value * 78.233f)) + seed_value);
+        const float shifted_state = (state + 19.19f);
+        const float sine1 = sin(state);
+        const float sine2 = sin(shifted_state);
+        const float raw1 = (sine1 * 43758.5453f);
+        const float raw2 = (sine2 * 24634.6345f);
+        const int whole1 = int(raw1);
+        const int whole2 = int(raw2);
+        const float whole1_value = float(whole1);
+        const float whole2_value = float(whole2);
+        const float difference1 = (raw1 - whole1_value);
+        const float difference2 = (raw2 - whole2_value);
+        const float fraction1 = (difference1 < 0.0f) ? -difference1 : difference1;
+        const float fraction2 = (difference2 < 0.0f) ? -difference2 : difference2;
+        const float scaled_fraction1 = (fraction1 * 0.999999f);
+        const float u1 = (scaled_fraction1 + 0.000001f);
+        const float u2 = fraction2;
+        const float logarithm = log(u1);
+        const float radius_squared = (-2.0f * logarithm);
+        const float radius = sqrt(radius_squared);
+        const float angle = (6.283185307179586f * u2);
+        const float cosine = cos(angle);
+        noise[item, token] = (radius * cosine);
+        ENDFOR
     }
 
     void perturb_batched_hidden(
@@ -305,18 +357,44 @@ namespace rllm::dust
     }
 
     void gaussian_ff_noise(
+        // OFFLOAD_PARAMETERS(noise, rows, seed)
         flexible_rows_matrix<float, PositionIndex, FFDimension>& noise,
-        PositionIndex rows, uint64_t seed)
+        PositionIndex rows, uint seed
+        // END_OFFLOAD_PARAMETERS
+    )
     {
-        cpu_flex_rows_matrix<float, PositionIndex, FFDimension> host;
-        host.set_rows(rows);
-        std::mt19937_64 generator(seed);
-        std::normal_distribution<float> normal;
-        for (const auto row : enum_iterator1D<PositionIndex>(rows))
-            for (const auto dimension : enum_iterator1D<FFDimension>())
-                host[row, dimension] = normal(generator);
         noise.set_rows(rows);
-        noise.copy_from_cpu(vulkan_runtime::get_queue(0), host);
+        auto& queue = vulkan_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, FFDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, dimension, grid, (noise, rows, seed))
+        const float row_value = float(row);
+        const float dimension_value = float(dimension);
+        const float seed_value = float(seed);
+        const float state = (((row_value * 12.9898f) +
+            (dimension_value * 78.233f)) + seed_value);
+        const float shifted_state = (state + 19.19f);
+        const float sine1 = sin(state);
+        const float sine2 = sin(shifted_state);
+        const float raw1 = (sine1 * 43758.5453f);
+        const float raw2 = (sine2 * 24634.6345f);
+        const int whole1 = int(raw1);
+        const int whole2 = int(raw2);
+        const float whole1_value = float(whole1);
+        const float whole2_value = float(whole2);
+        const float difference1 = (raw1 - whole1_value);
+        const float difference2 = (raw2 - whole2_value);
+        const float fraction1 = (difference1 < 0.0f) ? -difference1 : difference1;
+        const float fraction2 = (difference2 < 0.0f) ? -difference2 : difference2;
+        const float scaled_fraction1 = (fraction1 * 0.999999f);
+        const float u1 = (scaled_fraction1 + 0.000001f);
+        const float u2 = fraction2;
+        const float logarithm = log(u1);
+        const float radius_squared = (-2.0f * logarithm);
+        const float radius = sqrt(radius_squared);
+        const float angle = (6.283185307179586f * u2);
+        const float cosine = cos(angle);
+        noise[row, dimension] = (radius * cosine);
+        ENDFOR
     }
 
     void accumulate_hidden_ff_outer_product(

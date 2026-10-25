@@ -277,7 +277,12 @@ up, down, and output-logit perturbations. Vulkan kernels turn each token's loss
 improvement into a reward-weighted estimate for the specific projection that
 was perturbed. K and V receive decayed causal credit from later tokens in the
 same packed example; cached clean-pass inputs form local outer-product updates
-without traversing activation Jacobians. Training progress records `training_algorithm`,
+without traversing activation Jacobians. Each population member runs the
+perturbed transformer once, reuses its hidden states across all output chunks,
+and constructs transformer gradients once after the chunk rewards have been
+accumulated. The training log reports `chunk X/Y done` with elapsed time and a
+chunk-phase ETA so long micro-batches expose steady progress. Training progress
+records `training_algorithm`,
 `dust_population`, and `dust_population_evaluations`, so the existing progress
 visualizer can display DUST runs without a separate file format. Reverse-mode
 code is compiled from `src/backprop/`; DUST kernels and estimators are compiled
@@ -289,7 +294,24 @@ The backprop backend uses a hybrid Muon + AdamW optimizer. Muon updates the
 two-dimensional hidden-layer projection matrices (Q, K, V, attention output,
 and the three FFN projections), while AdamW updates embeddings, output heads,
 and other parameters that are not hidden-layer matrices. Muon uses Nesterov
-momentum and five Newton-Schulz orthogonalization steps.
+momentum and five Newton-Schulz orthogonalization steps. Its transformed update
+is computed in place in the gradient accumulator, so transformer layers retain
+one FP32 momentum matrix per projection rather than AdamW's two moment matrices.
+The second-moment matrices are allocated only for DUST/AdamW training.
+
+DUST retains only the four clean activations required to form its local weight
+updates for each transformer execution. One full transformer forward workspace
+is reused as transient scratch by both the clean and perturbed passes. The
+perturbed pass has separate hidden-state and loop buffers, but no per-layer
+forward caches. DUST also uses a shared error workspace containing one
+hidden-width and one FFN-width matrix; it does not allocate the reverse-mode
+backpropagation workspace or the Muon orthogonalization workspace. The startup
+transformer-memory estimate includes the compact activation caches and shared
+forward/error scratch.
+
+DUST Gaussian perturbations are generated deterministically on the GPU. This
+avoids constructing full activation-sized noise matrices on the CPU and
+uploading them for every projection, layer, and population member.
 
 Backprop checkpoints store Muon momentum buffers and identify the optimizer as
 `muon+adamw`. DUST checkpoints retain AdamW state and identify the optimizer as
@@ -745,7 +767,7 @@ later estimates. Early stopping may finish before the all-epochs estimate.
 
 At startup, `train.log` reports estimated transformer GPU memory in MB per layer and
 multiplied by the configured layer count. The estimate includes block weights,
-Adam optimizer state, per-layer forward workspaces and gradient accumulators,
+the active optimizer state, per-layer forward workspaces and gradient accumulators,
 and the correctly apportioned shared backward workspace. It excludes non-block
 buffers and Vulkan allocator overhead.
 

@@ -106,6 +106,8 @@ namespace rllm
             rms_norm_row_sums.zero(queue);
             rms_norm_inv_rms.zero(queue);
         }
+
+        size_t storage_size_bytes() const;
     };
 
 
@@ -244,15 +246,20 @@ namespace rllm
         void accumulate_gradients(const BackwardWorkspace& workspace, TransformerGradientAccumulator& accumulator);
         void apply_accumulated_update(TransformerGradientAccumulator& accumulator,
             float learning_rate, float bias_correction1, float bias_correction2,
-            bool use_muon, backprop::MuonWorkspace& muon_workspace);
+            bool use_muon, backprop::MuonWorkspace* muon_workspace);
+
+        // AdamW needs a persistent second moment for every weight. Muon does not.
+        void set_adam_second_moments_enabled(bool enabled);
 
         // GPU storage owned by this block plus its per-layer forward workspace,
         // gradient accumulator, and its share of the shared backward workspace.
         size_t memory_usage_bytes(
             const ForwardWorkspace& forward_workspace,
-            const BackwardWorkspace& backward_workspace,
+            const BackwardWorkspace* backward_workspace,
             const TransformerGradientAccumulator& gradient_accumulator,
-            size_t backward_workspace_share_count = 1) const;
+            size_t shared_workspace_count = 1,
+            bool include_forward_workspace = true,
+            size_t additional_shared_workspace_bytes = 0) const;
 
         void randomize(
             WeightInitializerType weight_type = WeightInitializerType::XavierInputProjections,
@@ -314,17 +321,22 @@ namespace rllm
         // Attention weights [D_MODEL × D_MODEL] (out_dim × in_dim), row-major
         fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension> W_q, W_k, W_v, W_o;
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> V_q, V_k, V_v, V_o;
-        fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> S_q, S_k, S_v, S_o;
 
         // SwiGLU FFN:
         //   gate, up:  [FFDimension::MAX    × D_MODEL]  (out × in)
         //   down:      [D_MODEL × FFDimension::MAX   ]  (out × in)
         fixed_size_matrix<float16, FFDimension, EmbeddingDimension> W_gate, W_up;
         fixed_size_matrix<float, FFDimension, EmbeddingDimension> V_gate, V_up;
-        fixed_size_matrix<float, FFDimension, EmbeddingDimension> S_gate, S_up;
         fixed_size_matrix<float16, EmbeddingDimension, FFDimension> W_down;
         fixed_size_matrix<float, EmbeddingDimension, FFDimension> V_down;
-        fixed_size_matrix<float, EmbeddingDimension, FFDimension> S_down;
+
+        struct AdamSecondMoments
+        {
+            fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> q, k, v, o;
+            fixed_size_matrix<float, FFDimension, EmbeddingDimension> gate, up;
+            fixed_size_matrix<float, EmbeddingDimension, FFDimension> down;
+        };
+        std::unique_ptr<AdamSecondMoments> m_adam_second_moments;
 
         // RMSNorm:  for each row t → y_t = x_t / rms(x_t)
         static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y);

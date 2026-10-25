@@ -42,7 +42,7 @@
   ],
   "training_arguments": [
     "--training-algorithm", "dust",
-    "--dust-population", "256",
+    "--dust-population", "1",
     "--epochs", "400",
     "--disable-example-convergence",
     "--disable-training-diagnostics",

@@ -47,6 +47,7 @@ namespace rllm
 
     struct TextTrainerForwardWorkspace;
     struct BackwardPropWorkspace;
+    struct DustWorkspace;
     struct GradientAccumulationWorkspace;
     /** Resolve the persisted frozen-layer boundary for a depth-increasing upgrade.
      * Returns nullopt when the checkpoint/target combination is incompatible. */
@@ -274,6 +275,7 @@ namespace rllm
         std::unique_ptr<TextTrainerForwardWorkspace> m_forward_workspace;
         std::unique_ptr<TextTrainerForwardWorkspace> m_dust_forward_workspace;
         std::unique_ptr<BackwardPropWorkspace> m_backward_workspace;
+        std::unique_ptr<DustWorkspace> m_dust_workspace;
         std::unique_ptr<GradientAccumulationWorkspace> m_gradient_accumulation_workspace;
         std::unique_ptr<GpuPackedBatchInput> m_gpu_packed_batch;
         std::unique_ptr<BatchedOutputWorkspace> m_batched_output_workspace;

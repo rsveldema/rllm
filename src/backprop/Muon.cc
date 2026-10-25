@@ -12,10 +12,9 @@ namespace rllm::backprop
         constexpr int NS_STEPS = 5;
 
         void initialize_square(
-            // OFFLOAD_PARAMETERS(momentum, update, gradient, norm, diagnostics)
+            // OFFLOAD_PARAMETERS(momentum, update, norm, diagnostics)
             fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& momentum,
             fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& update,
-            const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient,
             fixed_size_vector<float, TempStorage>& norm,
             const fixed_size_vector<float, TempStorage>& diagnostics
             // END_OFFLOAD_PARAMETERS
@@ -24,8 +23,8 @@ namespace rllm::backprop
             auto& queue = vulkan_runtime::get_queue(0);
             norm.zero(queue);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
-            OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, gradient, norm, diagnostics))
-            const float grad = (gradient[row, col] * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
+            OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, norm, diagnostics))
+            const float grad = (update[row, col] * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
             const float next_momentum = ((0.95f * momentum[row, col]) + (0.05f * grad));
             momentum[row, col] = next_momentum;
             const float value = ((0.05f * grad) + (0.95f * next_momentum));
@@ -35,10 +34,9 @@ namespace rllm::backprop
         }
 
         void initialize_tall(
-            // OFFLOAD_PARAMETERS(momentum, update, gradient, norm, diagnostics)
+            // OFFLOAD_PARAMETERS(momentum, update, norm, diagnostics)
             fixed_size_matrix<float, FFDimension, EmbeddingDimension>& momentum,
             fixed_size_matrix<float, FFDimension, EmbeddingDimension>& update,
-            const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& gradient,
             fixed_size_vector<float, TempStorage>& norm,
             const fixed_size_vector<float, TempStorage>& diagnostics
             // END_OFFLOAD_PARAMETERS
@@ -47,8 +45,8 @@ namespace rllm::backprop
             auto& queue = vulkan_runtime::get_queue(0);
             norm.zero(queue);
             const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
-            OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, gradient, norm, diagnostics))
-            const float grad = (gradient[row, col] * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
+            OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, norm, diagnostics))
+            const float grad = (update[row, col] * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
             const float next_momentum = ((0.95f * momentum[row, col]) + (0.05f * grad));
             momentum[row, col] = next_momentum;
             const float value = ((0.05f * grad) + (0.95f * next_momentum));
@@ -58,10 +56,9 @@ namespace rllm::backprop
         }
 
         void initialize_wide(
-            // OFFLOAD_PARAMETERS(momentum, update, gradient, norm, diagnostics)
+            // OFFLOAD_PARAMETERS(momentum, update, norm, diagnostics)
             fixed_size_matrix<float, EmbeddingDimension, FFDimension>& momentum,
             fixed_size_matrix<float, EmbeddingDimension, FFDimension>& update,
-            const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient,
             fixed_size_vector<float, TempStorage>& norm,
             const fixed_size_vector<float, TempStorage>& diagnostics
             // END_OFFLOAD_PARAMETERS
@@ -70,8 +67,8 @@ namespace rllm::backprop
             auto& queue = vulkan_runtime::get_queue(0);
             norm.zero(queue);
             const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
-            OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, gradient, norm, diagnostics))
-            const float grad = (gradient[row, col] * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
+            OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, norm, diagnostics))
+            const float grad = (update[row, col] * diagnostics[TempStorage::OPTIMIZER_GLOBAL_CLIP_SCALE]);
             const float next_momentum = ((0.95f * momentum[row, col]) + (0.05f * grad));
             momentum[row, col] = next_momentum;
             const float value = ((0.05f * grad) + (0.95f * next_momentum));
@@ -302,11 +299,10 @@ namespace rllm::backprop
     void muon_update(fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& weight,
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& momentum,
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& update,
-        const fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient,
         MuonWorkspace& workspace, float learning_rate,
         fixed_size_vector<float, TempStorage>& diagnostics)
     {
-        initialize_square(momentum, update, gradient, workspace.norm, diagnostics);
+        initialize_square(momentum, update, workspace.norm, diagnostics);
         normalize_square(update, workspace.norm);
         for (int step = 0; step < NS_STEPS; ++step)
         {
@@ -320,11 +316,10 @@ namespace rllm::backprop
     void muon_update(fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& weight,
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>& momentum,
         fixed_size_matrix<float, FFDimension, EmbeddingDimension>& update,
-        const fixed_size_matrix<float, FFDimension, EmbeddingDimension>& gradient,
         MuonWorkspace& workspace, float learning_rate,
         fixed_size_vector<float, TempStorage>& diagnostics)
     {
-        initialize_tall(momentum, update, gradient, workspace.norm, diagnostics);
+        initialize_tall(momentum, update, workspace.norm, diagnostics);
         normalize_tall(update, workspace.norm);
         for (int step = 0; step < NS_STEPS; ++step)
         {
@@ -338,11 +333,10 @@ namespace rllm::backprop
     void muon_update(fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& weight,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& momentum,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& update,
-        const fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient,
         MuonWorkspace& workspace, float learning_rate,
         fixed_size_vector<float, TempStorage>& diagnostics)
     {
-        initialize_wide(momentum, update, gradient, workspace.norm, diagnostics);
+        initialize_wide(momentum, update, workspace.norm, diagnostics);
         normalize_wide(update, workspace.norm);
         for (int step = 0; step < NS_STEPS; ++step)
         {

@@ -666,7 +666,7 @@ namespace rllm
             static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (h, last_rows, h_last, batch_size))
         h_last[batch, d] = h[last_rows[batch], d];
-        ENDFORrmm
+        ENDFOR
     }
 
     // Layers
@@ -699,7 +699,7 @@ namespace rllm
             }
             const size_t block_index = m_transformer_execution_order[execution];
             auto& block = m_transformer_blocks[block_index];
-            block.forward(ws.h, m_seq_len, ws.transformer_workspaces[execution],
+            block.forward(ws.h, m_seq_len, ws.transformer_workspace(execution),
                 transformer_residual_scale(block_index));
             char phase[96];
             std::snprintf(phase, sizeof(phase), "after transformer block %zu execution %zu forward", block_index, execution);
@@ -1016,13 +1016,16 @@ namespace rllm
                 block.V_gate.zero(queue);
                 block.V_up.zero(queue);
                 block.V_down.zero(queue);
-                block.S_q.zero(queue);
-                block.S_k.zero(queue);
-                block.S_v.zero(queue);
-                block.S_o.zero(queue);
-                block.S_gate.zero(queue);
-                block.S_up.zero(queue);
-                block.S_down.zero(queue);
+                if (block.m_adam_second_moments)
+                {
+                    block.m_adam_second_moments->q.zero(queue);
+                    block.m_adam_second_moments->k.zero(queue);
+                    block.m_adam_second_moments->v.zero(queue);
+                    block.m_adam_second_moments->o.zero(queue);
+                    block.m_adam_second_moments->gate.zero(queue);
+                    block.m_adam_second_moments->up.zero(queue);
+                    block.m_adam_second_moments->down.zero(queue);
+                }
             }
             for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
             {
@@ -1052,15 +1055,29 @@ namespace rllm
         m_forward_workspace.reset();
         m_dust_forward_workspace.reset();
         m_backward_workspace.reset();
+        m_dust_workspace.reset();
         m_gradient_accumulation_workspace.reset();
         m_gpu_packed_batch.reset();
         m_batched_output_workspace.reset();
-        m_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(PositionIndex::START, m_transformer_execution_order.size());
+        const size_t forward_workspace_count =
+            m_training_algorithm == TrainingAlgorithm::Dust ? 1 : m_transformer_execution_order.size();
+        m_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(
+            PositionIndex::START, forward_workspace_count);
         if (m_training_algorithm == TrainingAlgorithm::Dust)
+        {
             m_dust_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(
+                PositionIndex::START, 0);
+            m_dust_workspace = std::make_unique<DustWorkspace>(
                 PositionIndex::START, m_transformer_execution_order.size());
-        m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
-        m_gradient_accumulation_workspace = std::make_unique<GradientAccumulationWorkspace>(m_transformer_blocks.size());
+            auto& queue = vulkan_runtime::get_queue(0);
+            m_dust_forward_workspace->h.zero(queue);
+            m_dust_forward_workspace->loop_input.zero(queue);
+            m_dust_workspace->allocate_device_buffers(queue);
+        }
+        else
+            m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
+        m_gradient_accumulation_workspace = std::make_unique<GradientAccumulationWorkspace>(
+            m_transformer_blocks.size(), m_training_algorithm == TrainingAlgorithm::Backprop);
         m_gpu_packed_batch = std::make_unique<GpuPackedBatchInput>();
         m_batched_output_workspace = std::make_unique<BatchedOutputWorkspace>();
     }
@@ -1076,6 +1093,8 @@ namespace rllm
         if (m_training_algorithm == algorithm)
             return;
         m_training_algorithm = algorithm;
+        for (auto& block : m_transformer_blocks)
+            block.set_adam_second_moments_enabled(algorithm == TrainingAlgorithm::Dust);
         reset_workspaces();
     }
 
@@ -1195,7 +1214,7 @@ namespace rllm
                 m_gradient_accumulation_workspace->transformer_blocks[i], layer_learning_rate,
                 bias_correction1, bias_correction2,
                 m_training_algorithm == TrainingAlgorithm::Backprop,
-                m_gradient_accumulation_workspace->muon);
+                m_gradient_accumulation_workspace->muon.get());
             if (collect_diagnostics)
                 if (auto metrics = log_optimizer_diagnostics(
                         std::format("transformer layer {}", i)))
@@ -1220,7 +1239,10 @@ namespace rllm
         m_training_progress_filename = model_artifact_path("train.json").string();
         assert(static_cast<size_t>(TokenID::MAX) > 1);
         for (size_t i = 0; i < num_layers; ++i)
-            m_transformer_blocks.emplace_back();
+        {
+            auto& block = m_transformer_blocks.emplace_back();
+            block.set_adam_second_moments_enabled(m_training_algorithm == TrainingAlgorithm::Dust);
+        }
 
         reset_workspaces();
     }
@@ -1452,7 +1474,7 @@ namespace rllm
                 }
                 const size_t block = m_transformer_execution_order[execution];
                 m_transformer_blocks[block].forward_batched(
-                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspaces[execution],
+                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(execution),
                     transformer_residual_scale(block));
                 if (diagnose_first_batch)
                 {
@@ -2671,18 +2693,37 @@ namespace rllm
         size_t transformer_gpu_bytes = 0;
         if (n_layers > 0)
         {
+            const bool use_dust = m_training_algorithm == TrainingAlgorithm::Dust;
             const size_t per_layer_gpu_bytes = m_transformer_blocks.front().memory_usage_bytes(
                 m_forward_workspace->transformer_workspaces.front(),
-                m_backward_workspace->transformer_block,
-                m_gradient_accumulation_workspace->transformer_blocks.front(),
-                n_layers);
+                use_dust ? nullptr : &m_backward_workspace->transformer_block,
+                m_gradient_accumulation_workspace->transformer_blocks.front(), n_layers,
+                !use_dust, 0);
             transformer_gpu_bytes = per_layer_gpu_bytes * n_layers;
-            LOG_INFO(
-                "Estimated transformer GPU memory: {:.2f} MB per-layer share x {} layers = {:.2f} MB "
-                "(weights, optimizer state, forward/backward workspaces, and gradient accumulators)",
-                static_cast<double>(per_layer_gpu_bytes) / 1'000'000.0,
-                n_layers,
-                static_cast<double>(transformer_gpu_bytes) / 1'000'000.0);
+            if (use_dust)
+            {
+                transformer_gpu_bytes +=
+                    m_forward_workspace->transformer_workspaces.front().storage_size_bytes() +
+                    m_dust_workspace->storage_size_bytes();
+            }
+            if (use_dust)
+            {
+                LOG_INFO(
+                    "Estimated transformer GPU memory: {:.2f} MB per-layer weights/optimizer/gradients x {} layers; "
+                    "total {:.2f} MB including compact DUST caches and one shared forward workspace",
+                    static_cast<double>(per_layer_gpu_bytes) / 1'000'000.0,
+                    n_layers,
+                    static_cast<double>(transformer_gpu_bytes) / 1'000'000.0);
+            }
+            else
+            {
+                LOG_INFO(
+                    "Estimated transformer GPU memory: {:.2f} MB per-layer share x {} layers = {:.2f} MB "
+                    "(weights, optimizer state, forward/backward workspaces, and gradient accumulators)",
+                    static_cast<double>(per_layer_gpu_bytes) / 1'000'000.0,
+                    n_layers,
+                    static_cast<double>(transformer_gpu_bytes) / 1'000'000.0);
+            }
         }
 
         size_t batch_slot_gpu_bytes =

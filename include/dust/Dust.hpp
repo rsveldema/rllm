@@ -79,7 +79,7 @@ namespace rllm::dust
     void gaussian_hidden_noise(
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& noise,
         PositionIndex rows,
-        uint64_t seed);
+        uint seed);
 
     /** Per-example loss improvement, clean_loss - perturbed_loss. */
     void compute_rewards(
@@ -118,7 +118,7 @@ namespace rllm::dust
 
     void gaussian_logit_noise(
         fixed_size_matrix<float, BatchIndex, TokenID>& noise,
-        BatchIndex count, uint64_t seed);
+        BatchIndex count, uint seed);
 
     void perturb_batched_hidden(
         fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& hidden,
@@ -139,7 +139,7 @@ namespace rllm::dust
         PositionIndex rows, float sigma);
     void gaussian_ff_noise(
         flexible_rows_matrix<float, PositionIndex, FFDimension>& noise,
-        PositionIndex rows, uint64_t seed);
+        PositionIndex rows, uint seed);
 
     void accumulate_hidden_ff_outer_product(
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& error,
