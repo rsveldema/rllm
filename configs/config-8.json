@@ -41,14 +41,14 @@
     "-DRLLM_MAX_ATTENTION_POSITION=128"
   ],
   "training_arguments": [
-    "--epochs", "400",
+    "--epochs", "4",
     "--disable-example-convergence",
     "--disable-training-diagnostics",
     "--checkpoint-interval", "600",
     "--validation-interval", "600",
     "--learning-rate", "0.00001",
     "--layer-learning-rate-multiplier", "1.05",
-    "--warmup-percent", "1",
+    "--warmup-percent", "0.1",
     "--weight-initializer", "xavier-input-projections",
     "--ffn-initializer", "xavier-input-projections",
     "--embedding-initializer", "legacy-uniform",

@@ -2087,16 +2087,17 @@ TEST(DustEstimatorTest, RewardWeightedNoiseAndOuterProduct)
     cpu_fixed_matrix<float, EmbeddingDimension, EmbeddingDimension> host_gradient;
     error.copy_to_cpu(queue, host_error);
     gradient.copy_to_cpu(queue, host_gradient);
-    EXPECT_FLOAT_EQ((host_error[PositionIndex::START, EmbeddingDimension::START]), -2.0f);
-    EXPECT_FLOAT_EQ((host_error[static_cast<PositionIndex>(1), EmbeddingDimension::START]), 1.5f);
-    EXPECT_FLOAT_EQ((host_gradient[EmbeddingDimension::START, EmbeddingDimension::START]), 0.5f);
+    EXPECT_FLOAT_EQ((host_error[PositionIndex::START, EmbeddingDimension::START]), 2.0f);
+    EXPECT_FLOAT_EQ((host_error[static_cast<PositionIndex>(1), EmbeddingDimension::START]), -1.5f);
+    EXPECT_FLOAT_EQ((host_gradient[EmbeddingDimension::START, EmbeddingDimension::START]), -0.5f);
 }
 
-TEST(DustEstimatorTest, MatchesBackpropOnScalarLinearLayer)
+TEST(DustEstimatorTest, MatchesAdditiveOptimizerDescentOnScalarLinearLayer)
 {
     // This is the one-dimensional form of the same local outer product used by
-    // the Vulkan estimator: perturb y=w*x, estimate dL/dy from rewards, then
-    // multiply by cached x. Antithetic members remove the quadratic bias.
+    // the Vulkan estimator: perturb y=w*x, estimate the additive optimizer
+    // descent direction from rewards, then multiply by cached x. Antithetic
+    // members remove the quadratic bias.
     constexpr double weight = 0.7;
     constexpr double input = 1.3;
     constexpr double target = -0.2;
@@ -2110,7 +2111,7 @@ TEST(DustEstimatorTest, MatchesBackpropOnScalarLinearLayer)
     const double clean_loss = loss(activation);
     std::mt19937_64 generator(42);
     std::normal_distribution<double> normal;
-    double estimated_activation_gradient = 0.0;
+    double estimated_activation_descent = 0.0;
     for (size_t pair = 0; pair < pairs; ++pair)
     {
         const double noise = normal(generator);
@@ -2118,13 +2119,13 @@ TEST(DustEstimatorTest, MatchesBackpropOnScalarLinearLayer)
         {
             const double signed_noise = sign * noise;
             const double reward = clean_loss - loss(activation + sigma * signed_noise);
-            estimated_activation_gradient -= reward * signed_noise;
+            estimated_activation_descent += reward * signed_noise;
         }
     }
-    estimated_activation_gradient /= (2.0 * static_cast<double>(pairs) * sigma);
-    const double dust_gradient = estimated_activation_gradient * input;
-    const double backprop_gradient = (activation - target) * input;
-    EXPECT_NEAR(dust_gradient, backprop_gradient, 0.015);
+    estimated_activation_descent /= (2.0 * static_cast<double>(pairs) * sigma);
+    const double dust_descent = estimated_activation_descent * input;
+    const double additive_backprop_descent = (target - activation) * input;
+    EXPECT_NEAR(dust_descent, additive_backprop_descent, 0.015);
 }
 
 TEST(DustEstimatorTest, ProjectionSeedsAreDeterministicAndSiteSpecific)

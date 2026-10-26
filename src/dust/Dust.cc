@@ -85,7 +85,7 @@ namespace rllm::dust
         auto& queue = vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (rewards, noise, error, rows, inverse_population_sigma))
-        error[row, d] -= ((rewards[row] * noise[row, d]) * inverse_population_sigma);
+        error[row, d] += ((rewards[row] * noise[row, d]) * inverse_population_sigma);
         ENDFOR
     }
 
@@ -233,7 +233,7 @@ namespace rllm::dust
         auto& queue = vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, TokenID>(count);
         OFFLOAD_PARFOR_2D_PARAM(queue, item, token, grid, (rewards, noise, error, count, inverse_population_sigma))
-        error[item, token] -= ((rewards[item] * noise[item, token]) * inverse_population_sigma);
+        error[item, token] += ((rewards[item] * noise[item, token]) * inverse_population_sigma);
         ENDFOR
     }
 
@@ -323,7 +323,7 @@ namespace rllm::dust
         auto& queue = vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(count);
         OFFLOAD_PARFOR_2D_PARAM(queue, item, dimension, grid, (rewards, noise, error, count, inverse_population_sigma))
-        error[item, dimension] -= ((rewards[item] * noise[item, dimension]) * inverse_population_sigma);
+        error[item, dimension] += ((rewards[item] * noise[item, dimension]) * inverse_population_sigma);
         ENDFOR
     }
 
@@ -428,7 +428,7 @@ namespace rllm::dust
         auto& queue = vulkan_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, FFDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, row, dimension, grid, (rewards, noise, error, rows, inverse_population_sigma))
-        error[row, dimension] -= ((rewards[row] * noise[row, dimension]) * inverse_population_sigma);
+        error[row, dimension] += ((rewards[row] * noise[row, dimension]) * inverse_population_sigma);
         ENDFOR
     }
 

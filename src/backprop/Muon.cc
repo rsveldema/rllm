@@ -274,7 +274,8 @@ namespace rllm::backprop
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (weight, update, learning_rate))
             const float old_weight = weight[row, col];
             weight[row, col] = (((1.0f - (learning_rate * 0.01f)) * old_weight) -
-                ((learning_rate * 2.0f) * update[row, col]));
+                ((learning_rate * sqrt((static_cast<float>(FFDimension::MAX) /
+                    static_cast<float>(EmbeddingDimension::MAX)))) * update[row, col]));
             ENDFOR
         }
 

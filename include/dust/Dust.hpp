@@ -60,7 +60,7 @@ namespace rllm::dust
         PositionIndex rows,
         float sigma);
 
-    /** Accumulate -(reward / sigma) * noise into the estimated output error. */
+    /** Accumulate (reward / sigma) * noise as an additive optimizer descent direction. */
     void accumulate_hidden_error(
         const fixed_size_vector<float, PositionIndex>& rewards,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& noise,

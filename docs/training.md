@@ -311,7 +311,9 @@ forward/error scratch.
 
 DUST Gaussian perturbations are generated deterministically on the GPU. This
 avoids constructing full activation-sized noise matrices on the CPU and
-uploading them for every projection, layer, and population member.
+uploading them for every projection, layer, and population member. Because the
+optimizers apply updates additively, DUST converts `clean_loss - perturbed_loss`
+rewards directly into additive descent directions.
 
 Backprop checkpoints store Muon momentum buffers and identify the optimizer as
 `muon+adamw`. DUST checkpoints retain AdamW state and identify the optimizer as
