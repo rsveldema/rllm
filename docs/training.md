@@ -67,15 +67,15 @@ records as `loop_first_layer`, `loop_last_layer`, `loop_count`, and
 `RLLM_MAX_ATTENTION_POSITION` controls the maximum length of each independently
 attended sequence. Attention workspaces have shape packed rows by local
 attention positions, so they do not allocate scores between unrelated windows.
-The model-8 configuration uses `8192` packed rows and `128` attention positions,
+The model-8 configuration uses `8192` packed rows and `512` attention positions,
 and derives `RLLM_MAX_BATCH_SIZE` as `RLLM_MAX_POSITION /
-RLLM_MAX_ATTENTION_POSITION`, giving 64 batch slots. A 64-window micro-batch
-uses 8128 rows (`64 * 127`). These values change serialized tensor shapes;
+RLLM_MAX_ATTENTION_POSITION`, giving 16 batch slots. A 16-window micro-batch
+uses 8176 rows (`16 * 511`). These values change serialized tensor shapes;
 model-8 must start fresh after changing them.
 
 `--incremental-window` runs a fresh staged curriculum in the configured model
-directory. For the standard eight-layer, 128-token target it uses windows of 12,
-16, 24, 48, 72, and 128 tokens for layers 3 through 8 respectively. It adds one
+directory. For the standard eight-layer, 512-token target it uses windows of 12,
+16, 24, 48, 72, and 512 tokens for layers 3 through 8 respectively. It adds one
 layer and grows the window and proportional stride every
 `incremental_stage_epochs` epochs (default `4`).
 New blocks use Xavier-uniform weights while their residual output projections
@@ -297,6 +297,8 @@ and other parameters that are not hidden-layer matrices. Muon uses Nesterov
 momentum and five Newton-Schulz orthogonalization steps. Its transformed update
 is computed in place in the gradient accumulator, so transformer layers retain
 one FP32 momentum matrix per projection rather than AdamW's two moment matrices.
+On HIP, the FP32 row-Gram products used by square and wide Muon projections are
+lowered to `hipblasSgemm`; clipping remains outside all BLAS transformations.
 The second-moment matrices are allocated only for DUST/AdamW training.
 
 DUST retains only the four clean activations required to form its local weight

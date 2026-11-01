@@ -2,7 +2,7 @@
   "build_type": "release",
   "model_directory": "models-profiling",
   "layers": 8,
-  "window_size": 32,
+  "window_size": 64,
   "window_stride": 32,
   "learn_depth": 2,
   "strip_comments": true,
@@ -15,7 +15,7 @@
     "-DDEBUG_ATTENTION_DIAGNOSTICS=ON",
     "-DRLLM_ENABLE_STATISTICS=ON",
     "-DRLLM_MAX_POSITION=64",
-    "-DRLLM_MAX_ATTENTION_POSITION=32"
+    "-DRLLM_MAX_ATTENTION_POSITION=64"
   ],
   "training_arguments": [
     "--epochs", "2",
@@ -30,7 +30,7 @@
     "--ffn-initializer", "xavier-uniform",
     "--embedding-initializer", "legacy-uniform",
     "--learning-rate-schedule", "lowering",
-    "--micro-batch-size", "2",
+    "--micro-batch-size", "1",
     "--max-validation-windows", "64",
     "--validation-worst-count", "20",
     "--memorization-target-percent", "90",

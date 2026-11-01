@@ -83,6 +83,7 @@ if(OFFLOAD_BACKEND STREQUAL "hip")
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/transforms.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/tree_rewriter.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/transforms/blas_clip_abt.tkernel"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/transforms/blas_muon_gram_rows.tkernel"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/hip_kernel_visitor.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/rllm_hip_dispatch_stub_visitor.py"
             "${CMAKE_SOURCE_DIR}/hip-config.json"

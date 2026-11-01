@@ -2,7 +2,7 @@
   "build_type": "release",
   "model_directory": "models-english-overfit",
   "layers": 8,
-  "window_size": 32,
+  "window_size": 64,
   "window_stride": 1,
   "learn_depth": 200,
   "strip_comments": false,
@@ -15,7 +15,7 @@
     "-DDEBUG_ATTENTION_DIAGNOSTICS=ON",
     "-DRLLM_ENABLE_STATISTICS=ON",
     "-DRLLM_MAX_POSITION=512",
-    "-DRLLM_MAX_ATTENTION_POSITION=32"
+    "-DRLLM_MAX_ATTENTION_POSITION=64"
   ],
   "training_arguments": [
     "--epochs", "10000",

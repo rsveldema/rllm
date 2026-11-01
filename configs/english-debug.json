@@ -2,7 +2,7 @@
   "build_type": "debug",
   "model_directory": "models-english-debug",
   "layers": 8,
-  "window_size": 32,
+  "window_size": 64,
   "window_stride": 1,
   "learn_depth": 1,
   "strip_comments": false,
@@ -15,7 +15,7 @@
     "-DDEBUG_ATTENTION_DIAGNOSTICS=ON",
     "-DRLLM_ENABLE_STATISTICS=ON",
     "-DRLLM_MAX_POSITION=512",
-    "-DRLLM_MAX_ATTENTION_POSITION=32"
+    "-DRLLM_MAX_ATTENTION_POSITION=64"
   ],
   "training_arguments": [
     "--epochs", "40",
@@ -31,7 +31,7 @@
     "--ffn-initializer", "xavier-uniform",
     "--embedding-initializer", "legacy-uniform",
     "--learning-rate-schedule", "lowering",
-    "--micro-batch-size", "16",
+    "--micro-batch-size", "8",
     "--max-validation-windows", "128",
     "--validation-worst-count", "20",
     "--disable-early-stopping"

@@ -392,7 +392,7 @@ struct CommandLineParser
                  adamw_learning_rate = rate;
              }},
         {.options = {"--muon-learning-rate"},
-         .description = "Base Muon learning rate (default: inherit --learning-rate)",
+         .description = "Base Muon learning rate (default: inherit --adamw-learning-rate)",
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {

@@ -152,7 +152,7 @@ namespace rllm
         {
             std::println(
                 "Warning: base learning rate {} is high for the current clipped optimizer and may saturate logits. "
-                "Try --learning-rate 0.2 or lower if losses jump to ~38400.",
+                "Try --adamw-learning-rate 0.2 or lower if losses jump to ~38400.",
                 adamw_learning_rate
             );
         }

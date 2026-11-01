@@ -2,7 +2,7 @@
   "build_type": "release",
   "model_directory": "models-8-dust",
   "layers": 8,
-  "window_size": 128,
+  "window_size": 512,
   "window_stride": 1,
   "learn_depth": 1,
   "strip_comments": false,
@@ -38,7 +38,7 @@
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
     "-DRLLM_ENABLE_STATISTICS=OFF",
     "-DRLLM_MAX_POSITION=8192",
-    "-DRLLM_MAX_ATTENTION_POSITION=128"
+    "-DRLLM_MAX_ATTENTION_POSITION=512"
   ],
   "training_arguments": [
     "--training-algorithm", "dust",
@@ -61,7 +61,7 @@
     "--simulated-annealing-decay-factor", "0.7",
     "--simulated-annealing-decay-epochs", "1",
     "--simulated-annealing-min-multiplier", "0.02",
-    "--micro-batch-size", "64",
+    "--micro-batch-size", "16",
     "--max-validation-windows", "8",
     "--validation-worst-count", "100",
     "--hip-device", "R9700",

@@ -2,7 +2,7 @@
   "build_type": "release",
   "model_directory": "models-8",
   "layers": 8,
-  "window_size": 32,
+  "window_size": 512,
   "window_stride": 16,
   "learn_depth": 1,
   "strip_comments": false,
@@ -23,7 +23,7 @@
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
     "-DRLLM_ENABLE_STATISTICS=OFF",
     "-DRLLM_MAX_POSITION=512",
-    "-DRLLM_MAX_ATTENTION_POSITION=32"
+    "-DRLLM_MAX_ATTENTION_POSITION=512"
   ],
   "training_arguments": [
     "--epochs", "40",
@@ -48,7 +48,7 @@
     "--filter", "curriculum/algos",
     "--filter", "curriculum/english",
     "--filter", "curriculum/large",
-    "--micro-batch-size", "16",
+    "--micro-batch-size", "1",
     "--max-validation-windows", "512",
     "--validation-worst-count", "100",
     "--hip-device", "R9700",

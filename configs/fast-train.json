@@ -2,7 +2,7 @@
   "build_type": "release",
   "model_directory": "models-8-fast",
   "layers": 8,
-  "window_size": 96,
+  "window_size": 192,
   "window_stride": 48,
   "learn_depth": 1,
   "strip_comments": false,
@@ -18,7 +18,9 @@
   ],
   "cmake_arguments": [
     "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
-    "-DRLLM_ENABLE_STATISTICS=OFF"
+    "-DRLLM_ENABLE_STATISTICS=OFF",
+    "-DRLLM_MAX_POSITION=8192",
+    "-DRLLM_MAX_ATTENTION_POSITION=192"
   ],
   "training_arguments": [
     "--epochs", "40",
@@ -38,7 +40,7 @@
     "--simulated-annealing-decay-factor", "0.7",
     "--simulated-annealing-decay-epochs", "1",
     "--simulated-annealing-min-multiplier", "0.02",
-    "--micro-batch-size", "256",
+    "--micro-batch-size", "32",
     "--max-validation-windows", "512",
     "--validation-worst-count", "100",
     "--hip-device", "R9700",
