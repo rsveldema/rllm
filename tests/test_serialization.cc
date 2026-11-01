@@ -299,6 +299,7 @@ TEST(SerializationTest, SafetensorsTrainingStateDoesNotOverrideActiveLearningRat
     checkpoint.metadata.insert("training.optimizer", "muon+adamw");
     checkpoint.metadata.insert("training.optimizer_step", "7");
     checkpoint.metadata.insert("training.learning_rate", "0.01");
+    checkpoint.metadata.insert("training.muon_learning_rate", "0.04");
     checkpoint.metadata.insert("training.layer_learning_rate_multiplier", "1.1");
     checkpoint.metadata.insert("training.warmup_percent", "20");
     checkpoint.metadata.insert("training.learning_rate_schedule", "2");
@@ -317,7 +318,8 @@ TEST(SerializationTest, SafetensorsTrainingStateDoesNotOverrideActiveLearningRat
     ASSERT_TRUE(safetensors::save_to_file(checkpoint, sf_file, &warning, &error)) << error;
 
     rllm::TextTrainer loaded(0, corpus, stats);
-    loaded.set_learning_rate(0.02f);
+    loaded.set_adamw_learning_rate(0.02f);
+    loaded.set_muon_learning_rate(0.03f);
     loaded.set_layer_learning_rate_multiplier(1.2f);
     loaded.set_warmup_percent(5.0f);
     loaded.set_learning_rate_schedule(rllm::LearningRateSchedule::Lowering);
@@ -327,7 +329,8 @@ TEST(SerializationTest, SafetensorsTrainingStateDoesNotOverrideActiveLearningRat
     loaded.set_simulated_annealing_min_multiplier(0.05f);
 
     ASSERT_TRUE(loaded.load(sf_file));
-    EXPECT_FLOAT_EQ(loaded.get_learning_rate(), 0.02f);
+    EXPECT_FLOAT_EQ(loaded.get_adamw_learning_rate(), 0.02f);
+    EXPECT_FLOAT_EQ(loaded.get_muon_learning_rate(), 0.03f);
     EXPECT_FLOAT_EQ(loaded.get_layer_learning_rate_multiplier(), 1.2f);
     EXPECT_FLOAT_EQ(loaded.get_warmup_percent(), 5.0f);
     EXPECT_EQ(loaded.get_learning_rate_schedule(), rllm::LearningRateSchedule::Lowering);

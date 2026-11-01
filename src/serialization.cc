@@ -785,7 +785,8 @@ namespace rllm
             st.metadata.insert("training.optimizer",
                 m_training_algorithm == TrainingAlgorithm::Backprop ? "muon+adamw" : "adamw");
             st.metadata.insert("training.optimizer_step", std::to_string(m_optimizer_step));
-            st.metadata.insert("training.learning_rate", std::to_string(m_learning_rate));
+            st.metadata.insert("training.adamw_learning_rate", std::to_string(m_adamw_learning_rate));
+            st.metadata.insert("training.muon_learning_rate", std::to_string(m_muon_learning_rate));
             st.metadata.insert("training.layer_learning_rate_multiplier", std::to_string(m_layer_learning_rate_multiplier));
             st.metadata.insert("training.warmup_percent", std::to_string(m_warmup_percent));
             st.metadata.insert("training.learning_rate_schedule", std::to_string(static_cast<int>(m_learning_rate_schedule)));
@@ -872,6 +873,7 @@ namespace rllm
             }
             int schedule = 0;
             float checkpoint_learning_rate = 0.0f;
+            float checkpoint_muon_learning_rate = checkpoint_learning_rate;
             float checkpoint_layer_learning_rate_multiplier = 0.0f;
             float checkpoint_simulated_annealing_decay_factor = 0.0f;
             float checkpoint_simulated_annealing_initial_multiplier = 0.0f;
@@ -888,8 +890,11 @@ namespace rllm
                 std::println("Invalid warmup percentage in {}", filename);
                 return false;
             }
+            const bool has_adamw_learning_rate =
+                parse_value("training.adamw_learning_rate", checkpoint_learning_rate) ||
+                parse_value("training.learning_rate", checkpoint_learning_rate);
             if (!parse_value("training.optimizer_step", m_optimizer_step) ||
-                !parse_value("training.learning_rate", checkpoint_learning_rate) ||
+                !has_adamw_learning_rate ||
                 !parse_value("training.layer_learning_rate_multiplier", checkpoint_layer_learning_rate_multiplier) ||
                 !parse_value("training.learning_rate_schedule", schedule) ||
                 !parse_value("training.learning_rate_schedule_steps", m_learning_rate_schedule_steps) ||
@@ -907,6 +912,13 @@ namespace rllm
                 schedule > static_cast<int>(LearningRateSchedule::SimulatedAnnealing))
             {
                 std::println("Invalid or incomplete training state in {}", filename);
+                return false;
+            }
+            checkpoint_muon_learning_rate = checkpoint_learning_rate;
+            if (header.count("training.muon_learning_rate") &&
+                !parse_value("training.muon_learning_rate", checkpoint_muon_learning_rate))
+            {
+                std::println("Invalid Muon learning rate in {}", filename);
                 return false;
             }
             std::string window_count_text;

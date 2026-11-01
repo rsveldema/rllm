@@ -104,7 +104,8 @@ namespace rllm
          */
         static constexpr float K_CONVERGENCE_DIVISOR = 50.0f;
         static constexpr size_t DEFAULT_LEARN_DEPTH = 16;
-        static constexpr float DEFAULT_LEARNING_RATE = 0.0003f;
+        static constexpr float DEFAULT_ADAMW_LEARNING_RATE = 0.0003f;
+        static constexpr float DEFAULT_MUON_LEARNING_RATE = DEFAULT_ADAMW_LEARNING_RATE;
         static constexpr float FIRES_NOTHONG_CE_LOSS = std::log(static_cast<float>(TokenID::MAX));
         static constexpr float CONVERGENCE_THRESHOLD = FIRES_NOTHONG_CE_LOSS / K_CONVERGENCE_DIVISOR;
         static constexpr float PROBABILITY_OF_CORRECT_TOKEN = std::exp(-CONVERGENCE_THRESHOLD) * 100.0f;
@@ -125,7 +126,8 @@ namespace rllm
         size_t get_loop_last_block() const { return m_loop_last_block; }
         size_t get_loop_count() const { return m_loop_count; }
         size_t get_frozen_transformer_block_count() const { return m_frozen_transformer_block_count; }
-        float get_learning_rate() const { return m_learning_rate; }
+        float get_adamw_learning_rate() const { return m_adamw_learning_rate; }
+        float get_muon_learning_rate() const { return m_muon_learning_rate; }
         float get_layer_learning_rate_multiplier() const { return m_layer_learning_rate_multiplier; }
         float get_warmup_percent() const { return m_warmup_percent; }
         LearningRateSchedule get_learning_rate_schedule() const { return m_learning_rate_schedule; }
@@ -146,7 +148,19 @@ namespace rllm
         void set_window_size(int n) { assert(n >= 2); m_window_size = n; }
         void set_window_stride(size_t n) { assert(n > 0); m_window_stride = n; }
         void set_learn_depth(size_t n) { assert(n > 0); m_learn_depth = n; }
-        void set_learning_rate(float rate) { assert(rate > 0.0f); m_learning_rate = rate; }
+        void set_adamw_learning_rate(float rate)
+        {
+            assert(rate > 0.0f);
+            m_adamw_learning_rate = rate;
+            if (!m_muon_learning_rate_explicit)
+                m_muon_learning_rate = rate;
+        }
+        void set_muon_learning_rate(float rate)
+        {
+            assert(rate > 0.0f);
+            m_muon_learning_rate = rate;
+            m_muon_learning_rate_explicit = true;
+        }
         void set_layer_learning_rate_multiplier(float multiplier) { assert(multiplier >= 1.0f && multiplier < 2.0f); m_layer_learning_rate_multiplier = multiplier; }
         void set_warmup_percent(float percent) { assert(percent > 0.0f && percent <= 100.0f); m_warmup_percent = percent; }
         void set_skip_warmup(bool enabled) { m_skip_warmup = enabled; }
@@ -331,7 +345,9 @@ namespace rllm
         int m_window_size = 4;
         size_t m_window_stride = 1;
         size_t m_learn_depth = DEFAULT_LEARN_DEPTH;
-        float m_learning_rate = DEFAULT_LEARNING_RATE;
+        float m_adamw_learning_rate = DEFAULT_ADAMW_LEARNING_RATE;
+        float m_muon_learning_rate = DEFAULT_MUON_LEARNING_RATE;
+        bool m_muon_learning_rate_explicit = false;
         float m_layer_learning_rate_multiplier = DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER;
         float m_warmup_percent = LoweringLearningRate::DEFAULT_WARMUP_PERCENT;
         bool m_skip_warmup = false;

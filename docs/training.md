@@ -591,9 +591,12 @@ stride before constructing the training and validation windows.
 
 ## Learning Rate
 
-`--learning-rate <R>` sets the base learning rate used during training. The
-binary default for AdamW is `0.0003`; `train.py` currently selects
-`0.00001` explicitly.
+`--adamw-learning-rate <R>` sets the AdamW base learning rate. The binary default is
+`0.0003`; `train.py` currently selects `0.00001` explicitly.
+`--muon-learning-rate <R>` independently sets the Muon base learning rate for
+the transformer projection matrices. The JSON configuration key is
+`muon_learning_rate`. When omitted, Muon inherits `adamw_learning_rate`, preserving
+the behavior of existing configurations.
 
 `--learning-rate-schedule constant|lowering|simulated_annealing` selects the learning-rate
 implementation. `constant` keeps the configured rate unchanged for every
@@ -616,9 +619,10 @@ rate (default `0.02`, or one fiftieth). The factor must be
 greater than zero and less than one. `train.py` currently selects
 `simulated_annealing`.
 
-The configured rate is the actual AdamW base rate and is not divided by the
-number of transformer blocks. Each parameter tensor has independent AdamW
-moments, so changing model depth does not silently change the CLI rate.
+The configured rates are not divided by the number of transformer blocks.
+AdamW and Muon share the selected schedule scale and depth profile, but each is
+applied to its own base rate. AdamW updates embeddings and output heads; Muon
+updates the two-dimensional transformer projection matrices during backprop.
 
 The resulting effective rate is adjusted by model depth using a linear profile.
 `--layer-learning-rate-multiplier <M>` controls the output-head multiplier and

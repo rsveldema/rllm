@@ -59,7 +59,8 @@ namespace rllm
         size_t loop_last_layer,
         size_t loop_count,
         bool transformer_loop_configured,
-        float learning_rate,
+        float adamw_learning_rate,
+        float muon_learning_rate,
         float layer_learning_rate_multiplier,
         float warmup_percent,
         bool skip_warmup,
@@ -105,9 +106,10 @@ namespace rllm
 
         parallel::print_hip_provider();
         LOG_INFO(
-            "Training mode: depth {}, learning rate {}, micro-batch size {}",
+            "Training mode: depth {}, AdamW learning rate {}, Muon learning rate {}, micro-batch size {}",
             learn_depth,
-            learning_rate,
+            adamw_learning_rate,
+            muon_learning_rate,
             micro_batch_size
         );
         if (disable_early_stopping)
@@ -146,12 +148,12 @@ namespace rllm
             std::println("Upgrade residual output scale must be in (0, 1]");
             std::exit(1);
         }
-        if (learning_rate > 0.25f)
+        if (adamw_learning_rate > 0.25f)
         {
             std::println(
                 "Warning: base learning rate {} is high for the current clipped optimizer and may saturate logits. "
                 "Try --learning-rate 0.2 or lower if losses jump to ~38400.",
-                learning_rate
+                adamw_learning_rate
             );
         }
         ComputeKernelRegistry::instance().enableRegistrationLog("training-log.txt");
@@ -185,7 +187,8 @@ namespace rllm
             {"window_size", window_size},
             {"window_stride", window_stride},
             {"learn_depth", learn_depth},
-            {"learning_rate", learning_rate},
+            {"adamw_learning_rate", adamw_learning_rate},
+            {"muon_learning_rate", muon_learning_rate},
             {"learning_rate_schedule", schedule_name},
             {"layer_learning_rate_multiplier", layer_learning_rate_multiplier},
             {"warmup_percent", warmup_percent},
@@ -238,7 +241,8 @@ namespace rllm
         nn->set_learn_depth(learn_depth);
         if (transformer_loop_configured)
             nn->set_transformer_loop(loop_first_layer - 1, loop_last_layer - 1, loop_count);
-        nn->set_learning_rate(learning_rate);
+        nn->set_adamw_learning_rate(adamw_learning_rate);
+        nn->set_muon_learning_rate(muon_learning_rate);
         nn->set_layer_learning_rate_multiplier(layer_learning_rate_multiplier);
         nn->set_warmup_percent(warmup_percent);
         nn->set_skip_warmup(skip_warmup);

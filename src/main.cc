@@ -61,7 +61,8 @@ struct CommandLineParser
     std::string executable_name = "./rllm";
     size_t mtp_heads = 1;
     size_t learn_depth = rllm::TextTrainer::DEFAULT_LEARN_DEPTH;
-    float learning_rate = rllm::TextTrainer::DEFAULT_LEARNING_RATE;
+    float adamw_learning_rate = rllm::TextTrainer::DEFAULT_ADAMW_LEARNING_RATE;
+    std::optional<float> muon_learning_rate;
     float layer_learning_rate_multiplier = rllm::DEFAULT_DEPTH_LEARNING_RATE_MULTIPLIER;
     float warmup_percent = rllm::LoweringLearningRate::DEFAULT_WARMUP_PERCENT;
     bool skip_warmup = false;
@@ -125,7 +126,13 @@ struct CommandLineParser
             loop_count = j.at("loop_count").get<size_t>();
             transformer_loop_configured = true;
         }
-        learning_rate = j.value("learning_rate", learning_rate);
+        adamw_learning_rate = j.value(
+            "adamw_learning_rate", j.value("learning_rate", adamw_learning_rate));
+        if (j.contains("muon_learning_rate"))
+            muon_learning_rate = j.at("muon_learning_rate").get<float>();
+        if (muon_learning_rate &&
+            (!std::isfinite(*muon_learning_rate) || *muon_learning_rate <= 0.0f))
+            fail("muon_learning_rate must be positive");
         layer_learning_rate_multiplier = j.value("layer_learning_rate_multiplier", layer_learning_rate_multiplier);
         if (!std::isfinite(layer_learning_rate_multiplier) ||
             layer_learning_rate_multiplier < 1.0f || layer_learning_rate_multiplier >= 2.0f)
@@ -369,8 +376,8 @@ struct CommandLineParser
                  }
                  window_stride = static_cast<size_t>(n);
              }},
-        {.options = {"--learning-rate"},
-         .description = std::format("Base AdamW learning rate (default: {})", learning_rate),
+        {.options = {"--adamw-learning-rate", "--learning-rate"},
+         .description = std::format("Base AdamW learning rate (default: {})", adamw_learning_rate),
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
@@ -379,10 +386,26 @@ struct CommandLineParser
                  const float rate = std::strtof(args[0].c_str(), &end);
                  if (end == args[0].c_str() || *end != '\0' || errno == ERANGE || !std::isfinite(rate) || rate <= 0.0f)
                  {
-                     std::println("--learning-rate requires a positive number, got '{}'", args[0]);
+                     std::println("--adamw-learning-rate requires a positive number, got '{}'", args[0]);
                      std::exit(1);
                  }
-                 learning_rate = rate;
+                 adamw_learning_rate = rate;
+             }},
+        {.options = {"--muon-learning-rate"},
+         .description = "Base Muon learning rate (default: inherit --learning-rate)",
+         .required_args = 1,
+         .action =
+             [&](const std::vector<std::string>& args) {
+                 char* end = nullptr;
+                 errno = 0;
+                 const float rate = std::strtof(args[0].c_str(), &end);
+                 if (end == args[0].c_str() || *end != '\0' || errno == ERANGE ||
+                     !std::isfinite(rate) || rate <= 0.0f)
+                 {
+                     std::println("--muon-learning-rate requires a positive number, got '{}'", args[0]);
+                     std::exit(1);
+                 }
+                 muon_learning_rate = rate;
              }},
         {.options = {"--layer-learning-rate-multiplier"},
          .description = "Output-side depth learning-rate multiplier in [1, 2); input side uses 2-M (default: 1.05)",
@@ -996,7 +1019,8 @@ int main(int argc, char* argv[])
             parser.loop_last_layer,
             parser.loop_count,
             parser.transformer_loop_configured,
-            parser.learning_rate,
+            parser.adamw_learning_rate,
+            parser.muon_learning_rate.value_or(parser.adamw_learning_rate),
             parser.layer_learning_rate_multiplier,
             parser.warmup_percent,
             parser.skip_warmup,

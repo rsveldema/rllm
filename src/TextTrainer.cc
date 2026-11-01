@@ -1040,7 +1040,7 @@ namespace rllm
         {
             m_learning_rate_schedule_steps = 0;
             m_loaded_learning_rate_step = 0;
-            m_loaded_current_learning_rate = m_learning_rate;
+            m_loaded_current_learning_rate = m_adamw_learning_rate;
             m_loaded_epochs_at_current_rate = 0;
             LOG_INFO("Restarted loaded learning-rate schedule and discarded its saved total-step count");
         }
@@ -1144,14 +1144,16 @@ namespace rllm
     {
         ++m_optimizer_step;
         if (!m_learning_rate_provider)
-            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
+            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_adamw_learning_rate);
         const float scheduled_rate = m_learning_rate_provider->get_rate();
-        const float schedule_scale = scheduled_rate / m_learning_rate;
+        const float schedule_scale = scheduled_rate / m_adamw_learning_rate;
         // AdamW normalizes and updates every parameter tensor independently.
         // Dividing by the transformer-block count made the meaning of the CLI
         // rate depth-dependent and caused deeper models to learn too slowly.
-        const float learning_rate = scheduled_rate * learning_rate_scale;
-        const float peak_effective_rate = m_learning_rate * learning_rate_scale;
+        const float adamw_learning_rate = scheduled_rate * learning_rate_scale;
+        const float muon_learning_rate =
+            m_muon_learning_rate * schedule_scale * learning_rate_scale;
+        const float peak_effective_rate = m_adamw_learning_rate * learning_rate_scale;
         const float log_delta = peak_effective_rate * 0.01f;
         const size_t warmup_steps = LoweringLearningRate::warmup_steps_for(
             m_learning_rate_schedule_steps, m_warmup_percent);
@@ -1159,7 +1161,7 @@ namespace rllm
         const bool phase_boundary = schedule_step == warmup_steps ||
             schedule_step == m_learning_rate_schedule_steps;
         if (!std::isfinite(m_last_logged_learning_rate) ||
-            std::abs(learning_rate - m_last_logged_learning_rate) >= log_delta || phase_boundary)
+            std::abs(adamw_learning_rate - m_last_logged_learning_rate) >= log_delta || phase_boundary)
         {
             const char* phase = "constant";
             if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
@@ -1168,15 +1170,17 @@ namespace rllm
             else if (m_learning_rate_schedule == LearningRateSchedule::SimulatedAnnealing)
                 phase = "simulated_annealing";
             LOG_INFO(
-                "Learning rate changed: effective {:.10f}, base {:.10f}, schedule scale {:.6f}, phase {}, optimizer step {}, schedule step {}/{}",
-                learning_rate,
-                m_learning_rate,
+                "Learning rate changed: AdamW effective {:.10f}, Muon effective {:.10f}, AdamW base {:.10f}, Muon base {:.10f}, schedule scale {:.6f}, phase {}, optimizer step {}, schedule step {}/{}",
+                adamw_learning_rate,
+                muon_learning_rate,
+                m_adamw_learning_rate,
+                m_muon_learning_rate,
                 schedule_scale,
                 phase,
                 m_optimizer_step,
                 schedule_step,
                 m_learning_rate_schedule_steps);
-            m_last_logged_learning_rate = learning_rate;
+            m_last_logged_learning_rate = adamw_learning_rate;
         }
         const float bias_correction1 = 1.0f - std::pow(TransformerBlock::ADAM_BETA1, static_cast<float>(m_optimizer_step));
         const float bias_correction2 = 1.0f - std::pow(TransformerBlock::ADAM_BETA2, static_cast<float>(m_optimizer_step));
@@ -1185,9 +1189,9 @@ namespace rllm
         // of learned stages. A symmetric depth profile keeps the mean multiplier
         // at 1.0 while giving stages nearer the output a modestly higher rate.
         const size_t learned_stage_count = m_transformer_blocks.size() + 2;
-        const float input_learning_rate = learning_rate *
+        const float input_learning_rate = adamw_learning_rate *
             depth_learning_rate_multiplier(0, learned_stage_count, m_layer_learning_rate_multiplier);
-        const float output_learning_rate = learning_rate *
+        const float output_learning_rate = adamw_learning_rate *
             depth_learning_rate_multiplier(learned_stage_count - 1, learned_stage_count, m_layer_learning_rate_multiplier);
 
         const bool collect_diagnostics = m_optimizer_diagnostics_pending;
@@ -1206,12 +1210,17 @@ namespace rllm
 
         for (size_t i = m_frozen_transformer_block_count; i < m_transformer_blocks.size(); ++i)
         {
-            const float layer_learning_rate = learning_rate *
+            const float layer_learning_rate = adamw_learning_rate *
+                depth_learning_rate_multiplier(i + 1, learned_stage_count, m_layer_learning_rate_multiplier);
+            const float layer_muon_learning_rate = muon_learning_rate *
                 depth_learning_rate_multiplier(i + 1, learned_stage_count, m_layer_learning_rate_multiplier);
             if (collect_diagnostics)
                 begin_optimizer_diagnostics();
             m_transformer_blocks[i].apply_accumulated_update(
-                m_gradient_accumulation_workspace->transformer_blocks[i], layer_learning_rate,
+                m_gradient_accumulation_workspace->transformer_blocks[i],
+                m_training_algorithm == TrainingAlgorithm::Backprop
+                    ? layer_muon_learning_rate
+                    : layer_learning_rate,
                 bias_correction1, bias_correction2,
                 m_training_algorithm == TrainingAlgorithm::Backprop,
                 m_gradient_accumulation_workspace->muon.get());
@@ -2182,25 +2191,25 @@ namespace rllm
             m_learning_rate_schedule_steps = loaded_schedule_steps;
         if (m_learning_rate_schedule == LearningRateSchedule::Constant)
         {
-            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
+            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_adamw_learning_rate);
             LOG_INFO("Window training: maximum size {}, within-file stride {}; constant learning rate {:.8f}",
-                window_size, m_window_stride, m_learning_rate);
+                window_size, m_window_stride, m_adamw_learning_rate);
         }
         else if (m_learning_rate_schedule == LearningRateSchedule::Lowering)
         {
             m_learning_rate_provider = std::make_unique<LoweringLearningRate>(
-                m_learning_rate, m_learning_rate_schedule_steps, m_warmup_percent,
+                m_adamw_learning_rate, m_learning_rate_schedule_steps, m_warmup_percent,
                 m_skip_warmup);
             LOG_INFO(
                 "Window training: maximum size {}, within-file stride {}; learning-rate schedule: {} planned optimizer steps, {:.1f}% {}warmup, cosine decay from {:.8f} to {:.8f}",
                 window_size, m_window_stride, m_learning_rate_schedule_steps,
-                m_warmup_percent, m_skip_warmup ? "skipped " : "", m_learning_rate,
-                m_learning_rate * LoweringLearningRate::MIN_SCALE);
+                m_warmup_percent, m_skip_warmup ? "skipped " : "", m_adamw_learning_rate,
+                m_adamw_learning_rate * LoweringLearningRate::MIN_SCALE);
         }
         else
         {
             m_learning_rate_provider = std::make_unique<SimulatedAnnealingLearningRate>(
-                m_learning_rate, m_simulated_annealing_decay_factor,
+                m_adamw_learning_rate, m_simulated_annealing_decay_factor,
                 m_simulated_annealing_initial_multiplier, m_simulated_annealing_decay_epochs,
                 m_simulated_annealing_min_multiplier);
             LOG_INFO(
@@ -2209,9 +2218,9 @@ namespace rllm
                 m_simulated_annealing_decay_factor,
                 m_simulated_annealing_decay_epochs,
                 std::max(
-                    m_learning_rate * m_simulated_annealing_initial_multiplier,
-                    m_learning_rate * m_simulated_annealing_min_multiplier),
-                m_learning_rate * m_simulated_annealing_min_multiplier);
+                    m_adamw_learning_rate * m_simulated_annealing_initial_multiplier,
+                    m_adamw_learning_rate * m_simulated_annealing_min_multiplier),
+                m_adamw_learning_rate * m_simulated_annealing_min_multiplier);
         }
         if (m_has_loaded_training_state)
         {
@@ -2790,10 +2799,10 @@ namespace rllm
             m_layer_learning_rate_multiplier);
 
         if (m_learning_rate_schedule == LearningRateSchedule::Constant)
-            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_learning_rate);
+            m_learning_rate_provider = std::make_unique<ConstantLearningRate>(m_adamw_learning_rate);
         else if (m_learning_rate_schedule == LearningRateSchedule::SimulatedAnnealing)
             m_learning_rate_provider = std::make_unique<SimulatedAnnealingLearningRate>(
-                m_learning_rate, m_simulated_annealing_decay_factor,
+                m_adamw_learning_rate, m_simulated_annealing_decay_factor,
                 m_simulated_annealing_initial_multiplier, m_simulated_annealing_decay_epochs,
                 m_simulated_annealing_min_multiplier);
 
