@@ -3,7 +3,7 @@
 #include <backprop/Muon.hpp>
 #include <cpu/cpu_fixed_matrix.hpp>
 #include <cpu/cpu_fixed_vector.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 #include <array>
 #include <cmath>
@@ -58,7 +58,7 @@ namespace
             }
         }
 
-        auto& queue = vulkan_runtime::get_queue(0);
+        auto& queue = hip_runtime::get_queue(0);
         fixed_size_matrix<float16, Rows, Cols> weight;
         fixed_size_matrix<float, Rows, Cols> momentum;
         fixed_size_matrix<float, Rows, Cols> gradient;

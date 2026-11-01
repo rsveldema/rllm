@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <format>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 #include <vecmath.hpp>
 
 namespace rllm::backprop
@@ -28,7 +28,7 @@ namespace rllm
         MultiTokenPredictionIndex num_valid, TrainingStepTiming* timing)
     {
         assert(m_seq_len > PositionIndex::START);
-        auto& queue = vulkan_runtime::get_queue(0);
+        auto& queue = hip_runtime::get_queue(0);
         m_backward_workspace->reset(queue, m_seq_len);
         auto& ws = *m_backward_workspace;
         ws.dh.set_rows(m_seq_len);
@@ -41,14 +41,14 @@ namespace rllm
         for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>(num_valid))
         {
             ws.output_layer_delta.set_size(scores[oi].values.size());
-            auto bytes = static_cast<VkDeviceSize>(
+            auto bytes = static_cast<size_t>(
                 static_cast<size_t>(scores[oi].values.size()) * sizeof(float));
             if (bytes > 0)
                 ws.output_layer_delta.device_buffer().copy_from(
                     queue, scores[oi].values.device_buffer(), bytes);
             ws.output_string_table_index_delta.set_size(
                 scores[oi].string_table_index_values.size());
-            bytes = static_cast<VkDeviceSize>(
+            bytes = static_cast<size_t>(
                 static_cast<size_t>(scores[oi].string_table_index_values.size()) * sizeof(float));
             if (bytes > 0)
                 ws.output_string_table_index_delta.device_buffer().copy_from(

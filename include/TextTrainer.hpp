@@ -225,7 +225,7 @@ namespace rllm
         // Mean-pool the last transformer block's hidden state over the sequence dimension.
         // Equivalent to last_hidden_state.mean(dim=1) in PyTorch.
         // Must be called after propagate_forward().
-        cpu_fixed_vector<float, EmbeddingDimension> get_last_hidden_mean(VulkanQueue& queue) const;
+        cpu_fixed_vector<float, EmbeddingDimension> get_last_hidden_mean(HipQueue& queue) const;
 
         /** set the input for the neural network.
          * Call this just before    propagate_forward() and then call propagate_backward_mtp() to train on this input.
@@ -454,7 +454,7 @@ namespace rllm
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& hidden_gradient,
             float loss_weight,
             bool record_primary_loss,
-            VulkanQueue& queue,
+            HipQueue& queue,
             std::vector<float>& primary_losses,
             BatchTrainingTiming& timing
         );

@@ -11,7 +11,7 @@
 
 #include <IMemorySpace.hpp>
 #include <offloadable_data.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 #include <cpu/cpu_fixed_levels_rows_cols_matrix.hpp>
 
 namespace rllm
@@ -54,21 +54,21 @@ namespace rllm
             m_rows = rows;
             m_cols = cols;
         }
-        /** H2D: direct Vulkan copy from cpu_fixed_levels_rows_cols_matrix's pinned buffer to device. */
-        void copy_from_cpu(VulkanQueue& queue, const cpu_fixed_levels_rows_cols_matrix<ElementType, L, X, Y>& src)
+        /** H2D: direct Hip copy from cpu_fixed_levels_rows_cols_matrix's pinned buffer to device. */
+        void copy_from_cpu(HipQueue& queue, const cpu_fixed_levels_rows_cols_matrix<ElementType, L, X, Y>& src)
         {
             m_rows = src.num_rows();
             m_cols = src.num_cols();
-            const auto bytes = static_cast<VkDeviceSize>(LEVELS * static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
+            const auto bytes = static_cast<size_t>(LEVELS * static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
             this->m_data.device_buffer().write(queue,
                 const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), bytes);
         }
 
-        /** D2H: direct Vulkan copy from device into cpu_fixed_levels_rows_cols_matrix's pinned buffer. */
-        void copy_to_cpu(VulkanQueue& queue, cpu_fixed_levels_rows_cols_matrix<ElementType, L, X, Y>& dst) const
+        /** D2H: direct Hip copy from device into cpu_fixed_levels_rows_cols_matrix's pinned buffer. */
+        void copy_to_cpu(HipQueue& queue, cpu_fixed_levels_rows_cols_matrix<ElementType, L, X, Y>& dst) const
         {
             dst.set_size(m_rows, m_cols);
-            const auto bytes = static_cast<VkDeviceSize>(LEVELS * static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
+            const auto bytes = static_cast<size_t>(LEVELS * static_cast<size_t>(m_rows) * static_cast<size_t>(m_cols) * sizeof(ElementType));
             this->m_data.device_buffer().read(queue,
                 dst.vk_host_buffer(), bytes);
         }

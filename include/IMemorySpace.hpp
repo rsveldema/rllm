@@ -10,7 +10,7 @@
 enum class IMemorySpaceType
 {
     HOST,
-    VULKAN
+    HIP
 };
 
 
@@ -78,7 +78,7 @@ class OnHostStagingBuffer
 /** Allocate/deallocate memory in a specific memory space.
  *
  * For CPU-only builds this is a no-op wrapper around standard heap allocation.
- * Vulkan offload uses kernel_compiler VHost/VDeviceBuffer directly.
+ * Hip offload uses kernel_compiler VHost/VDeviceBuffer directly.
  *
  * This will at bootup allocate a large block of memory for the entire model and training state, and then sub-allocate from that for individual tensors. This is more efficient than doing many small device allocations, and also allows us to implement a simple free list to reuse freed blocks within the region. We expect most allocations to be long-lived and freed all at once when the region is destroyed, so we don't need to support arbitrary deallocation patterns.
  */

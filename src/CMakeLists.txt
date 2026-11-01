@@ -2,8 +2,8 @@
 # cmake -DPARALLEL_BACKEND=openmp|fastfork|sequential  (default: fastfork)
 set(PARALLEL_BACKEND "fastfork" CACHE STRING "Parallel backend: openmp, fastfork, or sequential")
 set_property(CACHE PARALLEL_BACKEND PROPERTY STRINGS openmp fastfork sequential)
-set(OFFLOAD_BACKEND "none" CACHE STRING "Offload backend: none or vulkan")
-set_property(CACHE OFFLOAD_BACKEND PROPERTY STRINGS none vulkan)
+set(OFFLOAD_BACKEND "none" CACHE STRING "Offload backend: none or hip")
+set_property(CACHE OFFLOAD_BACKEND PROPERTY STRINGS none hip)
 option(RLLM_ENABLE_STATISTICS "Enable runtime statistics gathering and reporting" ON)
 option(DEBUG_ATTENTION_DIAGNOSTICS "Compile forward Q/K/V and per-head attention diagnostics" ON)
 
@@ -13,8 +13,8 @@ if(NOT PARALLEL_BACKEND MATCHES "^(openmp|fastfork|sequential)$")
     message(FATAL_ERROR "PARALLEL_BACKEND must be one of: openmp, fastfork, sequential (got '${PARALLEL_BACKEND}')")
 endif()
 
-if(NOT OFFLOAD_BACKEND MATCHES "^(none|vulkan)$")
-    message(FATAL_ERROR "OFFLOAD_BACKEND must be one of: none, vulkan (got '${OFFLOAD_BACKEND}')")
+if(NOT OFFLOAD_BACKEND MATCHES "^(none|hip)$")
+    message(FATAL_ERROR "OFFLOAD_BACKEND must be one of: none, hip (got '${OFFLOAD_BACKEND}')")
 endif()
 
 if(PARALLEL_BACKEND STREQUAL "fastfork")
@@ -27,25 +27,24 @@ else()
 endif()
 message(STATUS "Runtime statistics: ${RLLM_ENABLE_STATISTICS}")
 
-if(OFFLOAD_BACKEND STREQUAL "vulkan")
-    find_package(Vulkan REQUIRED)
-    set(CMAKE_REQUIRED_INCLUDES "${Vulkan_INCLUDE_DIRS}")
+if(OFFLOAD_BACKEND STREQUAL "hip")
+    find_package(hip REQUIRED CONFIG)
+    find_package(hipblas REQUIRED CONFIG)
+    set(CMAKE_REQUIRED_LIBRARIES hip::host)
     check_cxx_source_compiles(
-        "#include <vulkan/vulkan.h>\nint main() { return VK_HEADER_VERSION; }"
-        RLLM_VULKAN_HEADERS_OK
+        "#include <hip/hip_runtime_api.h>\nint main() { return hipSuccess; }"
+        RLLM_HIP_HEADERS_OK
     )
-    unset(CMAKE_REQUIRED_INCLUDES)
-    if(NOT RLLM_VULKAN_HEADERS_OK)
-        message(FATAL_ERROR "OFFLOAD_BACKEND=vulkan requires usable Vulkan headers (failed to compile a probe including <vulkan/vulkan.h>).")
+    unset(CMAKE_REQUIRED_LIBRARIES)
+    if(NOT RLLM_HIP_HEADERS_OK)
+        message(FATAL_ERROR "OFFLOAD_BACKEND=hip requires usable Hip headers (failed to compile a probe including <hip/hip.h>).")
     endif()
-    find_program(RLLM_VULKAN_SHADER_COMPILER NAMES glslc glslangValidator)
-    if(NOT RLLM_VULKAN_SHADER_COMPILER)
-        message(FATAL_ERROR "OFFLOAD_BACKEND=vulkan requires glslc or glslangValidator to compile generated kernels to SPIR-V.")
+    find_program(RLLM_HIP_SHADER_COMPILER NAMES hipcc REQUIRED)
+    if(NOT RLLM_HIP_SHADER_COMPILER)
+        message(FATAL_ERROR "OFFLOAD_BACKEND=hip requires hipcc to compile generated kernels.")
     endif()
-    message(STATUS "Vulkan offload mode enabled (USE_VULKAN_OFFLOAD)")
-    message(STATUS "Vulkan includes: ${Vulkan_INCLUDE_DIRS}")
-    message(STATUS "Vulkan libraries: ${Vulkan_LIBRARIES}")
-    message(STATUS "Vulkan shader compiler: ${RLLM_VULKAN_SHADER_COMPILER}")
+    message(STATUS "Hip offload mode enabled (USE_HIP_OFFLOAD)")
+    message(STATUS "HIP compiler: ${RLLM_HIP_SHADER_COMPILER}")
 endif()
 
 set(RLLM_COMPILE_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -59,38 +58,40 @@ file(
 )
 
 
-if(OFFLOAD_BACKEND STREQUAL "vulkan")
-    set(RLLM_VULKANIZED_SRC_DIR "${CMAKE_BINARY_DIR}/generated/vulkanized/src")
-    set(RLLM_VULKAN_KERNEL_DIR "${CMAKE_BINARY_DIR}/generated/vulkanized/kernels")
-    set(RLLM_VULKANIZE_MANIFEST "${CMAKE_BINARY_DIR}/generated/vulkanized/vulkanized_sources.cmake")
-    set(RLLM_OFFLOAD_PREPROCESS_TARGET rllm_generate_vulkanized_sources)
+if(OFFLOAD_BACKEND STREQUAL "hip")
+    set(RLLM_HIPIZED_SRC_DIR "${CMAKE_BINARY_DIR}/generated/hipized/src")
+    set(RLLM_HIP_KERNEL_DIR "${CMAKE_BINARY_DIR}/generated/hipized/kernels")
+    set(RLLM_HIPIZE_MANIFEST "${CMAKE_BINARY_DIR}/generated/hipized/hipized_sources.cmake")
+    set(RLLM_OFFLOAD_PREPROCESS_TARGET rllm_generate_hipized_sources)
 
     add_custom_target(${RLLM_OFFLOAD_PREPROCESS_TARGET}
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${RLLM_VULKANIZED_SRC_DIR}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${RLLM_VULKAN_KERNEL_DIR}"
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/vulkanize.py"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${RLLM_HIPIZED_SRC_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${RLLM_HIP_KERNEL_DIR}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/hipify.py"
                 --src-dir "${CMAKE_CURRENT_SOURCE_DIR}"
-                --out-dir "${RLLM_VULKANIZED_SRC_DIR}"
-                --shader-compiler "${RLLM_VULKAN_SHADER_COMPILER}"
+                --out-dir "${RLLM_HIPIZED_SRC_DIR}"
+                --shader-compiler "${RLLM_HIP_SHADER_COMPILER}"
                 --enum-value-tool "$<TARGET_FILE:generate_domain_replace_json>"
-                --manifest "${RLLM_VULKANIZE_MANIFEST}"
+                --manifest "${RLLM_HIPIZE_MANIFEST}"
         DEPENDS
             generate_domain_replace_json
             ${RLLM_OFFLOAD_INPUT_SOURCES}
-            "${CMAKE_SOURCE_DIR}/vulkanize.py"
+            "${CMAKE_SOURCE_DIR}/hipify.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/compile.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/blas.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/parser.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/transforms.py"
             "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/tree_rewriter.py"
-            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/vulkan_kernel_visitor.py"
-            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/rllm_vulkan_dispatch_stub_visitor.py"
-            "${CMAKE_SOURCE_DIR}/vulkan-config.json"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/transforms/blas_clip_abt.tkernel"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/hip_kernel_visitor.py"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/codegen/visitors/rllm_hip_dispatch_stub_visitor.py"
+            "${CMAKE_SOURCE_DIR}/hip-config.json"
             "${CMAKE_SOURCE_DIR}/offloadize_common.py"
-        COMMENT "Generating Vulkan-offload source tree from src/ and compiling shaders"
+        COMMENT "Generating Hip-offload source tree from src/ and compiling shaders"
         VERBATIM
     )
 
-    set(RLLM_COMPILE_SRC_DIR "${RLLM_VULKANIZED_SRC_DIR}")
+    set(RLLM_COMPILE_SRC_DIR "${RLLM_HIPIZED_SRC_DIR}")
 endif()
 
 # ── Helper to create an rllm static library variant ──────────────────────────
@@ -127,6 +128,7 @@ function(rllm_define_lib target_name)
 
     target_sources(${target_name} PRIVATE
         ${RLLM_LIBRARY_SOURCES}
+        "${CMAKE_CURRENT_SOURCE_DIR}/logging.cc"
         "${CMAKE_BINARY_DIR}/generated/tokenizer_map.cc"
     )
 
@@ -170,21 +172,21 @@ function(rllm_define_lib target_name)
         target_link_libraries(${target_name} PUBLIC OpenMP::OpenMP_CXX)
     endif()
 
-    if(OFFLOAD_BACKEND STREQUAL "vulkan")
+    if(OFFLOAD_BACKEND STREQUAL "hip")
         target_sources(${target_name} PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/rllm_vulkan_runtime.cpp"
-            "${CMAKE_SOURCE_DIR}/kernel_compiler/runtime/src/vulkan_session.cc"
+            "${CMAKE_CURRENT_SOURCE_DIR}/rllm_hip_runtime.cpp"
+            "${CMAKE_SOURCE_DIR}/kernel_compiler/runtime/src/hip_session.cc"
         )
         target_compile_definitions(
             ${target_name} PUBLIC
-            USE_VULKAN_OFFLOAD
-            RLLM_VULKAN_KERNEL_ROOT="${RLLM_VULKAN_KERNEL_DIR}"
+            USE_HIP_OFFLOAD
+            RLLM_HIP_KERNEL_ROOT="${RLLM_HIP_KERNEL_DIR}"
         )
         target_include_directories(${target_name} PUBLIC
-            ${RLLM_VULKAN_KERNEL_DIR}
+            ${RLLM_HIP_KERNEL_DIR}
             "${CMAKE_SOURCE_DIR}/kernel_compiler/runtime/include"
         )
-        target_link_libraries(${target_name} PUBLIC Vulkan::Vulkan)
+        target_link_libraries(${target_name} PUBLIC hip::host roc::hipblas)
     endif()
 endfunction()
 

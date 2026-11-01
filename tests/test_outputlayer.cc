@@ -3,7 +3,7 @@
 #include <OutputLayer.hpp>
 #include <NumericLoss.hpp>
 #include <RuntimeConfig.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 #include <cpu/cpu_fixed_vector.hpp>
 #include <cpu/cpu_fixed_matrix.hpp>
@@ -20,7 +20,7 @@ TEST(OutputLayerBatchTest, BatchedForwardMatchesIndependentForwards)
     using namespace rllm;
     OutputLayer layer;
     layer.set_random_weights();
-    auto& queue = vulkan_runtime::get_queue(0);
+    auto& queue = hip_runtime::get_queue(0);
 
     cpu_fixed_matrix<float, BatchIndex, EmbeddingDimension> h_cpu;
     for (size_t batch = 0; batch < 2; ++batch)
@@ -52,7 +52,7 @@ TEST(OutputLayerBatchTest, BatchedForwardMatchesIndependentForwards)
 TEST(OutputLayerBatchTest, BatchedDeltaAndLossStayOnDevice)
 {
     using namespace rllm;
-    auto& queue = vulkan_runtime::get_queue(0);
+    auto& queue = hip_runtime::get_queue(0);
     OutputLayer layer;
     BatchedOutputWorkspace workspace;
 
@@ -150,9 +150,9 @@ namespace
         return logits;
     }
 
-    VulkanQueue& test_queue()
+    HipQueue& test_queue()
     {
-        return rllm::vulkan_runtime::get_queue(0);
+        return rllm::hip_runtime::get_queue(0);
     }
 
     class ScopedNanFindingMode
@@ -222,7 +222,7 @@ TEST(NumericLossTest, ParsesLiteralFormsAndRewardsCloserValues)
 TEST(OutputLayerBatchTest, CategoryTokenAddsWeightedIndexLoss)
 {
     using namespace rllm;
-    auto& queue = vulkan_runtime::get_queue(0);
+    auto& queue = hip_runtime::get_queue(0);
     OutputLayer layer;
     layer.load(zero_output_layer_weights_json());
     BatchedOutputWorkspace workspace;
@@ -289,7 +289,7 @@ TEST(OutputLayerBatchTest, CategoryTokenAddsWeightedIndexLoss)
 TEST(OutputLayerBatchTest, IntegerTokenIncludesConstantValueLoss)
 {
     using namespace rllm;
-    auto& queue = vulkan_runtime::get_queue(0);
+    auto& queue = hip_runtime::get_queue(0);
     OutputLayer layer;
     layer.load(zero_output_layer_weights_json());
     BatchedOutputWorkspace workspace;

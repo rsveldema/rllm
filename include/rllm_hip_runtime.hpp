@@ -4,19 +4,19 @@
 #include <memory>
 #include <mutex>
 
-#include <vulkan_session.hpp>
+#include <hip_session.hpp>
 
-namespace rllm::vulkan_runtime
+namespace rllm::hip_runtime
 {
-    void set_session(VulkanSession& session);
-    VulkanSession& session();
-    VulkanComputeContext& context();
+    void set_session(HipSession& session);
+    HipSession& session();
+    HipComputeContext& context();
     std::recursive_mutex& mutex();
 
-    /** Return the VulkanQueue at the given index.
+    /** Return the HipQueue at the given index.
      *  Queue 0 is the main queue (used by the main thread).
      *  Queues 1..N are used by parallel sections. */
-    VulkanQueue& get_queue(size_t index);
+    HipQueue& get_queue(size_t index);
     size_t queue_count();
     bool device_buffer_allocations_allowed();
     void set_device_buffer_allocations_allowed(bool allowed);

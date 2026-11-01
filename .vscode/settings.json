@@ -15,7 +15,7 @@
     "chat.tools.terminal.autoApprove": {
         ".": true,
         "./build_release.sh": true,
-        "build_release/kernel_compiler/tests/test_vulkan_stubs": true
+        "build_release/kernel_compiler/tests/test_hip_stubs": true
     }
     
 }

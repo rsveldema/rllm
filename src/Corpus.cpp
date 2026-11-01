@@ -866,6 +866,25 @@ namespace rllm
 
     static std::ofstream s_log_file;
 
+    struct TokenMatchInfo
+    {
+        TokenID id;
+        std::string_view text;
+        bool end_of_word;
+    };
+
+    const std::vector<TokenMatchInfo>& token_match_infos()
+    {
+        static const auto infos = [] {
+            std::vector<TokenMatchInfo> result;
+            result.reserve(tokenizer_map.size());
+            for (const auto& [id, info] : tokenizer_map)
+                result.push_back({id, info.str, info.end_of_word});
+            return result;
+        }();
+        return infos;
+    }
+
     void set_tokenization_log_file(const std::string& filename)
     {
         s_log_file.close();
@@ -1013,13 +1032,11 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         while (ix < text.size())
         {
             bool matched_token = false;
-            for (const auto& token_id_and_string : tokenizer_map)
+            for (const auto& token_info : token_match_infos())
             {
-                const auto& token_id = token_id_and_string.first;
-                const auto& token_info = token_id_and_string.second;
-                const auto token_len = std::strlen(token_info.str);
+                const auto token_len = token_info.text.size();
 
-                if (text.compare(ix, token_len, token_info.str) == 0)
+                if (text.compare(ix, token_len, token_info.text) == 0)
                 {
                     if (token_info.end_of_word)
                     {
@@ -1032,8 +1049,8 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                                 LOG_DEBUG(
                                     "Matched token '{}/{}' at position {}, but not at a word boundary, skipping it "
                                     "(remaining text: '{}')",
-                                    token_info.str,
-                                    token_id,
+                                    token_info.text,
+                                    token_info.id,
                                     ix,
                                     next_char
                                 );
@@ -1041,7 +1058,7 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                             }
                         }
                     }
-                    result.push_back(token_id);
+                    result.push_back(token_info.id);
                     ix += token_len;
                     matched_token = true;
                     break;
@@ -1170,13 +1187,11 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
             while (ix < abstracted.size())
             {
                 bool matched_token = false;
-                for (const auto& token_id_and_string : tokenizer_map)
+                for (const auto& token_info : token_match_infos())
                 {
-                    const auto& token_id = token_id_and_string.first;
-                    const auto& token_info = token_id_and_string.second;
-                    const auto token_len = std::strlen(token_info.str);
+                    const auto token_len = token_info.text.size();
 
-                    if (abstracted.compare(ix, token_len, token_info.str) == 0)
+                    if (abstracted.compare(ix, token_len, token_info.text) == 0)
                     {
                         if (token_info.end_of_word)
                         {
@@ -1188,13 +1203,13 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                                     continue;
                             }
                         }
-                        if (token_string_category(token_id) == TokenStringCategory::None)
-                            result.push_back(token_id);
+                        if (token_string_category(token_info.id) == TokenStringCategory::None)
+                            result.push_back(token_info.id);
                         else
                         {
                             assert(value_index < state.identifier_scopes.pending_string_table_values.size());
                             result.push_back(
-                                token_id, state.identifier_scopes.pending_string_table_values[value_index++]);
+                                token_info.id, state.identifier_scopes.pending_string_table_values[value_index++]);
                         }
                         ix += token_len;
                         matched_token = true;

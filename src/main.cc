@@ -5,7 +5,7 @@
 #include <RuntimeConfig.hpp>
 #include <Trainer.hpp>
 #include <parallel.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -97,7 +97,7 @@ struct CommandLineParser
     float upgrade_residual_output_scale = 1.0f;
     bool reset_training_cursor = false;
     bool nan_finding_mode = false;
-    std::optional<std::string> vulkan_device;
+    std::optional<std::string> hip_device;
 
     void load_training_parameters(const std::string& filename)
     {
@@ -697,17 +697,17 @@ struct CommandLineParser
              [&](const std::vector<std::string>&) {
                  restart_learning_rate_schedule = true;
              }},
-        {.options = {"--vulkan-device"},
-         .description = "Select a Vulkan device by a case-insensitive name substring",
+        {.options = {"--hip-device"},
+         .description = "Select a Hip device by a case-insensitive name substring",
          .required_args = 1,
          .action =
              [&](const std::vector<std::string>& args) {
                  if (args[0].empty())
                  {
-                     std::println("--vulkan-device requires a non-empty device name substring");
+                     std::println("--hip-device requires a non-empty device name substring");
                      std::exit(1);
                  }
-                 vulkan_device = args[0];
+                 hip_device = args[0];
              }},
         {.options = {"--train-dir"},
          .description = "Training directory, optionally PATH:WEIGHT; repeat for a weighted source mixture",
@@ -952,28 +952,28 @@ int main(int argc, char* argv[])
 
     CommandLineParser parser;
     parser.parse(argc, argv);
-    if (parser.vulkan_device)
-        setenv("RLLM_VULKAN_DEVICE_SUBSTRING", parser.vulkan_device->c_str(), 1);
+    if (parser.hip_device)
+        setenv("RLLM_HIP_DEVICE_SUBSTRING", parser.hip_device->c_str(), 1);
 
     parallel::init_parallel();
 
-    // Generated Vulkan kernels are function-local statics and may destruct
+    // Generated Hip kernels are function-local statics and may destruct
     // during process teardown. Keep the session alive for the full process so
-    // those destructors never see a dead VkDevice.
-    auto* vulkan_session = new VulkanSession(
+    // those destructors never see a torn-down HIP device context.
+    auto* hip_session = new HipSession(
         false,
-        parser.vulkan_device ? parser.vulkan_device->c_str() : nullptr
+        parser.hip_device ? parser.hip_device->c_str() : nullptr
     );
-    if (!vulkan_session->has_device())
+    if (!hip_session->has_device())
         return 1;
-    rllm::vulkan_runtime::set_session(*vulkan_session);
+    rllm::hip_runtime::set_session(*hip_session);
 #ifdef NDEBUG
     std::println("Build type: Release (NDEBUG defined)");
 #else
     std::println("Build type: Debug (NDEBUG not defined)");
 #endif
 
-    std::println("Offload type: Vulkan");
+    std::println("Offload type: Hip");
     rllm::set_nan_finding_mode_enabled(parser.nan_finding_mode);
 
     if (parser.train_mode)
@@ -1033,7 +1033,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-        parallel::print_vulkan_provider();
+        parallel::print_hip_provider();
         rllm::Prompter prompter(parser.filters);
         const std::string model_filename = parser.input_filename ? *parser.input_filename : parser.output_filename;
         if (parser.dump_concepts_filename)

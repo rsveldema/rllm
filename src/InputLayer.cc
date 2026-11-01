@@ -55,7 +55,7 @@ namespace rllm
     {
     }
 
-    void EmbeddingGradientAccumulator::reset(VulkanQueue& queue)
+    void EmbeddingGradientAccumulator::reset(HipQueue& queue)
     {
         gradients.zero(queue);
         touched.zero(queue);
@@ -78,7 +78,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (tokens, identifier_ngram_ids, identifier_ngram_counts, dh, gradients, touched, identifier_gradients, identifier_touched, rows, identifier_scale))
         const auto tok = tokens[row];
@@ -103,7 +103,7 @@ namespace rllm
     static constexpr float NAN_FINDING_INPUT_HIDDEN_ABS_BOUND = 2.0f;
     static constexpr float NAN_FINDING_INPUT_GRADIENT_ABS_BOUND = 10000.0f;
 
-    static fixed_size_vector<int, PositionIndex> make_input_layer_nan_scan_flag(VulkanQueue& queue)
+    static fixed_size_vector<int, PositionIndex> make_input_layer_nan_scan_flag(HipQueue& queue)
     {
         cpu_fixed_vector<int, PositionIndex> cpu_flag;
         cpu_flag.set_size(PositionIndex::MAX);
@@ -114,7 +114,7 @@ namespace rllm
         return flag;
     }
 
-    static bool input_layer_nan_scan_failed(VulkanQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
+    static bool input_layer_nan_scan_failed(HipQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
     {
         cpu_fixed_vector<int, PositionIndex> cpu_flag;
         flag.copy_to_cpu(queue, cpu_flag);
@@ -122,7 +122,7 @@ namespace rllm
     }
 
     static void scan_input_embedding_matrix(
-        VulkanQueue& queue,
+        HipQueue& queue,
         // OFFLOAD_PARAMETERS(matrix, flag, lower_bound, upper_bound)
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& matrix,
         fixed_size_vector<int, PositionIndex>& flag,
@@ -147,7 +147,7 @@ namespace rllm
     }
 
     static void scan_input_float_matrix(
-        VulkanQueue& queue,
+        HipQueue& queue,
         // OFFLOAD_PARAMETERS(matrix, flag, rows, lower_bound, upper_bound)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& matrix,
         fixed_size_vector<int, PositionIndex>& flag,
@@ -177,7 +177,7 @@ namespace rllm
         if (!nan_finding_mode_enabled())
             return;
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto flag = make_input_layer_nan_scan_flag(queue);
         scan_input_embedding_matrix(queue, m_embeddings, flag, -1.0f, 1.0f);
         if (input_layer_nan_scan_failed(queue, flag))
@@ -197,7 +197,7 @@ namespace rllm
         if (!nan_finding_mode_enabled())
             return;
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto flag = make_input_layer_nan_scan_flag(queue);
         const float bound = (std::string_view(name) == "hidden state")
             ? NAN_FINDING_INPUT_HIDDEN_ABS_BOUND
@@ -217,7 +217,7 @@ namespace rllm
         }
     }
 
-    static void fill_embeddings(VulkanQueue& queue,
+    static void fill_embeddings(HipQueue& queue,
         // OFFLOAD_PARAMETERS(tokens, embeddings, identifier_embeddings, identifier_ngram_ids, identifier_ngram_counts, h, identifier_scale)
         const GpuInputLine& tokens,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
@@ -252,7 +252,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void fill_packed_embeddings(VulkanQueue& queue,
+    static void fill_packed_embeddings(HipQueue& queue,
         // OFFLOAD_PARAMETERS(tokens, embeddings, identifier_embeddings, identifier_ngram_ids, identifier_ngram_counts, h, packed_rows, identifier_scale)
         const GpuInputLine& tokens,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& embeddings,
@@ -289,7 +289,7 @@ namespace rllm
 
     void InputLayer::reset_embeddings()
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_embeddings.zero(queue);
         m_identifier_embeddings.zero(queue);
         m_embeddings_cpu.zero();
@@ -309,12 +309,12 @@ namespace rllm
         for (const auto bucket : enum_iterator1D<IdentifierHashBucket>())
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 identifier_embeddings_cpu.set(bucket, d, static_cast<float16>(initializer->getNextValue()));
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_embeddings.copy_from_cpu(queue, m_embeddings_cpu);
         m_identifier_embeddings.copy_from_cpu(queue, identifier_embeddings_cpu);
     }
 
-    void InputLayer::upload_identifier_features(const CpuInputLine& input, VulkanQueue& queue) const
+    void InputLayer::upload_identifier_features(const CpuInputLine& input, HipQueue& queue) const
     {
         cpu_fixed_matrix<int, PositionIndex, IdentifierNgramSlot> ids;
         ids.zero();
@@ -340,7 +340,7 @@ namespace rllm
     {
         for (const auto d : enum_iterator1D<EmbeddingDimension>())
             m_embeddings_cpu.set(token, d, embedding[static_cast<size_t>(d)]);
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_embeddings.copy_row_to_offload_buffer(queue, token, m_embeddings_cpu);
     }
 
@@ -364,7 +364,7 @@ namespace rllm
         h.set_rows(static_cast<PositionIndex>(input.size()));
 
         // Sync CPU input to GPU before OFFLOAD region
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         gpu_input.sync_to_device(queue, input);
         upload_identifier_features(input, queue);
 
@@ -381,7 +381,7 @@ namespace rllm
     ) const
     {
         h.set_rows(input.packed_rows());
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         gpu_input.sync_to_device(queue, input);
         upload_identifier_features(input.tokens(), queue);
         check_nan_finding_mode_embeddings("batched-forward:start");
@@ -402,7 +402,7 @@ namespace rllm
     {
         // D2H: download the gradient matrix to CPU before element access
         cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> dh_cpu;
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         check_nan_finding_mode_matrix(dh, static_cast<PositionIndex>(input.size()), "gradient", "backward:dh");
         check_nan_finding_mode_embeddings("backward:start");
         const_cast<flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>&>(dh).copy_to_cpu(queue, dh_cpu);
@@ -477,7 +477,7 @@ namespace rllm
         EmbeddingGradientAccumulator& accumulator
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_gpu_input.sync_to_device(queue, input.tokens());
         accumulate_embedding_gradients(
             m_gpu_input, m_identifier_ngram_ids, m_identifier_ngram_counts, dh,
@@ -491,7 +491,7 @@ namespace rllm
         EmbeddingGradientAccumulator& accumulator
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         check_nan_finding_mode_matrix(dh, static_cast<PositionIndex>(input.size()), "gradient", "accumulate_backward:dh");
         m_gpu_input.sync_to_device(queue, input);
         accumulate_embedding_gradients(
@@ -533,7 +533,7 @@ namespace rllm
 
     void InputLayer::get_embedding(TokenID tok, embedding_row_t& out) const
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_embeddings.copy_to_cpu(queue,
             const_cast<cpu_fixed_matrix<float16, TokenID, EmbeddingDimension>&>(m_embeddings_cpu));
         queue.wait("InputLayer embedding inspection");
@@ -542,7 +542,7 @@ namespace rllm
 
     std::vector<embedding_row_t> InputLayer::get_all_embeddings() const
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_embeddings.copy_to_cpu(queue,
             const_cast<cpu_fixed_matrix<float16, TokenID, EmbeddingDimension>&>(m_embeddings_cpu));
         queue.wait("InputLayer embedding export");

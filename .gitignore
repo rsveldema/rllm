@@ -7,6 +7,7 @@ build_release
 build_profile
 perf_fwd.data
 build_profile_cpu
+build_profile_hip
 build_profile_vulkan
 build
 build_debug
@@ -21,12 +22,15 @@ build_profile_cpu_seq
 *.glsl
 cmake_test_discovery*
 perf*.data
+build_profile_hip_stats
 build_profile_vulkan_stats
 cmake_test_discovery*
 models-*/*
+VP_HIPINFO_AMD_Radeon_AI_PRO_R9700_(RADV_GFX1201)_26_1_3.json
 VP_VULKANINFO_AMD_Radeon_AI_PRO_R9700_(RADV_GFX1201)_26_1_3.json
 old-training.txt
 tiny-full-corpus-reference.json
 train.json
 training_metrics.png
+hip-info.txt
 vulkan-info.txt

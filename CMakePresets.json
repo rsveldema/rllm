@@ -26,13 +26,13 @@
       }
     },
     {
-      "name": "fastfork-vulkan",
-      "displayName": "FastFork + Vulkan Offload",
-      "description": "FastFork backend with Vulkan offload mode enabled",
+      "name": "fastfork-hip",
+      "displayName": "FastFork + Hip Offload",
+      "description": "FastFork backend with Hip offload mode enabled",
       "inherits": "base",
       "cacheVariables": {
         "PARALLEL_BACKEND": "fastfork",
-        "OFFLOAD_BACKEND": "vulkan"
+        "OFFLOAD_BACKEND": "hip"
       }
     }
   ],
@@ -43,9 +43,9 @@
       "configurePreset": "default-fastfork"
     },
     {
-      "name": "build-fastfork-vulkan",
-      "displayName": "Build FastFork + Vulkan",
-      "configurePreset": "fastfork-vulkan"
+      "name": "build-fastfork-hip",
+      "displayName": "Build FastFork + Hip",
+      "configurePreset": "fastfork-hip"
     }
   ]
 }

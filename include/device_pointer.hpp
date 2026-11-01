@@ -11,7 +11,7 @@
 #include <string_view>
 #include <utility>
 
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 #include <parallel.hpp>
 
 
@@ -22,10 +22,10 @@ public:
     explicit DevicePointer(size_t num_elements)
         : m_count(num_elements)
         , m_bytes(sizeof(T) * num_elements)
-        , m_device(make_device_buffer(static_cast<VkDeviceSize>(m_bytes)))
+        , m_device(make_device_buffer(m_bytes))
     {
         assert(m_count > 0);
-        m_device->zero(rllm::vulkan_runtime::get_queue(0));
+        m_device->zero(rllm::hip_runtime::get_queue(0));
     }
 
     DevicePointer(const DevicePointer&) = delete;
@@ -59,7 +59,7 @@ public:
 
     ~DevicePointer() = default;
 
-    void copy_from(VulkanQueue& queue, const DevicePointer& other)
+    void copy_from(HipQueue& queue, const DevicePointer& other)
     {
         assert(this != &other);
         // TODO: implement the copy operation using the specified queue
@@ -67,7 +67,7 @@ public:
         m_device->copy_from(queue, *other.m_device);
     }
 
-    void zero(VulkanQueue& queue)
+    void zero(HipQueue& queue)
     {
         m_device->zero(queue);
     }
@@ -75,8 +75,8 @@ public:
     size_t size() const { return m_count; }
     size_t storage_size_bytes() const { return m_bytes; }
 
-    /** H2D: upload from an external host-visible Vulkan buffer. */
-    void copy_to_offload_buffer(VulkanQueue& queue, VBaseHostBuffer& src,
+    /** H2D: upload from an external host-visible Hip buffer. */
+    void copy_to_offload_buffer(HipQueue& queue, VBaseHostBuffer& src,
                                 std::string_view site = {},
                                 std::string_view parameter = {})
     {
@@ -86,8 +86,8 @@ public:
         ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), m_bytes);
     }
 
-    /** D2H: download to an external host-visible Vulkan buffer. */
-    void copy_from_offload_buffer(VulkanQueue& queue, VBaseHostBuffer& dst,
+    /** D2H: download to an external host-visible Hip buffer. */
+    void copy_from_offload_buffer(HipQueue& queue, VBaseHostBuffer& dst,
                                   std::string_view = {},
                                   std::string_view = {}) const
     {
@@ -98,7 +98,7 @@ public:
     }
 
     /** H2D partial: upload a contiguous element range from an external host buffer. */
-    void copy_range_to_offload_buffer(VulkanQueue& queue, VBaseHostBuffer& src,
+    void copy_range_to_offload_buffer(HipQueue& queue, VBaseHostBuffer& src,
                                       size_t start_element,
                                       size_t element_count,
                                       std::string_view site = {},
@@ -107,8 +107,8 @@ public:
         std::lock_guard<std::mutex> lock(m_state_mutex);
         assert(start_element <= m_count);
         assert(element_count <= m_count - start_element);
-        const auto offset = static_cast<VkDeviceSize>(start_element * sizeof(T));
-        const auto bytes  = static_cast<VkDeviceSize>(element_count  * sizeof(T));
+        const auto offset = start_element * sizeof(T);
+        const auto bytes  = element_count * sizeof(T);
         m_device->write(queue, src, bytes, offset, offset);
         parallel::statistics.record_host_to_device_buffer_copy(site, parameter, static_cast<size_t>(bytes));
         ComputeKernelRegistry::instance().recordHostToDevice(ComputeKernelRegistry::activeKernel(), static_cast<size_t>(bytes));
@@ -126,15 +126,15 @@ public:
     }
 
 private:
-    static std::unique_ptr<VDynamicDeviceBuffer> make_device_buffer(VkDeviceSize bytes)
+    static std::unique_ptr<VDynamicDeviceBuffer> make_device_buffer(size_t bytes)
     {
-        if (!rllm::vulkan_runtime::device_buffer_allocations_allowed())
+        if (!rllm::hip_runtime::device_buffer_allocations_allowed())
         {
             std::fprintf(stderr, "device buffer allocated after startup allocation phase\n");
             std::abort();
         }
         return std::make_unique<VDynamicDeviceBuffer>(
-            rllm::vulkan_runtime::session(),
+            rllm::hip_runtime::session(),
             bytes);
     }
 

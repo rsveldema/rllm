@@ -10,7 +10,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include <vulkan_session.hpp>
+#include <hip_session.hpp>
 
 namespace rllm
 {
@@ -103,7 +103,7 @@ namespace rllm
         set_nn_log_file((artifact_directory / "train.log").string());
         set_tokenization_log_file((artifact_directory / "tokenization.log").string());
 
-        parallel::print_vulkan_provider();
+        parallel::print_hip_provider();
         LOG_INFO(
             "Training mode: depth {}, learning rate {}, micro-batch size {}",
             learn_depth,

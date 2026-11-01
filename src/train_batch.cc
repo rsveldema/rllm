@@ -14,7 +14,7 @@
 #include <limits>
 #include <numeric>
 #include <enum_iterator2D.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 namespace rllm
 {
@@ -99,7 +99,7 @@ namespace rllm
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(static_cast<BatchIndex>(count));
             OFFLOAD_PARFOR_2D_PARAM(queue, item, d, grid, (h, rows, gathered, count))
             gathered[item, d] = h[rows[item], d];
@@ -115,7 +115,7 @@ namespace rllm
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(static_cast<BatchIndex>(count));
             OFFLOAD_PARFOR_2D_PARAM(queue, item, d, grid, (gathered, rows, dh, count))
             dh[rows[item], d] += gathered[item, d];
@@ -133,7 +133,7 @@ namespace rllm
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(static_cast<BatchIndex>(count));
             OFFLOAD_PARFOR_2D_PARAM(queue, pair, d, grid, (h, first_rows, repeated_rows, dh, count, scale))
             const int first = first_rows[pair];
@@ -152,7 +152,7 @@ namespace rllm
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
             BatchedOutputWorkspace& workspace,
-            VulkanQueue& queue)
+            HipQueue& queue)
         {
             std::vector<std::pair<int, int>> pairs;
             for (size_t active = 0; active < contexts.size(); ++active)
@@ -225,7 +225,7 @@ namespace rllm
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& hidden,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& hidden_gradient,
         float loss_weight, bool record_primary_loss,
-        VulkanQueue& queue, std::vector<float>& primary_losses,
+        HipQueue& queue, std::vector<float>& primary_losses,
         BatchTrainingTiming& timing)
     {
         const auto started = std::chrono::steady_clock::now();
@@ -638,7 +638,7 @@ namespace rllm
 
         PackedBatchInput packed(contexts);
         const auto rows = packed.packed_rows();
-        auto& queue = vulkan_runtime::get_queue(0);
+        auto& queue = hip_runtime::get_queue(0);
         auto& forward = *m_forward_workspace;
         const auto forward_started = std::chrono::steady_clock::now();
         forward.reset(queue, rows);

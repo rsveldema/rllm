@@ -96,7 +96,7 @@ def _sanitize_offload_param_line_for_glsl(line: str) -> str | None:
 
 
 @dataclass
-class VulkanKernelSpec:
+class HipKernelSpec:
     rel_path: str
     lineno: int
     is_2d: bool
@@ -139,7 +139,7 @@ class ScalarParamSpec:
 
 
 @dataclass(frozen=True)
-class VulkanConfig:
+class HipConfig:
     workgroup_size_x: int = 1
     workgroup_size_y: int = 1
     workgroup_size_z: int = 1
@@ -234,7 +234,7 @@ def _resolve_enum_max(raw_enum_type: str, symbol_values: dict[str, str]) -> int 
         return None
 
 
-def _map_cpp_extra_param_to_vulkan(
+def _map_cpp_extra_param_to_hip(
     name: str,
     cpp_type: str,
     symbol_values: dict[str, str],
@@ -498,31 +498,31 @@ def _sanitize_name_component(text: str) -> str:
     return "".join(safe)
 
 
-def _kernel_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
+def _kernel_file_path(kernel_root: Path, spec: HipKernelSpec) -> Path:
     rel = Path(spec.rel_path)
     stem = _sanitize_name_component(rel.stem)
     return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.comp"
 
 
-def _kernel_glsl_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
+def _kernel_glsl_file_path(kernel_root: Path, spec: HipKernelSpec) -> Path:
     rel = Path(spec.rel_path)
     stem = _sanitize_name_component(rel.stem)
-    return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.glsl"
+    return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.hip"
 
 
-def _kernel_header_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
+def _kernel_header_file_path(kernel_root: Path, spec: HipKernelSpec) -> Path:
     rel = Path(spec.rel_path)
     stem = _sanitize_name_component(rel.stem)
     return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.hpp"
 
 
-def _spirv_file_path(kernel_root: Path, spec: VulkanKernelSpec) -> Path:
+def _spirv_file_path(kernel_root: Path, spec: HipKernelSpec) -> Path:
     rel = Path(spec.rel_path)
     stem = _sanitize_name_component(rel.stem)
-    return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.spv"
+    return kernel_root / rel.parent / f"{stem}.L{spec.lineno}.hsaco"
 
 
-def _load_vulkan_config(config_path: Path) -> VulkanConfig:
+def _load_hip_config(config_path: Path) -> HipConfig:
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     workgroup = raw.get("workgroup_size", {})
 
@@ -531,10 +531,10 @@ def _load_vulkan_config(config_path: Path) -> VulkanConfig:
     z = int(workgroup.get("z", 1))
     if x <= 0 or y <= 0 or z <= 0:
         raise ValueError(
-            f"Invalid Vulkan workgroup size in {config_path}: expected positive integers, got x={x}, y={y}, z={z}"
+            f"Invalid Hip workgroup size in {config_path}: expected positive integers, got x={x}, y={y}, z={z}"
         )
 
-    return VulkanConfig(workgroup_size_x=x, workgroup_size_y=y, workgroup_size_z=z)
+    return HipConfig(workgroup_size_x=x, workgroup_size_y=y, workgroup_size_z=z)
 
 
 def _sanitize_cpp_type_to_glsl(cpp_type: str) -> str:
@@ -600,10 +600,7 @@ def _extract_offload_shared_memory_decls(
 
 
 def _compile_to_spirv(compiler: str, input_path: Path, output_path: Path) -> None:
-    if Path(compiler).name == "glslangValidator":
-        cmd = [compiler, "-V", "--target-env", "vulkan1.1", input_path.as_posix(), "-o", output_path.as_posix()]
-    else:
-        cmd = [compiler, "-fshader-stage=compute", "--target-env=vulkan1.1", input_path.as_posix(), "-o", output_path.as_posix()]
+    cmd = [compiler, "--genco", "-O3", input_path.as_posix(), "-o", output_path.as_posix()]
     proc = subprocess.run(cmd, text=True, capture_output=True)
     if proc.returncode != 0:
         raise RuntimeError(
@@ -615,7 +612,7 @@ def _compile_to_spirv(compiler: str, input_path: Path, output_path: Path) -> Non
 
 
 
-def _parfor_dump_path(parfor_dump_dir: Path, spec: VulkanKernelSpec) -> Path:
+def _parfor_dump_path(parfor_dump_dir: Path, spec: HipKernelSpec) -> Path:
     src_basename = Path(spec.rel_path).name
     name_no_ext = src_basename.rsplit(".", 1)[0] if "." in src_basename else src_basename
     return parfor_dump_dir / f"offload_parfor_{name_no_ext}_{spec.lineno}.kernel"
@@ -626,7 +623,7 @@ def _kernel_compiler_python() -> str:
     return venv_python.as_posix() if venv_python.exists() else sys.executable
 
 
-def _generate_vulkan_kernel_artifacts(
+def _generate_hip_kernel_artifacts(
     input_file: Path,
     glsl_output: Path,
     dispatch_stub: Path,
@@ -637,9 +634,9 @@ def _generate_vulkan_kernel_artifacts(
     if kernel_compiler_root.as_posix() not in sys.path:
         sys.path.insert(0, kernel_compiler_root.as_posix())
 
-    from codegen.compile import generate_vulkan
+    from codegen.compile import generate_hip
 
-    generate_vulkan(
+    generate_hip(
         input_file.as_posix(),
         glsl_output.as_posix(),
         rllm_dispatch_stub=dispatch_stub.as_posix(),
@@ -649,7 +646,7 @@ def _generate_vulkan_kernel_artifacts(
 
 def _generate_kernel_compiler_artifacts(
     compiler: str | None,
-    kernel_specs: list[VulkanKernelSpec],
+    kernel_specs: list[HipKernelSpec],
     kernel_root: Path,
     parfor_dump_dir: Path
 ) -> tuple[list[Path], list[Path], list[Path]]:
@@ -666,7 +663,7 @@ def _generate_kernel_compiler_artifacts(
         glsl.parent.mkdir(parents=True, exist_ok=True)
         header.parent.mkdir(parents=True, exist_ok=True)
         try:
-            _generate_vulkan_kernel_artifacts(dump, glsl, header, rel_spv)
+            _generate_hip_kernel_artifacts(dump, glsl, header, rel_spv)
         except Exception as exc:
             raise RuntimeError(f"kernel_compiler failed for {dump}: {exc}") from exc
         generated_glsl.append(glsl)
@@ -675,7 +672,7 @@ def _generate_kernel_compiler_artifacts(
             _compile_to_spirv(compiler, glsl, spv)
             generated_spirv.append(spv)
 
-    umbrella = kernel_root / "rllm_vulkan_kernels.hpp"
+    umbrella = kernel_root / "rllm_hip_kernels.hpp"
     include_lines = ["#pragma once"]
     all_dispatch_headers = {
         header.relative_to(kernel_root).as_posix()
@@ -693,7 +690,7 @@ def _generate_kernel_compiler_artifacts(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate Vulkanized source copies for OFFLOAD_* loop macros.")
+    parser = argparse.ArgumentParser(description="Generate Hipized source copies for OFFLOAD_* loop macros.")
     parser.add_argument("--src-dir", required=True, help="Input source directory (e.g. src)")
     parser.add_argument("--out-dir", required=True, help="Output directory in build tree")
     parser.add_argument("--manifest", required=False, help="Optional output .cmake list of generated files")
@@ -705,7 +702,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--shader-compiler",
         required=False,
-        help="Path to Vulkan GLSL compiler (glslc or glslangValidator)",
+        help="Path to hipcc used to compile HIP kernels to code objects",
     )
     return parser.parse_args()
 
@@ -715,17 +712,17 @@ def main() -> int:
     src_dir = Path(args.src_dir).resolve()
     out_dir = Path(args.out_dir).resolve()
     kernel_root = out_dir.parent / "kernels"
-    config = _load_vulkan_config(Path(__file__).resolve().with_name("vulkan-config.json"))
-    kernel_specs: list[VulkanKernelSpec] = []
+    config = _load_hip_config(Path(__file__).resolve().with_name("hip-config.json"))
+    kernel_specs: list[HipKernelSpec] = []
     symbol_values = resolve_symbol_values(args.enum_value_tool)
 
-    # Do not clear kernel_root here: src/ and tests/ vulkanize targets run in
+    # Do not clear kernel_root here: src/ and tests/ hipize targets run in
     # parallel and share this directory. Deleting it introduces a race where one
     # invocation removes files the other is about to compile.
 
     def collect_kernel(ctx: LoopContext) -> None:
         kernel_specs.append(
-            VulkanKernelSpec(
+            HipKernelSpec(
                 rel_path=ctx.rel_path,
                 lineno=ctx.lineno,
                 is_2d=ctx.is_2d,
@@ -744,8 +741,8 @@ def main() -> int:
     generated_files = transform_tree(
         src_dir,
         out_dir,
-        backend_namespace="vulkan",
-        include_line="#include <rllm_vulkan_kernels.hpp>",
+        backend_namespace="hip",
+        include_line="#include <rllm_hip_kernels.hpp>",
         emit_named_kernels=True,
         on_emit_loop=collect_kernel,
         symbol_values=symbol_values,
@@ -761,19 +758,19 @@ def main() -> int:
 
     if args.manifest:
         manifest = Path(args.manifest).resolve()
-        write_manifest(manifest, "RLLM_VULKANIZED_SOURCES", generated_files)
-        kernel_manifest = manifest.with_name("vulkan_kernel_sources.cmake")
-        write_manifest(kernel_manifest, "RLLM_VULKAN_KERNEL_SOURCES", generated_kernels + generated_headers)
+        write_manifest(manifest, "RLLM_HIPIZED_SOURCES", generated_files)
+        kernel_manifest = manifest.with_name("hip_kernel_sources.cmake")
+        write_manifest(kernel_manifest, "RLLM_HIP_KERNEL_SOURCES", generated_kernels + generated_headers)
         if generated_spirv:
-            spirv_manifest = manifest.with_name("vulkan_kernel_spirv.cmake")
-            write_manifest(spirv_manifest, "RLLM_VULKAN_KERNEL_SPIRV", generated_spirv)
+            spirv_manifest = manifest.with_name("hip_kernel_spirv.cmake")
+            write_manifest(spirv_manifest, "RLLM_HIP_KERNEL_SPIRV", generated_spirv)
 
     print(
-        "vulkanize.py: generated "
+        "hipify.py: generated "
         f"{len(generated_files)} source files in {out_dir} and "
         f"{len(generated_kernels)} kernel files in {kernel_root}"
         + (
-            f" and {len(generated_spirv)} SPIR-V files"
+            f" and {len(generated_spirv)} HIP code objects"
             if generated_spirv
             else ""
         )

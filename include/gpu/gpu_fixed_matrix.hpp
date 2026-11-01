@@ -37,20 +37,20 @@ namespace rllm
 
         ~gpu_fixed_matrix() = default;
 
-        /** H2D: direct Vulkan copy from cpu_fixed_matrix's pinned host buffer to device. */
-        void copy_from_cpu(VulkanQueue& queue, const cpu_fixed_matrix<ElementType, X, Y>& src)
+        /** H2D: direct Hip copy from cpu_fixed_matrix's pinned host buffer to device. */
+        void copy_from_cpu(HipQueue& queue, const cpu_fixed_matrix<ElementType, X, Y>& src)
         {
             this->m_data.copy_to_offload_buffer(queue, const_cast<VBaseHostBuffer&>(src.vk_host_buffer()));
         }
 
-        /** D2H: direct Vulkan copy from device into cpu_fixed_matrix's pinned host buffer. */
-        void copy_to_cpu(VulkanQueue& queue, cpu_fixed_matrix<ElementType, X, Y>& dst) const
+        /** D2H: direct Hip copy from device into cpu_fixed_matrix's pinned host buffer. */
+        void copy_to_cpu(HipQueue& queue, cpu_fixed_matrix<ElementType, X, Y>& dst) const
         {
             this->m_data.copy_from_offload_buffer(queue, dst.vk_host_buffer());
         }
 
         /** Fill with random values using a cpu_fixed_matrix intermediate. */
-        void fill_rand(VulkanQueue& queue, ElementType lo, ElementType hi)
+        void fill_rand(HipQueue& queue, ElementType lo, ElementType hi)
         {
             cpu_fixed_matrix<ElementType, X, Y> tmp;
             auto* ptr = tmp.data();
@@ -60,7 +60,7 @@ namespace rllm
         }
 
         template<typename Initializer>
-        void fill_rand(VulkanQueue& queue, Initializer& initializer)
+        void fill_rand(HipQueue& queue, Initializer& initializer)
         {
             cpu_fixed_matrix<ElementType, X, Y> tmp;
             auto* ptr = tmp.data();
@@ -70,7 +70,7 @@ namespace rllm
         }
 
         /** H2D partial: upload one row from the given cpu source. */
-        void copy_row_to_offload_buffer(VulkanQueue& queue, X x, const cpu_fixed_matrix<ElementType, X, Y>& src)
+        void copy_row_to_offload_buffer(HipQueue& queue, X x, const cpu_fixed_matrix<ElementType, X, Y>& src)
         {
             assert(static_cast<size_t>(x) < ROWS);
             this->m_data.copy_range_to_offload_buffer(

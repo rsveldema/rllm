@@ -27,7 +27,7 @@ namespace rllm
         fixed_size_vector<int, IdentifierHashBucket> identifier_touched;
 
         EmbeddingGradientAccumulator();
-        void reset(VulkanQueue& queue);
+        void reset(HipQueue& queue);
     };
 
       /**  InputLayer converts an CpuInputLine (sequence of token IDs) into a
@@ -120,7 +120,7 @@ namespace rllm
         mutable fixed_size_vector<int, PositionIndex> m_identifier_ngram_counts;
 
         void reset_embeddings();
-        void upload_identifier_features(const CpuInputLine& input, VulkanQueue& queue) const;
+        void upload_identifier_features(const CpuInputLine& input, HipQueue& queue) const;
 
         // Per-call state for propagate_backward (moved out of the parallel loop to fix data race)
         // These are class members so each InputLayer instance has its own copy — no static shared state.

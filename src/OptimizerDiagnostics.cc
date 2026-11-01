@@ -4,7 +4,7 @@
 
 #include <cpu/cpu_fixed_vector.hpp>
 #include <logging.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 #include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
 #include <parallel.hpp>
@@ -45,7 +45,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TempStorage>(), (values))
         if (i == TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM)
             values[i] = 0.0f;
@@ -61,7 +61,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, values))
         atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (gradient[r, c] * gradient[r, c]));
@@ -75,7 +75,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<IdentifierHashBucket, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, values))
         const float value = gradient[r, c];
@@ -90,7 +90,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, values))
         atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (gradient[r, c] * gradient[r, c]));
@@ -105,7 +105,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, rows, values))
         atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (gradient[r, c] * gradient[r, c]));
@@ -119,7 +119,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, values))
         atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (gradient[r, c] * gradient[r, c]));
@@ -133,7 +133,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, values))
         atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (gradient[r, c] * gradient[r, c]));
@@ -147,7 +147,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, values))
         atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (gradient[r, c] * gradient[r, c]));
@@ -160,7 +160,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TempStorage>(static_cast<TempStorage>(1)), (values))
         const float maximum_norm = 30.0f;
         const float norm = sqrt(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM]);
@@ -176,7 +176,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, rows, values))
         const float value = gradient[r, c];
@@ -193,7 +193,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, FFDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, rows, values))
         const float value = gradient[r, c];
@@ -210,7 +210,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, AttentionPositionIndex>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, rows, values))
         const float value = gradient[r, c];
@@ -224,7 +224,7 @@ namespace rllm
         PositionIndex rows,
         std::string_view label)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto& values = optimizer_diagnostics_buffer();
         values.copy_from_cpu(queue, zero_host_buffer());
         accumulate_hidden_gradient_stats(gradient, rows, values);
@@ -244,7 +244,7 @@ namespace rllm
         PositionIndex rows,
         std::string_view label)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto& values = optimizer_diagnostics_buffer();
         values.copy_from_cpu(queue, zero_host_buffer());
         accumulate_hidden_gradient_stats(activation, rows, values);
@@ -264,7 +264,7 @@ namespace rllm
         PositionIndex rows,
         std::string_view label)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto& values = optimizer_diagnostics_buffer();
         values.copy_from_cpu(queue, zero_host_buffer());
         accumulate_ffn_gradient_stats(gradient, rows, values);
@@ -285,7 +285,7 @@ namespace rllm
         std::string_view label,
         bool log_per_head)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto& values = optimizer_diagnostics_buffer();
         values.copy_from_cpu(queue, zero_host_buffer());
         for (const auto head : enum_iterator1D<HeadsIndex>())
@@ -322,13 +322,13 @@ namespace rllm
     void begin_optimizer_diagnostics()
     {
         optimizer_diagnostics_buffer().copy_from_cpu(
-            rllm::vulkan_runtime::get_queue(0), zero_host_buffer());
+            rllm::hip_runtime::get_queue(0), zero_host_buffer());
         enabled = true;
     }
 
     std::optional<OptimizerDiagnosticMetrics> log_optimizer_diagnostics(std::string_view parameter_group)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto& values = read_host_buffer();
         optimizer_diagnostics_buffer().copy_to_cpu(queue, values);
         queue.wait("optimizer diagnostics");

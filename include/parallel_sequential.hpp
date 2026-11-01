@@ -41,7 +41,7 @@ namespace parallel {
 // Top-level (non-nested) parallel loops that are candidates for future GPU /
 // accelerator offload. Currently they expand identically to the CPU PARFOR*
 // macros; the distinct name marks the intent without changing behaviour.
-// The first argument is a VulkanQueue reference (ignored by CPU backends).
+// The first argument is a HipQueue reference (ignored by CPU backends).
 #define OFFLOAD_PARFOR_1D_PARAM(queue, v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(queue, v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
 #define OFFLOAD_PARFOR_3D_PARAM(queue, v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)

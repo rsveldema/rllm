@@ -40,7 +40,7 @@ namespace rllm
         return logit_spread * 1.5f + uniform_entropy;
     }
 
-    static fixed_size_vector<int, PositionIndex> make_nan_scan_flag(VulkanQueue& queue)
+    static fixed_size_vector<int, PositionIndex> make_nan_scan_flag(HipQueue& queue)
     {
         cpu_fixed_vector<int, PositionIndex> cpu_flag;
         cpu_flag.set_size(PositionIndex::MAX);
@@ -51,7 +51,7 @@ namespace rllm
         return flag;
     }
 
-    static bool nan_scan_failed(VulkanQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
+    static bool nan_scan_failed(HipQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
     {
         cpu_fixed_vector<int, PositionIndex> cpu_flag;
         flag.copy_to_cpu(queue, cpu_flag);
@@ -67,7 +67,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
         const float value = matrix[row, col];
@@ -92,7 +92,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
         const float value = matrix[row, col];
@@ -117,7 +117,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
         const float value = matrix[row, col];
@@ -142,7 +142,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (matrix, flag, lower_bound, upper_bound))
         const float value = matrix[row, col];
@@ -167,7 +167,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<EmbeddingDimension>(), (values, flag, lower_bound, upper_bound))
         const float value = values[i];
         if (value == value)
@@ -191,7 +191,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (values, flag, lower_bound, upper_bound))
         const float value = values[i];
         if (value == value)
@@ -215,7 +215,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(), (values, flag, lower_bound, upper_bound))
         const float value = values[i];
         if (value == value)
@@ -235,7 +235,7 @@ namespace rllm
         if (!nan_finding_mode_enabled())
             return;
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto flag = make_nan_scan_flag(queue);
         scan_output_layer_weight_matrix(W_lm_head, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
         scan_output_layer_weight_matrix(W_string_table_index_head, flag, -WEIGHT_CLAMP, WEIGHT_CLAMP);
@@ -254,7 +254,7 @@ namespace rllm
         const char* name,
         const char* phase,
         fixed_size_vector<int, PositionIndex>& flag,
-        VulkanQueue& queue,
+        HipQueue& queue,
         float bound
     )
     {
@@ -280,7 +280,7 @@ namespace rllm
         if (!nan_finding_mode_enabled())
             return;
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto flag = make_nan_scan_flag(queue);
         scan_output_embedding_vector(h_last, flag, -NAN_FINDING_H_LAST_ABS_BOUND, NAN_FINDING_H_LAST_ABS_BOUND);
         check_output_vector_scan_failed("h_last", phase, flag, queue, NAN_FINDING_H_LAST_ABS_BOUND);
@@ -294,7 +294,7 @@ namespace rllm
         if (!nan_finding_mode_enabled())
             return;
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto flag = make_nan_scan_flag(queue);
         scan_output_token_vector(logits, flag, -NAN_FINDING_LOGIT_ABS_BOUND, NAN_FINDING_LOGIT_ABS_BOUND);
 
@@ -339,7 +339,7 @@ namespace rllm
         if (!nan_finding_mode_enabled())
             return;
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         auto flag = make_nan_scan_flag(queue);
         scan_output_position_vector(logits, flag, -NAN_FINDING_LOGIT_ABS_BOUND, NAN_FINDING_LOGIT_ABS_BOUND);
         check_output_vector_scan_failed("string_table_index_logits", phase, flag, queue, NAN_FINDING_LOGIT_ABS_BOUND);
@@ -352,7 +352,7 @@ namespace rllm
         m_string_table_index_inputs_cpu.set_size(PositionIndex::MAX);
     }
 
-    void output_layer_forward_from_hidden_impl(VulkanQueue& queue,
+    void output_layer_forward_from_hidden_impl(HipQueue& queue,
         // OFFLOAD_PARAMETERS(h_last, W, inputs)
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
@@ -371,7 +371,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void output_layer_forward_string_table_index_from_hidden_impl(VulkanQueue& queue,
+    static void output_layer_forward_string_table_index_from_hidden_impl(HipQueue& queue,
         // OFFLOAD_PARAMETERS(h_last, W, inputs)
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
         const fixed_size_matrix<float16, PositionIndex, EmbeddingDimension>& W,
@@ -387,7 +387,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void output_layer_forward_batched_impl(VulkanQueue& queue,
+    static void output_layer_forward_batched_impl(HipQueue& queue,
         // OFFLOAD_PARAMETERS(h_last, W, logits, batch_size)
         const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
@@ -405,7 +405,7 @@ namespace rllm
         ENDFOR
     }
 
-    static void output_layer_forward_batched_string_table_index_impl(VulkanQueue& queue,
+    static void output_layer_forward_batched_string_table_index_impl(HipQueue& queue,
         // OFFLOAD_PARAMETERS(h_last, W, logits, batch_size, index_count)
         const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
         const fixed_size_matrix<float16, PositionIndex, EmbeddingDimension>& W,
@@ -434,7 +434,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (delta, dh_last, W, batch_size))
         float sum = dh_last[batch, d];
@@ -454,7 +454,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (delta, dh_last, W, batch_size, index_count))
         float sum = dh_last[batch, d];
@@ -473,7 +473,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, dW, batch_size))
         float grad = dW[v, d];
@@ -493,7 +493,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(index_count);
         OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, dW, batch_size, index_count))
         float grad = dW[v, d];
@@ -511,7 +511,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (delta, dh_last, W))
         float sum = dh_last[d];
         for (const auto v : enum_iterator1D<TokenID>())
@@ -531,7 +531,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (delta, dh_last, W))
         float sum = dh_last[d];
         for (const auto v : enum_iterator1D<PositionIndex>())
@@ -548,7 +548,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, dW))
         const float old_value = dW[v, d];
@@ -566,7 +566,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, dW))
         dW[v, d] += (delta[v] * h_last[d]);
@@ -580,7 +580,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, rows))
         dW[v, d] = 0.0f;
@@ -601,7 +601,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<TokenID, EmbeddingDimension>();
         OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, W, V, S, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics))
         const float raw_gradient = dW[v, d];
@@ -643,7 +643,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (dW, W, V, S, learning_rate, bias_correction1, bias_correction2, diagnostics, collect_diagnostics, rows))
         const float raw_gradient = dW[v, d];
@@ -676,7 +676,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TempStorage>(), (temp_values))
         temp_values[i] = (i == TempStorage::START) ? -3.402823e38f : 0.0f;
         ENDFOR
@@ -692,7 +692,7 @@ namespace rllm
         // PARFOR_SHARED_VARIABLES(workgroup_max)
         // ENDPARFOR_SHARED_VARIABLES
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (inputs, temp_values))
         {
             atomicMax(temp_values[TempStorage::ZERO], inputs[i]);
@@ -707,7 +707,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(), (inputs, temp_values))
         atomicMax(temp_values[TempStorage::ZERO], inputs[i]);
         ENDFOR
@@ -724,7 +724,7 @@ namespace rllm
         // PARFOR_SHARED_VARIABLES()
         // ENDPARFOR_SHARED_VARIABLES
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (inputs, values, temp_values))
         {
             const float max_val = temp_values[TempStorage::ZERO];
@@ -744,7 +744,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(), (inputs, values, temp_values))
         const float max_val = temp_values[TempStorage::ZERO];
         const float exp_value = exp((inputs[i] - max_val));
@@ -762,7 +762,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<TokenID>(), (values, temp_values, expected_output_token, weight))
         float sum_exp = temp_values[TempStorage::ONE];
         float delta = (OutputLayer::smooth - (values[i] / sum_exp));
@@ -782,7 +782,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(), (values, temp_values, expected_string_table_index, weight))
         const float sum_exp = temp_values[TempStorage::ONE];
         float delta = -(values[i] / sum_exp);
@@ -799,7 +799,7 @@ namespace rllm
         (void) corpus;
     }
 
-    void OutputLayerGradientAccumulator::reset(VulkanQueue& queue)
+    void OutputLayerGradientAccumulator::reset(HipQueue& queue)
     {
         dW_lm_head.zero(queue);
         if (!string_table_index_gradients_initialized || string_table_index_count == PositionIndex::MAX)
@@ -832,7 +832,7 @@ namespace rllm
             for (const auto d : enum_iterator1D<EmbeddingDimension>())
                 cpu_index_tmp.set(v, d, static_cast<float16>(index_initializer->getNextValue()));
         {
-            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            auto& queue = rllm::hip_runtime::get_queue(0);
             W_lm_head.copy_from_cpu(queue, cpu_tmp);
             W_string_table_index_head.copy_from_cpu(queue, cpu_index_tmp);
             V_lm_head.zero(queue);
@@ -844,7 +844,7 @@ namespace rllm
 
     // logits[v] = sum_d  h_last[d] * W_lm_head[v, d]
     void OutputLayer::forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last,
-              VulkanQueue& queue)
+              HipQueue& queue)
     {
         forward_from_hidden(h_last, m_inputs, m_inputs_cpu, queue);
     }
@@ -853,7 +853,7 @@ namespace rllm
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
         fixed_size_vector<float, TokenID>& inputs,
         cpu_fixed_vector<float, TokenID>& inputs_cpu,
-        VulkanQueue& queue
+        HipQueue& queue
     )
     {
         check_nan_finding_mode("forward:start");
@@ -893,7 +893,7 @@ namespace rllm
         const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
         BatchIndex batch_size,
         fixed_size_matrix<float, BatchIndex, TokenID>& logits,
-        VulkanQueue& queue
+        HipQueue& queue
     )
     {
         output_layer_forward_batched_impl(queue, h_last, W_lm_head, logits, static_cast<int>(batch_size));
@@ -907,7 +907,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, TempStorage>(static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, slot, grid, (temp, losses, batch_size))
         temp[batch, slot] = (slot == TempStorage::START) ? -3.402823e38f : 0.0f;
@@ -925,7 +925,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, temp, active_examples, batch_size))
         if (active_examples[batch] != 0)
@@ -943,7 +943,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, delta, temp, active_examples, batch_size))
         if (active_examples[batch] != 0)
@@ -966,7 +966,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, batch, enum_iterator1D<BatchIndex>(static_cast<BatchIndex>(batch_size)), (expected_string_table_indices, active_examples, string_table_index_active_examples, batch_size))
         string_table_index_active_examples[batch] = 0;
         if (active_examples[batch] != 0)
@@ -982,7 +982,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, TempStorage>(static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, slot, grid, (temp, batch_size))
         temp[batch, slot] = (slot == TempStorage::START) ? -3.402823e38f : 0.0f;
@@ -1000,7 +1000,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
             static_cast<BatchIndex>(batch_size), index_count);
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, temp, active_examples, value_counts, batch_size, index_count))
@@ -1023,7 +1023,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
             static_cast<BatchIndex>(batch_size), index_count);
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, active_examples, value_counts, numeric_distance_costs, batch_size, index_count))
@@ -1059,7 +1059,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, PositionIndex>(
             static_cast<BatchIndex>(batch_size), index_count);
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, index, grid, (logits, delta, temp, expected_string_table_indices, active_examples, value_counts, numeric_distance_costs, losses, batch_size, index_count, loss_gradient_scale, reference_loss_weight, numeric_distance_loss_weight))
@@ -1117,7 +1117,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, TokenID>(static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, token, grid, (logits, delta, temp, expected_tokens, active_examples, losses, correct_token_probabilities, top1_correct, batch_size, loss_gradient_scale, category_loss_bonus, local_token, param_token, global_token, field_token, loop_token, class_name_token))
         if (active_examples[batch] != 0)
@@ -1169,7 +1169,7 @@ namespace rllm
         const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
         BatchIndex batch_size,
         BatchedOutputWorkspace& workspace,
-        VulkanQueue& queue,
+        HipQueue& queue,
         float loss_gradient_scale)
     {
         (void) queue;
@@ -1194,7 +1194,7 @@ namespace rllm
         const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
         BatchIndex batch_size,
         BatchedOutputWorkspace& workspace,
-        VulkanQueue& queue,
+        HipQueue& queue,
         const fixed_size_vector<int, BatchIndex>& expected_string_table_indices,
         float loss_gradient_scale,
         PositionIndex string_table_index_count)
@@ -1374,7 +1374,7 @@ namespace rllm
         size_t expected_string_table_index
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         initialize_softmax_temp_values(score.temp_values);
         check_output_logits_nan_finding_mode(inputs, "compute_score:start");
         reduce_logits_max_to_temp(inputs, score.temp_values);

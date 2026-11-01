@@ -12,7 +12,7 @@ namespace rllm
         : m_data(elts)
         {}
 
-        void zero(VulkanQueue& queue)
+        void zero(HipQueue& queue)
         {
             m_data.zero(queue);
         }

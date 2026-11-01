@@ -33,7 +33,7 @@ namespace rllm
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension> dW_v;
         bool touched = false;
 
-        void reset(VulkanQueue& queue);
+        void reset(HipQueue& queue);
     };
 
     // ── forward workspace ─────────────────────────────────────────────────────
@@ -52,9 +52,11 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_mid;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_ff;
+        // FP16 projection input; the FP32 cache remains authoritative for backward.
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension> h_norm_ff_projection;
         flexible_rows_matrix<float, PositionIndex, FFDimension> gate_pre;
         flexible_rows_matrix<float, PositionIndex, FFDimension> up_pre;
-        flexible_rows_matrix<float, PositionIndex, FFDimension> ffn_act;
+        flexible_rows_matrix<float16, PositionIndex, FFDimension> ffn_act;
         // Temporaries used only within forward() itself
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
@@ -73,6 +75,7 @@ namespace rllm
             , attn_concat(seq)
             , h_mid(seq)
             , h_norm_ff(seq)
+            , h_norm_ff_projection(seq)
             , gate_pre(seq)
             , up_pre(seq)
             , ffn_act(seq)
@@ -83,7 +86,7 @@ namespace rllm
             attn_w.set_size(HeadsIndex::MAX);
         }
 
-        void reset(VulkanQueue& queue, PositionIndex seq)
+        void reset(HipQueue& queue, PositionIndex seq)
         {
             packed_batch = nullptr;
             h_in.set_rows(seq);
@@ -95,6 +98,7 @@ namespace rllm
             attn_concat.set_rows(seq);
             h_mid.set_rows(seq);
             h_norm_ff.set_rows(seq);
+            h_norm_ff_projection.set_rows(seq);
             gate_pre.set_rows(seq);
             up_pre.set_rows(seq);
             ffn_act.set_rows(seq);
@@ -157,7 +161,7 @@ namespace rllm
             d_raw.set_size(HeadsIndex::MAX);
         }
 
-        void reset(VulkanQueue& queue, PositionIndex seq)
+        void reset(HipQueue& queue, PositionIndex seq)
         {
             d_h_mid.set_rows(seq);
             d_ffn_act.set_rows(seq);
@@ -297,7 +301,7 @@ namespace rllm
 
 
         // Test helper: expose RMSNorm backward for correctness tests.
-        static void rms_norm_backward_for_test(VulkanQueue& queue,
+        static void rms_norm_backward_for_test(HipQueue& queue,
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy,
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx)
@@ -310,7 +314,7 @@ namespace rllm
             const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x,
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx)
         {
-            rms_norm_backward_for_test(rllm::vulkan_runtime::get_queue(0), dy, x, dx);
+            rms_norm_backward_for_test(rllm::hip_runtime::get_queue(0), dy, x, dx);
         }
 
     // Serialization helpers need access to private weight matrices.
@@ -342,7 +346,7 @@ namespace rllm
         static void rms_norm(const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& y);
 
         // RMSNorm backward: dx += ∂L/∂x  given dy = ∂L/∂y and the original x
-        static void rms_norm_backward(VulkanQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx);
+        static void rms_norm_backward(HipQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dy, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& x, flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dx);
 
         // In-place causal softmax over the active [T × T] block of x.
         static void causal_softmax(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& x, PositionIndex T);

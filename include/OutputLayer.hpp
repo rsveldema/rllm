@@ -18,7 +18,7 @@ namespace rllm
         bool string_table_index_gradients_initialized = false;
         bool touched = false;
 
-        void reset(VulkanQueue& queue);
+        void reset(HipQueue& queue);
     };
 
     struct BatchedOutputWorkspace
@@ -73,7 +73,7 @@ namespace rllm
     };
 
     void output_layer_forward_from_hidden_impl(
-        VulkanQueue& queue,
+        HipQueue& queue,
         const fixed_size_vector<float, EmbeddingDimension>& h_last,
         const fixed_size_matrix<float16, TokenID, EmbeddingDimension>& W,
         fixed_size_vector<float, TokenID>& inputs
@@ -113,12 +113,12 @@ namespace rllm
 
         // Project h_last[D_MODEL] to vocabulary logits, storing them in m_inputs.
         void forward_from_hidden(const fixed_size_vector<float, EmbeddingDimension>& h_last,
-              VulkanQueue& queue);
+              HipQueue& queue);
         void forward_from_hidden(
             const fixed_size_vector<float, EmbeddingDimension>& h_last,
             fixed_size_vector<float, TokenID>& inputs,
             cpu_fixed_vector<float, TokenID>& inputs_cpu,
-            VulkanQueue& queue
+            HipQueue& queue
         );
 
         void backward_accumulate(
@@ -132,7 +132,7 @@ namespace rllm
             const fixed_size_matrix<float, BatchIndex, EmbeddingDimension>& h_last,
             BatchIndex batch_size,
             fixed_size_matrix<float, BatchIndex, TokenID>& logits,
-            VulkanQueue& queue
+            HipQueue& queue
         );
         void backward_batched_accumulate(
             const fixed_size_matrix<float, BatchIndex, TokenID>& delta,
@@ -147,14 +147,14 @@ namespace rllm
             const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
             BatchIndex batch_size,
             BatchedOutputWorkspace& workspace,
-            VulkanQueue& queue,
+            HipQueue& queue,
             float loss_gradient_scale = 1.0f
         );
         void compute_batched_delta(
             const fixed_size_matrix<float, BatchIndex, TokenID>& logits,
             BatchIndex batch_size,
             BatchedOutputWorkspace& workspace,
-            VulkanQueue& queue,
+            HipQueue& queue,
             const fixed_size_vector<int, BatchIndex>& expected_string_table_indices,
             float loss_gradient_scale = 1.0f,
             PositionIndex string_table_index_count = PositionIndex::MAX

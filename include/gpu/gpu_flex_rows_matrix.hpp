@@ -14,7 +14,7 @@
 #include <IMemorySpace.hpp>
 #include <offloadable_data.hpp>
 #include <cpu/cpu_flex_rows_matrix.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 namespace rllm
 {
@@ -45,8 +45,8 @@ namespace rllm
             {
                 ensure_capacity(other.m_rows);
                 m_rows = other.m_rows;
-                const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
-                this->m_data.device_buffer().copy_from(rllm::vulkan_runtime::get_queue(0),
+                const auto bytes = static_cast<size_t>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
+                this->m_data.device_buffer().copy_from(rllm::hip_runtime::get_queue(0),
                     const_cast<VBaseDeviceBuffer&>(other.m_data.device_buffer()), bytes);
             }
             return *this;
@@ -56,11 +56,11 @@ namespace rllm
 
         ~gpu_flex_rows_matrix() = default;
 
-        void copy_from(VulkanQueue& queue, const gpu_flex_rows_matrix& other)
+        void copy_from(HipQueue& queue, const gpu_flex_rows_matrix& other)
         {
             ensure_capacity(other.m_rows);
             m_rows = other.m_rows;
-            const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
+            const auto bytes = static_cast<size_t>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
             this->m_data.device_buffer().copy_from(queue,
                 const_cast<VBaseDeviceBuffer&>(other.m_data.device_buffer()), bytes);
         }
@@ -72,21 +72,21 @@ namespace rllm
             m_rows = rows;
         }
 
-        /** H2D: direct Vulkan copy from cpu_flex_rows_matrix's pinned buffer to device. */
-        void copy_from_cpu(VulkanQueue& queue, const cpu_flex_rows_matrix<ElementType, X, Y>& src)
+        /** H2D: direct Hip copy from cpu_flex_rows_matrix's pinned buffer to device. */
+        void copy_from_cpu(HipQueue& queue, const cpu_flex_rows_matrix<ElementType, X, Y>& src)
         {
             ensure_capacity(src.num_rows());
             m_rows = src.num_rows();
-            const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
+            const auto bytes = static_cast<size_t>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
             this->m_data.device_buffer().write(queue,
                 const_cast<VBaseHostBuffer&>(src.vk_host_buffer()), bytes);
         }
 
-        /** D2H: direct Vulkan copy from device into cpu_flex_rows_matrix's pinned buffer. */
-        void copy_to_cpu(VulkanQueue& queue, cpu_flex_rows_matrix<ElementType, X, Y>& dst) const
+        /** D2H: direct Hip copy from device into cpu_flex_rows_matrix's pinned buffer. */
+        void copy_to_cpu(HipQueue& queue, cpu_flex_rows_matrix<ElementType, X, Y>& dst) const
         {
             dst.set_rows(m_rows);
-            const auto bytes = static_cast<VkDeviceSize>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
+            const auto bytes = static_cast<size_t>(static_cast<size_t>(m_rows) * COLS * sizeof(ElementType));
             this->m_data.device_buffer().read(queue,
                 dst.vk_host_buffer(), bytes);
         }

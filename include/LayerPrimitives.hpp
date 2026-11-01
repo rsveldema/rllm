@@ -630,7 +630,7 @@ namespace rllm
         }*/
 
         /** Upload from CpuInputLine to device. Call after modifying CpuInputLine. */
-        void sync_to_device(VulkanQueue& queue, const CpuInputLine& cpu) const
+        void sync_to_device(HipQueue& queue, const CpuInputLine& cpu) const
         {
             auto* self = const_cast<GpuInputLine*>(this);
             self->m_upload_staging.clear();
@@ -718,7 +718,7 @@ namespace rllm
     class GpuPackedBatchInput
     {
       public:
-        void sync_to_device(VulkanQueue& queue, const PackedBatchInput& cpu)
+        void sync_to_device(HipQueue& queue, const PackedBatchInput& cpu)
         {
             tokens.sync_to_device(queue, cpu.tokens());
             cpu_fixed_vector<int, BatchIndex> cpu_row_begin;
@@ -796,7 +796,7 @@ namespace rllm
             temp_values_cpu.set_size(TempStorage::MAX);
         }
 
-        void reset(VulkanQueue& queue)
+        void reset(HipQueue& queue)
         {
             values.zero(queue);
             string_table_index_values.zero(queue);

@@ -287,13 +287,13 @@ TEST(FastforkTest, OverheadPerTaskBounded)
 int main(int argc, char** argv)
 {
     fastfork::init();
-#if defined(USE_VULKAN_OFFLOAD)
-    auto* vulkan_session = new VulkanSession();
-    rllm::vulkan_runtime::set_session(*vulkan_session);
+#if defined(USE_HIP_OFFLOAD)
+    auto* hip_session = new HipSession();
+    rllm::hip_runtime::set_session(*hip_session);
 #endif
     std::println("Parallel backend: {}", parallel::backend_name());
-#if defined(USE_VULKAN_OFFLOAD)
-    parallel::print_vulkan_provider();
+#if defined(USE_HIP_OFFLOAD)
+    parallel::print_hip_provider();
 #endif
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

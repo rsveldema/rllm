@@ -3,7 +3,7 @@
 #include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
 #include <parallel.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 namespace rllm::backprop
 {
@@ -20,7 +20,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             norm.zero(queue);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, norm, diagnostics))
@@ -42,7 +42,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             norm.zero(queue);
             const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, norm, diagnostics))
@@ -64,7 +64,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             norm.zero(queue);
             const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (momentum, update, norm, diagnostics))
@@ -84,7 +84,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, norm))
             update[row, col] /= max(sqrt(norm[TempStorage::START]), 1e-7f);
@@ -98,7 +98,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, norm))
             update[row, col] /= max(sqrt(norm[TempStorage::START]), 1e-7f);
@@ -112,7 +112,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, norm))
             update[row, col] /= max(sqrt(norm[TempStorage::START]), 1e-7f);
@@ -126,7 +126,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, gram_matrix))
             float value = 0.0f;
@@ -143,7 +143,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, gram_matrix))
             float value = 0.0f;
@@ -160,7 +160,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, gram_matrix))
             float value = 0.0f;
@@ -177,7 +177,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (gram, result))
             float square = 0.0f;
@@ -195,7 +195,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, polynomial_value, next))
             float product = 0.0f;
@@ -214,7 +214,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, polynomial_value, next))
             float product = 0.0f;
@@ -233,7 +233,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (update, polynomial_value, next))
             float product = 0.0f;
@@ -252,7 +252,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (weight, update, learning_rate))
             const float old_weight = weight[row, col];
@@ -269,7 +269,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<FFDimension, EmbeddingDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (weight, update, learning_rate))
             const float old_weight = weight[row, col];
@@ -287,7 +287,7 @@ namespace rllm::backprop
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<EmbeddingDimension, FFDimension>();
             OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (weight, update, learning_rate))
             const float old_weight = weight[row, col];

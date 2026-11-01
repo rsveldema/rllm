@@ -9,12 +9,12 @@ namespace rllm
         const fixed_size_vector<float, EmbeddingDimension>& dh_last,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dh,
         PositionIndex last_pos);
-    void check_hidden_nan_finding_mode(VulkanQueue& queue,
+    void check_hidden_nan_finding_mode(HipQueue& queue,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
         PositionIndex rows, const char* phase);
-    void check_hidden_vector_nan_finding_mode(VulkanQueue& queue,
+    void check_hidden_vector_nan_finding_mode(HipQueue& queue,
         const fixed_size_vector<float, EmbeddingDimension>& values, const char* phase);
-    void check_token_vector_nan_finding_mode(VulkanQueue& queue,
+    void check_token_vector_nan_finding_mode(HipQueue& queue,
         const fixed_size_vector<float, TokenID>& values, float bound,
         const char* name, const char* phase);
 
@@ -36,7 +36,7 @@ namespace rllm
             h_last.set_size(EmbeddingDimension::MAX);
         }
 
-        void reset(VulkanQueue& queue, PositionIndex seq_len)
+        void reset(HipQueue& queue, PositionIndex seq_len)
         {
             h.set_rows(seq_len);
             loop_input.set_rows(seq_len);
@@ -54,7 +54,7 @@ namespace rllm
     };
 
     void prepare_loop_iteration_embedding(
-        TextTrainerForwardWorkspace& workspace, size_t iteration, VulkanQueue& queue);
+        TextTrainerForwardWorkspace& workspace, size_t iteration, HipQueue& queue);
 
     struct BackwardPropWorkspace
     {
@@ -76,7 +76,7 @@ namespace rllm
             dh_last.set_size(EmbeddingDimension::MAX);
         }
 
-        void reset(VulkanQueue& queue, PositionIndex seq_len)
+        void reset(HipQueue& queue, PositionIndex seq_len)
         {
             dh.set_rows(seq_len);
             din.set_rows(seq_len);
@@ -97,7 +97,7 @@ namespace rllm
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_attn;
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_ff;
-            flexible_rows_matrix<float, PositionIndex, FFDimension> ffn_act;
+            flexible_rows_matrix<float16, PositionIndex, FFDimension> ffn_act;
 
             explicit ActivationCache(PositionIndex rows)
                 : h_norm_attn(rows), attn_concat(rows), h_norm_ff(rows), ffn_act(rows)
@@ -139,7 +139,7 @@ namespace rllm
                 cache.reset(rows);
         }
 
-        void allocate_device_buffers(VulkanQueue& queue)
+        void allocate_device_buffers(HipQueue& queue)
         {
             hidden_error.zero(queue);
             ff_error.zero(queue);
@@ -178,7 +178,7 @@ namespace rllm
                 muon = std::make_unique<backprop::MuonWorkspace>();
         }
 
-        void reset(VulkanQueue& queue)
+        void reset(HipQueue& queue)
         {
             for (const auto oi : enum_iterator1D<MultiTokenPredictionIndex>())
                 output_layers[oi].reset(queue);

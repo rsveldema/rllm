@@ -90,7 +90,7 @@ namespace rllm
 
     void InputLayer::load(const nlohmann::json& j)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_adam_first.zero(queue);
         m_adam_second.zero(queue);
         m_identifier_adam_first.zero(queue);
@@ -107,7 +107,7 @@ namespace rllm
 
     nlohmann::json InputLayer::save() const
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_embeddings.copy_to_cpu(queue, const_cast<cpu_fixed_matrix<float16, TokenID, EmbeddingDimension>&>(m_embeddings_cpu));
         cpu_fixed_matrix<float16, IdentifierHashBucket, EmbeddingDimension> identifier_embeddings_cpu;
         m_identifier_embeddings.copy_to_cpu(queue, identifier_embeddings_cpu);
@@ -120,7 +120,7 @@ namespace rllm
 
     void OutputLayer::load(const nlohmann::json& j)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_inputs.zero(queue);
         if (j.contains("W_lm_head"))
         {
@@ -154,7 +154,7 @@ namespace rllm
     {
         cpu_fixed_matrix<float16, TokenID, EmbeddingDimension> w_lm_head_cpu;
         cpu_fixed_matrix<float16, PositionIndex, EmbeddingDimension> w_string_table_index_head_cpu;
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         W_lm_head.copy_to_cpu(queue, w_lm_head_cpu);
         W_string_table_index_head.copy_to_cpu(queue, w_string_table_index_head_cpu);
 
@@ -486,7 +486,7 @@ namespace rllm
         void push_matrix(safetensors::safetensors_t& st, const std::string& key, const fixed_size_matrix<T, X, Y>& m, std::vector<uint8_t>& storage)
         {
             cpu_fixed_matrix<T, X, Y> cpu_tmp;
-            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            auto& queue = rllm::hip_runtime::get_queue(0);
             m.copy_to_cpu(queue, cpu_tmp);
             push_cpu_matrix(st, key, cpu_tmp, storage);
         }
@@ -524,7 +524,7 @@ namespace rllm
             for (size_t x = 0; x < rows; ++x)
                 for (size_t y = 0; y < cols; ++y)
                     cpu_tmp.set(static_cast<X>(x), static_cast<Y>(y), static_cast<T>(data[x * cols + y]));
-            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            auto& queue = rllm::hip_runtime::get_queue(0);
             m.copy_from_cpu(queue, cpu_tmp);
         }
 
@@ -558,7 +558,7 @@ namespace rllm
 
     void InputLayer::load_from_safetensors(const std::string& filename, std::string* err)
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_adam_first.zero(queue);
         m_adam_second.zero(queue);
         m_identifier_adam_first.zero(queue);
@@ -614,7 +614,7 @@ namespace rllm
         pull_matrix(pfx + "W_up", st, W_up);
         pull_matrix(pfx + "W_down", st, W_down);
 
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         V_q.zero(queue);
         V_k.zero(queue);
         V_v.zero(queue);
@@ -672,7 +672,7 @@ namespace rllm
 
         pull_matrix("output_layers.W_lm_head", st, W_lm_head);
         pull_matrix("output_layers.W_string_table_index_head", st, W_string_table_index_head);
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_inputs.zero(queue);
         m_string_table_index_inputs.zero(queue);
         V_lm_head.zero(queue);
@@ -1092,7 +1092,7 @@ namespace rllm
             std::string pfx = "transformer_blocks." + std::to_string(bi) + ".";
 
             auto& block = m_transformer_blocks[bi];
-            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            auto& queue = rllm::hip_runtime::get_queue(0);
 
             // Directly pull each weight matrix into the block's members.
             pull_matrix(pfx + "W_q", st, block.W_q);
@@ -1183,7 +1183,7 @@ namespace rllm
                 const auto out_index_key =
                     "output_layers." + std::to_string(static_cast<size_t>(oi)) + ".W_string_table_index_head";
                 pull_matrix(out_index_key, st, m_output_layers[oi].W_string_table_index_head);
-                auto& queue = rllm::vulkan_runtime::get_queue(0);
+                auto& queue = rllm::hip_runtime::get_queue(0);
                 m_output_layers[oi].m_inputs.zero(queue);
                 m_output_layers[oi].m_string_table_index_inputs.zero(queue);
                 if (load_optimizer_tensors)

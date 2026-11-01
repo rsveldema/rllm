@@ -22,7 +22,7 @@ another.
 Batched output scoring remains GPU-resident. Valid hidden rows are gathered in
 chunks, and softmax, cross-entropy, and delta generation operate directly on
 their batched logits. Training reads back only primary-head losses used for
-reporting and convergence decisions. The Vulkan
+reporting and convergence decisions. The Hip
 reduction kernels use tkernel workgroup reductions to limit global atomics.
 
 Input-embedding backpropagation is also GPU-resident. Packed hidden gradients

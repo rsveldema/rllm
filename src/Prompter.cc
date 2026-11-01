@@ -1,5 +1,5 @@
 #include <Prompter.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -263,7 +263,7 @@ namespace rllm
                  nn.get_last_input() = token_ids; // set the input to the probe token(s) for tracing
 
                  nn.propagate_forward();
-                 auto& queue = rllm::vulkan_runtime::get_queue(0);
+                 auto& queue = rllm::hip_runtime::get_queue(0);
                  const auto mean_vec = nn.get_last_hidden_mean(queue);
                  constexpr size_t D = static_cast<size_t>(EmbeddingDimension::MAX);
                  constexpr size_t COLS = 8;

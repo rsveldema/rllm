@@ -229,8 +229,8 @@ def _defined_macros_for_backend(backend_namespace: str) -> set[str]:
     # Translate guarded diagnostic code so generated sources remain valid when
     # the corresponding C++ build option enables the preserved #if branch.
     defined: set[str] = {"DEBUG_ATTENTION_DIAGNOSTICS"}
-    if backend_namespace == "vulkan":
-        defined.add("USE_VULKAN_OFFLOAD")
+    if backend_namespace == "hip":
+        defined.add("USE_HIP_OFFLOAD")
     return defined
 
 
@@ -292,14 +292,14 @@ def _sanitize_name_component(text: str) -> str:
     return "".join(safe)
 
 
-def _vulkan_kernel_symbol_and_rel_spv(rel_path: str, lineno: int) -> tuple[str, str]:
+def _hip_kernel_symbol_and_rel_spv(rel_path: str, lineno: int) -> tuple[str, str]:
     rel = Path(rel_path)
     stem = _sanitize_name_component(rel.stem)
     parent = rel.parent.as_posix()
-    rel_spv = f"{stem}.L{lineno}.spv"
+    rel_spv = f"{stem}.L{lineno}.hsaco"
     if parent and parent != ".":
         rel_spv = f"{parent}/{rel_spv}"
-    symbol = f"__rllm_vulkan_kernel_{stem}_L{lineno}"
+    symbol = f"__rllm_hip_kernel_{stem}_L{lineno}"
     return symbol, rel_spv
 
 
@@ -513,8 +513,8 @@ def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
                 f"entry value: {item!r}"
             )
 
-        # Keep C++ enum casts intact in transformed sources; Vulkan GLSL
-        # conversion handles casts separately in vulkanize.py sanitization.
+        # Keep C++ enum casts intact in transformed sources; Hip GLSL
+        # conversion handles casts separately in hipize.py sanitization.
         if search.startswith("static_cast<"):
             continue
 
@@ -526,12 +526,12 @@ def resolve_symbol_values(enum_value_tool: str | None) -> dict[str, str]:
 def _emit_loop_invocation(ctx: LoopContext) -> list[str]:
     lines: list[str] = []
 
-    if ctx.backend_namespace == "vulkan":
-        kernel_symbol, rel_spv = _vulkan_kernel_symbol_and_rel_spv(ctx.rel_path, ctx.lineno)
+    if ctx.backend_namespace == "hip":
+        kernel_symbol, rel_spv = _hip_kernel_symbol_and_rel_spv(ctx.rel_path, ctx.lineno)
         extra_param_names = parse_extra_param_names(ctx.extra_params)
         _ = rel_spv
-        queue_expr = ctx.queue_expr or "rllm::vulkan_runtime::get_queue(0)"
-        lines.append(f"{ctx.indent}rllm::vulkan::generated::{kernel_symbol}(")
+        queue_expr = ctx.queue_expr or "rllm::hip_runtime::get_queue(0)"
+        lines.append(f"{ctx.indent}rllm::hip::generated::{kernel_symbol}(")
         lines.append(f"{ctx.indent}    {ctx.range_expr},")
         lines.append(f"{ctx.indent}    {queue_expr}{',' if extra_param_names else ''}")
         for idx, name in enumerate(extra_param_names):
@@ -822,7 +822,7 @@ def _write_parfor_dump(ctx: "LoopContext", dump_dir: Path,
             lines.append(hard_apply_symbol_values(l, symbol_values))
         lines.append("")
 
-    # Extract constexpr declarations for Vulkan compatibility.
+    # Extract constexpr declarations for Hip compatibility.
     # These are kept in the kernel file (above) and also emitted as #define during GLSL generation.
     if not getattr(ctx, '_constexpr_defines_set', False):
         import re as _re2
@@ -932,7 +932,7 @@ def _parse_kernel_file(kernel_path: Path) -> LoopContext | None:
     # Build LoopContext
     ctx = LoopContext(
         indent="",
-        backend_namespace="vulkan",
+        backend_namespace="hip",
         rel_path=rel_path,
         lineno=lineno,
         is_2d=is_2d,

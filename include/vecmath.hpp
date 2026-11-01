@@ -10,6 +10,11 @@ namespace rllm
     void fill(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& dst, float value);
     void fill(flexible_rows_cols_matrix<float, PositionIndex, PositionIndex>& dst, float value);
 
+    void convert_to_float16(
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& src,
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& dst
+    );
+
     void copy_hidden_row_to_vector(
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& src,
         PositionIndex row,
@@ -44,6 +49,12 @@ namespace rllm
     );
 
     void matmul_ABt(
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& A,
+        const fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& B,
+        flexible_rows_matrix<float, PositionIndex, FFDimension>& C
+    );
+
+    void matmul_ABt(
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,
         const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C
@@ -51,6 +62,12 @@ namespace rllm
 
     void matmul_ABt(
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& A,
+        const fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& B,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C
+    );
+
+    void matmul_ABt(
+        const flexible_rows_matrix<float16, PositionIndex, FFDimension>& A,
         const fixed_size_matrix<float16, EmbeddingDimension, FFDimension>& B,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C
     );
@@ -88,6 +105,13 @@ namespace rllm
     void matmul_AtB_acc(
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& B,
+        fixed_size_matrix<float, EmbeddingDimension, FFDimension>& C,
+        PositionIndex k_count
+    );
+
+    void matmul_AtB_acc(
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,
+        const flexible_rows_matrix<float16, PositionIndex, FFDimension>& B,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& C,
         PositionIndex k_count
     );
@@ -139,7 +163,7 @@ namespace rllm
     void swiglu_forward(
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre,
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre,
-        flexible_rows_matrix<float, PositionIndex, FFDimension>& ffn_act,
+        flexible_rows_matrix<float16, PositionIndex, FFDimension>& ffn_act,
         PositionIndex seq_len
     );
 }

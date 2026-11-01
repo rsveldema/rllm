@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(HIP_PATH "/opt/rocm" CACHE PATH "Path to HIP installation")
+
 set(PREFER_SPEED_OVER_MEMORY 0 CACHE BOOL "Use faster full attention matrices instead of compact triangular storage")
 set(RLLM_MAX_POSITION 8192 CACHE STRING "Maximum compiled token context/workspace capacity")
 set(RLLM_MAX_ATTENTION_POSITION 256 CACHE STRING "Maximum positions in one independently attended sequence")
@@ -41,7 +43,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(
     RLLM_ENUM_VALUE_TOOL ""
     CACHE FILEPATH
-    "Optional path to a prebuilt enum-value tool used by vulkanize"
+    "Optional path to a prebuilt enum-value tool used by hipize"
 )
 
 # --- tokenizer_map codegen ---------------------------------------------------
@@ -109,7 +111,8 @@ add_subdirectory(safetensors-cpp)
 set(IC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(isocline)
 
-find_package(Vulkan REQUIRED)
+find_package(hip REQUIRED CONFIG)
+find_package(hipblas REQUIRED CONFIG)
 
 add_executable(generate_domain_replace_json src/generate_domain_replace_json.cc)
 target_compile_definitions(generate_domain_replace_json PRIVATE
@@ -122,10 +125,10 @@ target_include_directories(generate_domain_replace_json PRIVATE
         ${CMAKE_BINARY_DIR}/generated
         "${CMAKE_SOURCE_DIR}/kernel_compiler/runtime/include"
 )
-target_compile_definitions(generate_domain_replace_json PRIVATE USE_VULKAN_OFFLOAD)
+target_compile_definitions(generate_domain_replace_json PRIVATE USE_HIP_OFFLOAD)
 target_link_libraries(generate_domain_replace_json PUBLIC safetensors-cpp::safetensors_cpp)
 target_link_libraries(generate_domain_replace_json PRIVATE nlohmann_json::nlohmann_json)
-target_link_libraries(generate_domain_replace_json PUBLIC Vulkan::Vulkan)
+target_link_libraries(generate_domain_replace_json PUBLIC hip::host roc::hipblas)
 
 add_dependencies(generate_domain_replace_json generate_tokenizer_map)
 set_target_properties(generate_domain_replace_json PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

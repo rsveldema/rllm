@@ -26,7 +26,7 @@
 #include <random>
 #include <sstream>
 #include <unordered_map>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 #include <set>
 #include <vecmath.hpp>
 
@@ -42,7 +42,7 @@ namespace rllm
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(h.num_rows());
             OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (h, loop_input, iteration_embedding))
             const float recurrent = h[row, d];
@@ -60,7 +60,7 @@ namespace rllm
             // END_OFFLOAD_PARAMETERS
         )
         {
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(gradient.num_rows());
             OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (gradient, loop_input_gradient, is_first_iteration))
             const float g = gradient[row, d];
@@ -95,7 +95,7 @@ namespace rllm
     }
 
     void prepare_loop_iteration_embedding(
-        TextTrainerForwardWorkspace& workspace, size_t iteration, VulkanQueue& queue)
+        TextTrainerForwardWorkspace& workspace, size_t iteration, HipQueue& queue)
     {
         cpu_fixed_vector<float, EmbeddingDimension> embedding;
         embedding.set_size(EmbeddingDimension::MAX);
@@ -372,13 +372,13 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, d, enum_iterator1D<EmbeddingDimension>(), (dh_last, dh, last_pos))
         dh[last_pos, d] = dh_last[d];
         ENDFOR
     }
 
-    static fixed_size_vector<int, PositionIndex> make_neural_network_nan_scan_flag(VulkanQueue& queue)
+    static fixed_size_vector<int, PositionIndex> make_neural_network_nan_scan_flag(HipQueue& queue)
     {
         cpu_fixed_vector<int, PositionIndex> cpu_flag;
         cpu_flag.set_size(PositionIndex::MAX);
@@ -389,7 +389,7 @@ namespace rllm
         return flag;
     }
 
-    static bool neural_network_nan_scan_failed(VulkanQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
+    static bool neural_network_nan_scan_failed(HipQueue& queue, fixed_size_vector<int, PositionIndex>& flag)
     {
         cpu_fixed_vector<int, PositionIndex> cpu_flag;
         flag.copy_to_cpu(queue, cpu_flag);
@@ -397,7 +397,7 @@ namespace rllm
     }
 
     static void scan_hidden_matrix(
-        VulkanQueue& queue,
+        HipQueue& queue,
         // OFFLOAD_PARAMETERS(h, flag, rows, lower_bound, upper_bound)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
         fixed_size_vector<int, PositionIndex>& flag,
@@ -423,7 +423,7 @@ namespace rllm
     }
 
     static void scan_embedding_vector(
-        VulkanQueue& queue,
+        HipQueue& queue,
         // OFFLOAD_PARAMETERS(values, flag, lower_bound, upper_bound)
         const fixed_size_vector<float, EmbeddingDimension>& values,
         fixed_size_vector<int, PositionIndex>& flag,
@@ -447,7 +447,7 @@ namespace rllm
     }
 
     static void scan_token_vector(
-        VulkanQueue& queue,
+        HipQueue& queue,
         // OFFLOAD_PARAMETERS(values, flag, lower_bound, upper_bound)
         const fixed_size_vector<float, TokenID>& values,
         fixed_size_vector<int, PositionIndex>& flag,
@@ -470,7 +470,7 @@ namespace rllm
         ENDFOR
     }
 
-    void check_hidden_nan_finding_mode(VulkanQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex rows, const char* phase)
+    void check_hidden_nan_finding_mode(HipQueue& queue, const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex rows, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -518,7 +518,7 @@ namespace rllm
         }
     }
 
-    void check_hidden_vector_nan_finding_mode(VulkanQueue& queue, const fixed_size_vector<float, EmbeddingDimension>& values, const char* phase)
+    void check_hidden_vector_nan_finding_mode(HipQueue& queue, const fixed_size_vector<float, EmbeddingDimension>& values, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -532,7 +532,7 @@ namespace rllm
         }
     }
 
-    void check_token_vector_nan_finding_mode(VulkanQueue& queue, const fixed_size_vector<float, TokenID>& values, float bound, const char* name, const char* phase)
+    void check_token_vector_nan_finding_mode(HipQueue& queue, const fixed_size_vector<float, TokenID>& values, float bound, const char* name, const char* phase)
     {
         if (!nan_finding_mode_enabled())
             return;
@@ -661,7 +661,7 @@ namespace rllm
         // END_OFFLOAD_PARAMETERS
     )
     {
-        auto& queue = vulkan_runtime::get_queue(0);
+        auto& queue = hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<BatchIndex, EmbeddingDimension>(
             static_cast<BatchIndex>(batch_size));
         OFFLOAD_PARFOR_2D_PARAM(queue, batch, d, grid, (h, last_rows, h_last, batch_size))
@@ -676,7 +676,7 @@ namespace rllm
         assert(!m_transformer_blocks.empty());
 
         m_seq_len = m_last_input.size();
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_forward_workspace->reset(queue, m_seq_len);
 
         auto& ws = *m_forward_workspace;
@@ -730,14 +730,14 @@ namespace rllm
     {
       public:
         ScopedDeviceBufferAllocationFreeze()
-            : m_previous(rllm::vulkan_runtime::device_buffer_allocations_allowed())
+            : m_previous(rllm::hip_runtime::device_buffer_allocations_allowed())
         {
-            rllm::vulkan_runtime::set_device_buffer_allocations_allowed(false);
+            rllm::hip_runtime::set_device_buffer_allocations_allowed(false);
         }
 
         ~ScopedDeviceBufferAllocationFreeze()
         {
-            rllm::vulkan_runtime::set_device_buffer_allocations_allowed(m_previous);
+            rllm::hip_runtime::set_device_buffer_allocations_allowed(m_previous);
         }
 
         ScopedDeviceBufferAllocationFreeze(const ScopedDeviceBufferAllocationFreeze&) = delete;
@@ -791,7 +791,7 @@ namespace rllm
         return top_k_pairs;
     }
 
-    cpu_fixed_vector<float, EmbeddingDimension> TextTrainer::get_last_hidden_mean(VulkanQueue& queue) const
+    cpu_fixed_vector<float, EmbeddingDimension> TextTrainer::get_last_hidden_mean(HipQueue& queue) const
     {
         const size_t seq_len = static_cast<size_t>(m_seq_len);
         if (seq_len == 0)
@@ -1002,7 +1002,7 @@ namespace rllm
 
         if (m_reset_optimizer_state_on_load)
         {
-            auto& queue = rllm::vulkan_runtime::get_queue(0);
+            auto& queue = rllm::hip_runtime::get_queue(0);
             m_input_layer.m_adam_first.zero(queue);
             m_input_layer.m_adam_second.zero(queue);
             m_input_layer.m_identifier_adam_first.zero(queue);
@@ -1069,7 +1069,7 @@ namespace rllm
                 PositionIndex::START, 0);
             m_dust_workspace = std::make_unique<DustWorkspace>(
                 PositionIndex::START, m_transformer_execution_order.size());
-            auto& queue = vulkan_runtime::get_queue(0);
+            auto& queue = hip_runtime::get_queue(0);
             m_dust_forward_workspace->h.zero(queue);
             m_dust_forward_workspace->loop_input.zero(queue);
             m_dust_workspace->allocate_device_buffers(queue);
@@ -1135,7 +1135,7 @@ namespace rllm
 
     void TextTrainer::reset_gradient_accumulators()
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         m_gradient_accumulation_workspace->reset(queue);
         queue.wait("TextTrainer gradient accumulator reset");
     }
@@ -1397,7 +1397,7 @@ namespace rllm
         }
 
         Score& score = m_evaluation_score;
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
 
         constexpr size_t MTP_HEAD_COUNT = static_cast<size_t>(MultiTokenPredictionIndex::MAX);
         std::array<double, MTP_HEAD_COUNT> per_head_loss_sum{};

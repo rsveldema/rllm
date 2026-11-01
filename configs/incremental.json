@@ -42,6 +42,6 @@
     "--micro-batch-size", "64",
     "--max-validation-windows", "512",
     "--validation-worst-count", "20",
-    "--vulkan-device", "R9700"
+    "--hip-device", "R9700"
   ]
 }

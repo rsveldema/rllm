@@ -39,7 +39,7 @@ TEST(PackedBatchInputTest, IdentifierNameFeaturesAreDeterministicAndNameSensitiv
     input_layer.propagate_forward(add, add_h);
     input_layer.propagate_forward(subtract, subtract_h);
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> add_cpu, subtract_cpu;
     add_h.copy_to_cpu(queue, add_cpu);
     subtract_h.copy_to_cpu(queue, subtract_cpu);
@@ -108,7 +108,7 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
     ForwardWorkspace packed_ws(packed.packed_rows());
     block.forward_batched(packed_h, packed.packed_rows(), gpu_packed, packed_ws);
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_cpu, second_cpu, packed_cpu;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_q, second_q, packed_q;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_attn, second_attn, packed_attn;
@@ -210,7 +210,7 @@ TEST(PackedBatchInputTest, BatchedEmbeddingMatchesIndependentForwards)
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> packed_h(packed.packed_rows());
     layer.propagate_forward(packed, gpu_packed, packed_h);
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_cpu;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> second_cpu;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> packed_cpu;

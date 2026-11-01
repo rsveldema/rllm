@@ -8,7 +8,7 @@
 #include <fixed_size_matrix.hpp>
 #include <fixed_size_vector.hpp>
 #include <parallel.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 #include <vecmath.hpp>
 #include <cpu/cpu_fixed_vector.hpp>
 #include <cpu/cpu_fixed_matrix.hpp>
@@ -24,7 +24,7 @@
 
 using namespace rlmm;
 
-#if defined(USE_VULKAN_OFFLOAD)
+#if defined(USE_HIP_OFFLOAD)
 constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES = 0u;
 constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ = 0u;
 constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ = 1u;
@@ -39,8 +39,8 @@ constexpr size_t EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_AFTER_READ = 0u;
 int main(int argc, char** argv)
 {
     parallel::init_parallel();
-    auto* vulkan_session = new VulkanSession();
-    rllm::vulkan_runtime::set_session(*vulkan_session);
+    auto* hip_session = new HipSession();
+    rllm::hip_runtime::set_session(*hip_session);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
@@ -61,7 +61,7 @@ static void visit_lower_triangle(
     // END_OFFLOAD_PARAMETERS
 )
 {
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, n, (visits))
     atomicAdd((visits[i, j]), 1);
     ENDFOR
@@ -74,7 +74,7 @@ static void visit_upper_triangle(
     // END_OFFLOAD_PARAMETERS
 )
 {
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM(queue, i, j, n, (visits))
     atomicAdd((visits[i, j]), 1);
     ENDFOR
@@ -89,7 +89,7 @@ TEST_F(OffloadParForTest, OffloadParForVisitsEachIndexExactlyOnce)
 
     visits.set_size(static_cast<PositionIndex>(N));
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
     atomicAdd(visits[static_cast<size_t>(i)], 1);
     ENDFOR
@@ -115,7 +115,7 @@ TEST_F(OffloadParForTest, OffloadParForParamVisitsEachIndexExactlyOnce)
 
     visits.set_size(static_cast<PositionIndex>(N));
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
     atomicAdd(visits[static_cast<size_t>(i)], 1);
     ENDFOR
@@ -137,7 +137,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DVisitsEachCellExactlyOnce)
     const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(
         static_cast<PositionIndex>(ROWS), static_cast<HeadDimension>(COLS)
     );
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (visits))
     atomicAdd((visits[i, j]), 1);
     ENDFOR
@@ -163,7 +163,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellExactlyOnce)
     const auto rows = static_cast<PositionIndex>(ROWS);
     const auto cols = static_cast<HeadDimension>(COLS);
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(rows, cols);
     OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (visits))
     atomicAdd((visits[i, j]), 1);
@@ -196,7 +196,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DTriangularParamVisitsLowerTriangle)
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_fixed_matrix<int, PositionIndex, PositionIndex> cpu_tri_lower;
     visits.copy_to_cpu(queue, cpu_tri_lower);
     for (size_t i = 0; i < N; ++i)
@@ -222,7 +222,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DUpperTriangularParamVisitsUpperTriangle
     EXPECT_EQ(parallel::statistics.host_to_device_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_H2D_COPIES);
     EXPECT_EQ(parallel::statistics.device_to_host_buffer_copies(), EXPECTED_FIXED_SIZE_OFFLOAD_D2H_COPIES_BEFORE_READ);
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_fixed_matrix<int, PositionIndex, PositionIndex> cpu_tri_upper;
     visits.copy_to_cpu(queue, cpu_tri_upper);
     for (size_t i = 0; i < N; ++i)
@@ -249,7 +249,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamVisitsEachCellTwiceInARow)
     // END_OFFLOAD_PARAMETERS
     visits.set_size(static_cast<PositionIndex>(ROWS * COLS));
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     visits.zero(queue);
     const auto grid = enum_iterator2D<PositionIndex, HeadDimension>(
         static_cast<PositionIndex>(ROWS), static_cast<HeadDimension>(COLS)
@@ -295,7 +295,7 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamVisitsEachIndexExactlyOnceUsingFix
     visits.set_size(static_cast<PositionIndex>(N));
     fill(visits, 0, static_cast<PositionIndex>(N));
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     {
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (visits))
         visits[static_cast<size_t>(i)] = (static_cast<int>(i) + 42);
@@ -323,7 +323,7 @@ TEST_F(OffloadParForTest, OffloadParFor1DParamWritesFixedSizeFloatVector)
     values.set_size(static_cast<PositionIndex>(N));
     fill(values, 0.0f, static_cast<PositionIndex>(N));
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     {
         OFFLOAD_PARFOR_1D_PARAM(queue, i, enum_iterator1D<PositionIndex>(static_cast<PositionIndex>(N)), (values))
         values[static_cast<size_t>(i)] = (static_cast<float>(i) * 1.1f);
@@ -341,7 +341,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrix)
     // OFFLOAD_PARAMETERS(values)
     fixed_size_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     values.zero(queue);
     {
         const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>();
@@ -382,7 +382,7 @@ TEST_F(OffloadParForTest, InputLayerPropagateForwardMatchesReference)
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> actual(input.size());
     input_layer.propagate_forward(input, actual);
 
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_actual;
     actual.copy_to_cpu(queue, cpu_actual);
 
@@ -410,7 +410,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
     fixed_size_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     float scale = 0.25f;
     // END_OFFLOAD_PARAMETERS
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     values.zero(queue);
     {
         const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>();
@@ -436,7 +436,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFixedSizeMatrixUsingFloatPar
 
 TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
 {
-    GTEST_SKIP() << "Performance smoke is unstable on some Vulkan drivers; correctness is covered by the offload tests.";
+    GTEST_SKIP() << "Performance smoke is unstable on some Hip drivers; correctness is covered by the offload tests.";
     constexpr int BENCHMARK_RUNS = 5;
     constexpr auto PERF_N = static_cast<EmbeddingDimension>(64);
 
@@ -449,7 +449,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamPerformanceComparedToParFor2D)
     cpu_fixed_matrix<float, EmbeddingDimension, EmbeddingDimension> parfor_values;
 
     const auto grid = enum_iterator2D<EmbeddingDimension, EmbeddingDimension>(PERF_N, PERF_N);
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
 
     auto run_parfor = [&]() {
         const auto t0 = std::chrono::steady_clock::now();
@@ -547,7 +547,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsMatrix)
     flexible_rows_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
     values.set_rows(MultiTokenPredictionIndex::MAX);
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     values.zero(queue);
     {
         const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>(
@@ -582,7 +582,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleColsMatrix)
     flexible_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
     values.set_cols(HeadsIndex::MAX);
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     values.zero(queue);
     {
         const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>();
@@ -615,7 +615,7 @@ TEST_F(OffloadParForTest, OffloadParFor2DParamWritesFlexibleRowsColsMatrix)
     flexible_rows_cols_matrix<float, MultiTokenPredictionIndex, HeadsIndex> values;
     // END_OFFLOAD_PARAMETERS
     values.set_size(MultiTokenPredictionIndex::MAX, HeadsIndex::MAX);
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     values.zero(queue);
     {
         const auto grid = enum_iterator2D<MultiTokenPredictionIndex, HeadsIndex>(

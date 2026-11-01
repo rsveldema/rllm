@@ -9,7 +9,7 @@
 #include <IMemorySpace.hpp>
 #include <cpu/cpu_fixed_vector.hpp>
 #include <offloadable_data.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 namespace rllm
 {
@@ -55,7 +55,7 @@ namespace rllm
         }
 
         /** H2D: upload from a cpu_fixed_vector. Also updates size to match src. */
-        void copy_from_cpu(VulkanQueue& queue, const cpu_fixed_vector<T, LengthType>& src)
+        void copy_from_cpu(HipQueue& queue, const cpu_fixed_vector<T, LengthType>& src)
         {
             len = src.size();
             const auto n = static_cast<size_t>(len);
@@ -69,7 +69,7 @@ namespace rllm
         }
 
         /** D2H: download into a cpu_fixed_vector. Also updates dst size to match. */
-        void copy_to_cpu(VulkanQueue& queue, cpu_fixed_vector<T, LengthType>& dst) const
+        void copy_to_cpu(HipQueue& queue, cpu_fixed_vector<T, LengthType>& dst) const
         {
             dst.set_size(len);
             if (static_cast<size_t>(len) == 0)

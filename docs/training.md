@@ -273,7 +273,7 @@ resume cannot silently switch credit-assignment algorithms.
 
 The DUST backend evaluates clean per-token losses, then reruns the complete
 transformer for a population of simultaneous Q, K, V, attention-output, gate,
-up, down, and output-logit perturbations. Vulkan kernels turn each token's loss
+up, down, and output-logit perturbations. Hip kernels turn each token's loss
 improvement into a reward-weighted estimate for the specific projection that
 was perturbed. K and V receive decayed causal credit from later tokens in the
 same packed example; cached clean-pass inputs form local outer-product updates
@@ -425,7 +425,7 @@ write it to `models/tokenization.log`. Per-token match tracing is disabled by
 default so loading a large unfiltered corpus does not perform a synchronous log
 write for every token candidate.
 
-`train.log` begins with the selected Vulkan provider, training mode and feature
+`train.log` begins with the selected Hip provider, training mode and feature
 flags, weighted source directories, and checkpoint optimizer-state restore
 strategy, so startup configuration is retained alongside later progress.
 
@@ -685,11 +685,11 @@ separate newline token; prompt rendering converts it back to `\n`.
 Prompt mode uses the C++ marker by default. Use `/language <name>` (or `/lang
 <name>`) to select `cpp`, `c`, `python`, `rust`, `java`, or `shell`; subsequent
 prompts and hidden-state probes receive that language marker.
-Corpus lines and generated windows use compact ordinary CPU storage. Vulkan
+Corpus lines and generated windows use compact ordinary CPU storage. Hip
 host-visible staging buffers are allocated only for reusable GPU upload
 objects, avoiding one driver allocation per window when large corpora are
 loaded.
-Generated Vulkan dispatches allocate descriptor sets from a reusable
+Generated Hip dispatches allocate descriptor sets from a reusable
 per-queue arena. The arena is reset only after that queue becomes idle, so
 forward and backward passes do not create and destroy a descriptor pool for
 every kernel invocation.
@@ -771,7 +771,7 @@ At startup, `train.log` reports estimated transformer GPU memory in MB per layer
 multiplied by the configured layer count. The estimate includes block weights,
 the active optimizer state, per-layer forward workspaces and gradient accumulators,
 and the correctly apportioned shared backward workspace. It excludes non-block
-buffers and Vulkan allocator overhead.
+buffers and Hip allocator overhead.
 
 The startup log also reports GPU memory required per compiled batch slot and in
 total across `BatchIndex::MAX`. This batch-slot estimate covers the batched

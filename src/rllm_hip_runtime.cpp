@@ -1,30 +1,30 @@
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
-namespace rllm::vulkan_runtime
+namespace rllm::hip_runtime
 {
     namespace
     {
-        VulkanSession* g_session = nullptr;
-        VulkanComputeContext* g_context = nullptr;
+        HipSession* g_session = nullptr;
+        HipComputeContext* g_context = nullptr;
         std::recursive_mutex g_mutex;
         thread_local size_t g_queue_offset = 0;
         bool g_device_buffer_allocations_allowed = true;
 
     }
 
-    void set_session(VulkanSession& session)
+    void set_session(HipSession& session)
     {
         std::lock_guard<std::recursive_mutex> lock(g_mutex);
         g_session = &session;
-        g_context = new VulkanComputeContext(session);
+        g_context = new HipComputeContext(session);
     }
 
-    VulkanSession& session()
+    HipSession& session()
     {
         return *g_session;
     }
 
-    VulkanComputeContext& context()
+    HipComputeContext& context()
     {
         return *g_context;
     }
@@ -34,7 +34,7 @@ namespace rllm::vulkan_runtime
         return g_mutex;
     }
 
-    VulkanQueue& get_queue(size_t index)
+    HipQueue& get_queue(size_t index)
     {
         const size_t n = session().queue_count();
         return session().get_queue((index + g_queue_offset) % n);

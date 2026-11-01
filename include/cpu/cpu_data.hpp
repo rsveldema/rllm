@@ -4,12 +4,12 @@
 #include <cstddef>
 #include <cstring>
 
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 
 namespace rllm
 {
-    /** Plain host-only data storage backed by a Vulkan HOST_VISIBLE|HOST_COHERENT
-     *  buffer.  Because the buffer is already pinned in a Vulkan-accessible region
+    /** Plain host-only data storage backed by a Hip HOST_VISIBLE|HOST_COHERENT
+     *  buffer.  Because the buffer is already pinned in a Hip-accessible region
      *  the gpu_* copy_from_cpu / copy_to_cpu helpers can transfer directly from/to
      *  this buffer without going through a second staging allocation.
      */
@@ -19,12 +19,12 @@ namespace rllm
     public:
         explicit cpu_data(size_t elts)
             : m_size(elts)
-            , m_host(rllm::vulkan_runtime::session(), static_cast<VkDeviceSize>(sizeof(T) * elts))
+            , m_host(rllm::hip_runtime::session(), static_cast<size_t>(sizeof(T) * elts))
         {}
 
         cpu_data(const cpu_data& other)
             : m_size(other.m_size)
-            , m_host(rllm::vulkan_runtime::session(), static_cast<VkDeviceSize>(sizeof(T) * other.m_size))
+            , m_host(rllm::hip_runtime::session(), static_cast<size_t>(sizeof(T) * other.m_size))
         {
             std::memcpy(data(), other.data(), m_size * sizeof(T));
         }
@@ -48,7 +48,7 @@ namespace rllm
         T* data()             { return reinterpret_cast<T*>(m_host.bytes()); }
         const T* data() const { return reinterpret_cast<const T*>(m_host.bytes()); }
 
-        /** Return the underlying Vulkan host buffer for direct H2D / D2H transfers. */
+        /** Return the underlying Hip host buffer for direct H2D / D2H transfers. */
         VBaseHostBuffer& vk_host_buffer()             { return m_host; }
         const VBaseHostBuffer& vk_host_buffer() const { return m_host; }
 
@@ -56,8 +56,8 @@ namespace rllm
         {
             if (new_size == m_size)
                 return;
-            VDynamicHostBuffer new_host(rllm::vulkan_runtime::session(),
-                                        static_cast<VkDeviceSize>(sizeof(T) * new_size));
+            VDynamicHostBuffer new_host(rllm::hip_runtime::session(),
+                                        static_cast<size_t>(sizeof(T) * new_size));
             std::memcpy(new_host.bytes(), m_host.bytes(),
                         std::min(m_size, new_size) * sizeof(T));
             m_host = std::move(new_host);

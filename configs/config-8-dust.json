@@ -63,7 +63,7 @@
     "--micro-batch-size", "64",
     "--max-validation-windows", "8",
     "--validation-worst-count", "100",
-    "--vulkan-device", "R9700",
+    "--hip-device", "R9700",
     "--restart-learning-rate-schedule"
   ]
 }

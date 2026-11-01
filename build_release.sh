@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Keep generated kernels fresh when switching between source and test codegen.
-rm -rf build_release/generated/vulkanized/kernels
+rm -rf build_release/generated/hipized/kernels
 
 PYTHON="${PYTHON:-}"
 if [[ -z "$PYTHON" ]]; then
@@ -20,5 +20,5 @@ if [[ "$PYTHON" != /* ]]; then
     fi
 fi
 
-cmake -B build_release -DCMAKE_BUILD_TYPE=Release -DPARALLEL_BACKEND=sequential -DOFFLOAD_BACKEND=vulkan -DBUILD_TESTING=ON -DRLLM_BUILD_KERNEL_COMPILER=ON -DPython3_EXECUTABLE:FILEPATH="$PYTHON" "$@"
+cmake -B build_release -DCMAKE_BUILD_TYPE=Release -DPARALLEL_BACKEND=sequential -DOFFLOAD_BACKEND=hip -DBUILD_TESTING=ON -DRLLM_BUILD_KERNEL_COMPILER=ON -DPython3_EXECUTABLE:FILEPATH="$PYTHON" "$@"
 cmake --build build_release --parallel

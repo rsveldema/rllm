@@ -75,7 +75,7 @@ namespace rllm::dust
         fixed_size_matrix<float, EmbeddingDimension, EmbeddingDimension>& gradient,
         PositionIndex rows);
 
-    /** Deterministic host-side Gaussian draw, uploaded for the Vulkan estimator. */
+    /** Deterministic host-side Gaussian draw, uploaded for the Hip estimator. */
     void gaussian_hidden_noise(
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& noise,
         PositionIndex rows,
@@ -143,7 +143,7 @@ namespace rllm::dust
 
     void accumulate_hidden_ff_outer_product(
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& error,
-        const flexible_rows_matrix<float, PositionIndex, FFDimension>& layer_input,
+        const flexible_rows_matrix<float16, PositionIndex, FFDimension>& layer_input,
         fixed_size_matrix<float, EmbeddingDimension, FFDimension>& gradient,
         PositionIndex rows);
     void accumulate_ff_error(

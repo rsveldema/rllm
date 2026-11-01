@@ -13,23 +13,23 @@ Build requirements (minimum):
 ```bash
 git submodules update --init --recursive
 sudo apt install libhwloc-dev
-sudo apt install glslc
+Install ROCm/HIP so that `hipcc` is available on `PATH`.
 ```
 
 Offload dispatch note:
 
-- In `vulkan` offload mode, kernel launch helpers dispatch through kernel_compiler generated stubs and SPIR-V.
+- In `hip` offload mode, kernel launch helpers dispatch through generated stubs and HIP code objects.
 - Set `NAN_FINDING_MODE=1` to run extra offloaded checks around `TransformerBlock` and `OutputLayer` forward/backward passes. The checks abort if model weights or optimizer velocities become NaN or leave their clamp ranges.
 - Run `./train.py config-6.json --fresh-start` to ignore existing checkpoints and start from random weights.
 
 Compatibility matrix:
 
 - fastfork + none: supported
-- fastfork + vulkan: supported
+- fastfork + hip: supported
 - openmp + none: supported
 - sequential + none: supported
-- sequential + vulkan: supported
-- openmp + vulkan: supported
+- sequential + hip: supported
+- openmp + hip: supported
 
 Quick start with CMake presets
 ===============
@@ -47,11 +47,11 @@ cmake --preset default-fastfork
 cmake --build --preset build-default-fastfork --parallel
 ```
 
-Configure + build FastFork with Vulkan offload mode:
+Configure + build FastFork with Hip offload mode:
 
 ```bash
-cmake --preset fastfork-vulkan
-cmake --build --preset build-fastfork-vulkan --parallel
+cmake --preset fastfork-hip
+cmake --build --preset build-fastfork-hip --parallel
 ```
 
 Manual CMake configuration (without presets)
@@ -71,31 +71,31 @@ cmake -S . -B build/openmp -DPARALLEL_BACKEND=openmp -DOFFLOAD_BACKEND=none
 cmake --build build/openmp --parallel
 ```
 
-FastFork + Vulkan offload mode build:
+FastFork + Hip offload mode build:
 
 ```bash
-cmake -S . -B build/fastfork-vulkan -DPARALLEL_BACKEND=fastfork -DOFFLOAD_BACKEND=vulkan
-cmake --build build/fastfork-vulkan --parallel
+cmake -S . -B build/fastfork-hip -DPARALLEL_BACKEND=fastfork -DOFFLOAD_BACKEND=hip
+cmake --build build/fastfork-hip --parallel
 ```
 
-Vulkan device selection (optional):
+Hip device selection (optional):
 
 ```bash
 # Select the device used by rllm by a case-insensitive name substring
-./build/fastfork-vulkan/rllm --vulkan-device radeon
+./build/fastfork-hip/rllm --hip-device radeon
 
-# Prefer AMD Vulkan devices (vendor id 0x1002)
-RLLM_VULKAN_VENDOR=amd ./build/fastfork-vulkan/rllm --help
+# Prefer AMD Hip devices (vendor id 0x1002)
+RLLM_HIP_VENDOR=amd ./build/fastfork-hip/rllm --help
 
-# Select a specific enumerated compute-capable Vulkan device index
-RLLM_VULKAN_DEVICE_INDEX=1 ./build/fastfork-vulkan/rllm --help
+# Select a specific enumerated compute-capable Hip device index
+RLLM_HIP_DEVICE_INDEX=1 ./build/fastfork-hip/rllm --help
 
 # Match by case-insensitive device name substring
-RLLM_VULKAN_DEVICE_SUBSTRING=radeon ./build/fastfork-vulkan/rllm --help
+RLLM_HIP_DEVICE_SUBSTRING=radeon ./build/fastfork-hip/rllm --help
 ```
 
-Selection priority is: `RLLM_VULKAN_DEVICE_INDEX` first, then `RLLM_VULKAN_VENDOR` and/or
-`RLLM_VULKAN_DEVICE_SUBSTRING`, then automatic best-device scoring.
+Selection priority is: `RLLM_HIP_DEVICE_INDEX` first, then `RLLM_HIP_VENDOR` and/or
+`RLLM_HIP_DEVICE_SUBSTRING`, then automatic best-device scoring.
 
 Sequential build:
 

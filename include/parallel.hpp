@@ -21,7 +21,7 @@
 
 #include <memory_spaces/host_memory_space.hpp>
 
-#include <vulkan_session.hpp>
+#include <hip_session.hpp>
 
 template <typename T>
 T* allocate_aligned(IMemorySpace& mem_space, std::size_t count)
@@ -37,7 +37,7 @@ void deallocate_aligned(IMemorySpace& mem_space, T* ptr, std::size_t count)
 
 namespace parallel {
     const char* backend_name();
-    void print_vulkan_provider();
+    void print_hip_provider();
     inline std::string bytes_to_mbyte(size_t b) { return std::format("{:.2f}", b / 1048576.0); }
 
 
@@ -587,13 +587,13 @@ namespace parallel {
     };
 
 #if defined(RLLM_ENABLE_STATISTICS)
-    void set_vulkan_dispatch_params(std::string_view site, std::string_view param);
+    void set_hip_dispatch_params(std::string_view site, std::string_view param);
     DispatchParams get_dispatch_params();
-    void clear_vulkan_dispatch_params();
+    void clear_hip_dispatch_params();
 #else
-    inline void set_vulkan_dispatch_params(std::string_view site, std::string_view param) {}
+    inline void set_hip_dispatch_params(std::string_view site, std::string_view param) {}
     inline DispatchParams get_dispatch_params() { return {}; }
-    inline void clear_vulkan_dispatch_params() {}
+    inline void clear_hip_dispatch_params() {}
 #endif
 
     extern Statistics statistics;

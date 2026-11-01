@@ -9,7 +9,7 @@
 #include <Statistics.hpp>
 #include <TransformerBlock.hpp>
 #include <parallel.hpp>
-#include <rllm_vulkan_runtime.hpp>
+#include <rllm_hip_runtime.hpp>
 #include <enum_iterator1D.hpp>
 #include <enum_iterator2D.hpp>
 
@@ -145,8 +145,8 @@ int main(int argc, char** argv)
 {
     setenv("RLLM_MODEL_DIR", TEST_MODEL_DIRECTORY, 1);
     parallel::init_parallel();
-    auto* vulkan_session = new VulkanSession();
-    rllm::vulkan_runtime::set_session(*vulkan_session);
+    auto* hip_session = new HipSession();
+    rllm::hip_runtime::set_session(*hip_session);
     ::testing::InitGoogleTest(&argc, argv);
     ::testing::UnitTest::GetInstance()->listeners().Append(new CleanModelsListener());
     return RUN_ALL_TESTS();
@@ -927,7 +927,7 @@ TEST(TextTrainerTest, TransformerLoopExpandsOnlyTheSelectedBlockRange)
 TEST(TextTrainerTest, LoopTransitionBackwardMatchesForward)
 {
     using namespace rllm;
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
 
     const auto T = static_cast<PositionIndex>(4);
     constexpr int LOOP_COUNT = 3;
@@ -1397,7 +1397,7 @@ TEST(TransformerBlockTest, CausalSoftmaxMasksFutureTokensAndNormalizesRows)
 
     flexible_rows_cols_matrix<float, PositionIndex, PositionIndex> scores(T, T);
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         scores.copy_from_cpu(queue, cpu_scores);
     }
 
@@ -1405,7 +1405,7 @@ TEST(TransformerBlockTest, CausalSoftmaxMasksFutureTokensAndNormalizesRows)
 
     cpu_flex_rows_cols_matrix<float, PositionIndex, PositionIndex> result_cpu;
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         scores.copy_to_cpu(queue, result_cpu);
     }
 
@@ -1489,7 +1489,7 @@ TEST(TransformerBlockTest, SoftmaxAttentionForHeadMatchesJacobian)
     AttentionMatrix attn_w;
     AttentionMatrix d_raw;
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         d_scores.copy_from_cpu(queue, cpu_d_scores);
         attn_w.copy_from_cpu(queue, cpu_attn_w);
         d_raw.copy_from_cpu(queue, cpu_d_raw);
@@ -1497,7 +1497,7 @@ TEST(TransformerBlockTest, SoftmaxAttentionForHeadMatchesJacobian)
 
     TransformerBlock::softmax_attention_for_head_for_test(d_scores, d_raw, attn_w, T);
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         d_raw.copy_to_cpu(queue, cpu_d_raw);
     }
 
@@ -1999,7 +1999,7 @@ TEST(TransformerBlockTest, RmsNormBackwardMatchesCpuReference)
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dy(seq);
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> x(seq);
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dx(seq);
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     {
         dy.copy_from_cpu(queue, cpu_dy);
         x.copy_from_cpu(queue, cpu_x);
@@ -2011,7 +2011,7 @@ TEST(TransformerBlockTest, RmsNormBackwardMatchesCpuReference)
 
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> cpu_dx(seq);
     {
-        auto& queue = rllm::vulkan_runtime::get_queue(0);
+        auto& queue = rllm::hip_runtime::get_queue(0);
         dx.copy_to_cpu(queue, cpu_dx);
     }
 
@@ -2053,7 +2053,7 @@ TEST(TrainingAlgorithmTest, NamesAreStableForMetadata)
 
 TEST(DustEstimatorTest, RewardWeightedNoiseAndOuterProduct)
 {
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     constexpr auto rows = static_cast<PositionIndex>(2);
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> host_noise;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> host_input;
@@ -2095,7 +2095,7 @@ TEST(DustEstimatorTest, RewardWeightedNoiseAndOuterProduct)
 TEST(DustEstimatorTest, MatchesAdditiveOptimizerDescentOnScalarLinearLayer)
 {
     // This is the one-dimensional form of the same local outer product used by
-    // the Vulkan estimator: perturb y=w*x, estimate the additive optimizer
+    // the Hip estimator: perturb y=w*x, estimate the additive optimizer
     // descent direction from rewards, then multiply by cached x. Antithetic
     // members remove the quadratic bias.
     constexpr double weight = 0.7;
@@ -2145,7 +2145,7 @@ TEST(DustEstimatorTest, ProjectionSeedsAreDeterministicAndSiteSpecific)
 
 TEST(DustEstimatorTest, ScattersAndPropagatesCausalRewards)
 {
-    auto& queue = rllm::vulkan_runtime::get_queue(0);
+    auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_fixed_vector<float, BatchIndex> host_rewards;
     host_rewards.push_back(2.0f);
     host_rewards.push_back(3.0f);

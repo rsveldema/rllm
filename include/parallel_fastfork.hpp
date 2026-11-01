@@ -7,8 +7,8 @@
 #include <type_traits>
 #include <fastfork/fastfork.hpp>
 
-#if defined(USE_VULKAN_OFFLOAD)
-#error "PARFOR* with the FastFork backend is not supported in Vulkan builds; use PARALLEL_BACKEND=sequential or openmp"
+#if defined(USE_HIP_OFFLOAD)
+#error "PARFOR* with the FastFork backend is not supported in Hip builds; use PARALLEL_BACKEND=sequential or openmp"
 #endif
 
 namespace parallel {
@@ -148,9 +148,9 @@ namespace parallel {
         fastfork::reset_worker_stats(); \
     } while (false)
 
-// Source offload macros are rewritten by vulkanize, but headers are not rewritten.
+// Source offload macros are rewritten by hipize, but headers are not rewritten.
 // Keep header-time uses valid by falling back to the CPU PARFOR forms.
-// The first argument is a VulkanQueue reference (ignored by CPU backends).
+// The first argument is a HipQueue reference (ignored by CPU backends).
 #define OFFLOAD_PARFOR_1D_PARAM(queue, v, n, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_1D(v, n)
 #define OFFLOAD_PARFOR_2D_PARAM(queue, v1, v2, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_2D(v1, v2, N)
 #define OFFLOAD_PARFOR_3D_PARAM(queue, v1, v2, v3, N, PARAMS) RLLM_TIMED_KERNEL(__func__) PARFOR_3D(v1, v2, v3, N)
