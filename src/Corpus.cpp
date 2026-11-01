@@ -4,6 +4,7 @@
 #include <TokenIDFormatter.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <cstdlib>
@@ -866,20 +867,68 @@ namespace rllm
 
     static std::ofstream s_log_file;
 
+    class HashString
+    {
+      public:
+        explicit HashString(std::string value)
+            : string(std::move(value)), hash_value(hash(string))
+        {}
+
+        static uint32_t hash(std::string_view value)
+        {
+            uint32_t result = 0;
+            for (const unsigned char ch : value)
+                result = result * multiplier + static_cast<uint32_t>(ch) + 1;
+            return result;
+        }
+
+        static constexpr uint32_t multiplier = 16777619u;
+        std::string string;
+        uint32_t hash_value;
+    };
+
+    class SubstringHashes
+    {
+      public:
+        explicit SubstringHashes(std::string_view text)
+            : m_prefix(text.size() + 1), m_powers(text.size() + 1, 1)
+        {
+            for (size_t i = 0; i < text.size(); ++i)
+            {
+                m_prefix[i + 1] = m_prefix[i] * HashString::multiplier +
+                    static_cast<uint32_t>(static_cast<unsigned char>(text[i])) + 1;
+                m_powers[i + 1] = m_powers[i] * HashString::multiplier;
+            }
+        }
+
+        uint32_t get(size_t position, size_t length) const
+        {
+            return m_prefix[position + length] - m_prefix[position] * m_powers[length];
+        }
+
+      private:
+        std::vector<uint32_t> m_prefix;
+        std::vector<uint32_t> m_powers;
+    };
+
     struct TokenMatchInfo
     {
         TokenID id;
-        std::string_view text;
+        HashString key;
         bool end_of_word;
     };
 
-    const std::vector<TokenMatchInfo>& token_match_infos()
+    const std::array<std::vector<TokenMatchInfo>, 256>& token_match_infos_by_initial()
     {
         static const auto infos = [] {
-            std::vector<TokenMatchInfo> result;
-            result.reserve(tokenizer_map.size());
+            std::array<std::vector<TokenMatchInfo>, 256> result;
             for (const auto& [id, info] : tokenizer_map)
-                result.push_back({id, info.str, info.end_of_word});
+            {
+                const std::string_view text{info.str};
+                assert(!text.empty());
+                result[static_cast<unsigned char>(text.front())].push_back(
+                    {id, HashString{std::string{text}}, info.end_of_word});
+            }
             return result;
         }();
         return infos;
@@ -1026,17 +1075,24 @@ namespace rllm
 CpuInputLine Corpus::get_token_ids(const std::string& text) const
     {
         CpuInputLine result;
+        const SubstringHashes substring_hashes{text};
 
         size_t ix = 0;
 
         while (ix < text.size())
         {
             bool matched_token = false;
-            for (const auto& token_info : token_match_infos())
+            const auto& candidates =
+                token_match_infos_by_initial()[static_cast<unsigned char>(text[ix])];
+            for (const auto& token_info : candidates)
             {
-                const auto token_len = token_info.text.size();
+                const auto token_len = token_info.key.string.size();
+                if (token_len > text.size() - ix)
+                    continue;
+                if (substring_hashes.get(ix, token_len) != token_info.key.hash_value)
+                    continue;
 
-                if (text.compare(ix, token_len, token_info.text) == 0)
+                if (text.compare(ix, token_len, token_info.key.string) == 0)
                 {
                     if (token_info.end_of_word)
                     {
@@ -1049,7 +1105,7 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                                 LOG_DEBUG(
                                     "Matched token '{}/{}' at position {}, but not at a word boundary, skipping it "
                                     "(remaining text: '{}')",
-                                    token_info.text,
+                                    token_info.key.string,
                                     token_info.id,
                                     ix,
                                     next_char
@@ -1182,16 +1238,23 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
             const size_t value_begin = state.identifier_scopes.pending_string_table_values.size();
             const auto abstracted = abstract_source_for_model(
                 part, language, m_mcp, &state.identifier_scopes);
+            const SubstringHashes substring_hashes{abstracted};
             size_t value_index = value_begin;
             size_t ix = 0;
             while (ix < abstracted.size())
             {
                 bool matched_token = false;
-                for (const auto& token_info : token_match_infos())
+                const auto& candidates =
+                    token_match_infos_by_initial()[static_cast<unsigned char>(abstracted[ix])];
+                for (const auto& token_info : candidates)
                 {
-                    const auto token_len = token_info.text.size();
+                    const auto token_len = token_info.key.string.size();
+                    if (token_len > abstracted.size() - ix)
+                        continue;
+                    if (substring_hashes.get(ix, token_len) != token_info.key.hash_value)
+                        continue;
 
-                    if (abstracted.compare(ix, token_len, token_info.text) == 0)
+                    if (abstracted.compare(ix, token_len, token_info.key.string) == 0)
                     {
                         if (token_info.end_of_word)
                         {

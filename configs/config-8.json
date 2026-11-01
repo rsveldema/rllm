@@ -46,7 +46,7 @@
     "--disable-training-diagnostics",
     "--checkpoint-interval", "600",
     "--validation-interval", "600",
-    "--learning-rate", "0.00001",
+    "--learning-rate", "0.0001",
     "--layer-learning-rate-multiplier", "1.05",
     "--warmup-percent", "0.1",
     "--weight-initializer", "xavier-input-projections",

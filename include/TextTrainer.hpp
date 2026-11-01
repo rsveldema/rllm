@@ -88,19 +88,19 @@ namespace rllm
          * NOTE: if set too high, we drive a specific example to high confidence but fail to learn from other examples, harming generalization.
          *
          * - FIRES_NOTHONG_CE_LOSS(std::log(static_cast<float>(TokenID::MAX)))
-         * - With TokenID::MAX = 621:
-         * - Baseline uniform CE loss: ln(621) ≈ 6.431
+         * - With the currently generated TokenID::MAX = 1440:
+         * - Baseline uniform CE loss: ln(1440) ≈ 7.272
          * - CONVERGENCE_THRESHOLD(FIRES_NOTHONG_CE_LOSS / K_CONVERGENCE_DIVISOR)
-         * - K_CONVERGENCE_DIVISOR = 2.0 → convergence threshold ≈ 3.215   = exp(-3.215) ≈ 0.040 = 4% chance of predicting the correct token
-         * - K_CONVERGENCE_DIVISOR = 4.0 → convergence threshold ≈ 1.608 = exp(-1.608) ≈ 0.200 = 20% chance of predicting the correct token
-         * - K_CONVERGENCE_DIVISOR = 6.0 → convergence threshold ≈ 1.072 = exp(-1.072) ≈ 0.342 = 34% chance of predicting the correct token
-         * - K_CONVERGENCE_DIVISOR = 10.0 → convergence threshold ≈
-         * - K_CONVERGENCE_DIVISOR = 50.0 → convergence threshold ≈ 0.129 = exp(-0.129) ≈ 0.879 = 88% chance of predicting the correct token
-         * - K_CONVERGENCE_DIVISOR = 100.0 → convergence threshold ≈ 0.0643 = exp(-0.0643) ≈ 0.938 = 94% chance of predicting the correct token
-         * - K_CONVERGENCE_DIVISOR = 200.0 → convergence threshold ≈ 0.0321 = exp(-0.0321) ≈ 0.969 = 97% chance of predicting the correct token
-         * - K_CONVERGENCE_DIVISOR = 500.0 → convergence threshold ≈ 0.0129 = exp(-0.0129) ≈ 0.987 = 98% chance of predicting the correct token
-         * - K_CONVERGENCE_DIVISOR = 1000.0 → convergence threshold ≈ 0.00643 = exp(-0.00643) ≈ 0.9936 = 99% chance of predicting the correct token
-         * - K_CONVERGENCE_DIVISOR = 2000.0 → convergence threshold ≈ 0.003215 = exp(-0.003215) ≈ 0.9968 = 99.7% chance of predicting the
+         * - K_CONVERGENCE_DIVISOR = 2.0 → threshold ≈ 3.6362 → exp(-loss) ≈ 2.64%
+         * - K_CONVERGENCE_DIVISOR = 4.0 → threshold ≈ 1.8181 → exp(-loss) ≈ 16.22%
+         * - K_CONVERGENCE_DIVISOR = 6.0 → threshold ≈ 1.2121 → exp(-loss) ≈ 29.75%
+         * - K_CONVERGENCE_DIVISOR = 10.0 → threshold ≈ 0.7272 → exp(-loss) ≈ 48.33%
+         * - K_CONVERGENCE_DIVISOR = 50.0 → threshold ≈ 0.1454 → exp(-loss) ≈ 86.47%
+         * - K_CONVERGENCE_DIVISOR = 100.0 → threshold ≈ 0.0727 → exp(-loss) ≈ 92.98%
+         * - K_CONVERGENCE_DIVISOR = 200.0 → threshold ≈ 0.0364 → exp(-loss) ≈ 96.43%
+         * - K_CONVERGENCE_DIVISOR = 500.0 → threshold ≈ 0.0145 → exp(-loss) ≈ 98.56%
+         * - K_CONVERGENCE_DIVISOR = 1000.0 → threshold ≈ 0.0073 → exp(-loss) ≈ 99.28%
+         * - K_CONVERGENCE_DIVISOR = 2000.0 → threshold ≈ 0.0036 → exp(-loss) ≈ 99.64%
          */
         static constexpr float K_CONVERGENCE_DIVISOR = 50.0f;
         static constexpr size_t DEFAULT_LEARN_DEPTH = 16;
