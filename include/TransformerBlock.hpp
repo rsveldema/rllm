@@ -46,7 +46,8 @@ namespace rllm
         // Activations cached for the backward pass
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_in;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_attn;
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> Q, K, V;
+        // Q/K/V are stored in FP16; attention dot products still accumulate in FP32.
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension> Q, K, V;
         // Per-head softmax weight matrices; only the [H x T x T] block is live.
         fixed_size_obj_vector<AttentionMatrix, HeadsIndex> attn_w;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;

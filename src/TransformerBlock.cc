@@ -657,8 +657,8 @@ namespace rllm
 
     static void apply_packed_rope(
         // OFFLOAD_PARAMETERS(Q, K, local_positions, rows, direction)
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K,
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q,
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K,
         const fixed_size_vector<int, PositionIndex>& local_positions,
         PositionIndex rows,
         float direction
@@ -683,10 +683,52 @@ namespace rllm
             const float q1 = Q[row, next];
             const float k0 = K[row, d];
             const float k1 = K[row, next];
-            Q[row, d] = ((q0 * cosine) - (q1 * sine));
-            Q[row, next] = ((q0 * sine) + (q1 * cosine));
-            K[row, d] = ((k0 * cosine) - (k1 * sine));
-            K[row, next] = ((k0 * sine) + (k1 * cosine));
+            const float q0_rotated = ((q0 * cosine) - (q1 * sine));
+            const float q1_rotated = ((q0 * sine) + (q1 * cosine));
+            const float k0_rotated = ((k0 * cosine) - (k1 * sine));
+            const float k1_rotated = ((k0 * sine) + (k1 * cosine));
+            Q[row, d] = float16(q0_rotated);
+            Q[row, next] = float16(q1_rotated);
+            K[row, d] = float16(k0_rotated);
+            K[row, next] = float16(k1_rotated);
+        }
+        ENDFOR
+    }
+
+    static void apply_rope_fp16(
+        // OFFLOAD_PARAMETERS(Q, K, rows)
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q,
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K,
+        PositionIndex rows
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::hip_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (Q, K, rows))
+        const int dimension = static_cast<int>(d);
+        if (dimension % 2 == 0)
+        {
+            const int head_dimension = static_cast<int>(HeadDimension::MAX);
+            const int dimension_in_head = (dimension - ((dimension / head_dimension) * head_dimension));
+            const float inverse_frequency = std::pow(
+                10000.0f, -(static_cast<float>(dimension_in_head) / static_cast<float>(head_dimension)));
+            const float angle = (static_cast<float>(row) * inverse_frequency);
+            const float cosine = std::cos(angle);
+            const float sine = std::sin(angle);
+            const auto next = static_cast<EmbeddingDimension>((dimension + 1));
+            const float q0 = static_cast<float>(Q[row, d]);
+            const float q1 = static_cast<float>(Q[row, next]);
+            const float k0 = static_cast<float>(K[row, d]);
+            const float k1 = static_cast<float>(K[row, next]);
+            const float q0_rotated = ((q0 * cosine) - (q1 * sine));
+            const float q1_rotated = ((q0 * sine) + (q1 * cosine));
+            const float k0_rotated = ((k0 * cosine) - (k1 * sine));
+            const float k1_rotated = ((k0 * sine) + (k1 * cosine));
+            Q[row, d] = float16(q0_rotated);
+            Q[row, next] = float16(q1_rotated);
+            K[row, d] = float16(k0_rotated);
+            K[row, next] = float16(k1_rotated);
         }
         ENDFOR
     }
@@ -829,8 +871,8 @@ namespace rllm
     {
         // OFFLOAD_PARAMETERS(attn_w_h, Q, K, active_seq_len, hStart)
         fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h = ws.attn_w[hi];
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q = ws.Q;
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K = ws.K;
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q = ws.Q;
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K = ws.K;
         const PositionIndex active_seq_len = seq_len;
         const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
         // END_OFFLOAD_PARAMETERS
@@ -898,7 +940,7 @@ namespace rllm
     inline void compute_attention_values_for_head(
         // OFFLOAD_PARAMETERS(attn_w_h, V, attn_concat, active_seq_len, hStart)
         const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& V,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& attn_concat,
         int active_seq_len,
         int hStart
@@ -945,8 +987,8 @@ namespace rllm
     static void compute_batched_attention_scores_for_head(
         // OFFLOAD_PARAMETERS(attn_w_h, Q, K, row_batch, row_begin, local_position, packed_rows, hStart)
         fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_begin,
         const fixed_size_vector<int, PositionIndex>& local_position,
@@ -1008,7 +1050,7 @@ namespace rllm
     static void compute_batched_attention_values_for_head(
         // OFFLOAD_PARAMETERS(attn_w_h, V, attn_concat, row_batch, row_begin, local_position, packed_rows, hStart)
         const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& V,
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& attn_concat,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_begin,
@@ -1070,7 +1112,7 @@ namespace rllm
         // ── 2. Q / K / V projections ─────────────────────────────────────────
         matmul_ABt_3_matrix_muls(ws.h_norm_attn, W_q, ws.Q, W_k, ws.K, W_v, ws.V);
         // RoPE injects token position by rotating each head's Q/K dimension pairs.
-        apply_rope(ws.Q, ws.K, seq_len, 1.0f);
+        apply_rope_fp16(ws.Q, ws.K, seq_len);
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
         {
@@ -1228,7 +1270,7 @@ namespace rllm
         // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, seq_len, hStart)
         fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_scores_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& V,
         PositionIndex seq_len,
         int hStart
         // END_OFFLOAD_PARAMETERS
@@ -1252,7 +1294,7 @@ namespace rllm
         // OFFLOAD_PARAMETERS(d_scores_h, d_attn_concat, V, row_batch, row_begin, local_position, seq_len, hStart)
         fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_scores_h,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& V,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_begin,
         const fixed_size_vector<int, PositionIndex>& local_position,
@@ -1285,7 +1327,7 @@ namespace rllm
     {
         fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& d_scores = ws.d_scores;
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws.d_attn_concat;
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& V = fwd.V;
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& V = fwd.V;
         const PositionIndex seq_len = fwd.seq_len;
 
         // d_scores_h[i,j] = d_attn_concat[i, d] · V[j, d]
@@ -1382,7 +1424,7 @@ namespace rllm
         // OFFLOAD_PARAMETERS(d_Q, d_raw_h, K, row_batch, row_begin, local_position, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_Q,
         const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_begin,
         const fixed_size_vector<int, PositionIndex>& local_position,
@@ -1415,7 +1457,7 @@ namespace rllm
         // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, row_batch, row_end, local_position, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_K,
         const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h,
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q,
         const fixed_size_vector<int, PositionIndex>& row_batch,
         const fixed_size_vector<int, BatchIndex>& row_end,
         const fixed_size_vector<int, PositionIndex>& local_position,
@@ -1445,7 +1487,7 @@ namespace rllm
         // OFFLOAD_PARAMETERS(d_Q, d_raw_h, K, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_Q = ws.d_Q;
         fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h = ws.d_raw[hi];
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& K = fwd.K;
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K = fwd.K;
         const PositionIndex seq_len = fwd.seq_len;
         const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
         // END_OFFLOAD_PARAMETERS
@@ -1479,7 +1521,7 @@ namespace rllm
         // OFFLOAD_PARAMETERS(d_K, d_raw_h, Q, seq_len, hStart)
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_K = ws.d_K;
         const fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& d_raw_h = ws.d_raw[hi];
-        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q = fwd.Q;
         PositionIndex seq_len = fwd.seq_len;
         const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
         // END_OFFLOAD_PARAMETERS

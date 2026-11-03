@@ -20,7 +20,8 @@ log-sum-exp, and no attention bias or dropout. Backward generation includes the
 matching group-mode stages. This avoids compiling CK's thousands of example
 variants.
 
-The existing FP32 attention implementation remains the runtime path until the
-FP16 conversion buffers, packed sequence-start metadata, and forward/backward
-dispatch adapter are connected. Enabling this option currently builds and links
-the CK kernels; it does not change numerical behavior.
+The generated CK kernels are not dispatched by the runtime yet. The active
+in-tree attention path stores Q, K, and V projection outputs and their RoPE
+results in FP16. Attention dot products, softmax probabilities, output
+accumulation, and gradients remain FP32. A runtime adapter is still needed
+before the CK FMHA kernels can replace this path.

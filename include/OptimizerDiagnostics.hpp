@@ -43,6 +43,10 @@ namespace rllm
         PositionIndex rows,
         std::string_view label);
     void log_hidden_activation_diagnostics(
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& activation,
+        PositionIndex rows,
+        std::string_view label);
+    void log_hidden_activation_diagnostics(
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& activation,
         PositionIndex rows,
         std::string_view label);

@@ -110,7 +110,7 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
 
     auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_cpu, second_cpu, packed_cpu;
-    cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_q, second_q, packed_q;
+    cpu_flex_rows_matrix<float16, PositionIndex, EmbeddingDimension> first_q, second_q, packed_q;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_attn, second_attn, packed_attn;
     cpu_fixed_matrix<float, PositionIndex, AttentionPositionIndex> first_weights, packed_weights;
     first_h.copy_to_cpu(queue, first_cpu);
@@ -130,7 +130,9 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
     float max_output_difference = 0.f;
     for (const auto d : enum_iterator1D<EmbeddingDimension>())
     {
-        max_q_difference = std::max(max_q_difference, std::abs((packed_q[static_cast<PositionIndex>(0), d]) - (first_q[static_cast<PositionIndex>(0), d])));
+        max_q_difference = std::max(max_q_difference,
+            std::abs(static_cast<float>(packed_q[static_cast<PositionIndex>(0), d]) -
+                     static_cast<float>(first_q[static_cast<PositionIndex>(0), d])));
         max_attention_difference = std::max(max_attention_difference, std::abs((packed_attn[static_cast<PositionIndex>(0), d]) - (first_attn[static_cast<PositionIndex>(0), d])));
         max_output_difference = std::max(max_output_difference, std::abs((packed_cpu[static_cast<PositionIndex>(0), d]) - (first_cpu[static_cast<PositionIndex>(0), d])));
         max_output_difference = std::max(max_output_difference, std::abs((packed_cpu[static_cast<PositionIndex>(1), d]) - (first_cpu[static_cast<PositionIndex>(1), d])));

@@ -38,6 +38,14 @@ namespace rllm::dust
     }
 
     void ForwardPerturbation::hidden(
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& activations,
+        ProjectionSite site, size_t execution)
+    {
+        gaussian_hidden_noise(hidden_noise, rows, site_seed(site, execution));
+        perturb_hidden(activations, hidden_noise, rows, attention_sigma);
+    }
+
+    void ForwardPerturbation::hidden(
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& activations,
         ProjectionSite site, size_t execution)
     {
@@ -54,6 +62,24 @@ namespace rllm::dust
     {
         gaussian_ff_noise(ff_noise, rows, site_seed(site, execution));
         perturb_ff(activations, ff_noise, rows, activation_sigma);
+    }
+
+    void perturb_hidden(
+        // OFFLOAD_PARAMETERS(activations, noise, rows, sigma)
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& activations,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& noise,
+        PositionIndex rows,
+        float sigma
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = hip_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, d, grid, (activations, noise, rows, sigma))
+        const float perturbed =
+            (static_cast<float>(activations[row, d]) + (sigma * noise[row, d]));
+        activations[row, d] = float16(perturbed);
+        ENDFOR
     }
 
     void perturb_hidden(

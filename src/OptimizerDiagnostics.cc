@@ -170,6 +170,23 @@ namespace rllm
 
     static void accumulate_hidden_gradient_stats(
         // OFFLOAD_PARAMETERS(gradient, rows, values)
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& gradient,
+        PositionIndex rows,
+        fixed_size_vector<float, TempStorage>& values
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::hip_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(rows);
+        OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (gradient, rows, values))
+        const float value = static_cast<float>(gradient[r, c]);
+        atomicMax(values[TempStorage::OPTIMIZER_GRADIENT_MAX], abs(value));
+        atomicAdd(values[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM], (value * value));
+        ENDFOR
+    }
+
+    static void accumulate_hidden_gradient_stats(
+        // OFFLOAD_PARAMETERS(gradient, rows, values)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& gradient,
         PositionIndex rows,
         fixed_size_vector<float, TempStorage>& values
@@ -235,6 +252,26 @@ namespace rllm
         const size_t count = static_cast<size_t>(rows) * static_cast<size_t>(EmbeddingDimension::MAX);
         const double rms = std::sqrt(host[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM] / static_cast<double>(count));
         LOG_INFO("Backward gradient [{}]: RMS {:.7g}, max {:.7g}, L2 norm {:.7g} ({} values)",
+            label, rms, host[TempStorage::OPTIMIZER_GRADIENT_MAX],
+            std::sqrt(host[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM]), count);
+    }
+
+    void log_hidden_activation_diagnostics(
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& activation,
+        PositionIndex rows,
+        std::string_view label)
+    {
+        auto& queue = rllm::hip_runtime::get_queue(0);
+        auto& values = optimizer_diagnostics_buffer();
+        values.copy_from_cpu(queue, zero_host_buffer());
+        accumulate_hidden_gradient_stats(activation, rows, values);
+
+        auto& host = read_host_buffer();
+        values.copy_to_cpu(queue, host);
+        queue.wait("hidden FP16 activation diagnostics");
+        const size_t count = static_cast<size_t>(rows) * static_cast<size_t>(EmbeddingDimension::MAX);
+        const double rms = std::sqrt(host[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM] / static_cast<double>(count));
+        LOG_INFO("Forward activation [{}]: RMS {:.7g}, max {:.7g}, L2 norm {:.7g} ({} values)",
             label, rms, host[TempStorage::OPTIMIZER_GRADIENT_MAX],
             std::sqrt(host[TempStorage::OPTIMIZER_GRADIENT_SQUARE_SUM]), count);
     }

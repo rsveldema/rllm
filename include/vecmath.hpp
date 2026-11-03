@@ -30,11 +30,11 @@ namespace rllm
         // OFFLOAD_PARAMETERS(A,B1,C1,B2,C2,B3,C3)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,
         const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B1,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C1,
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& C1,
         const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B2,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C2,
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& C2,
         const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B3,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C3
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& C3
         // END_OFFLOAD_PARAMETERS
     );
 

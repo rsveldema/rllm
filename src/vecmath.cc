@@ -325,11 +325,11 @@ namespace rllm
         // OFFLOAD_PARAMETERS(A,B1,C1,B2,C2,B3,C3)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,
         const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B1,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C1,
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& C1,
         const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B2,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C2,
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& C2,
         const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B3,
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C3
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& C3
         // END_OFFLOAD_PARAMETERS
     )
     {
@@ -356,9 +356,9 @@ namespace rllm
                 OVERFLOW_CHECK_ADD(sum3, term3);
                 sum3 += term3;
             }
-            C1[i, j] = static_cast<float>(sum1);
-            C2[i, j] = static_cast<float>(sum2);
-            C3[i, j] = static_cast<float>(sum3);
+            C1[i, j] = float16(sum1);
+            C2[i, j] = float16(sum2);
+            C3[i, j] = float16(sum3);
         ENDFOR
     }
 

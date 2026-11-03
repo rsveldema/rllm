@@ -45,6 +45,9 @@ namespace rllm::dust
             float activation_sigma_, float attention_sigma_);
         void reset(PositionIndex rows_, uint64_t seed_);
         void hidden(
+            flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& activations,
+            ProjectionSite site, size_t execution);
+        void hidden(
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& activations,
             ProjectionSite site, size_t execution);
         void ff(
@@ -54,6 +57,11 @@ namespace rllm::dust
     };
 
     /** Add sigma-scaled activation noise in-place for one DUST draw. */
+    void perturb_hidden(
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& activations,
+        const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& noise,
+        PositionIndex rows,
+        float sigma);
     void perturb_hidden(
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& activations,
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& noise,
