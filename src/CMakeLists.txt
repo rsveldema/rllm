@@ -6,6 +6,7 @@ set(OFFLOAD_BACKEND "none" CACHE STRING "Offload backend: none or hip")
 set_property(CACHE OFFLOAD_BACKEND PROPERTY STRINGS none hip)
 option(RLLM_ENABLE_STATISTICS "Enable runtime statistics gathering and reporting" ON)
 option(DEBUG_ATTENTION_DIAGNOSTICS "Compile forward Q/K/V and per-head attention diagnostics" ON)
+option(RLLM_ENABLE_CK_FMHA "Build the CK-Tile FP16 causal FMHA kernels" OFF)
 
 include(CheckCXXSourceCompiles)
 
@@ -45,6 +46,12 @@ if(OFFLOAD_BACKEND STREQUAL "hip")
     endif()
     message(STATUS "Hip offload mode enabled (USE_HIP_OFFLOAD)")
     message(STATUS "HIP compiler: ${RLLM_HIP_SHADER_COMPILER}")
+endif()
+
+if(RLLM_ENABLE_CK_FMHA)
+    enable_language(HIP)
+    include("${CMAKE_SOURCE_DIR}/cmake/RllmCkFmha.cmake")
+    rllm_add_ck_fmha_target()
 endif()
 
 set(RLLM_COMPILE_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -189,6 +196,10 @@ function(rllm_define_lib target_name)
             "${CMAKE_SOURCE_DIR}/kernel_compiler/runtime/include"
         )
         target_link_libraries(${target_name} PUBLIC hip::host roc::hipblas)
+        if(RLLM_ENABLE_CK_FMHA)
+            target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_CK_FMHA)
+            target_link_libraries(${target_name} PUBLIC rllm_ck_fmha)
+        endif()
     endif()
 endfunction()
 

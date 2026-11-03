@@ -7,3 +7,6 @@
 [submodule "isocline"]
 	path = isocline
 	url = https://github.com/daanx/isocline
+[submodule "third_party/composable_kernel"]
+	path = third_party/composable_kernel
+	url = https://github.com/ROCm/composable_kernel.git
