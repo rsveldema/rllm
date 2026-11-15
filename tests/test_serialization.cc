@@ -229,6 +229,28 @@ TEST(SerializationTest, CheckpointAliasUsesRelativeModelAndSidecarSymlinks)
     std::filesystem::remove_all(directory);
 }
 
+TEST(SerializationTest, CheckpointRefreshesLatestModelAndSidecarSymlinks)
+{
+    rllm::Corpus corpus({});
+    rllm::Statistics stats;
+    rllm::TextTrainer network(0, corpus, stats);
+    network.set_training_parameters_json("{}");
+    const auto checkpoint = network.checkpoint();
+    const auto latest = checkpoint.parent_path() / "checkpoint-latest.st";
+    const auto checkpoint_sidecar = std::filesystem::path(checkpoint.string() + ".training.json");
+    const auto latest_sidecar = std::filesystem::path(latest.string() + ".training.json");
+
+    ASSERT_TRUE(std::filesystem::is_symlink(latest));
+    EXPECT_EQ(std::filesystem::read_symlink(latest), checkpoint.filename());
+    ASSERT_TRUE(std::filesystem::is_symlink(latest_sidecar));
+    EXPECT_EQ(std::filesystem::read_symlink(latest_sidecar), checkpoint_sidecar.filename());
+
+    std::filesystem::remove(latest);
+    std::filesystem::remove(latest_sidecar);
+    std::filesystem::remove(checkpoint);
+    std::filesystem::remove(checkpoint_sidecar);
+}
+
 TEST(SerializationTest, TextTrainerJsonLoadCanExtendTransformerBlocks)
 {
     rllm::Corpus corpus({});

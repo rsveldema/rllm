@@ -401,6 +401,42 @@ namespace rllm
     void matmul_ABt(
         // OFFLOAD_PARAMETERS(A, B, C)
         const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& A,
+        const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::hip_runtime::get_queue(0);
+        const PositionIndex m = A.num_rows();
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(m);
+        OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
+            float sum = 0.f;
+            for (size_t l_idx = 0; l_idx < static_cast<size_t>(EmbeddingDimension::MAX); ++l_idx)
+            {
+                const int k = int(l_idx);
+                sum += (A[i, k] * B[j, k]);
+            }
+            C[i, j] = math::clamp(sum, -10000.0f, 10000.0f);
+        ENDFOR
+    }
+
+    void convert_to_float(
+        // OFFLOAD_PARAMETERS(input, output)
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& input,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& output
+        // END_OFFLOAD_PARAMETERS
+    )
+    {
+        auto& queue = rllm::hip_runtime::get_queue(0);
+        const auto grid = enum_iterator2D<PositionIndex, EmbeddingDimension>(input.num_rows());
+        OFFLOAD_PARFOR_2D_PARAM(queue, row, col, grid, (input, output))
+            output[row, col] = static_cast<float>(input[row, col]);
+        ENDFOR
+    }
+
+    void matmul_ABt(
+        // OFFLOAD_PARAMETERS(A, B, C)
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& A,
         const fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& B,
         flexible_rows_matrix<float, PositionIndex, FFDimension>& C
         // END_OFFLOAD_PARAMETERS

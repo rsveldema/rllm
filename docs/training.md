@@ -196,6 +196,11 @@ marker. Their words and punctuation are tokenized directly. A lone space uses
 `<SPACE>`; a literal tab or run of two through eight spaces uses `<TAB>`.
 Unlike program sources,
 prose does not pass through identifier, literal, or MCP abstraction.
+Before tokenization, plain-text arithmetic words are normalized
+case-insensitively at word boundaries: `zero` through `ten` become `0` through
+`10`; `plus`, `minus`, `times`, and `equals` become `+`, `-`, `*`, and `=`;
+and `multiplied by` and `divided by` become `*` and `/`. Training and prompt
+mode use the same normalization.
 
 For an isolated diagnostic run, `configs/english-debug.json` trains a four-layer
 debug build exclusively on `curriculum/english`. It enables runtime statistics
@@ -446,6 +451,10 @@ and deletes every older numbered
 checkpoint and training sidecar. This pruning also covers checkpoints left by
 earlier runs. A checkpoint pair referenced by any symlink in the model
 directory is preserved in addition to the newest two.
+Every completed checkpoint write atomically refreshes `checkpoint-latest.st`
+and its training sidecar symlink to reference that numbered checkpoint. This
+applies to baseline, timed, and end-of-epoch checkpoints, so an interrupted run
+resumes from its most recently saved state without requiring `--clean`.
 
 ## Learn Depth
 

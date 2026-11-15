@@ -63,6 +63,53 @@ namespace rllm
         constexpr std::string_view mcp_start_token = "<MCP>";
         constexpr std::string_view mcp_end_token = "</MCP>";
 
+        std::string normalize_plain_text_arithmetic(std::string_view text)
+        {
+            static constexpr std::pair<std::string_view, std::string_view> replacements[] = {
+                {"multiplied by", "*"}, {"divided by", "/"},
+                {"zero", "0"}, {"one", "1"}, {"two", "2"}, {"three", "3"},
+                {"four", "4"}, {"five", "5"}, {"six", "6"}, {"seven", "7"},
+                {"eight", "8"}, {"nine", "9"}, {"ten", "10"},
+                {"plus", "+"}, {"minus", "-"}, {"times", "*"}, {"equals", "="},
+            };
+            const auto is_word_character = [](char ch) {
+                return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+            };
+            const auto matches_case_insensitive = [&](size_t position, std::string_view pattern) {
+                if (pattern.size() > text.size() - position)
+                    return false;
+                for (size_t offset = 0; offset < pattern.size(); ++offset)
+                {
+                    if (std::tolower(static_cast<unsigned char>(text[position + offset])) !=
+                        std::tolower(static_cast<unsigned char>(pattern[offset])))
+                        return false;
+                }
+                return true;
+            };
+
+            std::string normalized;
+            normalized.reserve(text.size());
+            for (size_t position = 0; position < text.size();)
+            {
+                bool replaced = false;
+                for (const auto& [spelling, symbol] : replacements)
+                {
+                    const size_t end = position + spelling.size();
+                    if ((position != 0 && is_word_character(text[position - 1])) ||
+                        (end < text.size() && is_word_character(text[end])) ||
+                        !matches_case_insensitive(position, spelling))
+                        continue;
+                    normalized += symbol;
+                    position = end;
+                    replaced = true;
+                    break;
+                }
+                if (!replaced)
+                    normalized += text[position++];
+            }
+            return normalized;
+        }
+
         bool identifier_start(char ch)
         {
             return std::isalpha(static_cast<unsigned char>(ch)) || ch == '_';
@@ -1153,23 +1200,24 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
         state.line_comment_on_last_line = false;
         if (language == SourceLanguage::Text)
         {
+            const std::string normalized_text = normalize_plain_text_arithmetic(text);
             size_t segment_start = 0;
             const auto append_segment = [&](size_t end) {
                 if (end == segment_start)
                     return;
-                const auto tokens = get_token_ids(text.substr(segment_start, end - segment_start));
+                const auto tokens = get_token_ids(normalized_text.substr(segment_start, end - segment_start));
                 for (const auto position : enum_iterator1D<PositionIndex>(tokens.size()))
                     result.push_back(tokens[position]);
             };
-            for (size_t position = 0; position < text.size();)
+            for (size_t position = 0; position < normalized_text.size();)
             {
-                if (text[position] != ' ' && text[position] != '\t')
+                if (normalized_text[position] != ' ' && normalized_text[position] != '\t')
                 {
                     ++position;
                     continue;
                 }
                 append_segment(position);
-                if (text[position] == '\t')
+                if (normalized_text[position] == '\t')
                 {
                     result.push_back(TokenID::TEXT_TAB);
                     segment_start = ++position;
@@ -1177,7 +1225,7 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                 }
 
                 const size_t spaces_start = position;
-                while (position < text.size() && text[position] == ' ')
+                while (position < normalized_text.size() && normalized_text[position] == ' ')
                     ++position;
                 size_t spaces = position - spaces_start;
                 while (spaces >= 2)
@@ -1190,7 +1238,7 @@ CpuInputLine Corpus::get_token_ids(const std::string& text) const
                     result.push_back(TokenID::SPACE);
                 segment_start = position;
             }
-            append_segment(text.size());
+            append_segment(normalized_text.size());
             return result;
         }
         if (language == SourceLanguage::Python)

@@ -1,0 +1,68 @@
+{
+  "build_type": "release",
+  "model_directory": "models-10",
+  "layers": 10,
+  "window_size": 512,
+  "window_stride": 1,
+  "learn_depth": 1,
+  "strip_comments": false,
+  "token_drop_probability": 0.0,
+  "token_typo_probability": 0.0,
+  "python_edu": {
+    "enabled": true,
+    "directory": "~/huggingface/smollm-python-edu",
+    "max_files": 10000,
+    "workers": 16,
+    "weight": 0.05
+  },
+  "tiny_math_stories": {
+    "enabled": true,
+    "directory": "~/huggingface/tiny-math-stories",
+    "max_files": 10000,
+    "weight": 0.05
+  },
+  "sources": [
+    "training_data0:0.05",
+    "curriculum/grammar:0.10",
+    "curriculum/syntax:0.10",
+    "curriculum/systems:0.10",
+    "curriculum/comments:0.05",
+    "curriculum/algos:0.05",
+    "curriculum/english:0.10",
+    "curriculum/english-large:0.10",
+    "curriculum/math:0.05",
+    "curriculum/large:0.05",
+    "training_data2:0.15"
+  ],
+  "cmake_arguments": [
+    "-DDEBUG_ATTENTION_DIAGNOSTICS=OFF",
+    "-DRLLM_ENABLE_STATISTICS=OFF",
+    "-DRLLM_MAX_POSITION=8192",
+    "-DRLLM_MAX_ATTENTION_POSITION=512"
+  ],
+  "training_arguments": [
+    "--epochs", "4",
+    "--disable-example-convergence",
+    "--disable-training-diagnostics",
+    "--checkpoint-interval", "1200",
+    "--validation-interval", "1200",
+    "--adamw-learning-rate", "0.0001",
+    "--muon-learning-rate", "0.0002",
+    "--layer-learning-rate-multiplier", "1.05",
+    "--warmup-percent", "0.1",
+    "--weight-initializer", "xavier-input-projections",
+    "--ffn-initializer", "xavier-input-projections",
+    "--embedding-initializer", "legacy-uniform",
+    "--concept-embeddings", "configs/programming-concepts.json",
+    "--learning-rate-schedule", "lowering",
+    "--simulated-annealing-initial-multiplier", "9",
+    "--simulated-annealing-decay-factor", "0.7",
+    "--simulated-annealing-decay-epochs", "1",
+    "--simulated-annealing-min-multiplier", "0.02",
+    "--micro-batch-size", "16",
+    "--max-validation-windows", "8",
+    "--validation-worst-count", "100",
+    "--hip-device", "R9700",
+    "--restart-learning-rate-schedule"
+  ]
+}

@@ -396,6 +396,7 @@ namespace rllm
         const auto filename = model_artifact_path(std::format("checkpoint-{}.st", now_ms));
         std::filesystem::create_directories(filename.parent_path());
         save(filename.string());
+        link_checkpoint_alias(filename, filename.parent_path() / "checkpoint-latest.st");
         return filename;
     }
 

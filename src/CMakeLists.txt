@@ -6,7 +6,12 @@ set(OFFLOAD_BACKEND "none" CACHE STRING "Offload backend: none or hip")
 set_property(CACHE OFFLOAD_BACKEND PROPERTY STRINGS none hip)
 option(RLLM_ENABLE_STATISTICS "Enable runtime statistics gathering and reporting" ON)
 option(DEBUG_ATTENTION_DIAGNOSTICS "Compile forward Q/K/V and per-head attention diagnostics" ON)
-option(RLLM_ENABLE_CK_FMHA "Build the CK-Tile FP16 causal FMHA kernels" OFF)
+if(OFFLOAD_BACKEND STREQUAL "hip")
+    set(RLLM_CK_FMHA_DEFAULT ON)
+else()
+    set(RLLM_CK_FMHA_DEFAULT OFF)
+endif()
+option(RLLM_ENABLE_CK_FMHA "Build and dispatch CK-Tile FP16 causal FMHA kernels" ${RLLM_CK_FMHA_DEFAULT})
 
 include(CheckCXXSourceCompiles)
 
@@ -52,6 +57,7 @@ if(RLLM_ENABLE_CK_FMHA)
     enable_language(HIP)
     include("${CMAKE_SOURCE_DIR}/cmake/RllmCkFmha.cmake")
     rllm_add_ck_fmha_target()
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/ck_fmha.cpp" PROPERTIES LANGUAGE HIP)
 endif()
 
 set(RLLM_COMPILE_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -63,6 +69,7 @@ file(
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
 )
+list(FILTER RLLM_OFFLOAD_INPUT_SOURCES EXCLUDE REGEX "/ck_fmha\\.cpp$")
 
 
 if(OFFLOAD_BACKEND STREQUAL "hip")
@@ -197,6 +204,7 @@ function(rllm_define_lib target_name)
         )
         target_link_libraries(${target_name} PUBLIC hip::host roc::hipblas)
         if(RLLM_ENABLE_CK_FMHA)
+            target_sources(${target_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ck_fmha.cpp")
             target_compile_definitions(${target_name} PUBLIC RLLM_ENABLE_CK_FMHA)
             target_link_libraries(${target_name} PUBLIC rllm_ck_fmha)
         endif()

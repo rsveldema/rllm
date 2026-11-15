@@ -43,6 +43,7 @@ namespace rllm
     {
         PositionIndex seq_len;
         const GpuPackedBatchInput* packed_batch = nullptr;
+        bool used_ck_fmha = false;
         // Activations cached for the backward pass
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_in;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_attn;
@@ -51,6 +52,9 @@ namespace rllm
         // Per-head softmax weight matrices; only the [H x T x T] block is live.
         fixed_size_obj_vector<AttentionMatrix, HeadsIndex> attn_w;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;
+        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension> fmha_output;
+        flexible_rows_matrix<float, PositionIndex, HeadsIndex> fmha_lse;
+        fixed_size_vector<int, PositionIndex> fmha_sequence_starts;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_mid;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_ff;
         // FP16 projection input; the FP32 cache remains authoritative for backward.
@@ -74,6 +78,8 @@ namespace rllm
             , K(seq)
             , V(seq)
             , attn_concat(seq)
+            , fmha_output(seq)
+            , fmha_lse(seq)
             , h_mid(seq)
             , h_norm_ff(seq)
             , h_norm_ff_projection(seq)
@@ -97,6 +103,8 @@ namespace rllm
             K.set_rows(seq);
             V.set_rows(seq);
             attn_concat.set_rows(seq);
+            fmha_output.set_rows(seq);
+            fmha_lse.set_rows(seq);
             h_mid.set_rows(seq);
             h_norm_ff.set_rows(seq);
             h_norm_ff_projection.set_rows(seq);

@@ -108,11 +108,16 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
     ForwardWorkspace packed_ws(packed.packed_rows());
     block.forward_batched(packed_h, packed.packed_rows(), gpu_packed, packed_ws);
 
+#ifdef RLLM_ENABLE_CK_FMHA
+    EXPECT_TRUE(first_ws.used_ck_fmha);
+    EXPECT_TRUE(second_ws.used_ck_fmha);
+    EXPECT_TRUE(packed_ws.used_ck_fmha);
+#endif
+
     auto& queue = rllm::hip_runtime::get_queue(0);
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_cpu, second_cpu, packed_cpu;
     cpu_flex_rows_matrix<float16, PositionIndex, EmbeddingDimension> first_q, second_q, packed_q;
     cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> first_attn, second_attn, packed_attn;
-    cpu_fixed_matrix<float, PositionIndex, AttentionPositionIndex> first_weights, packed_weights;
     first_h.copy_to_cpu(queue, first_cpu);
     second_h.copy_to_cpu(queue, second_cpu);
     packed_h.copy_to_cpu(queue, packed_cpu);
@@ -122,8 +127,6 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
     first_ws.attn_concat.copy_to_cpu(queue, first_attn);
     second_ws.attn_concat.copy_to_cpu(queue, second_attn);
     packed_ws.attn_concat.copy_to_cpu(queue, packed_attn);
-    first_ws.attn_w[HeadsIndex::START].copy_to_cpu(queue, first_weights);
-    packed_ws.attn_w[HeadsIndex::START].copy_to_cpu(queue, packed_weights);
 
     float max_q_difference = 0.f;
     float max_attention_difference = 0.f;
@@ -140,11 +143,6 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
         max_output_difference = std::max(max_output_difference, std::abs((packed_cpu[static_cast<PositionIndex>(4), d]) - (second_cpu[static_cast<PositionIndex>(2), d])));
     }
     EXPECT_LT(max_q_difference, 1e-4f);
-    EXPECT_NEAR(
-        (packed_weights[static_cast<PositionIndex>(0), static_cast<AttentionPositionIndex>(0)]),
-        (first_weights[static_cast<PositionIndex>(0), static_cast<AttentionPositionIndex>(0)]),
-        1e-4f
-    );
     EXPECT_LT(max_attention_difference, 1e-4f);
     EXPECT_LT(max_output_difference, 1e-4f);
 

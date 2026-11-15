@@ -50,9 +50,19 @@ namespace rllm
 
     void matmul_ABt(
         const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& A,
+        const fixed_size_matrix<float16, EmbeddingDimension, EmbeddingDimension>& B,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& C
+    );
+
+    void matmul_ABt(
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& A,
         const fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& B,
         flexible_rows_matrix<float, PositionIndex, FFDimension>& C
     );
+
+    void convert_to_float(
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& input,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& output);
 
     void matmul_ABt(
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,

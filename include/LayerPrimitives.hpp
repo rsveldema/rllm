@@ -732,21 +732,31 @@ namespace rllm
             }
             cpu_fixed_vector<int, PositionIndex> cpu_local_position;
             cpu_fixed_vector<int, PositionIndex> cpu_row_batch;
+            cpu_fixed_vector<int, PositionIndex> cpu_sequence_starts;
+            cpu_sequence_starts.push_back(0);
             for (const auto row : enum_iterator1D<PositionIndex>(cpu.packed_rows()))
             {
                 cpu_local_position.push_back(static_cast<int>(cpu.local_position(row)));
                 cpu_row_batch.push_back(static_cast<int>(cpu.row_batch(row)));
             }
+            for (const auto batch : enum_iterator1D<BatchIndex>(cpu.batch_size()))
+                cpu_sequence_starts.push_back(static_cast<int>(cpu.row_end(batch)));
             row_begin.copy_from_cpu(queue, cpu_row_begin);
             row_end.copy_from_cpu(queue, cpu_row_end);
             last_row.copy_from_cpu(queue, cpu_last_row);
             local_position.copy_from_cpu(queue, cpu_local_position);
             row_batch.copy_from_cpu(queue, cpu_row_batch);
+            sequence_starts.copy_from_cpu(queue, cpu_sequence_starts);
             // The converted CPU vectors are temporary staging buffers. Keep
             // them alive until every H2D copy has completed.
             queue.wait("GpuPackedBatchInput metadata upload");
             batch_size = cpu.batch_size();
             packed_rows = cpu.packed_rows();
+            max_sequence_length = PositionIndex::START;
+            for (const auto batch : enum_iterator1D<BatchIndex>(cpu.batch_size()))
+                max_sequence_length = std::max(max_sequence_length,
+                    static_cast<PositionIndex>(static_cast<size_t>(cpu.row_end(batch)) -
+                                               static_cast<size_t>(cpu.row_begin(batch))));
         }
 
         GpuInputLine tokens;
@@ -755,8 +765,10 @@ namespace rllm
         fixed_size_vector<int, BatchIndex> last_row;
         fixed_size_vector<int, PositionIndex> local_position;
         fixed_size_vector<int, PositionIndex> row_batch;
+        fixed_size_vector<int, PositionIndex> sequence_starts;
         BatchIndex batch_size{BatchIndex::START};
         PositionIndex packed_rows{PositionIndex::START};
+        PositionIndex max_sequence_length{PositionIndex::START};
     };
 
     class InputLineView

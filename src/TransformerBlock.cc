@@ -12,6 +12,9 @@
 #include <flexible_rows_cols_levels_matrix.hpp>
 #include <parallel.hpp>
 #include <vecmath.hpp>
+#ifdef RLLM_ENABLE_CK_FMHA
+#include <ck_fmha.hpp>
+#endif
 
 #include <algorithm>
 #include <cassert>
@@ -519,7 +522,9 @@ namespace rllm
         size_t bytes =
             h_in.storage_size_bytes() + h_norm_attn.storage_size_bytes() +
             Q.storage_size_bytes() + K.storage_size_bytes() + V.storage_size_bytes() +
-            attn_concat.storage_size_bytes() + h_mid.storage_size_bytes() +
+            attn_concat.storage_size_bytes() + fmha_output.storage_size_bytes() +
+            fmha_lse.storage_size_bytes() + fmha_sequence_starts.storage_size_bytes() +
+            h_mid.storage_size_bytes() +
             h_norm_ff.storage_size_bytes() + h_norm_ff_projection.storage_size_bytes() +
             gate_pre.storage_size_bytes() +
             up_pre.storage_size_bytes() + ffn_act.storage_size_bytes() +
@@ -984,6 +989,29 @@ namespace rllm
         compute_attention_values_for_heads(ws, seq_len);
     }
 
+#ifdef RLLM_ENABLE_CK_FMHA
+    static bool run_ck_fmha(ForwardWorkspace& ws,
+        PositionIndex packed_rows,
+        const fixed_size_vector<int, PositionIndex>& sequence_starts,
+        int batch_size,
+        int max_sequence_length)
+    {
+        auto& queue = rllm::hip_runtime::get_queue(0);
+        const bool launched = ck_fmha_forward(queue,
+            ws.Q.device_buffer(), ws.K.device_buffer(), ws.V.device_buffer(),
+            ws.fmha_output.device_buffer(), ws.fmha_lse.device_buffer(),
+            sequence_starts.device_buffer(), static_cast<int>(packed_rows), batch_size,
+            max_sequence_length);
+        if (launched)
+        {
+            ws.fmha_output.mark_device_latest();
+            ws.fmha_lse.mark_device_latest();
+            convert_to_float(ws.fmha_output, ws.attn_concat);
+        }
+        return launched;
+    }
+#endif
+
     static void compute_batched_attention_scores_for_head(
         // OFFLOAD_PARAMETERS(attn_w_h, Q, K, row_batch, row_begin, local_position, packed_rows, hStart)
         fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
@@ -1101,6 +1129,7 @@ namespace rllm
     {
         auto& ws = workspace;
         ws.residual_scale = residual_scale;
+        ws.packed_batch = nullptr;
 
         check_nan_finding_mode("forward:start");
         ws.h_in = h;
@@ -1115,11 +1144,24 @@ namespace rllm
         apply_rope_fp16(ws.Q, ws.K, seq_len);
 
         // ── 3. Multi-head causal self-attention ──────────────────────────────
+        ws.used_ck_fmha = false;
+#ifdef RLLM_ENABLE_CK_FMHA
+        {
+            cpu_fixed_vector<int, PositionIndex> cpu_sequence_starts;
+            cpu_sequence_starts.push_back(0);
+            cpu_sequence_starts.push_back(static_cast<int>(seq_len));
+            auto& queue = rllm::hip_runtime::get_queue(0);
+            ws.fmha_sequence_starts.copy_from_cpu(queue, cpu_sequence_starts);
+            ws.used_ck_fmha = run_ck_fmha(ws, seq_len, ws.fmha_sequence_starts, 1,
+                static_cast<int>(seq_len));
+        }
+#endif
+        if (!ws.used_ck_fmha)
         {
             auto& queue = rllm::hip_runtime::get_queue(0);
             ws.attn_concat.zero(queue);
+            forward_attention_heads(ws, seq_len);
         }
-        forward_attention_heads(ws, seq_len);
 
         // ── 4. Output projection + residual ──────────────────────────────────
         matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
@@ -1170,8 +1212,16 @@ namespace rllm
         // Use per-example local positions so RoPE restarts at zero in each packed sequence.
         apply_packed_rope(ws.Q, ws.K, batch.local_position, packed_rows, 1.0f);
         auto& queue = rllm::hip_runtime::get_queue(0);
-        ws.attn_concat.zero(queue);
-        forward_batched_attention_heads(ws, packed_rows, batch);
+        ws.used_ck_fmha = false;
+#ifdef RLLM_ENABLE_CK_FMHA
+        ws.used_ck_fmha = run_ck_fmha(ws, packed_rows, batch.sequence_starts,
+            static_cast<int>(batch.batch_size), static_cast<int>(batch.max_sequence_length));
+#endif
+        if (!ws.used_ck_fmha)
+        {
+            ws.attn_concat.zero(queue);
+            forward_batched_attention_heads(ws, packed_rows, batch);
+        }
         matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
         if (perturbation)
             perturbation->hidden(
@@ -1569,6 +1619,30 @@ namespace rllm
             log_hidden_activation_diagnostics(fwd.V, fwd.seq_len, diagnostic_label("attention V"));
         }
 #endif
+        // CK forward does not materialize probabilities. Recompute them for the
+        // established FP32 backward path until CK backward is connected.
+        if (fwd.used_ck_fmha)
+        {
+            auto& mutable_fwd = const_cast<ForwardWorkspace&>(fwd);
+            if (fwd.packed_batch)
+            {
+                mutable_fwd.attn_w.set_size(HeadsIndex::MAX);
+                for (const auto hi : enum_iterator1D<HeadsIndex>())
+                {
+                    const int h_start = static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX);
+                    compute_batched_attention_scores_for_head(mutable_fwd.attn_w[hi], fwd.Q, fwd.K,
+                        fwd.packed_batch->row_batch, fwd.packed_batch->row_begin,
+                        fwd.packed_batch->local_position, fwd.seq_len, h_start);
+                    apply_batched_causal_softmax_for_head(mutable_fwd.attn_w[hi],
+                        fwd.packed_batch->local_position, fwd.seq_len);
+                }
+            }
+            else
+            {
+                compute_attention_scores_for_heads(mutable_fwd, fwd.seq_len);
+                apply_causal_softmax_for_heads(mutable_fwd, fwd.seq_len);
+            }
+        }
         backward_accumulate_attention_dv_for_heads(ws, fwd);
         if (log_gradient_diagnostics)
             log_hidden_gradient_diagnostics(ws.d_V, fwd.seq_len, diagnostic_label("attention d_V"));

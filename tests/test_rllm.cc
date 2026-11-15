@@ -679,6 +679,32 @@ TEST(CorpusTest, PlainTextRoundTripsUnseenUnicodeThroughByteFallbacks)
     EXPECT_EQ(corpus.get_line(tokens), text);
 }
 
+TEST(CorpusTest, PlainTextNormalizesWrittenArithmetic)
+{
+    Corpus corpus{{}};
+    CommentLexState state;
+
+    const auto tokens = corpus.get_token_ids(
+        "One plus two equals three. Eight divided by four equals two. "
+        "Ten multiplied by zero equals zero.",
+        SourceLanguage::Text, state);
+
+    EXPECT_EQ(
+        corpus.get_line(tokens),
+        "1 + 2 = 3. 8 / 4 = 2. 10 * 0 = 0.");
+}
+
+TEST(CorpusTest, PlainTextArithmeticNormalizationRequiresWordBoundaries)
+{
+    Corpus corpus{{}};
+    CommentLexState state;
+    const std::string text = "Someone has a stone and a plus_sign.";
+
+    const auto tokens = corpus.get_token_ids(text, SourceLanguage::Text, state);
+
+    EXPECT_EQ(corpus.get_line(tokens), text);
+}
+
 TEST(CorpusTest, PlainTextCompressesConsecutiveSpacesAsTabs)
 {
     const std::vector<std::string> filters;
@@ -693,7 +719,7 @@ TEST(CorpusTest, PlainTextCompressesConsecutiveSpacesAsTabs)
             << "space count: " << spaces;
         EXPECT_EQ(std::ranges::count(tokens.m_cpu, TokenID::SPACE), 0)
             << "space count: " << spaces;
-        EXPECT_EQ(corpus.get_line(tokens), "one\ttwo")
+        EXPECT_EQ(corpus.get_line(tokens), "1\t2")
             << "space count: " << spaces;
     }
 }

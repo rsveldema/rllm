@@ -7,11 +7,11 @@ submodule. Initialize it with:
 git submodule update --init --recursive
 ```
 
-Configure `RLLM_ENABLE_CK_FMHA=ON` together with HIP offload and an explicit
-GPU target:
+HIP builds enable `RLLM_ENABLE_CK_FMHA` by default and require an explicit GPU
+target. It can be disabled with `-DRLLM_ENABLE_CK_FMHA=OFF`:
 
 ```sh
-./build_release.sh -DRLLM_ENABLE_CK_FMHA=ON -DGPU_TARGETS=gfx1201
+./build_release.sh -DGPU_TARGETS=gfx1201
 ```
 
 The build intentionally generates only the kernel family needed by the model:
@@ -20,8 +20,10 @@ log-sum-exp, and no attention bias or dropout. Backward generation includes the
 matching group-mode stages. This avoids compiling CK's thousands of example
 variants.
 
-The generated CK kernels are not dispatched by the runtime yet. The active
-in-tree attention path stores Q, K, and V projection outputs and their RoPE
-results in FP16. Attention dot products, softmax probabilities, output
-accumulation, and gradients remain FP32. A runtime adapter is still needed
-before the CK FMHA kernels can replace this path.
+When enabled, the runtime dispatches causal FP16 attention forward passes to CK
+for both single sequences and packed variable-length batches. CK writes FP16
+attention outputs and FP32 log-sum-exp values; rllm converts the output to FP32
+for the output projection. The existing FP32 backward path remains active and
+recomputes attention probabilities because CK forward does not materialize
+them. If CK cannot select a compatible forward kernel, rllm falls back to its
+in-tree attention implementation.
