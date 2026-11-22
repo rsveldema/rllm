@@ -381,6 +381,7 @@ namespace rllm
                     m_transformer_blocks[block].forward_batched(
                         dust_forward.h, packed_rows, *m_gpu_packed_batch,
                         m_forward_workspace->transformer_workspaces.front(),
+                        dust_forward.scratchspace,
                         transformer_residual_scale(block), &perturbation, execution);
                 }
 
@@ -655,6 +656,7 @@ namespace rllm
             const size_t block = m_transformer_execution_order[execution];
             m_transformer_blocks[block].forward_batched(
                 forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(execution),
+                forward.scratchspace,
                 transformer_residual_scale(block));
             if (m_training_algorithm == TrainingAlgorithm::Dust)
             {

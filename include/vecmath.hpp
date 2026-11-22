@@ -42,9 +42,9 @@ namespace rllm
         // OFFLOAD_PARAMETERS(A,B1,C1,B2,C2)
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& A,
         const fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& B1,
-        flexible_rows_matrix<float, PositionIndex, FFDimension>& C1,
+        flexible_rows_matrix<float16, PositionIndex, FFDimension>& C1,
         const fixed_size_matrix<float16, FFDimension, EmbeddingDimension>& B2,
-        flexible_rows_matrix<float, PositionIndex, FFDimension>& C2
+        flexible_rows_matrix<float16, PositionIndex, FFDimension>& C2
         // END_OFFLOAD_PARAMETERS
     );
 
@@ -171,8 +171,8 @@ namespace rllm
     );
 
     void swiglu_forward(
-        const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre,
-        const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre,
+        const flexible_rows_matrix<float16, PositionIndex, FFDimension>& gate_pre,
+        const flexible_rows_matrix<float16, PositionIndex, FFDimension>& up_pre,
         flexible_rows_matrix<float16, PositionIndex, FFDimension>& ffn_act,
         PositionIndex seq_len
     );

@@ -24,15 +24,17 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input;
         fixed_size_vector<float, EmbeddingDimension> loop_iteration_embedding;
         fixed_size_vector<float, EmbeddingDimension> h_last;
+        AttentionWorkspace attention_workspace;
+        ForwardScratchspace scratchspace;
         std::vector<ForwardWorkspace> transformer_workspaces;
 
         TextTrainerForwardWorkspace(PositionIndex seq_len, size_t num_transformer_blocks)
-            : h(seq_len), loop_input(seq_len)
+            : h(seq_len), loop_input(seq_len), scratchspace(seq_len)
         {
             loop_iteration_embedding.set_size(EmbeddingDimension::MAX);
             transformer_workspaces.reserve(num_transformer_blocks);
             for (size_t i = 0; i < num_transformer_blocks; ++i)
-                transformer_workspaces.emplace_back(seq_len);
+                transformer_workspaces.emplace_back(seq_len, &attention_workspace);
             h_last.set_size(EmbeddingDimension::MAX);
         }
 
@@ -40,6 +42,7 @@ namespace rllm
         {
             h.set_rows(seq_len);
             loop_input.set_rows(seq_len);
+            scratchspace.reset(seq_len);
             for (auto& workspace : transformer_workspaces)
                 workspace.reset(queue, seq_len);
         }

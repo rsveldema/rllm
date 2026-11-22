@@ -22,6 +22,22 @@ namespace rllm
     namespace dust { struct ForwardPerturbation; }
     using AttentionMatrix = fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>;
 
+    struct AttentionWorkspace
+    {
+        using Storage = fixed_size_obj_vector<AttentionMatrix, HeadsIndex>;
+        Storage weights;
+
+        AttentionWorkspace()
+        {
+            weights.set_size(HeadsIndex::MAX);
+        }
+
+        size_t storage_size_bytes() const
+        {
+            return static_cast<size_t>(HeadsIndex::MAX) * weights[0].storage_size_bytes();
+        }
+    };
+
     struct TransformerGradientAccumulator
     {
         fixed_size_matrix<float, EmbeddingDimension, FFDimension> dW_down;
@@ -34,6 +50,29 @@ namespace rllm
         bool touched = false;
 
         void reset(HipQueue& queue);
+    };
+
+    // Scratch buffers used only during a block's forward call. A single
+    // instance can be reused across sequential transformer executions.
+    struct ForwardScratchspace
+    {
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
+
+        explicit ForwardScratchspace(PositionIndex seq)
+            : attn_proj(seq), ffn_out(seq)
+        {}
+
+        void reset(PositionIndex seq)
+        {
+            attn_proj.set_rows(seq);
+            ffn_out.set_rows(seq);
+        }
+
+        size_t storage_size_bytes() const
+        {
+            return attn_proj.storage_size_bytes() + ffn_out.storage_size_bytes();
+        }
     };
 
     // ── forward workspace ─────────────────────────────────────────────────────
@@ -50,48 +89,43 @@ namespace rllm
         // Q/K/V are stored in FP16; attention dot products still accumulate in FP32.
         flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension> Q, K, V;
         // Per-head softmax weight matrices; only the [H x T x T] block is live.
-        fixed_size_obj_vector<AttentionMatrix, HeadsIndex> attn_w;
+        // The trainer points every layer at one preallocated scratch buffer.
+        // Standalone workspaces own one for compatibility with direct callers.
+        std::unique_ptr<AttentionWorkspace> owned_attention;
+        AttentionWorkspace* attention;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_concat;
         flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension> fmha_output;
         flexible_rows_matrix<float, PositionIndex, HeadsIndex> fmha_lse;
         fixed_size_vector<int, PositionIndex> fmha_sequence_starts;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_mid;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_norm_ff;
-        // FP16 projection input; the FP32 cache remains authoritative for backward.
-        flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension> h_norm_ff_projection;
-        flexible_rows_matrix<float, PositionIndex, FFDimension> gate_pre;
-        flexible_rows_matrix<float, PositionIndex, FFDimension> up_pre;
+        flexible_rows_matrix<float16, PositionIndex, FFDimension> gate_pre;
+        flexible_rows_matrix<float16, PositionIndex, FFDimension> up_pre;
         flexible_rows_matrix<float16, PositionIndex, FFDimension> ffn_act;
-        // Temporaries used only within forward() itself
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> attn_proj;
-        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> ffn_out;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> auxiliary_gradient;
         fixed_size_vector<float, RmsNormPartialSumIndex> rms_norm_row_sums;
         fixed_size_vector<float, PositionIndex> rms_norm_inv_rms;
         float residual_scale = 1.0f;
 
-        explicit ForwardWorkspace(PositionIndex seq)
+        explicit ForwardWorkspace(PositionIndex seq, AttentionWorkspace* shared_attention = nullptr)
             : seq_len(seq)
             , h_in(seq)
             , h_norm_attn(seq)
             , Q(seq)
             , K(seq)
             , V(seq)
+            , owned_attention(shared_attention ? nullptr : std::make_unique<AttentionWorkspace>())
+            , attention(shared_attention ? shared_attention : owned_attention.get())
             , attn_concat(seq)
             , fmha_output(seq)
             , fmha_lse(seq)
             , h_mid(seq)
             , h_norm_ff(seq)
-            , h_norm_ff_projection(seq)
             , gate_pre(seq)
             , up_pre(seq)
             , ffn_act(seq)
-            , attn_proj(seq)
-            , ffn_out(seq)
             , auxiliary_gradient(seq)
-        {
-            attn_w.set_size(HeadsIndex::MAX);
-        }
+        {}
 
         void reset(HipQueue& queue, PositionIndex seq)
         {
@@ -107,15 +141,11 @@ namespace rllm
             fmha_lse.set_rows(seq);
             h_mid.set_rows(seq);
             h_norm_ff.set_rows(seq);
-            h_norm_ff_projection.set_rows(seq);
             gate_pre.set_rows(seq);
             up_pre.set_rows(seq);
             ffn_act.set_rows(seq);
-            attn_proj.set_rows(seq);
-            ffn_out.set_rows(seq);
             auxiliary_gradient.set_rows(seq);
             auxiliary_gradient.zero(queue);
-            attn_w.set_size(HeadsIndex::MAX);
             rms_norm_row_sums.zero(queue);
             rms_norm_inv_rms.zero(queue);
         }
@@ -237,12 +267,15 @@ namespace rllm
 
         // Forward pass.  h[seq_len × D_MODEL] is modified in-place.
         // Caches intermediate activations for the backward pass.
-        void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len, ForwardWorkspace& workspace, float residual_scale = 1.0f);
+        void forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
+            PositionIndex seq_len, ForwardWorkspace& workspace,
+            ForwardScratchspace& scratchspace, float residual_scale = 1.0f);
         void forward_batched(
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h,
             PositionIndex packed_rows,
             const GpuPackedBatchInput& batch,
             ForwardWorkspace& workspace,
+            ForwardScratchspace& scratchspace,
             float residual_scale = 1.0f,
             dust::ForwardPerturbation* perturbation = nullptr,
             size_t execution = 0
@@ -368,7 +401,7 @@ namespace rllm
             PositionIndex seq_len);
 
         // SwiGLU backward: computes d_gate_pre and d_up_pre from d_ffn_act.
-        static void swiglu_backward(PositionIndex seq, const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre);
+        static void swiglu_backward(PositionIndex seq, const flexible_rows_matrix<float16, PositionIndex, FFDimension>& gate_pre, const flexible_rows_matrix<float16, PositionIndex, FFDimension>& up_pre, const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre, flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre);
 
         void forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void forward_batched_attention_heads(ForwardWorkspace& ws, PositionIndex packed_rows, const GpuPackedBatchInput& batch);
@@ -377,14 +410,18 @@ namespace rllm
                 const ForwardWorkspace& fwd,
                 HeadsIndex hi);
         void apply_causal_softmax_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
-        void compute_attention_scores_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi);
+        void compute_attention_scores_for_head_hi(AttentionMatrix& attn_w_h,
+            const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q,
+            const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K,
+            PositionIndex seq_len, int h_start);
         void compute_attention_values_for_heads(ForwardWorkspace& ws, PositionIndex seq_len);
         void backward_attention_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd,
             bool log_gradient_diagnostics, int diagnostic_layer);
         void backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
         void backward_compute_attention_dscores_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
 
-        void apply_causal_softmax_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi);
+        void apply_causal_softmax_for_head_hi(AttentionMatrix& attn_w_h,
+            PositionIndex seq_len);
         void backward_accumulate_attention_dk_for_heads_hi(BackwardWorkspace& ws, const ForwardWorkspace& fwd, HeadsIndex hi);
         void backward_softmax_attention_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);
         void backward_accumulate_attention_dq_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd);

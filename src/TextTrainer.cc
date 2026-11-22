@@ -699,7 +699,7 @@ namespace rllm
             }
             const size_t block_index = m_transformer_execution_order[execution];
             auto& block = m_transformer_blocks[block_index];
-            block.forward(ws.h, m_seq_len, ws.transformer_workspace(execution),
+            block.forward(ws.h, m_seq_len, ws.transformer_workspace(execution), ws.scratchspace,
                 transformer_residual_scale(block_index));
             char phase[96];
             std::snprintf(phase, sizeof(phase), "after transformer block %zu execution %zu forward", block_index, execution);
@@ -1484,6 +1484,7 @@ namespace rllm
                 const size_t block = m_transformer_execution_order[execution];
                 m_transformer_blocks[block].forward_batched(
                     forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(execution),
+                    forward.scratchspace,
                     transformer_residual_scale(block));
                 if (diagnose_first_batch)
                 {
@@ -2707,7 +2708,8 @@ namespace rllm
                 m_forward_workspace->transformer_workspaces.front(),
                 use_dust ? nullptr : &m_backward_workspace->transformer_block,
                 m_gradient_accumulation_workspace->transformer_blocks.front(), n_layers,
-                !use_dust, 0);
+                !use_dust, m_forward_workspace->attention_workspace.storage_size_bytes() +
+                    m_forward_workspace->scratchspace.storage_size_bytes());
             transformer_gpu_bytes = per_layer_gpu_bytes * n_layers;
             if (use_dust)
             {

@@ -57,7 +57,7 @@ namespace rllm::dust
     }
 
     void ForwardPerturbation::ff(
-        flexible_rows_matrix<float, PositionIndex, FFDimension>& activations,
+        flexible_rows_matrix<float16, PositionIndex, FFDimension>& activations,
         ProjectionSite site, size_t execution)
     {
         gaussian_ff_noise(ff_noise, rows, site_seed(site, execution));
@@ -369,7 +369,7 @@ namespace rllm::dust
 
     void perturb_ff(
         // OFFLOAD_PARAMETERS(activations, noise, rows, sigma)
-        flexible_rows_matrix<float, PositionIndex, FFDimension>& activations,
+        flexible_rows_matrix<float16, PositionIndex, FFDimension>& activations,
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& noise,
         PositionIndex rows, float sigma
         // END_OFFLOAD_PARAMETERS
@@ -378,7 +378,9 @@ namespace rllm::dust
         auto& queue = hip_runtime::get_queue(0);
         const auto grid = enum_iterator2D<PositionIndex, FFDimension>(rows);
         OFFLOAD_PARFOR_2D_PARAM(queue, row, dimension, grid, (activations, noise, rows, sigma))
-        activations[row, dimension] += (sigma * noise[row, dimension]);
+        const float perturbed =
+            (activations[row, dimension] + (sigma * noise[row, dimension]));
+        activations[row, dimension] = float16(perturbed);
         ENDFOR
     }
 

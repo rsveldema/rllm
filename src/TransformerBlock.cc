@@ -525,15 +525,14 @@ namespace rllm
             attn_concat.storage_size_bytes() + fmha_output.storage_size_bytes() +
             fmha_lse.storage_size_bytes() + fmha_sequence_starts.storage_size_bytes() +
             h_mid.storage_size_bytes() +
-            h_norm_ff.storage_size_bytes() + h_norm_ff_projection.storage_size_bytes() +
+            h_norm_ff.storage_size_bytes() +
             gate_pre.storage_size_bytes() +
             up_pre.storage_size_bytes() + ffn_act.storage_size_bytes() +
-            attn_proj.storage_size_bytes() + ffn_out.storage_size_bytes() +
             auxiliary_gradient.storage_size_bytes() +
             decltype(rms_norm_row_sums)::CAPACITY * sizeof(float) +
             decltype(rms_norm_inv_rms)::CAPACITY * sizeof(float);
-        for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
-            bytes += attn_w[hi].storage_size_bytes();
+        if (owned_attention)
+            bytes += owned_attention->storage_size_bytes();
         return bytes;
     }
 
@@ -819,8 +818,8 @@ namespace rllm
     void TransformerBlock::swiglu_backward(
         // OFFLOAD_PARAMETERS(seq, gate_pre, up_pre, d_ffn_act, d_gate_pre, d_up_pre)
         PositionIndex seq,
-        const flexible_rows_matrix<float, PositionIndex, FFDimension>& gate_pre,
-        const flexible_rows_matrix<float, PositionIndex, FFDimension>& up_pre,
+        const flexible_rows_matrix<float16, PositionIndex, FFDimension>& gate_pre,
+        const flexible_rows_matrix<float16, PositionIndex, FFDimension>& up_pre,
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& d_ffn_act,
         flexible_rows_matrix<float, PositionIndex, FFDimension>& d_gate_pre,
         flexible_rows_matrix<float, PositionIndex, FFDimension>& d_up_pre
@@ -872,18 +871,17 @@ namespace rllm
 
     // ── forward pass ──────────────────────────────────────────────────────────
 
-    void TransformerBlock::compute_attention_scores_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi)
-    {
-        // OFFLOAD_PARAMETERS(attn_w_h, Q, K, active_seq_len, hStart)
-        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h = ws.attn_w[hi];
-        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q = ws.Q;
-        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K = ws.K;
-        const PositionIndex active_seq_len = seq_len;
-        const int hStart = (static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
+    void TransformerBlock::compute_attention_scores_for_head_hi(
+        // OFFLOAD_PARAMETERS(attn_w_h, Q, K, seq_len, hStart)
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& Q,
+        const flexible_rows_matrix<float16, PositionIndex, EmbeddingDimension>& K,
+        PositionIndex seq_len, int hStart
         // END_OFFLOAD_PARAMETERS
-
+    )
+    {
         auto& queue = rllm::hip_runtime::get_queue(0);
-        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, active_seq_len, (attn_w_h, Q, K, active_seq_len, hStart))
+        OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, seq_len, (attn_w_h, Q, K, seq_len, hStart))
         {
             float dot = 0.f;
             for (const auto d_head : enum_iterator1D<HeadDimension>())
@@ -900,26 +898,28 @@ namespace rllm
 
     void TransformerBlock::compute_attention_scores_for_heads(ForwardWorkspace& ws, PositionIndex seq_len)
     {
-        ws.attn_w.set_size(HeadsIndex::MAX);
         PARFOR_1D(hi, enum_iterator1D<HeadsIndex>())
-            compute_attention_scores_for_head_hi(ws, seq_len, hi);
+            compute_attention_scores_for_head_hi(
+                ws.attention->weights[hi], ws.Q, ws.K, seq_len,
+                static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX));
         ENDFOR
     }
 
     void TransformerBlock::apply_causal_softmax_for_heads(ForwardWorkspace& ws, PositionIndex seq_len)
     {
         PARFOR_1D(hi, enum_iterator1D<HeadsIndex>())
-            apply_causal_softmax_for_head_hi(ws, seq_len, hi);
+            apply_causal_softmax_for_head_hi(ws.attention->weights[hi], seq_len);
         ENDFOR
     }
 
-    void TransformerBlock::apply_causal_softmax_for_head_hi(ForwardWorkspace& ws, PositionIndex seq_len, HeadsIndex hi)
+    void TransformerBlock::apply_causal_softmax_for_head_hi(
+        // OFFLOAD_PARAMETERS(attn_w_h, seq_len)
+        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h,
+        PositionIndex seq_len
+        // END_OFFLOAD_PARAMETERS
+    )
     {
         const auto softmax_grid = enum_iterator1D<PositionIndex>(seq_len);
-
-        // OFFLOAD_PARAMETERS(attn_w_h)
-        fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>& attn_w_h = ws.attn_w[hi];
-        // END_OFFLOAD_PARAMETERS
 
         auto& queue = rllm::hip_runtime::get_queue(0);
         OFFLOAD_PARFOR_1D_PARAM(queue, i, softmax_grid, (attn_w_h))
@@ -967,7 +967,7 @@ namespace rllm
 
     void TransformerBlock::compute_attention_values_for_heads(ForwardWorkspace& ws, PositionIndex seq_len)
     {
-        auto& attn_w = ws.attn_w;
+        auto& attn_w = ws.attention->weights;
         const auto& V = ws.V;
         auto& attn_concat = ws.attn_concat;
         const int active_seq_len = static_cast<int>(seq_len);
@@ -982,8 +982,6 @@ namespace rllm
 
     void TransformerBlock::forward_attention_heads(ForwardWorkspace& ws, PositionIndex seq_len)
     {
-        ws.attn_w.set_size(HeadsIndex::MAX);
-
         compute_attention_scores_for_heads(ws, seq_len);
         apply_causal_softmax_for_heads(ws, seq_len);
         compute_attention_values_for_heads(ws, seq_len);
@@ -1111,21 +1109,20 @@ namespace rllm
 
     void TransformerBlock::forward_batched_attention_heads(ForwardWorkspace& ws, PositionIndex packed_rows, const GpuPackedBatchInput& batch)
     {
-        ws.attn_w.set_size(HeadsIndex::MAX);
         for (const auto hi : enum_iterator1D<HeadsIndex>())
         {
             const int hStart = static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX);
-            compute_batched_attention_scores_for_head(ws.attn_w[hi], ws.Q, ws.K,
+            compute_batched_attention_scores_for_head(ws.attention->weights[hi], ws.Q, ws.K,
                 batch.row_batch, batch.row_begin, batch.local_position, packed_rows, hStart);
             apply_batched_causal_softmax_for_head(
-                ws.attn_w[hi], batch.local_position, packed_rows);
-            compute_batched_attention_values_for_head(ws.attn_w[hi], ws.V, ws.attn_concat,
+                ws.attention->weights[hi], batch.local_position, packed_rows);
+            compute_batched_attention_values_for_head(ws.attention->weights[hi], ws.V, ws.attn_concat,
                 batch.row_batch, batch.row_begin, batch.local_position, packed_rows, hStart);
         }
     }
 
     void TransformerBlock::forward(flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& h, PositionIndex seq_len,
-        ForwardWorkspace& workspace, float residual_scale)
+        ForwardWorkspace& workspace, ForwardScratchspace& scratchspace, float residual_scale)
     {
         auto& ws = workspace;
         ws.residual_scale = residual_scale;
@@ -1164,25 +1161,24 @@ namespace rllm
         }
 
         // ── 4. Output projection + residual ──────────────────────────────────
-        matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
+        matmul_ABt(ws.attn_concat, W_o, scratchspace.attn_proj);
 
-        element_wise_scaled_sum(h, ws.attn_proj, ws.h_mid, residual_scale);
+        element_wise_scaled_sum(h, scratchspace.attn_proj, ws.h_mid, residual_scale);
 
         // ── 5. Pre-norm (FFN) ─────────────────────────────────────────────────
         //rms_norm_hip_optimized_with_workspace(ws.h_mid, ws.h_norm_ff, ws.rms_norm_row_sums, ws.rms_norm_inv_rms);
         rms_norm(ws.h_mid, ws.h_norm_ff);
 
         // ── 6. SwiGLU FFN ─────────────────────────────────────────────────────
-        convert_to_float16(ws.h_norm_ff, ws.h_norm_ff_projection);
-        matmul_ABt(ws.h_norm_ff_projection, W_gate, ws.gate_pre);
-        matmul_ABt(ws.h_norm_ff_projection, W_up, ws.up_pre);
+        matmul_ABt_2_matrix_muls(ws.h_norm_ff, W_gate, ws.gate_pre,
+            W_up, ws.up_pre);
 
         swiglu_forward(ws.gate_pre, ws.up_pre, ws.ffn_act, seq_len);
 
-        matmul_ABt(ws.ffn_act, W_down, ws.ffn_out);
+        matmul_ABt(ws.ffn_act, W_down, scratchspace.ffn_out);
 
         // ── 7. Residual ───────────────────────────────────────────────────────
-        element_wise_scaled_sum(ws.h_mid, ws.ffn_out, h, residual_scale);
+        element_wise_scaled_sum(ws.h_mid, scratchspace.ffn_out, h, residual_scale);
         check_nan_finding_mode("forward:end");
     }
 
@@ -1191,6 +1187,7 @@ namespace rllm
         PositionIndex packed_rows,
         const GpuPackedBatchInput& batch,
         ForwardWorkspace& workspace,
+        ForwardScratchspace& scratchspace,
         float residual_scale,
         dust::ForwardPerturbation* perturbation,
         size_t execution
@@ -1222,25 +1219,24 @@ namespace rllm
             ws.attn_concat.zero(queue);
             forward_batched_attention_heads(ws, packed_rows, batch);
         }
-        matmul_ABt(ws.attn_concat, W_o, ws.attn_proj);
+        matmul_ABt(ws.attn_concat, W_o, scratchspace.attn_proj);
         if (perturbation)
             perturbation->hidden(
-                ws.attn_proj, dust::ProjectionSite::AttentionOutput, execution);
-        element_wise_scaled_sum(h, ws.attn_proj, ws.h_mid, residual_scale);
+                scratchspace.attn_proj, dust::ProjectionSite::AttentionOutput, execution);
+        element_wise_scaled_sum(h, scratchspace.attn_proj, ws.h_mid, residual_scale);
         rms_norm(ws.h_mid, ws.h_norm_ff);
-        convert_to_float16(ws.h_norm_ff, ws.h_norm_ff_projection);
-        matmul_ABt(ws.h_norm_ff_projection, W_gate, ws.gate_pre);
-        matmul_ABt(ws.h_norm_ff_projection, W_up, ws.up_pre);
+        matmul_ABt_2_matrix_muls(ws.h_norm_ff, W_gate, ws.gate_pre,
+            W_up, ws.up_pre);
         if (perturbation)
         {
             perturbation->ff(ws.gate_pre, dust::ProjectionSite::Gate, execution);
             perturbation->ff(ws.up_pre, dust::ProjectionSite::Up, execution);
         }
         swiglu_forward(ws.gate_pre, ws.up_pre, ws.ffn_act, packed_rows);
-        matmul_ABt(ws.ffn_act, W_down, ws.ffn_out);
+        matmul_ABt(ws.ffn_act, W_down, scratchspace.ffn_out);
         if (perturbation)
-            perturbation->hidden(ws.ffn_out, dust::ProjectionSite::Down, execution);
-        element_wise_scaled_sum(ws.h_mid, ws.ffn_out, h, residual_scale);
+            perturbation->hidden(scratchspace.ffn_out, dust::ProjectionSite::Down, execution);
+        element_wise_scaled_sum(ws.h_mid, scratchspace.ffn_out, h, residual_scale);
         check_nan_finding_mode("batched-forward:end");
     }
 
@@ -1299,7 +1295,7 @@ namespace rllm
     void TransformerBlock::backward_accumulate_attention_dv_for_heads(BackwardWorkspace& ws, const ForwardWorkspace& fwd)
     {
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_V = ws.d_V;
-        const fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& attn_w = fwd.attn_w;
+        const auto& attn_w = fwd.attention->weights;
         const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& d_attn_concat = ws.d_attn_concat;
         const PositionIndex seq_len = fwd.seq_len;
 
@@ -1450,7 +1446,7 @@ namespace rllm
         fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& d_scores = ws.d_scores;
         fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& d_raw = ws.d_raw;
         const PositionIndex seq_len = fwd.seq_len;
-        const fixed_size_obj_vector<fixed_size_matrix<float, PositionIndex, AttentionPositionIndex>, HeadsIndex>& attn_w = fwd.attn_w;
+        const auto& attn_w = fwd.attention->weights;
 
         for (const auto hi : enum_iterator1D<HeadsIndex>(HeadsIndex::MAX))
         {
@@ -1619,29 +1615,25 @@ namespace rllm
             log_hidden_activation_diagnostics(fwd.V, fwd.seq_len, diagnostic_label("attention V"));
         }
 #endif
-        // CK forward does not materialize probabilities. Recompute them for the
-        // established FP32 backward path until CK backward is connected.
-        if (fwd.used_ck_fmha)
+        // The attention-probability buffer is shared across executions, so
+        // reconstruct this layer's probabilities before its backward pass.
+        auto& mutable_fwd = const_cast<ForwardWorkspace&>(fwd);
+        if (fwd.packed_batch)
         {
-            auto& mutable_fwd = const_cast<ForwardWorkspace&>(fwd);
-            if (fwd.packed_batch)
+            for (const auto hi : enum_iterator1D<HeadsIndex>())
             {
-                mutable_fwd.attn_w.set_size(HeadsIndex::MAX);
-                for (const auto hi : enum_iterator1D<HeadsIndex>())
-                {
-                    const int h_start = static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX);
-                    compute_batched_attention_scores_for_head(mutable_fwd.attn_w[hi], fwd.Q, fwd.K,
-                        fwd.packed_batch->row_batch, fwd.packed_batch->row_begin,
-                        fwd.packed_batch->local_position, fwd.seq_len, h_start);
-                    apply_batched_causal_softmax_for_head(mutable_fwd.attn_w[hi],
-                        fwd.packed_batch->local_position, fwd.seq_len);
-                }
+                const int h_start = static_cast<int>(hi) * static_cast<int>(HeadDimension::MAX);
+                compute_batched_attention_scores_for_head(mutable_fwd.attention->weights[hi], fwd.Q, fwd.K,
+                    fwd.packed_batch->row_batch, fwd.packed_batch->row_begin,
+                    fwd.packed_batch->local_position, fwd.seq_len, h_start);
+                apply_batched_causal_softmax_for_head(mutable_fwd.attention->weights[hi],
+                    fwd.packed_batch->local_position, fwd.seq_len);
             }
-            else
-            {
-                compute_attention_scores_for_heads(mutable_fwd, fwd.seq_len);
-                apply_causal_softmax_for_heads(mutable_fwd, fwd.seq_len);
-            }
+        }
+        else
+        {
+            compute_attention_scores_for_heads(mutable_fwd, fwd.seq_len);
+            apply_causal_softmax_for_heads(mutable_fwd, fwd.seq_len);
         }
         backward_accumulate_attention_dv_for_heads(ws, fwd);
         if (log_gradient_diagnostics)

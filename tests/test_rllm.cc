@@ -1355,7 +1355,8 @@ TEST(TransformerBlockTest, ForwardOutputShape)
     fill(h, 0.1f);
 
     auto forward_workspace = std::make_unique<ForwardWorkspace>(static_cast<PositionIndex>(T));
-    block->forward(h, static_cast<PositionIndex>(T), *forward_workspace);
+    auto scratchspace = std::make_unique<ForwardScratchspace>(static_cast<PositionIndex>(T));
+    block->forward(h, static_cast<PositionIndex>(T), *forward_workspace, *scratchspace);
 
     ASSERT_EQ(static_cast<size_t>(h.num_rows()), static_cast<size_t>(T));
 }
@@ -1375,7 +1376,8 @@ TEST(TransformerBlockTest, BackwardOutputShape)
     );
     fill(h, 0.05f);
     auto forward_workspace = std::make_unique<ForwardWorkspace>(static_cast<PositionIndex>(T));
-    block->forward(h, static_cast<PositionIndex>(T), *forward_workspace);
+    auto scratchspace = std::make_unique<ForwardScratchspace>(static_cast<PositionIndex>(T));
+    block->forward(h, static_cast<PositionIndex>(T), *forward_workspace, *scratchspace);
 
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dout(
         static_cast<PositionIndex>(T)
@@ -1571,6 +1573,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
     fill(h_template, 0.1f);
 
     ForwardWorkspace forward_workspace(static_cast<PositionIndex>(T));
+    ForwardScratchspace scratchspace(static_cast<PositionIndex>(T));
 
     // --- serial baseline (1 thread) ---
     parallel::set_num_threads(1);
@@ -1580,7 +1583,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
         std::println("Forward seq iter {}/{}", iter + 1, BENCH_FORWARD_ITERS);
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(static_cast<PositionIndex>(T));
         h = h_template;
-        block->forward(h, static_cast<PositionIndex>(T), forward_workspace);
+        block->forward(h, static_cast<PositionIndex>(T), forward_workspace, scratchspace);
     }
     const auto t1 = std::chrono::steady_clock::now();
 
@@ -1592,7 +1595,7 @@ TEST(TransformerBlockTest, ForwardParallelFasterThanSerial)
         std::println("Forward par iter {}/{}", iter + 1, BENCH_FORWARD_ITERS);
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(static_cast<PositionIndex>(T));
         h = h_template;
-        block->forward(h, static_cast<PositionIndex>(T), forward_workspace);
+        block->forward(h, static_cast<PositionIndex>(T), forward_workspace, scratchspace);
     }
     const auto t3 = std::chrono::steady_clock::now();
 
@@ -1635,6 +1638,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
 
 
     auto forward_workspace = std::make_unique<ForwardWorkspace>(static_cast<PositionIndex>(BENCH_SEQ_LEN));
+    auto scratchspace = std::make_unique<ForwardScratchspace>(static_cast<PositionIndex>(BENCH_SEQ_LEN));
     auto backward_workspace = std::make_unique<BackwardWorkspace>(static_cast<PositionIndex>(T));
 
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h_template(
@@ -1650,7 +1654,7 @@ TEST(TransformerBlockTest, BackwardParallelFasterThanSerial)
     {
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h(static_cast<PositionIndex>(T));
         h = h_template;
-        block->forward(h, static_cast<PositionIndex>(T), *forward_workspace);
+        block->forward(h, static_cast<PositionIndex>(T), *forward_workspace, *scratchspace);
     }
 
     // --- serial baseline (1 thread) ---

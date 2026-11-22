@@ -98,15 +98,18 @@ TEST(PackedBatchInputTest, BatchedTransformerForwardMatchesIndependentForwards)
     input_layer.propagate_forward(second, second_h);
     ForwardWorkspace first_ws(first.size());
     ForwardWorkspace second_ws(second.size());
-    block.forward(first_h, first.size(), first_ws);
-    block.forward(second_h, second.size(), second_ws);
+    ForwardScratchspace scratchspace(first.size());
+    block.forward(first_h, first.size(), first_ws, scratchspace);
+    scratchspace.reset(second.size());
+    block.forward(second_h, second.size(), second_ws, scratchspace);
 
     PackedBatchInput packed({first, second});
     GpuPackedBatchInput gpu_packed;
     flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> packed_h(packed.packed_rows());
     input_layer.propagate_forward(packed, gpu_packed, packed_h);
     ForwardWorkspace packed_ws(packed.packed_rows());
-    block.forward_batched(packed_h, packed.packed_rows(), gpu_packed, packed_ws);
+    scratchspace.reset(packed.packed_rows());
+    block.forward_batched(packed_h, packed.packed_rows(), gpu_packed, packed_ws, scratchspace);
 
 #ifdef RLLM_ENABLE_CK_FMHA
     EXPECT_TRUE(first_ws.used_ck_fmha);

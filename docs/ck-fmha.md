@@ -27,3 +27,8 @@ for the output projection. The existing FP32 backward path remains active and
 recomputes attention probabilities because CK forward does not materialize
 them. If CK cannot select a compatible forward kernel, rllm falls back to its
 in-tree attention implementation.
+
+A single dense attention-probability scratch buffer is preallocated with the
+trainer workspace and reused by every transformer layer. Backward recomputes
+the current layer's probabilities into that buffer, so no per-layer copy or
+training-time GPU allocation is required.

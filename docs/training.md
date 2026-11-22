@@ -788,6 +788,11 @@ the active optimizer state, per-layer forward workspaces and gradient accumulato
 and the correctly apportioned shared backward workspace. It excludes non-block
 buffers and Hip allocator overhead.
 
+Transformer FFN gate and up projections accumulate in FP32 and are cached in
+FP16 for SwiGLU and backward. Dense attention probabilities use one
+preallocated trainer-level scratch buffer; each layer recomputes its own
+probabilities there during backward instead of retaining a per-layer copy.
+
 The startup log also reports GPU memory required per compiled batch slot and in
 total across `BatchIndex::MAX`. This batch-slot estimate covers the batched
 output workspace and per-example packed-row boundaries. Token-level packed

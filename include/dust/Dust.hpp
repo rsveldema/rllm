@@ -51,7 +51,7 @@ namespace rllm::dust
             flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& activations,
             ProjectionSite site, size_t execution);
         void ff(
-            flexible_rows_matrix<float, PositionIndex, FFDimension>& activations,
+            flexible_rows_matrix<float16, PositionIndex, FFDimension>& activations,
             ProjectionSite site, size_t execution);
         uint64_t site_seed(ProjectionSite site, size_t execution) const;
     };
@@ -142,7 +142,7 @@ namespace rllm::dust
         BatchIndex count, uint64_t seed);
 
     void perturb_ff(
-        flexible_rows_matrix<float, PositionIndex, FFDimension>& activations,
+        flexible_rows_matrix<float16, PositionIndex, FFDimension>& activations,
         const flexible_rows_matrix<float, PositionIndex, FFDimension>& noise,
         PositionIndex rows, float sigma);
     void gaussian_ff_noise(
