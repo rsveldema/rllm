@@ -699,8 +699,9 @@ namespace rllm
             }
             const size_t block_index = m_transformer_execution_order[execution];
             auto& block = m_transformer_blocks[block_index];
-            block.forward(ws.h, m_seq_len, ws.transformer_workspace(execution), ws.scratchspace,
+            block.forward(ws.h, m_seq_len, ws.transformer_workspace(block_index), ws.scratchspace,
                 transformer_residual_scale(block_index));
+            ws.finish_transformer_execution(block_index, queue);
             char phase[96];
             std::snprintf(phase, sizeof(phase), "after transformer block %zu execution %zu forward", block_index, execution);
             check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, phase);
@@ -1060,13 +1061,14 @@ namespace rllm
         m_gpu_packed_batch.reset();
         m_batched_output_workspace.reset();
         const size_t forward_workspace_count =
-            m_training_algorithm == TrainingAlgorithm::Dust ? 1 : m_transformer_execution_order.size();
+            m_training_algorithm == TrainingAlgorithm::Dust ? 1 : m_transformer_blocks.size();
         m_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(
-            PositionIndex::START, forward_workspace_count);
+            PositionIndex::START, forward_workspace_count,
+            m_training_algorithm == TrainingAlgorithm::Dust);
         if (m_training_algorithm == TrainingAlgorithm::Dust)
         {
             m_dust_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(
-                PositionIndex::START, 0);
+                PositionIndex::START, 0, true);
             m_dust_workspace = std::make_unique<DustWorkspace>(
                 PositionIndex::START, m_transformer_execution_order.size());
             auto& queue = hip_runtime::get_queue(0);
@@ -1483,9 +1485,10 @@ namespace rllm
                 }
                 const size_t block = m_transformer_execution_order[execution];
                 m_transformer_blocks[block].forward_batched(
-                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(execution),
+                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(block),
                     forward.scratchspace,
                     transformer_residual_scale(block));
+                forward.finish_transformer_execution(block, queue);
                 if (diagnose_first_batch)
                 {
                     const auto label = std::format(

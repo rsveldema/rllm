@@ -24,10 +24,13 @@ the launcher selects a compatible checkpoint automatically.
 Use `--loop-layers P-Q:N` to execute the one-based transformer-block range
 `P` through `Q` for `N` total passes. For example, `--layers 8
 --loop-layers 3-5:4` executes blocks in the order `1,2,3,4,5,3,4,5,3,4,5,3,4,5,6,7,8`.
-The repeated passes share the same block parameters, while each execution keeps
-its own forward activations so backpropagation traverses the complete unrolled
-graph. Gradients from all invocations of a block accumulate before its one
-optimizer update. `N=1` is equivalent to an ordinary transformer.
+The repeated passes share the same block parameters and one backward activation
+cache per physical block. The first execution initializes that cache and later
+executions add their activations to it. A single reusable transient cache handles
+repeated forward executions, so loop activation memory is independent of `N`.
+Backpropagation then traverses the physical blocks once in reverse order and
+consumes each block's accumulated cache once. `N=1` is equivalent to an ordinary
+transformer.
 
 When `N > 1`, loop execution also applies the version-1 loop architecture:
 

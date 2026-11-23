@@ -27,14 +27,22 @@ namespace rllm
         AttentionWorkspace attention_workspace;
         ForwardScratchspace scratchspace;
         std::vector<ForwardWorkspace> transformer_workspaces;
+        std::unique_ptr<ForwardWorkspace> repeated_execution_workspace;
+        std::vector<bool> transformer_workspace_used;
+        bool reuse_single_workspace;
 
-        TextTrainerForwardWorkspace(PositionIndex seq_len, size_t num_transformer_blocks)
-            : h(seq_len), loop_input(seq_len), scratchspace(seq_len)
+        TextTrainerForwardWorkspace(PositionIndex seq_len, size_t num_transformer_blocks,
+            bool reuse_single_workspace_ = false)
+            : h(seq_len), loop_input(seq_len), scratchspace(seq_len),
+              reuse_single_workspace(reuse_single_workspace_)
         {
             loop_iteration_embedding.set_size(EmbeddingDimension::MAX);
             transformer_workspaces.reserve(num_transformer_blocks);
             for (size_t i = 0; i < num_transformer_blocks; ++i)
                 transformer_workspaces.emplace_back(seq_len, &attention_workspace);
+            if (num_transformer_blocks > 0)
+                repeated_execution_workspace = std::make_unique<ForwardWorkspace>(seq_len, &attention_workspace);
+            transformer_workspace_used.resize(num_transformer_blocks, false);
             h_last.set_size(EmbeddingDimension::MAX);
         }
 
@@ -45,14 +53,30 @@ namespace rllm
             scratchspace.reset(seq_len);
             for (auto& workspace : transformer_workspaces)
                 workspace.reset(queue, seq_len);
+            if (repeated_execution_workspace)
+                repeated_execution_workspace->reset(queue, seq_len);
+            std::fill(transformer_workspace_used.begin(), transformer_workspace_used.end(), false);
         }
 
-        ForwardWorkspace& transformer_workspace(size_t execution)
+        ForwardWorkspace& transformer_workspace(size_t block)
         {
-            assert(!transformer_workspaces.empty());
-            return transformer_workspaces.size() == 1
-                ? transformer_workspaces.front()
-                : transformer_workspaces[execution];
+            if (reuse_single_workspace)
+                return transformer_workspaces.front();
+            assert(block < transformer_workspaces.size());
+            return transformer_workspace_used[block]
+                ? *repeated_execution_workspace
+                : transformer_workspaces[block];
+        }
+
+        void finish_transformer_execution(size_t block, HipQueue& queue)
+        {
+            if (reuse_single_workspace)
+                return;
+            assert(block < transformer_workspaces.size());
+            if (transformer_workspace_used[block])
+                transformer_workspaces[block].accumulate_from(*repeated_execution_workspace, queue);
+            else
+                transformer_workspace_used[block] = true;
         }
     };
 

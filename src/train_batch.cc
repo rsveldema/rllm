@@ -655,9 +655,10 @@ namespace rllm
             }
             const size_t block = m_transformer_execution_order[execution];
             m_transformer_blocks[block].forward_batched(
-                forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(execution),
+                forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(block),
                 forward.scratchspace,
                 transformer_residual_scale(block));
+            forward.finish_transformer_execution(block, queue);
             if (m_training_algorithm == TrainingAlgorithm::Dust)
             {
                 const auto& transient = forward.transformer_workspaces.front();
@@ -696,7 +697,8 @@ namespace rllm
                 const auto iteration = loop_iteration_for_execution(execution);
                 if (!iteration || *iteration == 0)
                     continue;
-                auto& execution_workspace = forward.transformer_workspaces[execution];
+                const size_t block = m_transformer_execution_order[execution];
+                auto& execution_workspace = forward.transformer_workspaces[block];
                 train_window_all_positions(batch, active_indices, packed,
                     execution_workspace.h_in, execution_workspace.auxiliary_gradient,
                     auxiliary_weight, false, queue, losses, timing);
@@ -717,7 +719,7 @@ namespace rllm
         {
             train_batch_transformer_backward(rows, timing);
             const auto input_started = std::chrono::steady_clock::now();
-            auto& input_gradient = (m_transformer_execution_order.size() % 2 == 0)
+            auto& input_gradient = (m_transformer_blocks.size() % 2 == 0)
                 ? m_backward_workspace->dh : m_backward_workspace->din;
             m_input_layer.accumulate_backward_packed(
                 packed, input_gradient, m_gradient_accumulation_workspace->embeddings);

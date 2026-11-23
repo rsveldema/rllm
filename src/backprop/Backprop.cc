@@ -75,17 +75,15 @@ namespace rllm
         auto* p_dh = &ws.dh;
         auto* p_din = &ws.din;
         const auto transformer_started_at = std::chrono::steady_clock::now();
-        for (size_t reverse_execution = m_transformer_execution_order.size();
-             reverse_execution-- > 0;)
+        for (size_t i = m_transformer_blocks.size(); i-- > 0;)
         {
-            const size_t i = m_transformer_execution_order[reverse_execution];
             const auto before_phase = std::format(
                 "before transformer block {} backward", i);
             check_hidden_nan_finding_mode(
                 queue, *p_dh, m_seq_len, before_phase.c_str());
             m_transformer_blocks[i].backward(
                 *p_dh, *p_din, ws.transformer_block,
-                m_forward_workspace->transformer_workspaces[reverse_execution]);
+                m_forward_workspace->transformer_workspaces[i]);
             if (i >= m_frozen_transformer_block_count)
                 m_transformer_blocks[i].accumulate_gradients(
                     ws.transformer_block,
@@ -94,9 +92,8 @@ namespace rllm
                 "after transformer block {} backward", i);
             check_hidden_nan_finding_mode(
                 queue, *p_din, m_seq_len, after_phase.c_str());
-            if (const auto iteration = loop_iteration_for_execution(reverse_execution))
-                backward_loop_transition(
-                    *p_din, ws.loop_input_gradient, *iteration == 0);
+            if (m_loop_count > 1 && i == m_loop_first_block)
+                backward_loop_transition(*p_din, ws.loop_input_gradient, true);
             std::swap(p_dh, p_din);
         }
         if (timing)
@@ -124,13 +121,11 @@ namespace rllm
             log_hidden_gradient_diagnostics(*dh, packed_rows,
                 std::format("output heads -> transformer layer {}",
                     m_transformer_blocks.size() - 1));
-        for (size_t reverse_execution = m_transformer_execution_order.size();
-             reverse_execution-- > 0;)
+        for (size_t index = m_transformer_blocks.size(); index-- > 0;)
         {
-            const size_t index = m_transformer_execution_order[reverse_execution];
             m_transformer_blocks[index].backward(
                 *dh, *din, back.transformer_block,
-                forward.transformer_workspaces[reverse_execution], true,
+                forward.transformer_workspaces[index], true,
                 collect_diagnostics, static_cast<int>(index));
             if (index >= m_frozen_transformer_block_count)
                 m_transformer_blocks[index].accumulate_gradients(
@@ -138,18 +133,15 @@ namespace rllm
                     m_gradient_accumulation_workspace->transformer_blocks[index]);
             if (collect_diagnostics)
                 log_hidden_gradient_diagnostics(*din, packed_rows,
-                    reverse_execution == 0
-                        ? "transformer execution 0 -> input embeddings"
-                        : std::format("transformer execution {} -> {}",
-                            reverse_execution, reverse_execution - 1));
-            if (const auto iteration = loop_iteration_for_execution(reverse_execution))
+                    index == 0
+                        ? "transformer block 0 -> input embeddings"
+                        : std::format("transformer block {} -> {}", index, index - 1));
+            if (m_loop_count > 1 && index == m_loop_first_block)
             {
-                if (*iteration > 0)
-                    element_wise_sum(*din,
-                        forward.transformer_workspaces[reverse_execution].auxiliary_gradient,
-                        *din);
-                backward_loop_transition(
-                    *din, back.loop_input_gradient, *iteration == 0);
+                element_wise_sum(*din,
+                    forward.transformer_workspaces[index].auxiliary_gradient,
+                    *din);
+                backward_loop_transition(*din, back.loop_input_gradient, true);
             }
             std::swap(dh, din);
         }

@@ -151,6 +151,11 @@ namespace rllm
         }
 
         size_t storage_size_bytes() const;
+
+        // Merge activations from another execution of the same physical block.
+        // This lets looped architectures retain one backward cache per block
+        // instead of one cache per unrolled execution.
+        void accumulate_from(const ForwardWorkspace& other, HipQueue& queue);
     };
 
 
