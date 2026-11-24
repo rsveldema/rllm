@@ -61,7 +61,7 @@
     "--simulated-annealing-decay-epochs", "1",
     "--simulated-annealing-min-multiplier", "0.02",
     "--micro-batch-size", "16",
-    "--max-validation-windows", "8",
+    "--max-validation-windows", "4",
     "--validation-worst-count", "100",
     "--hip-device", "R9700",
     "--restart-learning-rate-schedule"

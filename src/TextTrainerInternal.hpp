@@ -20,6 +20,27 @@ namespace rllm
 
     struct TextTrainerForwardWorkspace
     {
+        struct ExecutionCheckpoint
+        {
+            cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension> h_in;
+            std::unique_ptr<cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension>> auxiliary_gradient;
+
+            ExecutionCheckpoint(PositionIndex rows, bool needs_auxiliary_gradient)
+                : h_in(rows)
+            {
+                if (needs_auxiliary_gradient)
+                    auxiliary_gradient = std::make_unique<cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension>>(rows);
+            }
+
+            void reset(HipQueue& queue, PositionIndex rows)
+            {
+                h_in.set_rows(rows);
+                if (auxiliary_gradient)
+                    auxiliary_gradient->set_rows(rows);
+                (void)queue;
+            }
+        };
+
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input;
         fixed_size_vector<float, EmbeddingDimension> loop_iteration_embedding;
@@ -27,22 +48,19 @@ namespace rllm
         AttentionWorkspace attention_workspace;
         ForwardScratchspace scratchspace;
         std::vector<ForwardWorkspace> transformer_workspaces;
-        std::unique_ptr<ForwardWorkspace> repeated_execution_workspace;
-        std::vector<bool> transformer_workspace_used;
-        bool reuse_single_workspace;
+        std::vector<ExecutionCheckpoint> execution_checkpoints;
 
-        TextTrainerForwardWorkspace(PositionIndex seq_len, size_t num_transformer_blocks,
-            bool reuse_single_workspace_ = false)
-            : h(seq_len), loop_input(seq_len), scratchspace(seq_len),
-              reuse_single_workspace(reuse_single_workspace_)
+        TextTrainerForwardWorkspace(PositionIndex seq_len, size_t workspace_count,
+            const std::vector<bool>& auxiliary_checkpoint_executions = {})
+            : h(seq_len), loop_input(seq_len), scratchspace(seq_len)
         {
             loop_iteration_embedding.set_size(EmbeddingDimension::MAX);
-            transformer_workspaces.reserve(num_transformer_blocks);
-            for (size_t i = 0; i < num_transformer_blocks; ++i)
+            transformer_workspaces.reserve(workspace_count);
+            for (size_t i = 0; i < workspace_count; ++i)
                 transformer_workspaces.emplace_back(seq_len, &attention_workspace);
-            if (num_transformer_blocks > 0)
-                repeated_execution_workspace = std::make_unique<ForwardWorkspace>(seq_len, &attention_workspace);
-            transformer_workspace_used.resize(num_transformer_blocks, false);
+            execution_checkpoints.reserve(auxiliary_checkpoint_executions.size());
+            for (const bool needs_auxiliary_gradient : auxiliary_checkpoint_executions)
+                execution_checkpoints.emplace_back(seq_len, needs_auxiliary_gradient);
             h_last.set_size(EmbeddingDimension::MAX);
         }
 
@@ -53,30 +71,52 @@ namespace rllm
             scratchspace.reset(seq_len);
             for (auto& workspace : transformer_workspaces)
                 workspace.reset(queue, seq_len);
-            if (repeated_execution_workspace)
-                repeated_execution_workspace->reset(queue, seq_len);
-            std::fill(transformer_workspace_used.begin(), transformer_workspace_used.end(), false);
+            for (auto& checkpoint : execution_checkpoints)
+                checkpoint.reset(queue, seq_len);
         }
 
-        ForwardWorkspace& transformer_workspace(size_t block)
+        ForwardWorkspace& transformer_workspace()
         {
-            if (reuse_single_workspace)
-                return transformer_workspaces.front();
-            assert(block < transformer_workspaces.size());
-            return transformer_workspace_used[block]
-                ? *repeated_execution_workspace
-                : transformer_workspaces[block];
+            assert(!transformer_workspaces.empty());
+            return transformer_workspaces.front();
         }
 
-        void finish_transformer_execution(size_t block, HipQueue& queue)
+        void checkpoint_execution(size_t execution,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& input,
+            HipQueue& queue)
         {
-            if (reuse_single_workspace)
+            if (execution_checkpoints.empty())
                 return;
-            assert(block < transformer_workspaces.size());
-            if (transformer_workspace_used[block])
-                transformer_workspaces[block].accumulate_from(*repeated_execution_workspace, queue);
-            else
-                transformer_workspace_used[block] = true;
+            assert(execution < execution_checkpoints.size());
+            input.copy_to_cpu(queue, execution_checkpoints[execution].h_in);
+        }
+
+        void restore_execution(size_t execution,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& input,
+            HipQueue& queue)
+        {
+            assert(execution < execution_checkpoints.size());
+            input.copy_from_cpu(queue, execution_checkpoints[execution].h_in);
+        }
+
+        void checkpoint_auxiliary_gradient(size_t execution,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& gradient,
+            HipQueue& queue)
+        {
+            assert(execution < execution_checkpoints.size());
+            auto& auxiliary = execution_checkpoints[execution].auxiliary_gradient;
+            assert(auxiliary);
+            gradient.copy_to_cpu(queue, *auxiliary);
+        }
+
+        void restore_auxiliary_gradient(size_t execution,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& gradient,
+            HipQueue& queue)
+        {
+            assert(execution < execution_checkpoints.size());
+            auto& auxiliary = execution_checkpoints[execution].auxiliary_gradient;
+            assert(auxiliary);
+            gradient.copy_from_cpu(queue, *auxiliary);
         }
     };
 

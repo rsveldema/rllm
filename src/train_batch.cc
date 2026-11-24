@@ -654,11 +654,11 @@ namespace rllm
                 apply_loop_transition(forward.h, forward.loop_input, forward.loop_iteration_embedding);
             }
             const size_t block = m_transformer_execution_order[execution];
+            forward.checkpoint_execution(execution, forward.h, queue);
             m_transformer_blocks[block].forward_batched(
-                forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(block),
+                forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(),
                 forward.scratchspace,
                 transformer_residual_scale(block));
-            forward.finish_transformer_execution(block, queue);
             if (m_training_algorithm == TrainingAlgorithm::Dust)
             {
                 const auto& transient = forward.transformer_workspaces.front();
@@ -688,6 +688,9 @@ namespace rllm
         }
         train_window_all_positions(batch, active_indices, packed, forward.h, *hidden_gradient,
             1.0f, true, queue, losses, timing);
+        if (m_training_algorithm == TrainingAlgorithm::Backprop)
+            add_entity_consistency_loss(contexts, packed, forward.h, m_backward_workspace->dh,
+                *m_batched_output_workspace, queue);
         if (m_training_algorithm == TrainingAlgorithm::Backprop && m_loop_count > 1)
         {
             const float auxiliary_weight =
@@ -697,16 +700,17 @@ namespace rllm
                 const auto iteration = loop_iteration_for_execution(execution);
                 if (!iteration || *iteration == 0)
                     continue;
-                const size_t block = m_transformer_execution_order[execution];
-                auto& execution_workspace = forward.transformer_workspaces[block];
+                auto& checkpoint = forward.execution_checkpoints[execution];
+                assert(checkpoint.auxiliary_gradient);
+                forward.restore_execution(execution, forward.h, queue);
+                auto& auxiliary_gradient = forward.transformer_workspace().auxiliary_gradient;
+                auxiliary_gradient.zero(queue);
                 train_window_all_positions(batch, active_indices, packed,
-                    execution_workspace.h_in, execution_workspace.auxiliary_gradient,
+                    forward.h, auxiliary_gradient,
                     auxiliary_weight, false, queue, losses, timing);
+                forward.checkpoint_auxiliary_gradient(execution, auxiliary_gradient, queue);
             }
         }
-        if (m_training_algorithm == TrainingAlgorithm::Backprop)
-            add_entity_consistency_loss(contexts, packed, forward.h, m_backward_workspace->dh,
-                *m_batched_output_workspace, queue);
         for (const float loss : losses)
         {
             if (std::isfinite(loss))
@@ -719,7 +723,7 @@ namespace rllm
         {
             train_batch_transformer_backward(rows, timing);
             const auto input_started = std::chrono::steady_clock::now();
-            auto& input_gradient = (m_transformer_blocks.size() % 2 == 0)
+            auto& input_gradient = (m_transformer_execution_order.size() % 2 == 0)
                 ? m_backward_workspace->dh : m_backward_workspace->din;
             m_input_layer.accumulate_backward_packed(
                 packed, input_gradient, m_gradient_accumulation_workspace->embeddings);

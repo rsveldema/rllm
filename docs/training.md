@@ -21,16 +21,20 @@ environment variables. Resume behavior is selected with the mutually exclusive
 directory, even when a best-validation checkpoint exists. With none of these,
 the launcher selects a compatible checkpoint automatically.
 
+Window training runs a baseline validation before training when weights were
+loaded from a checkpoint. A fresh model skips that baseline and begins training
+immediately; timed and end-of-epoch validation continue normally.
+
 Use `--loop-layers P-Q:N` to execute the one-based transformer-block range
 `P` through `Q` for `N` total passes. For example, `--layers 8
 --loop-layers 3-5:4` executes blocks in the order `1,2,3,4,5,3,4,5,3,4,5,3,4,5,6,7,8`.
-The repeated passes share the same block parameters and one backward activation
-cache per physical block. The first execution initializes that cache and later
-executions add their activations to it. A single reusable transient cache handles
-repeated forward executions, so loop activation memory is independent of `N`.
-Backpropagation then traverses the physical blocks once in reverse order and
-consumes each block's accumulated cache once. `N=1` is equivalent to an ordinary
-transformer.
+The repeated passes share the same block parameters. Backprop training stores
+each execution's input hidden state and any auxiliary loop gradient in pinned
+host memory. During backward propagation,
+each execution is replayed into one reusable forward workspace and differentiated
+in reverse execution order. This preserves the exact unrolled-loop gradient
+without retaining every execution's full attention and FFN activations on the
+GPU. `N=1` is equivalent to an ordinary transformer.
 
 When `N > 1`, loop execution also applies the version-1 loop architecture:
 

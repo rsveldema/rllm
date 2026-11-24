@@ -699,9 +699,9 @@ namespace rllm
             }
             const size_t block_index = m_transformer_execution_order[execution];
             auto& block = m_transformer_blocks[block_index];
-            block.forward(ws.h, m_seq_len, ws.transformer_workspace(block_index), ws.scratchspace,
+            ws.checkpoint_execution(execution, ws.h, queue);
+            block.forward(ws.h, m_seq_len, ws.transformer_workspace(), ws.scratchspace,
                 transformer_residual_scale(block_index));
-            ws.finish_transformer_execution(block_index, queue);
             char phase[96];
             std::snprintf(phase, sizeof(phase), "after transformer block %zu execution %zu forward", block_index, execution);
             check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, phase);
@@ -1060,15 +1060,22 @@ namespace rllm
         m_gradient_accumulation_workspace.reset();
         m_gpu_packed_batch.reset();
         m_batched_output_workspace.reset();
-        const size_t forward_workspace_count =
-            m_training_algorithm == TrainingAlgorithm::Dust ? 1 : m_transformer_blocks.size();
+        std::vector<bool> auxiliary_checkpoint_executions;
+        if (m_training_algorithm == TrainingAlgorithm::Backprop)
+        {
+            auxiliary_checkpoint_executions.resize(m_transformer_execution_order.size(), false);
+            for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
+            {
+                const auto iteration = loop_iteration_for_execution(execution);
+                auxiliary_checkpoint_executions[execution] = iteration && *iteration > 0;
+            }
+        }
         m_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(
-            PositionIndex::START, forward_workspace_count,
-            m_training_algorithm == TrainingAlgorithm::Dust);
+            PositionIndex::START, 1, auxiliary_checkpoint_executions);
         if (m_training_algorithm == TrainingAlgorithm::Dust)
         {
             m_dust_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(
-                PositionIndex::START, 0, true);
+                PositionIndex::START, 0);
             m_dust_workspace = std::make_unique<DustWorkspace>(
                 PositionIndex::START, m_transformer_execution_order.size());
             auto& queue = hip_runtime::get_queue(0);
@@ -1484,11 +1491,11 @@ namespace rllm
                     apply_loop_transition(forward.h, forward.loop_input, forward.loop_iteration_embedding);
                 }
                 const size_t block = m_transformer_execution_order[execution];
+                forward.checkpoint_execution(execution, forward.h, queue);
                 m_transformer_blocks[block].forward_batched(
-                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(block),
+                    forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(),
                     forward.scratchspace,
                     transformer_residual_scale(block));
-                forward.finish_transformer_execution(block, queue);
                 if (diagnose_first_batch)
                 {
                     const auto label = std::format(
@@ -2286,7 +2293,9 @@ namespace rllm
                 m_checkpoint_window = 0;
             }
         }
-        if (!validation_windows.empty())
+        // A baseline is useful when resuming or fine-tuning loaded weights, but
+        // evaluating random fresh weights only delays the first training step.
+        if (!validation_windows.empty() && !m_loaded_model_path.empty())
         {
             const auto baseline = evaluate_all_window_positions(validation_windows, true);
             const double baseline_epoch_progress =
@@ -2711,8 +2720,9 @@ namespace rllm
                 m_forward_workspace->transformer_workspaces.front(),
                 use_dust ? nullptr : &m_backward_workspace->transformer_block,
                 m_gradient_accumulation_workspace->transformer_blocks.front(), n_layers,
-                !use_dust, m_forward_workspace->attention_workspace.storage_size_bytes() +
-                    m_forward_workspace->scratchspace.storage_size_bytes());
+                false, m_forward_workspace->attention_workspace.storage_size_bytes() +
+                    m_forward_workspace->scratchspace.storage_size_bytes() +
+                    (use_dust ? 0 : m_forward_workspace->transformer_workspaces.front().storage_size_bytes()));
             transformer_gpu_bytes = per_layer_gpu_bytes * n_layers;
             if (use_dust)
             {
@@ -2733,7 +2743,8 @@ namespace rllm
             {
                 LOG_INFO(
                     "Estimated transformer GPU memory: {:.2f} MB per-layer share x {} layers = {:.2f} MB "
-                    "(weights, optimizer state, forward/backward workspaces, and gradient accumulators)",
+                    "(weights, optimizer state, one shared forward/backward workspace, and gradient accumulators; "
+                    "execution checkpoints are pinned host memory)",
                     static_cast<double>(per_layer_gpu_bytes) / 1'000'000.0,
                     n_layers,
                     static_cast<double>(transformer_gpu_bytes) / 1'000'000.0);
