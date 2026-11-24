@@ -1121,23 +1121,21 @@ namespace rllm
         TextTrainerForwardWorkspace& workspace, size_t execution,
         PositionIndex rows, const GpuInputLine& tokens, HipQueue& queue)
     {
-        if (m_loop_count > 1)
-            return;
         assert(m_transformer_execution_order.size() <=
             static_cast<size_t>(HeadsIndex::MAX));
         workspace.checkpoint_residual(execution, workspace.h, queue);
         if (execution == 0)
             return;
-        m_dynamic_skip_attention.begin_mix(workspace.loop_input, rows);
+        m_dynamic_skip_attention.begin_mix(workspace.dsa_mixed, rows);
         const auto destination = static_cast<HeadsIndex>(execution);
         for (size_t source = 0; source < execution; ++source)
         {
             workspace.restore_residual(source + 1, workspace.h, queue);
             m_dynamic_skip_attention.add_source(
-                workspace.h, workspace.loop_input, tokens, static_cast<int>(rows),
+                workspace.h, workspace.dsa_mixed, tokens, static_cast<int>(rows),
                 static_cast<int>(source), static_cast<int>(destination));
         }
-        workspace.h = workspace.loop_input;
+        workspace.h = workspace.dsa_mixed;
     }
 
     void TextTrainer::backward_dynamic_skip_attention(
@@ -1146,23 +1144,23 @@ namespace rllm
         size_t execution, PositionIndex rows, const GpuInputLine& tokens,
         HipQueue& queue)
     {
-        if (m_loop_count > 1 || execution == 0)
+        if (execution == 0)
             return;
         // Preserve the actual input consumed by this block while residual
         // sources are streamed back from their host checkpoints.
-        forward.restore_execution(execution, forward.loop_input, queue);
+        forward.restore_execution(execution, forward.dsa_mixed, queue);
         const auto destination = static_cast<HeadsIndex>(execution);
         for (size_t source = 0; source < execution; ++source)
         {
             forward.restore_residual(source + 1, forward.h, queue);
-            backward.restore_residual_gradient(source, backward.loop_input_gradient, queue);
+            backward.restore_residual_gradient(source, backward.dsa_source_gradient, queue);
             m_dynamic_skip_attention.backward_source(
-                mixed_gradient, forward.h, forward.loop_input,
-                backward.loop_input_gradient, tokens, static_cast<int>(rows),
+                mixed_gradient, forward.h, forward.dsa_mixed,
+                backward.dsa_source_gradient, tokens, static_cast<int>(rows),
                 static_cast<int>(source), static_cast<int>(destination),
                 m_gradient_accumulation_workspace->dynamic_skip_attention);
             backward.checkpoint_residual_gradient(
-                source, backward.loop_input_gradient, queue);
+                source, backward.dsa_source_gradient, queue);
         }
         backward.restore_residual_gradient(execution - 1, mixed_gradient, queue);
     }
@@ -2781,6 +2779,8 @@ namespace rllm
                 m_gradient_accumulation_workspace->transformer_blocks.front(), n_layers,
                 false, m_forward_workspace->attention_workspace.storage_size_bytes() +
                     m_forward_workspace->scratchspace.storage_size_bytes() +
+                    m_forward_workspace->dsa_mixed.storage_size_bytes() +
+                    (use_dust ? 0 : m_backward_workspace->dsa_source_gradient.storage_size_bytes()) +
                     (use_dust ? 0 : m_forward_workspace->transformer_workspaces.front().storage_size_bytes()));
             transformer_gpu_bytes = per_layer_gpu_bytes * n_layers;
             if (use_dust)
@@ -2802,7 +2802,8 @@ namespace rllm
             {
                 LOG_INFO(
                     "Estimated transformer GPU memory: {:.2f} MB per-layer share x {} layers = {:.2f} MB "
-                    "(weights, optimizer state, one shared forward/backward workspace, and gradient accumulators; "
+                    "(weights, optimizer state, shared forward/backward workspace including DSA scratch, "
+                    "and gradient accumulators; "
                     "execution checkpoints are pinned host memory)",
                     static_cast<double>(per_layer_gpu_bytes) / 1'000'000.0,
                     n_layers,

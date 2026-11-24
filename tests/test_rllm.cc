@@ -16,6 +16,7 @@
 #include <vecmath.hpp>
 #include <cpu/cpu_flex_rows_cols_matrix.hpp>
 #include <cpu/cpu_flex_rows_matrix.hpp>
+#include <cpu/cpu_fixed_matrix.hpp>
 #include <cpu/cpu_fixed_triangular_matrix.hpp>
 #include <cpu/cpu_fixed_vector.hpp>
 
@@ -1040,6 +1041,45 @@ TEST(TextTrainerTest, LoopTransitionBackwardMatchesForward)
         EXPECT_NEAR(actual, expected, 1e-4f)
             << "total gradient w.r.t. loop_input must equal w";
     }
+}
+
+TEST(TextTrainerTest, LoopedTrainingUpdatesDynamicSkipAttention)
+{
+    using namespace rllm;
+    std::srand(0);
+    std::vector<std::string> filters = {"guaranteed_to_learn"};
+    Corpus corpus(filters);
+    corpus.load_files_from_dir("training_data0");
+    Statistics stats;
+    TextTrainer network(1, corpus, stats);
+    network.set_transformer_loop(0, 0, 3);
+    network.set_training_method(TrainingMethod::WINDOW);
+    network.set_window_size(64);
+    network.set_micro_batch_size(1);
+    network.set_learn_depth(1);
+    network.set_example_convergence_enabled(false);
+    network.set_early_stopping_enabled(false);
+    network.set_training_progress_filename(
+        (std::filesystem::temp_directory_path() / "rllm-looped-dsa-progress.json").string());
+
+    auto& dsa = const_cast<DynamicSkipAttention&>(network.get_dynamic_skip_attention());
+    auto& queue = hip_runtime::get_queue(0);
+    cpu_fixed_matrix<float, TokenID, HeadsIndex> uniform_logits;
+    for (const auto [token, source] : enum_iterator2D<TokenID, HeadsIndex>())
+        uniform_logits[token, source] = 0.0f;
+    dsa.logits().copy_from_cpu(queue, uniform_logits);
+
+    network.train(false, 1, std::nullopt, std::nullopt, 1);
+
+    cpu_fixed_matrix<float, TokenID, HeadsIndex> updated_logits;
+    dsa.logits().copy_to_cpu(queue, updated_logits);
+    bool updated = false;
+    for (const auto [token, source] : enum_iterator2D<TokenID, HeadsIndex>())
+        updated |= updated_logits[token, source] != uniform_logits[token, source];
+    EXPECT_TRUE(updated);
+
+    std::filesystem::remove(
+        std::filesystem::temp_directory_path() / "rllm-looped-dsa-progress.json");
 }
 
 namespace

@@ -43,6 +43,7 @@ namespace rllm
 
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> h;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dsa_mixed;
         fixed_size_vector<float, EmbeddingDimension> loop_iteration_embedding;
         fixed_size_vector<float, EmbeddingDimension> h_last;
         AttentionWorkspace attention_workspace;
@@ -54,7 +55,7 @@ namespace rllm
 
         TextTrainerForwardWorkspace(PositionIndex seq_len, size_t workspace_count,
             const std::vector<bool>& auxiliary_checkpoint_executions = {})
-            : h(seq_len), loop_input(seq_len), scratchspace(seq_len)
+            : h(seq_len), loop_input(seq_len), dsa_mixed(seq_len), scratchspace(seq_len)
         {
             loop_iteration_embedding.set_size(EmbeddingDimension::MAX);
             transformer_workspaces.reserve(workspace_count);
@@ -73,6 +74,7 @@ namespace rllm
         {
             h.set_rows(seq_len);
             loop_input.set_rows(seq_len);
+            dsa_mixed.set_rows(seq_len);
             scratchspace.reset(seq_len);
             for (auto& workspace : transformer_workspaces)
                 workspace.reset(queue, seq_len);
@@ -155,11 +157,13 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dh;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input_gradient;
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dsa_source_gradient;
         std::vector<cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension>> residual_gradients;
         BackwardWorkspace transformer_block;
 
         explicit BackwardPropWorkspace(PositionIndex seq_len, size_t execution_count)
-            : dh(seq_len), din(seq_len), loop_input_gradient(seq_len), transformer_block(seq_len)
+            : dh(seq_len), din(seq_len), loop_input_gradient(seq_len),
+              dsa_source_gradient(seq_len), transformer_block(seq_len)
         {
             output_layer_delta.set_size(TokenID::MAX);
             output_string_table_index_delta.set_size(PositionIndex::MAX);
@@ -176,6 +180,8 @@ namespace rllm
             din.set_rows(seq_len);
             loop_input_gradient.set_rows(seq_len);
             loop_input_gradient.zero(queue);
+            dsa_source_gradient.set_rows(seq_len);
+            dsa_source_gradient.zero(queue);
             transformer_block.reset(queue, seq_len);
             output_layer_delta.zero(queue);
             output_string_table_index_delta.zero(queue);
