@@ -49,6 +49,8 @@ namespace rllm
         ForwardScratchspace scratchspace;
         std::vector<ForwardWorkspace> transformer_workspaces;
         std::vector<ExecutionCheckpoint> execution_checkpoints;
+        std::vector<cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension>> residual_history;
+        GpuInputLine dsa_tokens;
 
         TextTrainerForwardWorkspace(PositionIndex seq_len, size_t workspace_count,
             const std::vector<bool>& auxiliary_checkpoint_executions = {})
@@ -61,6 +63,9 @@ namespace rllm
             execution_checkpoints.reserve(auxiliary_checkpoint_executions.size());
             for (const bool needs_auxiliary_gradient : auxiliary_checkpoint_executions)
                 execution_checkpoints.emplace_back(seq_len, needs_auxiliary_gradient);
+            residual_history.reserve(workspace_count == 0 ? 0 : auxiliary_checkpoint_executions.size());
+            for (size_t i = 0; i < auxiliary_checkpoint_executions.size(); ++i)
+                residual_history.emplace_back(seq_len);
             h_last.set_size(EmbeddingDimension::MAX);
         }
 
@@ -73,6 +78,24 @@ namespace rllm
                 workspace.reset(queue, seq_len);
             for (auto& checkpoint : execution_checkpoints)
                 checkpoint.reset(queue, seq_len);
+            for (auto& residual : residual_history)
+                residual.set_rows(seq_len);
+        }
+
+        void checkpoint_residual(size_t execution,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& value,
+            HipQueue& queue)
+        {
+            assert(execution < residual_history.size());
+            value.copy_to_cpu(queue, residual_history[execution]);
+        }
+
+        void restore_residual(size_t execution,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& value,
+            HipQueue& queue)
+        {
+            assert(execution < residual_history.size());
+            value.copy_from_cpu(queue, residual_history[execution]);
         }
 
         ForwardWorkspace& transformer_workspace()
@@ -132,15 +155,19 @@ namespace rllm
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> dh;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> din;
         flexible_rows_matrix<float, PositionIndex, EmbeddingDimension> loop_input_gradient;
+        std::vector<cpu_flex_rows_matrix<float, PositionIndex, EmbeddingDimension>> residual_gradients;
         BackwardWorkspace transformer_block;
 
-        explicit BackwardPropWorkspace(PositionIndex seq_len)
+        explicit BackwardPropWorkspace(PositionIndex seq_len, size_t execution_count)
             : dh(seq_len), din(seq_len), loop_input_gradient(seq_len), transformer_block(seq_len)
         {
             output_layer_delta.set_size(TokenID::MAX);
             output_string_table_index_delta.set_size(PositionIndex::MAX);
             h_last_vec.set_size(EmbeddingDimension::MAX);
             dh_last.set_size(EmbeddingDimension::MAX);
+            residual_gradients.reserve(execution_count);
+            for (size_t i = 0; i < execution_count; ++i)
+                residual_gradients.emplace_back(seq_len);
         }
 
         void reset(HipQueue& queue, PositionIndex seq_len)
@@ -154,6 +181,25 @@ namespace rllm
             output_string_table_index_delta.zero(queue);
             h_last_vec.zero(queue);
             dh_last.zero(queue);
+            for (auto& gradient : residual_gradients)
+            {
+                gradient.set_rows(seq_len);
+                gradient.zero();
+            }
+        }
+
+        void restore_residual_gradient(size_t layer,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& value,
+            HipQueue& queue)
+        {
+            value.copy_from_cpu(queue, residual_gradients[layer]);
+        }
+
+        void checkpoint_residual_gradient(size_t layer,
+            const flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& value,
+            HipQueue& queue)
+        {
+            value.copy_to_cpu(queue, residual_gradients[layer]);
         }
     };
 
@@ -235,6 +281,7 @@ namespace rllm
         fixed_size_obj_vector<OutputLayerGradientAccumulator, MultiTokenPredictionIndex> output_layers;
         std::vector<TransformerGradientAccumulator> transformer_blocks;
         EmbeddingGradientAccumulator embeddings;
+        fixed_size_matrix<float, TokenID, HeadsIndex> dynamic_skip_attention;
         std::unique_ptr<backprop::MuonWorkspace> muon;
 
         explicit GradientAccumulationWorkspace(size_t num_transformer_blocks, bool use_muon)
@@ -252,6 +299,7 @@ namespace rllm
             for (auto& block : transformer_blocks)
                 block.reset(queue);
             embeddings.reset(queue);
+            dynamic_skip_attention.zero(queue);
         }
     };
 }

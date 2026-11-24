@@ -126,6 +126,7 @@ function(rllm_define_lib target_name)
         "${RLLM_COMPILE_SRC_DIR}/InputLayer.cc"
         "${RLLM_COMPILE_SRC_DIR}/vecmath.cc"
         "${RLLM_COMPILE_SRC_DIR}/TransformerBlock.cc"
+        "${RLLM_COMPILE_SRC_DIR}/DynamicSkipAttention.cc"
         "${RLLM_COMPILE_SRC_DIR}/OutputLayer.cc"
         "${RLLM_COMPILE_SRC_DIR}/OptimizerDiagnostics.cc"
         "${RLLM_COMPILE_SRC_DIR}/TextTrainer.cc"

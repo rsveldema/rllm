@@ -232,6 +232,11 @@ namespace rllm
         }
 
         m_input_layer.load(j.at("input_layer"));
+        cpu_fixed_matrix<float, TokenID, HeadsIndex> dsa_logits;
+        json_helpers::deserialize_matrix(
+            j.at("dynamic_skip_attention").at("logits"), dsa_logits);
+        m_dynamic_skip_attention.logits().copy_from_cpu(
+            hip_runtime::get_queue(0), dsa_logits);
 
         if (j.contains("transformer_blocks"))
         {
@@ -364,6 +369,15 @@ namespace rllm
         j["loop_count"] = m_loop_count;
         j["loop_architecture_version"] = LOOP_ARCHITECTURE_VERSION;
         j["input_layer"] = m_input_layer.save();
+        {
+            cpu_fixed_matrix<float, TokenID, HeadsIndex> logits;
+            auto& queue = hip_runtime::get_queue(0);
+            m_dynamic_skip_attention.logits().copy_to_cpu(queue, logits);
+            queue.wait("DSA JSON serialization");
+            j["dynamic_skip_attention"] = {
+                {"logits", *json_helpers::serialize_matrix(logits)}
+            };
+        }
 
         auto blocks = nlohmann::json::array();
         for (const auto& block : m_transformer_blocks)
@@ -713,6 +727,15 @@ namespace rllm
         push_matrix(st, "training.input_layer.identifier_adam_first", m_input_layer.m_identifier_adam_first, storage);
         push_matrix(st, "training.input_layer.identifier_adam_second", m_input_layer.m_identifier_adam_second, storage);
 
+        // Dynamic Skip Attention is part of the model architecture, not an
+        // ephemeral workspace. Persist it even for inference-only checkpoints.
+        push_matrix(st, "dynamic_skip_attention.logits",
+            m_dynamic_skip_attention.logits(), storage);
+        push_matrix(st, "training.dynamic_skip_attention.adam_first",
+            m_dynamic_skip_attention.adam_first(), storage);
+        push_matrix(st, "training.dynamic_skip_attention.adam_second",
+            m_dynamic_skip_attention.adam_second(), storage);
+
         // Transformer blocks (friend grants access to W_q etc.)
         for (size_t bi = 0; bi < m_transformer_blocks.size(); ++bi)
         {
@@ -847,6 +870,11 @@ namespace rllm
         if (!header.count("version"))
         {
             std::println("Missing version in safetensors metadata for: {}", filename);
+            return false;
+        }
+        if (!st.tensors.count("dynamic_skip_attention.logits"))
+        {
+            std::println("Missing Dynamic Skip Attention table in: {}", filename);
             return false;
         }
 
@@ -1076,6 +1104,26 @@ namespace rllm
         }
 
         m_input_layer.load_from_safetensors(filename);
+        pull_matrix("dynamic_skip_attention.logits", st,
+            m_dynamic_skip_attention.logits());
+        if (load_optimizer_tensors)
+        {
+            if (!st.tensors.count("training.dynamic_skip_attention.adam_first") ||
+                !st.tensors.count("training.dynamic_skip_attention.adam_second"))
+            {
+                std::println("Missing Dynamic Skip Attention optimizer state in: {}", filename);
+                return false;
+            }
+            pull_matrix("training.dynamic_skip_attention.adam_first", st,
+                m_dynamic_skip_attention.adam_first());
+            pull_matrix("training.dynamic_skip_attention.adam_second", st,
+                m_dynamic_skip_attention.adam_second());
+        }
+        else
+        {
+            m_dynamic_skip_attention.adam_first().zero(hip_runtime::get_queue(0));
+            m_dynamic_skip_attention.adam_second().zero(hip_runtime::get_queue(0));
+        }
         if (load_optimizer_tensors)
         {
             pull_matrix("training.input_layer.adam_first", st, m_input_layer.m_adam_first);

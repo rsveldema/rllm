@@ -684,6 +684,7 @@ namespace rllm
 
         // Embed tokens; transformer attention applies RoPE to Q and K.
         m_input_layer.propagate_forward(m_last_input, ws.h);
+        ws.dsa_tokens.sync_to_device(queue, m_last_input);
         check_hidden_nan_finding_mode(queue, ws.h, m_seq_len, "after input layer forward");
 
         // Repeated entries share block parameters but retain per-execution
@@ -699,6 +700,7 @@ namespace rllm
             }
             const size_t block_index = m_transformer_execution_order[execution];
             auto& block = m_transformer_blocks[block_index];
+            apply_dynamic_skip_attention(ws, execution, m_seq_len, ws.dsa_tokens, queue);
             ws.checkpoint_execution(execution, ws.h, queue);
             block.forward(ws.h, m_seq_len, ws.transformer_workspace(), ws.scratchspace,
                 transformer_residual_scale(block_index));
@@ -1061,9 +1063,9 @@ namespace rllm
         m_gpu_packed_batch.reset();
         m_batched_output_workspace.reset();
         std::vector<bool> auxiliary_checkpoint_executions;
+        auxiliary_checkpoint_executions.resize(m_transformer_execution_order.size(), false);
         if (m_training_algorithm == TrainingAlgorithm::Backprop)
         {
-            auxiliary_checkpoint_executions.resize(m_transformer_execution_order.size(), false);
             for (size_t execution = 0; execution < m_transformer_execution_order.size(); ++execution)
             {
                 const auto iteration = loop_iteration_for_execution(execution);
@@ -1075,7 +1077,7 @@ namespace rllm
         if (m_training_algorithm == TrainingAlgorithm::Dust)
         {
             m_dust_forward_workspace = std::make_unique<TextTrainerForwardWorkspace>(
-                PositionIndex::START, 0);
+                PositionIndex::START, 0, auxiliary_checkpoint_executions);
             m_dust_workspace = std::make_unique<DustWorkspace>(
                 PositionIndex::START, m_transformer_execution_order.size());
             auto& queue = hip_runtime::get_queue(0);
@@ -1084,7 +1086,8 @@ namespace rllm
             m_dust_workspace->allocate_device_buffers(queue);
         }
         else
-            m_backward_workspace = std::make_unique<BackwardPropWorkspace>(PositionIndex::START);
+            m_backward_workspace = std::make_unique<BackwardPropWorkspace>(
+                PositionIndex::START, m_transformer_execution_order.size());
         m_gradient_accumulation_workspace = std::make_unique<GradientAccumulationWorkspace>(
             m_transformer_blocks.size(), m_training_algorithm == TrainingAlgorithm::Backprop);
         m_gpu_packed_batch = std::make_unique<GpuPackedBatchInput>();
@@ -1112,6 +1115,56 @@ namespace rllm
         if (m_loop_count <= 1 || block < m_loop_first_block || block > m_loop_last_block)
             return 1.0f;
         return 1.0f / std::sqrt(static_cast<float>(m_loop_count));
+    }
+
+    void TextTrainer::apply_dynamic_skip_attention(
+        TextTrainerForwardWorkspace& workspace, size_t execution,
+        PositionIndex rows, const GpuInputLine& tokens, HipQueue& queue)
+    {
+        if (m_loop_count > 1)
+            return;
+        assert(m_transformer_execution_order.size() <=
+            static_cast<size_t>(HeadsIndex::MAX));
+        workspace.checkpoint_residual(execution, workspace.h, queue);
+        if (execution == 0)
+            return;
+        m_dynamic_skip_attention.begin_mix(workspace.loop_input, rows);
+        const auto destination = static_cast<HeadsIndex>(execution);
+        for (size_t source = 0; source < execution; ++source)
+        {
+            workspace.restore_residual(source + 1, workspace.h, queue);
+            m_dynamic_skip_attention.add_source(
+                workspace.h, workspace.loop_input, tokens, static_cast<int>(rows),
+                static_cast<int>(source), static_cast<int>(destination));
+        }
+        workspace.h = workspace.loop_input;
+    }
+
+    void TextTrainer::backward_dynamic_skip_attention(
+        TextTrainerForwardWorkspace& forward, BackwardPropWorkspace& backward,
+        flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& mixed_gradient,
+        size_t execution, PositionIndex rows, const GpuInputLine& tokens,
+        HipQueue& queue)
+    {
+        if (m_loop_count > 1 || execution == 0)
+            return;
+        // Preserve the actual input consumed by this block while residual
+        // sources are streamed back from their host checkpoints.
+        forward.restore_execution(execution, forward.loop_input, queue);
+        const auto destination = static_cast<HeadsIndex>(execution);
+        for (size_t source = 0; source < execution; ++source)
+        {
+            forward.restore_residual(source + 1, forward.h, queue);
+            backward.restore_residual_gradient(source, backward.loop_input_gradient, queue);
+            m_dynamic_skip_attention.backward_source(
+                mixed_gradient, forward.h, forward.loop_input,
+                backward.loop_input_gradient, tokens, static_cast<int>(rows),
+                static_cast<int>(source), static_cast<int>(destination),
+                m_gradient_accumulation_workspace->dynamic_skip_attention);
+            backward.checkpoint_residual_gradient(
+                source, backward.loop_input_gradient, queue);
+        }
+        backward.restore_residual_gradient(execution - 1, mixed_gradient, queue);
     }
 
     std::optional<size_t> TextTrainer::loop_iteration_for_execution(size_t execution) const
@@ -1238,6 +1291,10 @@ namespace rllm
                         std::format("transformer layer {}", i)))
                     m_pending_optimizer_diagnostics.push_back(std::move(*metrics));
         }
+
+        m_dynamic_skip_attention.apply_update(
+            m_gradient_accumulation_workspace->dynamic_skip_attention,
+            adamw_learning_rate, bias_correction1, bias_correction2);
 
         OptimizerDiagnosticMetrics embedding_metrics;
         m_input_layer.apply_accumulated_update(
@@ -1491,6 +1548,8 @@ namespace rllm
                     apply_loop_transition(forward.h, forward.loop_input, forward.loop_iteration_embedding);
                 }
                 const size_t block = m_transformer_execution_order[execution];
+                apply_dynamic_skip_attention(
+                    forward, execution, rows, m_gpu_packed_batch->tokens, queue);
                 forward.checkpoint_execution(execution, forward.h, queue);
                 m_transformer_blocks[block].forward_batched(
                     forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(),

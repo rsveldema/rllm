@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Corpus.hpp>
+#include <DynamicSkipAttention.hpp>
 #include <array>
 #include <InputLayer.hpp>
 #include <LearningRate.hpp>
@@ -120,6 +121,7 @@ namespace rllm
         const fixed_size_obj_vector<OutputLayer, MultiTokenPredictionIndex>& get_output_layers() const { return m_output_layers; }
         const OutputLayer& get_output_layer(MultiTokenPredictionIndex idx) const { return m_output_layers[idx]; }
         const InputLayer& get_input_layer() const { return m_input_layer; }
+        const DynamicSkipAttention& get_dynamic_skip_attention() const { return m_dynamic_skip_attention; }
         size_t get_transformer_block_count() const { return m_transformer_blocks.size(); }
         const std::vector<size_t>& get_transformer_execution_order() const { return m_transformer_execution_order; }
         size_t get_loop_first_block() const { return m_loop_first_block; }
@@ -257,6 +259,7 @@ namespace rllm
         Corpus&    m_corpus;
         Statistics& m_stats;
         InputLayer  m_input_layer;
+        DynamicSkipAttention m_dynamic_skip_attention;
         CpuInputLine   m_last_input;   // saved in propagate_forward for use in propagate_backward
         std::vector<TransformerBlock> m_transformer_blocks;
         std::vector<size_t> m_transformer_execution_order;
@@ -476,6 +479,20 @@ namespace rllm
         );
         void train_batch_transformer_backward(PositionIndex packed_rows, BatchTrainingTiming& timing);
         void rebuild_transformer_execution_order();
+        void apply_dynamic_skip_attention(
+            TextTrainerForwardWorkspace& workspace,
+            size_t execution,
+            PositionIndex rows,
+            const GpuInputLine& tokens,
+            HipQueue& queue);
+        void backward_dynamic_skip_attention(
+            TextTrainerForwardWorkspace& forward,
+            BackwardPropWorkspace& backward,
+            flexible_rows_matrix<float, PositionIndex, EmbeddingDimension>& mixed_gradient,
+            size_t execution,
+            PositionIndex rows,
+            const GpuInputLine& tokens,
+            HipQueue& queue);
         float transformer_residual_scale(size_t block) const;
         std::optional<size_t> loop_iteration_for_execution(size_t execution) const;
         size_t finish_converged_batch_items(

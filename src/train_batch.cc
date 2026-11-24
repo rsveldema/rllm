@@ -378,6 +378,9 @@ namespace rllm
                             dust_forward.loop_iteration_embedding);
                     }
                     const size_t block = m_transformer_execution_order[execution];
+                    apply_dynamic_skip_attention(
+                        dust_forward, execution, packed_rows,
+                        m_gpu_packed_batch->tokens, queue);
                     m_transformer_blocks[block].forward_batched(
                         dust_forward.h, packed_rows, *m_gpu_packed_batch,
                         m_forward_workspace->transformer_workspaces.front(),
@@ -654,6 +657,8 @@ namespace rllm
                 apply_loop_transition(forward.h, forward.loop_input, forward.loop_iteration_embedding);
             }
             const size_t block = m_transformer_execution_order[execution];
+            apply_dynamic_skip_attention(
+                forward, execution, rows, m_gpu_packed_batch->tokens, queue);
             forward.checkpoint_execution(execution, forward.h, queue);
             m_transformer_blocks[block].forward_batched(
                 forward.h, rows, *m_gpu_packed_batch, forward.transformer_workspace(),

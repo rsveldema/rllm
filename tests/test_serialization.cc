@@ -196,6 +196,18 @@ TEST(SerializationTest, TextTrainerShortSafetensorsExtensionRoundTrip)
     network.save(sf_file);
     ASSERT_TRUE(std::filesystem::exists(sf_file));
 
+    safetensors::safetensors_t checkpoint;
+    std::string warning, error;
+    ASSERT_TRUE(safetensors::load_from_file(
+        sf_file, &checkpoint, &warning, &error)) << error;
+    safetensors::tensor_t dsa;
+    ASSERT_TRUE(checkpoint.tensors.at("dynamic_skip_attention.logits", &dsa));
+    ASSERT_EQ(dsa.shape.size(), 2u);
+    EXPECT_EQ(dsa.shape[0], static_cast<size_t>(rllm::TokenID::MAX));
+    EXPECT_EQ(dsa.shape[1], static_cast<size_t>(rllm::HeadsIndex::MAX));
+    EXPECT_TRUE(checkpoint.tensors.count("training.dynamic_skip_attention.adam_first"));
+    EXPECT_TRUE(checkpoint.tensors.count("training.dynamic_skip_attention.adam_second"));
+
     rllm::TextTrainer loaded(0, corpus, stats);
     EXPECT_TRUE(loaded.load(sf_file));
 

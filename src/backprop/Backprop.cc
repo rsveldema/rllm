@@ -97,6 +97,9 @@ namespace rllm
                 m_transformer_blocks[i].accumulate_gradients(
                     ws.transformer_block,
                     m_gradient_accumulation_workspace->transformer_blocks[i]);
+            backward_dynamic_skip_attention(
+                *m_forward_workspace, ws, *p_din, reverse_execution,
+                m_seq_len, m_forward_workspace->dsa_tokens, queue);
             const auto after_phase = std::format(
                 "after transformer block {} backward", i);
             check_hidden_nan_finding_mode(
@@ -149,6 +152,9 @@ namespace rllm
                 m_transformer_blocks[index].accumulate_gradients(
                     back.transformer_block,
                     m_gradient_accumulation_workspace->transformer_blocks[index]);
+            backward_dynamic_skip_attention(
+                forward, back, *din, reverse_execution, packed_rows,
+                m_gpu_packed_batch->tokens, queue);
             if (collect_diagnostics)
                 log_hidden_gradient_diagnostics(*din, packed_rows,
                     reverse_execution == 0
